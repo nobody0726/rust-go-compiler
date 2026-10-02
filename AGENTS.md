@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 已完成**（E1/E2/E10 通过）；Phase 1 环境就绪、四条门禁全过，**仅剩 E5（实测断点命中）待人工操作** |
+| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成** —— 四项门禁 **E1 / E2 / E10 / E5 全部通过**（E5 于 2026-10-02 由用户按 F5 实测确认） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；`rgoc/` 下只有用于验证调试链路的最小 `rgoc-harness`（1 函数 + 1 测试），**编译器实现尚未开始**。
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（52 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（53 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -148,7 +148,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 |---|---|
 | 编译器工程 | `rgoc/` 下**只有 `rgoc-harness`**（1 个函数 + 1 个测试），作用是 Phase 1 的调试目标；**编译器实现尚未开始** |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
-| M0 | **Phase 0 已完成**（T01–T19；E1/E2/E10 通过，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`）。**Phase 1 只剩 E5**：T23–T26 的文件与断言已就绪，T27（Reopen in Container）/ T28（**实测断点命中**）需人工在 VSCode 中完成 |
+| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**下一步是冻结 `M0-tests.md` 并拆 Phase 2–4 计划** |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
 | 阶段目录 | `docs/contracts/` **已创建但为空**；`docs/milestones/` 含 M0 四件套 + `M0-manifest.json` |
@@ -270,7 +270,9 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
 
 ## 7. 下一步
 
-**Phase 0 已完成；Phase 1 只剩 E5 这一项人工操作。**
+**Phase 0 与 Phase 1 均已完成 —— M0 的四项门禁（E1 / E2 / E10 / E5）全部通过。**
+
+**E5 的完成记录**：2026-10-02 由用户在 VSCode dev container 中按 F5 实测确认，T28 检查表四项逐项通过（断点命中未被跳过 / 变量面板 `a=1,b=2` / 调用栈 ≥2 帧 / F10 后停在第 28 行且 `sum==3`），登记在 `M0-manifest.json` 的 `gate.E5`。
 
 按序执行：
 
@@ -296,27 +298,34 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    `http.proxy` 配置** —— 该值由宿主经 AHP 下发，远端覆盖不了（实测，见 `M0-benchmarks.md` §7）。
    **注意与第 0 步的区别**：同一句报错，`Path:` 在宿主 `/var/folders/…` 就是 server 层（第 0 步），
    不在宿主就是平台包层（本步）—— 见 §9 的层级辨异表。
-1. **完成 E5**（人工，唯一阻塞项）：在 VSCode 中打开本仓库 → `Dev Containers: Reopen in Container`
-   → 在 `rgoc/crates/rgoc-harness/src/lib.rs` 的 `double_sum()` 里 `let sum = a + b;`（第 27 行）下断点
-   → 按 F5 跑 **「调试当前测试 (CodeLLDB)」** → 逐项核对 `M0-plan.md` T28 的四项检查表。
-   **注意**：第 4 项（单步后 `sum == 3`）依赖调试目标的形状 —— 尾位置直接返回的 `let` 绑定
-   不会进 DWARF，换目标前先读 `M0-benchmarks.md` §8。
-   **如果 F5 又弹出 `Cargo command did not complete successfully.`**：那不是环境层的问题，
-   而是 CodeLLDB 的 **cargo 启动配置**（`cargo.cwd` / `filter.name`，两者都是**静默**陷阱，
-   VSCode 的提示里不会指向它们）。真错在 **OUTPUT → LLDB** 通道里的 `Cargo exited with code N`，
-   不在弹出的那个提示里 —— 两个坑、复现方法与修法见 `M0-benchmarks.md` §10。
-   **别用 shell 去复现那条 cargo 命令**：CodeLLDB 是不经 shell 的 `spawn`，shell 会剥掉
-   `target.'cfg(all())'` 上的单引号，给你一个**假的** TOML 报错。
-2. 把 E5 的四项结果填入 `docs/milestones/M0-manifest.json` 的 `gate.E5`
-3. **冻结 `M0-tests.md`** —— §4 的 20 个官方样本与 §6 的 unsupported 清单是 Phase 2 开工前的白名单
-4. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
+   （第 0/0b 两步在 Phase 1 之后依然保留：它们是**任何一次环境异常时成本最低的起手式**，
+   与「有没有 E5 要做」无关。）
+1. **冻结 `M0-tests.md`** —— §4 的 20 个官方样本与 §6 的 unsupported 清单是 Phase 2 开工前的白名单
+2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
+3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
+
+**E5 已完成的记录（2026-10-02）**：由用户在 VSCode dev container 中按 F5 实测确认，
+T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。
+下面是当时的操作与排障路径 —— **环境复发时（换机器 / 重装 / 升级 VSCode）要复验时照它走**：
+
+- 在 VSCode 中打开本仓库 → `Dev Containers: Reopen in Container`
+  → 在 `rgoc/crates/rgoc-harness/src/lib.rs` 的 `double_sum()` 里 `let sum = a + b;`（第 27 行）下断点
+  → 按 F5 跑 **「调试当前测试 (CodeLLDB)」** → 逐项核对 `M0-plan.md` T28 的四项检查表。
+- **注意**：第 4 项（单步后 `sum == 3`）依赖调试目标的形状 —— 尾位置直接返回的 `let` 绑定
+  不会进 DWARF，换目标前先读 `M0-benchmarks.md` §8。
+- **如果 F5 弹出 `Cargo command did not complete successfully.`**：那不是环境层的问题，
+  而是 CodeLLDB 的 **cargo 启动配置**（`cargo.cwd` / `filter.name`，两者都是**静默**陷阱，
+  VSCode 的提示里不会指向它们）。真错在 **OUTPUT → LLDB** 通道里的 `Cargo exited with code N`，
+  不在弹出的那个提示里 —— 两个坑、复现方法与修法见 `M0-benchmarks.md` §10。
+  **别用 shell 去复现那条 cargo 命令**：CodeLLDB 是不经 shell 的 `spawn`，shell 会剥掉
+  `target.'cfg(all())'` 上的单引号，给你一个**假的** TOML 报错。
 
 **M0 的 5 个 Phase**（详见 `M0-design.md` §6）：
 
 | Phase | 内容 | 门禁 | 计划状态 |
 |---|---|---|---|
 | 0 | 容器与工具链底座 | E1 镜像 digest 可重放、E2 环境值入 manifest、E10 基准 | ✅ **已完成**（T01–T19；E1/E2/E10 通过） |
-| 1 | VSCode 调试环境 | **E5 实测断点命中** | ⏳ T20–T22 ✅（四条门禁全过）/ T23–T26 ✅ / **T27–T28 待人工** |
+| 1 | VSCode 调试环境 | **E5 实测断点命中** | ✅ **已完成**（T20–T28；四条统一退出检查全过，E5 于 2026-10-02 人工实测确认） |
 | 2 | Rust 工程骨架 + harness | E3 六类自测全绿、E4 20 样本 100% | ⏳ 待拆 |
 | 3 | 三个 spike（解释 / SSA / native） | E6 可复现、E7 native `hello` | ⏳ 待拆 |
 | 4 | 契约初稿 + 报告 | E8/E9/E10 | ⏳ 待拆 |

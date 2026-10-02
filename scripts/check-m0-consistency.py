@@ -202,10 +202,17 @@ def main() -> int:
         manifest = json.loads((REPO_ROOT / "docs/milestones/M0-manifest.json").read_text(encoding="utf-8"))
         check("manifest 的 image.digest == 实际镜像 id",
               manifest["environment"]["image"]["digest"] == actual_id)
+        # 四条门禁全部通过（E5 于 2026-10-02 由用户在 VSCode 中按 F5 实测确认）。
+        # 注意 E5 是**人工**门禁：这里只校验 manifest 的登记状态，不校验实测本身
+        # —— 实测证据在 gate.E5.evidence 里（含确认人与确认时间）。
         gate = {k: manifest["gate"][k]["status"] for k in ("E1", "E2", "E10", "E5")}
-        check("gate: E1/E2/E10=pass, E5=pending",
-              [gate[k] for k in ("E1", "E2", "E10", "E5")] == ["pass", "pass", "pass", "pending"],
+        check("gate: E1/E2/E10/E5 全部 pass",
+              [gate[k] for k in ("E1", "E2", "E10", "E5")] == ["pass"] * 4,
               str(gate))
+        check("gate.E5 登记了确认人与确认时间",
+              bool(manifest["gate"]["E5"].get("confirmed_by"))
+              and bool(manifest["gate"]["E5"].get("confirmed_at")),
+              manifest["gate"]["E5"].get("confirmed_at", "(缺失)"))
         check("benchmarks 五节齐备", len(manifest["benchmarks"]) == 5)
 
     # ── 4. 占位符 ──────────────────────────────────────────────────────────

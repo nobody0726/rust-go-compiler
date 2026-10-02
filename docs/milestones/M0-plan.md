@@ -20,6 +20,10 @@
 
 **Phase 2–4 的计划在 Phase 1 门禁（E5）通过后，基于实测到的环境事实再拆。**
 
+> **状态更新（2026-10-02）**：Phase 0 与 Phase 1 均已完成，四项门禁 **E1/E2/E10/E5 全部通过**
+> （E5 由用户在 VSCode 中按 F5 实测确认，登记在 `M0-manifest.json` 的 `gate.E5`）。
+> **拆 Phase 2–4 计划的前置条件已满足**，现在即可动手。
+
 ### 0.2 一处 Phase 边界的调整（需注意）
 
 `M0-design.md` §6.2 把「VSCode 调试环境」列为 Phase 1，其门禁 E5 要求在**某段 Rust 代码**上实测断点命中。但按原划分，Rust 工程要到 Phase 2 才建 —— 那就没有调试目标。
@@ -34,15 +38,15 @@
 
 ### 0.3 任务编号与门禁对应
 
-| 任务范围 | 对应 Phase | 对应门禁 |
-|---|---|---|
-| T01–T07 | Phase 0 · 镜像构建 | **E1** 镜像 digest 可重放 |
-| T08–T11 | Phase 0 · 工具链验证 | **E2** 环境值入 manifest |
-| T12–T16 | Phase 0 · 入口与 manifest | **E2** |
-| T17–T19 | Phase 0 · 基准测试 | **E10** |
-| T20–T22 | Phase 1 · 最小 Rust 工程 | — |
-| T23–T27 | Phase 1 · devcontainer | — |
-| T28 | Phase 1 · **实测断点命中** | **E5** |
+| 任务范围 | 对应 Phase | 对应门禁 | 状态 |
+|---|---|---|---|
+| T01–T07 | Phase 0 · 镜像构建 | **E1** 镜像 digest 可重放 | ✅ |
+| T08–T11 | Phase 0 · 工具链验证 | **E2** 环境值入 manifest | ✅ |
+| T12–T16 | Phase 0 · 入口与 manifest | **E2** | ✅ |
+| T17–T19 | Phase 0 · 基准测试 | **E10** | ✅ |
+| T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
+| T23–T27 | Phase 1 · devcontainer | — | ✅ |
+| T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
 
 ---
 
@@ -1354,14 +1358,21 @@ cargo（A：工作目录取自 `cargo.cwd`；B：退出码 0；C：`filter` 恰�
 
 - **验证**（**E5 的判定必须是实测，不是「能开窗口」**）：
 
-| 检查项 | 期望 | 实测 |
+| 检查项 | 期望 | 实测（2026-10-02，用户人工） |
 |---|---|---|
-| 断点命中（未被跳过） | 黄条停在 `let sum = a + b;`（第 27 行） | ☐ |
-| 「变量」面板非空 | 可见 `a = 1`、`b = 2` | ☐ |
-| 「调用栈」面板非空 | ≥2 帧（`double_sum` ← `double_sum_works`） | ☐ |
-| 单步后可观察值变化 | 停止行移到第 28 行，且 `sum == 3` | ☐ |
+| 断点命中（未被跳过） | 黄条停在 `let sum = a + b;`（第 27 行） | ☑ **通过** |
+| 「变量」面板非空 | 可见 `a = 1`、`b = 2` | ☑ **通过** |
+| 「调用栈」面板非空 | ≥2 帧（`double_sum` ← `double_sum_works`） | ☑ **通过** |
+| 单步后可观察值变化 | 停止行移到第 28 行，且 `sum == 3` | ☑ **通过** |
 
 **四项全部 ☑ 才算 E5 通过**，并把结果记录进 `M0-manifest.json` 的 `gate.E5`。
+
+> ✅ **E5 已完成**（2026-10-02）：用户在 VSCode dev container 中按 F5 运行
+> 「调试当前测试 (CodeLLDB)」，上表四项逐项确认通过。结果已登记进
+> `M0-manifest.json` 的 `gate.E5`（含 `confirmed_at` / `confirmed_by` / `evidence`，
+> 原始正文见 `git log` 中本日期的提交）。自检也随之把
+> `gate: E1/E2/E10=pass, E5=pending` 改为 `gate: E1/E2/E10/E5 全部 pass`，
+> 并新增一条「`gate.E5` 登记了确认人与确认时间」的断言。
 
 > 第 4 项依赖调试目标的具体形状 —— 见 T21 的说明与 `M0-benchmarks.md` §8：
 > 若函数写成 `let sum = a + b; sum`（尾位置直接返回），rustc 不会为 `sum` 生成 DWARF 条目，
@@ -1394,13 +1405,17 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 | 门禁 | 判定方式 | 状态 | 证据 |
 |---|---|---|---|
 | T22 | `fmt` / `check` / `clippy -D warnings` / `test` 四条全过 | **✅** | 修正验证命令后 `clippy --all-targets -- -D warnings` exit=0，日志中 warning/error 行数为 0。**注意**：调试目标改为 `double_sum` 后已**不再需要** `#[allow(clippy::let_and_return)]`（尾表达式是 `sum * 2`），该 allow 已删除 |
-| **E5** | T28 的四项检查全部 ☑（**实测断点命中**） | ☐ **待人工** | 下层证据已齐：`scripts/debug-smoke-test.sh` 第 2 节 **A/B/C 三项 + 9 项断言通过、exit 0**（断点解析到 `double_sum + 20 at lib.rs:27`、`stop reason = breakpoint 1.1`、调用栈 3 帧、`a=1`/`b=2`、`step over` 停到 `lib.rs:28`、`sum = 3`、`1 passed; 0 failed`）；第 2 节的 A/B/C 即「编辑器链路」在下层的彩排（其复刻行为由自检第 5c 节 6 条断言守住）。T27/T28 的**编辑器链路**仍需用户在 VSCode 中按 F5 确认 |
+| **E5** | T28 的四项检查全部 ☑（**实测断点命中**） | **✅ 通过**（2026-10-02） | **实测**：用户在 VSCode dev container 中按 F5 运行「调试当前测试 (CodeLLDB)」，T28 四项逐项通过（断点命中未被跳过 / 变量面板 `a=1,b=2` / 调用栈 ≥2 帧 / F10 后停在第 28 行且 `sum==3`），登记在 `M0-manifest.json` 的 `gate.E5`。**下层印证**：`scripts/debug-smoke-test.sh` 第 2 节 **A/B/C 三项 + 9 项断言通过、exit 0**（断点解析到 `double_sum + 20 at lib.rs:27`、`stop reason = breakpoint 1.1`、调用栈 3 帧、`a=1`/`b=2`、`step over` 停到 `lib.rs:28`、`sum = 3`、`1 passed; 0 failed`）；第 2 节的 A/B/C 即「编辑器链路」在下层的彩排（其复刻行为由自检第 5c 节 6 条断言守住） |
 
-**Phase 1 门禁通过后**：
+**Phase 1 门禁已通过（2026-10-02）—— 三项收尾的实际状态**：
 
-1. 交付用户可用的 VSCode 调试环境（用户明确要求的那一项）；
-2. 基于**实测到的环境事实**回头拆 **Phase 2–4** 的计划（本计划 §0.1 已说明理由）；
-3. 更新 `M0-manifest.json` 与 `M0-plan.md` 的执行状态。
+| # | 事项 | 状态 |
+|---|---|---|
+| 1 | 交付用户可用的 VSCode 调试环境（用户明确要求的那一项） | ✅ **已交付**：`.devcontainer/` + `.vscode/launch.json` + 两个离线安装脚本，用户在容器内按 F5 实测断开成功 |
+| 2 | 基于**实测到的环境事实**回头拆 **Phase 2–4** 的计划 | ⏳ **待办**（前置条件已满足，见 §0.1 的状态更新） |
+| 3 | 更新 `M0-manifest.json` 与 `M0-plan.md` 的执行状态 | ✅ **已完成**：`gate.E5 = pass`（含 `confirmed_at`/`confirmed_by`）、本节的检查表与门禁汇总表均已回写 |
+
+**下一步（Phase 2 开工前）**：① 冻结 `M0-tests.md`；② 拆 Phase 2–4 计划；③ 跑一遍 `AGENTS.md` §6.1 的自检。
 
 ---
 
@@ -1456,3 +1471,4 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 | 2026-10-02 | **新增 `scripts/mutation-test-debug-smoke.sh`**（4 个变异 + 对照组，跑完自动还原）；`check-m0-consistency.py` 增加 §5c 共 15 条断言（**45 → 60**）；`mutation-test-m0-consistency.py` 增加 11 个 §5c 变异（**20 → 31**） | 新断言同样必须被证明**能失败**。这个变异测试直接改**真实** `launch.json`（因为第 2 节就是按它的真实路径读的），所以还原靠 `trap` + sha256 双保险，且判定标准是**失败原因特征**而非仅退出码 —— 否则脚本自身崩掉也会被算成「抓住」。它自己也进 `FILES` 夹具，否则 §5c 的断言在临时副本里会被整段跳过 |
 | 2026-10-02 | `code_only()`（剔除**整行注释**后再做子串断言）推广到 `install-*.sh` 的既有断言 | 变异测试抓出**两条恒真断言**：`ln -sfn` 与 `[0-9a-f]{40}` 的匹配点被脚本**头部注释**满足 —— 把真实代码行改成注释形态也不会报错。本仓已第二次踩「注释满足断言」的坑（第一次是断点行推导的宽松 `grep`） |
 | 2026-10-02 | **移除 3 个脚本**：`scripts/env-probe.sh`（T14，输出已固化进 manifest）、`scripts/mutation-test-m0-consistency.py`（33 个变异）、`scripts/mutation-test-debug-smoke.sh`（4 个变异）。`check-m0-consistency.py` 由 **63 条断言降为 52 条**（删掉守变异脚本的 9 条 §5c + 2 条 §6）；§6 保留「`AGENTS.md` 记录的断言数 == 实际数」这条防腐断言 | **用户要求「提交前清理掉以后可能不再需要的脚本」**。判据是**是否与自检/门禁耦合、以及是否会复发**：两个 `install-*.sh` 会随容器重建与宿主升级 VSCode 复发，`in-container.sh` 被 `image.lock` 指纹引用，`debug-smoke-test.sh` 是 E5 的下层证据 —— 都不能删。**代价要明确**：移掉两个变异脚本后，「断言是否恒真」不再有任何自动校验，改断言须人工反向验证（把目标改成注释形态/删掉，确认报 ✗）。快照留 `.workbuddy/backup/scripts-removed-20261002-1504/`（不入库），拷回即可重跑。**注意**：`env-probe.sh` 的脚本体仍完整保存在 T14，重新采集 E2 事实时按文重建即可 |
+| 2026-10-02 | **E5 通过**：`M0-manifest.json` 的 `gate.E5` 由 `pending` 改为 `pass`，补 `confirmed_at` / `confirmed_by`；T28 检查表四项补实测列；门禁汇总表与任务总表回写状态；`check-m0-consistency.py` 的门禁断言由「E1/E2/E10=pass, E5=pending」改为「四条全部 pass」并新增「`gate.E5` 登记了确认人与确认时间」（**52 → 53 条断言**） | **用户在 VSCode dev container 中按 F5 实测确认 T28 四项通过**（断点命中未被跳过 / 变量面板 `a=1,b=2` / 调用栈 ≥2 帧 / F10 后停在第 28 行且 `sum==3`）。这是 M0 最后一项门禁 —— 至此 **E1/E2/E10/E5 全部通过**，Phase 0 与 Phase 1 完成。**门禁状态是硬事实，必须与实测同步**：改了 `gate` 就要同步自检里的断言与全部文档，否则自检会红（本轮 `AGENTS.md` 的断言数就又被 §6 抓到一次） |
