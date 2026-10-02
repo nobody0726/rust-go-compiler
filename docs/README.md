@@ -22,7 +22,9 @@
 |---|---|---|---|
 | M0 | [`milestones/M0-design.md`](./milestones/M0-design.md) | **怎么建 M0** —— 设计决策 D-M0-1~12、环境基线、Phase 0–4、门禁 E1–E10 | **已确认** |
 | M0 | [`milestones/M0-tests.md`](./milestones/M0-tests.md) | **怎么验 M0** —— 测试 ID（T-H/T-C/T-S1~S3）、20 个官方样本清单、unsupported 清单、超时预算 | 待冻结 |
-| M0 | [`milestones/M0-plan.md`](./milestones/M0-plan.md) | **怎么干 M0** —— Phase 0–1 的 T01–T28 任务（文件路径 / 可粘贴内容 / 验证命令） | 待执行 |
+| M0 | [`milestones/M0-plan.md`](./milestones/M0-plan.md) | **怎么干 M0** —— Phase 0–1 的 T01–T28 任务（文件路径 / 可粘贴内容 / 验证命令） | **Phase 0 已完成**；Phase 1 待 E5 |
+| M0 | [`milestones/M0-benchmarks.md`](./milestones/M0-benchmarks.md) | **实测依据** —— 镜像时间/体积、冷启动、编译、`target/` 挂载布局对比、可复现性结论、环境陷阱清单、调试环境四则案例（CodeLLDB 平台包 / DWARF 变量条目 / VS Code Server / cargo 启动配置） | **已产出**（E10 证据） |
+| M0 | [`milestones/M0-manifest.json`](./milestones/M0-manifest.json) | **机器可读事实** —— `environment`（E2）+ `gate`（E1/E2/E10/E5）+ `benchmarks`（E10） | 环境节与 benchmarks 已填实 |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -88,7 +90,7 @@
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
 | `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | **空** —— 待 M0 Phase 4 产出 5 份初稿（见 `milestones/M0-design.md` §7） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | `M0-design.md`（已确认）、`M0-tests.md`（待冻结）、`M0-plan.md`（待执行）；`M0-manifest.json` 由 T15 产出 |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | `M0-design.md`（已确认）、`M0-tests.md`（待冻结）、`M0-plan.md`（Phase 0 已完成）、`M0-benchmarks.md`（E10 证据）、`M0-manifest.json`（environment + gate + benchmarks 已填实） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 
@@ -106,6 +108,9 @@
 - 04 为**方案稿**：容器镜像、工具链、环境 manifest、`.devcontainer` 与任何编译器实现均**尚未**因该文档而搭建或执行（Docker Desktop 已实测可启动，见 04 §3.1）。
 - `milestones/M0-design.md` —— **已确认**（D-M0-1 ~ D-M0-12 全部决策，2026-10-02）。其 §3.1 的环境实测值（Docker 29.6.2、内核 `6.12.76-linuxkit`、`aarch64`、10 CPU / 7.75 GiB、基础镜像 digest、宿主机无 Rust 工具链、VSCode 缺 `rust-analyzer` / CodeLLDB）来自**只读侦察**，用于让设计基于真实数据。
 - `milestones/M0-tests.md` —— **测试先行清单**。§4 的 20 个官方样本与 §6 的 unsupported 清单**须在开工前冻结**。其 §1.1 记录了一处**事实修正**：官方驱动器是 `src/cmd/internal/testdir/testdir_test.go`（**非** `test/run.go`），指令集为 **16 个**（非 7 个）—— 应回写至 `02-test-inventory.md`。
-- `milestones/M0-plan.md` —— **Phase 0–1 的实施计划**（T01–T28），**待执行**。两点需注意：① T20–T22 把「最小 Rust 工程骨架」提前到 Phase 1，作为 E5 断点调试的目标（理由见该文档 §0.2）；② **E5 的唯一判定方式是 T28 的实测断点命中**，不是「能打开容器窗口」。Phase 2–4 的计划待 Phase 1 门禁通过后再拆。
-- **`M0` 整体尚未开工**：设计确认、测试清单与实施计划产出**都不代表**环境已就绪 —— 容器镜像、工具链、`.devcontainer` 与任何编译器实现均**未搭建**。
+- `milestones/M0-plan.md` —— **Phase 0–1 的实施计划**（T01–T28）。两点需注意：① T20–T22 把「最小 Rust 工程骨架」提前到 Phase 1，作为 E5 断点调试的目标（理由见该文档 §0.2）；② **E5 的唯一判定方式是 T28 的实测断点命中**，不是「能打开容器窗口」。Phase 2–4 的计划待 Phase 1 门禁通过后再拆。
+- `milestones/M0-benchmarks.md` —— **实测基准与决策依据**。§4 是 D-M0-9（`target/` 放 bind mount 还是命名卷）的判定数据（命名卷快 2.3×）；§5 记录「镜像不可位级复现」这一结论，并据此调整了 E1 的判定方式；§6 是环境陷阱清单（计时器、`pipefail`、Rust 关键字、宿主下发的死代理等 **14 项**）；**§7 是 CodeLLDB「无法下载」的完整因果链**（6 条证据，含「远端设置覆盖无效」的反证）与修法 `scripts/install-codelldb.sh`；**§8 是 rustc 不为「尾位置直接返回的 `let` 绑定」生成 DWARF 变量条目**这一发现（三变体对照实验），它决定了 T28 调试目标的形状；**§9 是 VS Code Server「无法下载」** —— 与 §7 **报错文字相同、层级不同**（前者在宿主侧、连接容器之前），给出按 `Path:` 辨异的判据、持久卷 `/vscode` 的两处 `test -d` 布局、实测数据（204 MB / 9.2–10.5 MB/s / sha256 两次逐字节一致）与修法 `scripts/install-vscode-server.sh`；**§10 是 F5 报「Cargo command did not complete successfully.」** —— CodeLLDB 的 cargo 工作目录取自 **`cargo.cwd`**（**不读顶层 `cwd`**）且 `filter.name` 要比 **target name**（下划线，非包名），两处缺陷都在首次 F5 才暴露，含三次复现与一条假线索（用 shell 复现会因为剥掉单引号得到**假的** TOML 报错）；同节末尾给出这条链路的**三层回归**（静态断言 / 冒烟测试第 2 节按 `launch.json` 原样复刻 / 变异测试注入后必须报 ✗）。
+- **`M0` 环境已就绪，Phase 0 已完成**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 均已落地；E1/E2/E10 三项门禁通过，四条统一退出检查（`fmt`/`check`/`clippy`/`test`）全过。
+- **唯一未完成的门禁是 E5**（实测断点命中），属人工操作：需在 VSCode 中 Reopen in Container 后按 `M0-plan.md` T27/T28 操作。其**下层证据已经齐备** —— `scripts/debug-smoke-test.sh` 第 2 节 **A/B/C 三项 + 9 项断言全部通过**（第 2 节按 `.vscode/launch.json` 原样复刻 CodeLLDB 的 cargo 步骤：cwd 来自 `cargo.cwd`、退出码 0、`filter` 恰好选中 1 个产物；随后是断点解析 / 命中 / 调用栈 / 形参 / 单步 / 停止行 / 中间值 `sum = 3` / 测试结束），剩下待确认的只有编辑器链路本身。**任何编译器实现仍未开始** —— `rgoc/` 下只有用于验证调试链路的最小 `rgoc-harness`（1 个函数 + 1 个测试），Phase 2 引入真实功能时删除。
+- **编辑器链路的三个环境前提已就位**（2026-10-02，实测）：① 宿主 VSCode 1.140.0（commit `07f806f9…`）的 **VS Code Server** 已装入持久卷 `/vscode`（601 MB，Dev Containers 的两处 `test -d` 均 exit=0，**不会再发起任何下载**，见 §9）；② CodeLLDB **平台包**已装好（`platform.ok` 存在，`lldb 22.1.8-codelldb` 可用，见 §7）；③ `.vscode/launch.json` 的两处缺陷已修（`cargo.cwd` 与 `filter.name`，见 §10）。注意前两者都会**各自复发**：宿主升级 VSCode → 重跑 `install-vscode-server.sh`；容器重建 → 重跑 `install-codelldb.sh`。
 - 03 的计划文本修订**不代表**环境安装、spike 或编译器实现已经完成（见 03 §9 说明）。

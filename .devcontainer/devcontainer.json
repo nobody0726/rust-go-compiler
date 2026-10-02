@@ -1,0 +1,94 @@
+// rgoc 的 VSCode 调试环境（M0-design.md §4.2）
+//
+// 关键点：本文件引用的镜像是 docker/Dockerfile —— 与门禁容器【同一个】镜像，
+// 保证「在编辑器里跑通的」与「在门禁里跑的」是同一环境。
+//
+// 宿主【不需要】手动安装 rust-analyzer 与 CodeLLDB：
+// Dev Containers 会在容器内按下面的 extensions 列表自动安装。
+// 宿主只要求已装 ms-vscode-remote.remote-containers。
+{
+  "name": "rgoc (aarch64 / Linux)",
+
+  "build": {
+    "dockerfile": "../docker/Dockerfile",
+    "context": ".."
+  },
+
+  // 调试器需要 ptrace 与关闭 seccomp 限制（04 §4.2）。
+  // 缺这两项时，断点表现为「被静默跳过」，极易被误判为调试器配置错误。
+  "runArgs": [
+    "--cap-add=SYS_PTRACE",
+    "--security-opt", "seccomp=unconfined"
+  ],
+
+  "workspaceFolder": "/work",
+  "remoteUser": "dev",
+
+  "mounts": [
+    "source=${localWorkspaceFolder},target=/work,type=bind,consistency=cached",
+    // cargo registry/git 放命名卷（D-M0-9）：macOS 上 bind mount 随机写慢。
+    "source=rgoc-cargo-registry,target=/home/dev/.cargo/registry,type=volume",
+    "source=rgoc-cargo-git,target=/home/dev/.cargo/git,type=volume",
+    // rgoc/target/ 也放命名卷。依据 T18 实测：120 模块 crate 冷构建
+    //   宿主 bind mount 0.287–0.359s  vs  命名卷 0.133–0.150s（≈2.3×）
+    // 与 scripts/in-container.sh 用【同一个卷名】，保证编辑器与门禁同环境（D-M0-10）。
+    "source=rgoc-target,target=/work/rgoc/target,type=volume"
+  ],
+
+  // 新建的空卷属主是 root，dev 写不进去（实测 Permission denied）。
+  // 下面这一步是必需的，不是可选的便利 —— 没有它，用户第一次 cargo build 就会失败。
+  // 幂等：只改卷根属主，cargo 自己在下面建目录。
+  // 注意 `cargo clean` 在此布局下会报 EBUSY，清空请用：
+  //     find rgoc/target -mindepth 1 -delete
+  "postCreateCommand": "sudo chown 501:20 /work/rgoc/target",
+
+  "customizations": {
+    "vscode": {
+      // 宿主不需要预装这两个：Dev Containers 会在容器内按此清单安装。
+      // ⚠️ CodeLLDB 这里装好的只是【扩展本体】—— 它的【平台包】（含真正的 lldb
+      //    二进制）是第二次下载，会被宿主下发的死代理卡住。若断点不生效，
+      //    在容器内执行：bash /work/scripts/install-codelldb.sh
+      //    判据：<扩展目录>/platform.ok 是否存在。详见下方 settings 里的注释。
+      "extensions": [
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb"
+      ],
+      "settings": {
+        "rust-analyzer.cargo.features": "all",
+        "rust-analyzer.check.command": "clippy",
+        "terminal.integrated.defaultProfile.linux": "bash",
+
+        // ── 代理：这两行【保留，但不要指望它】────────────────────────────
+        // 背景：宿主 VSCode 的 User settings 里若有 `http.proxy`（常见于 Clash/V2Ray
+        // 之类，形如 http://127.0.0.1:7897），该值会进入容器，而容器内 127.0.0.1
+        // 指向容器自己的 loopback，那里没有任何代理在听。实测报错：
+        //     CodeLLDB: "Failed to establish a socket connection to proxies:
+        //                PROXY 127.0.0.1:7897"
+        //     → 扩展本体装上了，但它去 GitHub 下平台包（codelldb-linux-arm64.vsix）
+        //       时被这个死代理卡住，断点自然不可用。
+        //
+        // ⚠️ 实测结论：下面这两行**不足以**修好它。
+        //    证据：把它们写进容器的 Machine settings 后（文件 mtime 03:31:58），
+        //    新开的扩展宿主会话（03:40:12）仍报同一错误。真因是该值由**客户端**
+        //    通过 AHP `root/configChanged` 主动下发（证据在
+        //    ~/.vscode-server/data/logs/<会话>/ahp/ahp-*.jsonl），远端机器级设置
+        //    排不上队。因果链见 docs/milestones/M0-benchmarks.md §7。
+        //    保留是因为对别的 VSCode 版本/环境可能仍有效，且无副作用。
+        //
+        // ✅ 真正的修法（容器重建后重跑一次即可，幂等）：
+        //     docker exec <容器名> bash /work/scripts/install-codelldb.sh
+        //    该脚本用 curl --noproxy '*' 直连下载平台包，再用 code-server CLI
+        //    从本地 vsix 安装，完全绕开 VSCode 的网络栈。
+        //    容器的直连网络实测很快：54 MB / 13–30 s / 4.1 MB/s。
+        //
+        // ⚠️ 若将来在【必须走代理】的网络下工作，不要删掉这两行，改为容器能访问到
+        //    宿主代理的地址，例如：
+        //        "http.proxy": "http://host.docker.internal:7897"
+        //    （host.docker.internal 是 Docker Desktop 提供的宿主别名。）
+        //    但按上面的结论，写在远端未必生效 —— 优先回到 install-codelldb.sh。
+        "http.proxy": "",
+        "http.proxySupport": "off"
+      }
+    }
+  }
+}

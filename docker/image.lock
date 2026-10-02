@@ -1,0 +1,121 @@
+# rgoc 镜像锁定信息（门禁 E1）
+#
+# 由 M0 Phase 0 / T07 生成。每次重建镜像都必须更新本文件并说明原因。
+# 设计依据：docs/milestones/M0-design.md §3.3（决策 D-M0-7）
+#
+# ⚠️ 读取方式（T17 实测得出，务必按此理解本文件）：
+#   local.image_id 是【本次构建产物】，不是可复现常量。
+#   同输入的两次 `docker build --no-cache` 会产出不同的 image id 与不同的层 digest
+#   （实测：14 层中有 6 层不同）。因此：
+#     · 真正的【钉子】是 base.index_digest —— 上游不可变 digest；
+#     · image id 只用于「本次事故现场与本文件是否对得上」的事后比对；
+#     · 【禁止】把 image id 写进任何门禁断言。
+#   证据见 docs/milestones/M0-benchmarks.md §4。
+
+# ── 基础镜像（按 index digest 钉死；tag 仅作可读性注释，不参与解析）─────────
+base.tag                = golang:1.27.1-bookworm
+base.index_digest       = sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195
+base.arm64_digest       = sha256:1668bbf856490c9bd0b77204ae1cdaebe273dc459b5eeb3a31a4ddc78ca6fae1
+base.upstream_revision  = c4664da1bd8d0cbc975460744d90c031b409c215
+base.upstream_source    = docker-library/golang 1.27/bookworm
+base.verified_at        = 2026-10-02T03:06:06Z（docker build 时按 digest 解析成功）
+
+# ── 本地构建产物（每次重建都会变，见文件头的⚠️）──────────────────────────────
+local.image_tag         = rgoc:dev
+local.image_id          = sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b
+local.image_size        = 2.92GB
+local.layer_count       = 14（其中容器层 7 个：架构断言 / apt+lldb 包装 / dev 用户+sudoers / rustup 钉版 / profile.d / 断言）
+local.built_at          = 2026-10-02T03:36:28Z
+
+# ── 源码侧指纹（建立「镜像 ↔ 源码」关联）────────────────────────────────────
+# 这些才是判断「镜像是否与当前源码一致」的依据。
+src.dockerfile_sha256   = 6e93604a36389f0ea6c457701c3e3903324187572680fa8a7a0a44e453be8ae6
+src.toolchain_sha256    = 87ba8fc2e4228f43fc6fb9ebc5426e4dd2e9c747854434469e1ac1a83f89d272
+src.dockerignore_sha256 = 5ff247a9f882e508c90d3eda5465ab1e8d0f313a86af89e68dee63cb60430c66
+src.devcontainer_sha256 = e1a2621e06b324e3a8a5e854ee353b7835252a429696297966496823abd69587
+src.in_container_sha256 = c9285f41ba6882d45163966250fc98c57efe3be9365f939453ec987c54ef16d5
+
+# ── 运行环境 ────────────────────────────────────────────────────────────────
+docker.version          = 29.6.2
+docker.engine_arch      = aarch64
+container.kernel        = 6.12.76-linuxkit
+container.user          = dev (uid=501, gid=20, 复用宿主 gid 20)
+container.sudo          = dev 免密（/etc/sudoers.d/90-dev，用途见下「层 5 说明」）
+
+# ── 层构成 ──────────────────────────────────────────────────────────────────
+# 层 1  FROM golang:1.27.1-bookworm 按 index digest 钉死（见上）
+#       + arm64 架构断言（不是 arm64 立刻失败）
+# 层 2  clang / llvm / lld / lldb / make / pkg-config / file / curl / perl / sudo
+# 层 3  非 root 用户 dev（uid/gid 与宿主对齐）+ sudoers 免密
+# 层 4  rustup + 钉版工具链（channel 由 rust-toolchain.toml 解析）
+# 层 5  /etc/profile.d/50-rgoc-toolchains.sh —— 修「登录 shell 找不到工具链」
+# 层 6  回归断言：bash -lc 必须能解析 cargo / go
+
+# ── 命名卷（D-M0-9，T18 基准后决定）─────────────────────────────────────────
+volumes.cargo_registry  = rgoc-cargo-registry → /home/dev/.cargo/registry
+volumes.cargo_git       = rgoc-cargo-git      → /home/dev/.cargo/git
+volumes.target          = rgoc-target         → /work/rgoc/target
+# 依据：120 模块 crate 冷构建 —— 宿主 bind mount 0.287–0.359s vs 命名卷 0.133–0.150s（≈2.3×）
+# 代价 1：新建空卷属主为 root:root，dev 写入报 Permission denied
+#          → in-container.sh 做 bootstrap chown；devcontainer 走 postCreateCommand
+# 代价 2：`cargo clean` 因卷挂载点无法 rmdir 而报 EBUSY(16)、exit 101
+#          → 清空改用 `find rgoc/target -mindepth 1 -delete`
+# 注意：宿主侧的 `rgoc/target/` 只是 Docker 的挂载点，**应当是空的** ——
+#       卷的内容存在 Docker VM 里，不会出现在宿主路径下。
+#       若在宿主侧看到构建产物，说明它们是切换到卷布局【之前】的残留，可直接删除。
+
+# ── 更新记录 ────────────────────────────────────────────────────────────────
+# 2026-10-02  初版。
+#   T06 首次实现依赖 rustup 的 auto-installation（`rustup show` 触发），
+#   构建日志报「auto-installation is deprecated ... may stop working in the future」。
+#   遂改为显式 `rustup toolchain install`（channel 由解析 rust-toolchain.toml
+#   得到，版本来源仍唯一，D-M0-8），并加非空断言。重建后警告消除。
+#
+# 2026-10-02  新增层 5（登录 shell 的 PATH）。实测缺陷：
+#   镜像用 ENV PATH 注入 cargo bin；但登录 shell 会执行 /etc/profile，
+#   【无条件】把 PATH 重置为 /usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games。
+#   结果 `bash -lc 'cargo --version'` → command not found（go 同样）。
+#   VSCode 集成终端默认以登录 shell 启动 —— 不修这条，用户在编辑器里敲 cargo
+#   就是 command not found，CodeLLDB 的 cargo 集成也会失败。
+#   验证过 Debian bookworm 的顺序是「先重置 PATH、后 source /etc/profile.d/*.sh」，
+#   故上层写一处即可（曾同时写 ~/.profile，实测 PATH 前缀被叠加两次，已移除）。
+#   同时加层 6 断言，作为这个缺陷的回归测试。
+#
+# 2026-10-02  新增 sudo 与 sudoers 免密。用途单一且必需：
+#   D-M0-9 决定把 rgoc/target/ 放到命名卷，而新建空卷属主是 root:root，
+#   dev 无法写入（实测 `failed to create directory target/debug: Permission denied`）。
+#   devcontainer 的 postCreateCommand 需以 root 修正属主，没有 sudo 无解。
+#
+# 2026-10-02  记录「image id 不可复现」这一事实（见文件头与 benchmarks §4）。
+#
+# 2026-10-02  层 2 增加 /usr/local/bin/lldb 包装脚本 + 输出断言。实测缺陷：
+#   `lldb --version` 抛 ModuleNotFoundError: No module named
+#   'lldb.embedded_interpreter'（python3-lldb-14 已装、模块也确实在
+#   /usr/lib/llvm-14/lib/python3.11/dist-packages/lldb/，但
+#   /usr/lib/python3/dist-packages/lldb 是【相对符号链接】，python 把它
+#   解析成 namespace package —— `import lldb` 成功而 __file__ 为 None ——
+#   内嵌解释器因此找不到子模块）。
+#   修法：包装脚本注入 PYTHONPATH（不设全局环境变量，避免遮蔽其它 python 包的搜索路径）。
+#   断言必须查【输出】而非退出码：损坏态会打 traceback 但退出码仍是 0。
+#   验证：which lldb -> /usr/local/bin/lldb；lldb --version -> lldb version 14.0.6。
+#
+# 2026-10-02  记录 CodeLLDB「无法下载」的根因（不是网络）：宿主 VSCode 的
+#   http.proxy 被下发进容器，容器内 127.0.0.1 指向自己的 loopback。
+#   所以 src.devcontainer_sha256 变更是【有意义】的，不要当成噪声忽略。
+#   完整因果链见 docs/milestones/M0-benchmarks.md §7。
+#
+# 2026-10-02  ⚠️ 更正上一条的【处置】（根因描述仍然正确，修法被推翻）：
+#   曾以为「写进远端 Machine settings 的 http.proxy="" 优先级高于 User settings，
+#   故能覆盖宿主下发值」—— 实测【不成立】：
+#     · Machine settings 写入时间 03:31:58；
+#     · 之后新开的扩展宿主会话 03:40:12 **仍报同一错误**。
+#   真因：该值由【客户端】经 AHP root/configChanged 主动下发，证据在
+#     会话日志目录内的 ahp/ahp-*.jsonl，即
+#     ~/.vscode-server/data/logs/*/ahp/ahp-*.jsonl
+#     （本文件与 M0-manifest.json 有「不得出现尖括号元变量」的风格约定，
+#       见 scripts/check-m0-consistency.py 第 4 节，故此处不用尖括号占位。）
+#   修法改为 scripts/install-codelldb.sh（curl --noproxy '*' 直连下载平台包，
+#   再用 code-server CLI 从本地 vsix 安装，绕开 VSCode 网络栈）。
+#   devcontainer.json 里那两行【保留】（对别的环境可能有效、无副作用），
+#   但已明确标注「不是修法」。故本次 src.devcontainer_sha256 变更同样是有意义的。
+#   注意：本镜像是运行环境，不含编辑器扩展；**无需**为此重建镜像。

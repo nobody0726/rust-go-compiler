@@ -1,0 +1,14 @@
+# 构建镜像只需要 Dockerfile 与 rust-toolchain.toml，其余全部排除。
+# 目的：缩小构建上下文、加快构建、避免把语料与凭据送进镜像层。
+
+.git
+.gitignore
+.workbuddy
+go_source_code
+corpus-manifest.sha256
+docs
+AGENTS.md
+rgoc/target
+**/target
+**/.DS_Store
+**/._*

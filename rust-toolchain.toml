@@ -1,0 +1,12 @@
+# Rust 工具链钉版（决策 D-M0-8，见 docs/milestones/M0-design.md §3.3）。
+#
+# 本文件是 Rust 版本的【唯一来源】：Dockerfile 通过 `rustup show` 触发安装，
+# 本地开发与门禁容器都读取同一个版本，不允许在别处硬编码版本号。
+#
+# 版本选择依据：Go oracle 是硬约束（必须精确 go1.27.1），Rust 是软约束，
+# 取当时 stable 即可。1.98.1 发布于 2026-09-03。
+
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

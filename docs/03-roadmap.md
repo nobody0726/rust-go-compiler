@@ -141,7 +141,7 @@ rust_go_compiler/                           # 仓库根
 ├── docker/
 │   ├── Dockerfile                         # 唯一镜像定义（开发容器与门禁容器共用，D-M0-10）
 │   └── image.lock                         # 基础镜像 digest 与构建元数据
-├── scripts/                               # 容器入口（in-container.sh）与环境探测（env-probe.sh）
+├── scripts/                               # 容器入口（in-container.sh）/ 离线安装（install-*）/ 自检与冒烟测试
 ├── docs/
 │   ├── README.md, 01-…, 02-…, 03-…, 04-…
 │   ├── contracts/                         # 跨阶段接口与版本化契约

@@ -1,0 +1,67 @@
+// rgoc 调试启动配置（T26 / M0-design.md §4.2）
+//
+// 依赖容器内的 CodeLLDB（vadimcn.vscode-lldb），由 devcontainer.json 自动安装。
+// 断点要能命中，容器必须以 --cap-add=SYS_PTRACE 启动 —— 见 devcontainer.json 的 runArgs。
+//
+// ⚠️ 关键点：cargo 工程根是 `rgoc/`，**不是** workspace 的根（容器里是 /work）。
+//
+//   CodeLLDB 用 **`cargo.cwd`** 决定 cargo 的工作目录，**不读顶层的 `cwd`**：
+//       getCargoCwd(e) { return e ?? this.workspaceFolder?.uri?.fsPath }   // 无 path.resolve
+//       this.runCargoAndGetArtifacts(l, d, r.cwd, t)                       // r = e.cargo
+//   所以 `cargo.cwd` 一旦漏写，它就会回退到 workspaceFolder = /work，
+//   而 /work 下没有 Cargo.toml → cargo 退出 **101** → VSCode 弹出
+//   「Cargo command did not complete successfully.」并提示打开 launch.json。
+//
+//   顶层的 `cwd` 仍然保留：它标识调试目标的运行目录，对 cargo 那一步无效但不是错的。
+//   实测与完整因果链见 `docs/milestones/M0-benchmarks.md` §10。
+//
+// ⚠️ 第二处关键点：`filter.name` 比对的是 **cargo 的 target name（crate 名，下划线）**，
+//   **不是包名（连字符）**。源码：产物入列时用的是 `e.target.name`，
+//   再按 `e.name != filter.name` 过滤。本包包名是 `rgoc-harness`，
+//   而 target name 是 `rgoc_harness` —— 写成包名会 0 匹配，抛
+//   「Cargo has produced no matching compilation artifacts.」
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // 调试单个测试：在测试函数里下断点后选本配置并按 F5。
+      // 这是 T28 / E5 的验收路径。
+      "type": "lldb",
+      "request": "launch",
+      "name": "调试当前测试 (CodeLLDB)",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--package=rgoc-harness",
+          "--lib"
+        ],
+        // name 用 target name（下划线），不是包名（连字符）——见文件头注释
+        "filter": {
+          "name": "rgoc_harness",
+          "kind": "lib"
+        },
+        // ← 必需：cargo 的工作目录（${workspaceFolder} 在 CodeLLDB 解析 cargo
+        //   配置时【已】替换 —— 那一步跑在 resolveDebugConfigurationWithSubstitutedVariables）
+        "cwd": "${workspaceFolder}/rgoc"
+      },
+      "args": [],
+      "cwd": "${workspaceFolder}/rgoc"
+    },
+    {
+      // 调试整个 workspace 的测试。
+      "type": "lldb",
+      "request": "launch",
+      "name": "调试全部测试 (CodeLLDB)",
+      "cargo": {
+        "args": [
+          "test",
+          "--no-run",
+          "--workspace"
+        ],
+        "cwd": "${workspaceFolder}/rgoc"
+      },
+      "cwd": "${workspaceFolder}/rgoc"
+    }
+  ]
+}

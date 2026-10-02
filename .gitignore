@@ -10,6 +10,11 @@ go_source_code/
 # ── WorkBuddy 文档备份快照（临时产物，保留 memory/ 入库）──────────────
 .workbuddy/backup/
 
+# ── Rust 构建产物（cargo workspace 在 rgoc/）────────────────────────
+# Cargo.lock 对应用类项目【入库】（rgoc 是编译器可执行程序，非库）。
+rgoc/target/
+**/target/
+
 # ── 系统 / 编辑器产物 ────────────────────────────────────────────────
 .DS_Store
 ._*

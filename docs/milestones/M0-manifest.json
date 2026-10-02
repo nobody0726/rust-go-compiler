@@ -1,0 +1,178 @@
+{
+  "stage": "M0",
+  "generated_at": "2026-10-02T03:52:12Z",
+  "environment": {
+    "host": {
+      "os": "macOS 27.2",
+      "arch": "arm64",
+      "docker_desktop_version": "29.6.2"
+    },
+    "image": {
+      "tag": "rgoc:dev",
+      "digest": "sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b",
+      "digest_stability": "per-build (not reproducible; the pin is base_index_digest + src.*_sha256, see M0-benchmarks.md section 5)",
+      "size": "2.92GB",
+      "layer_count": 14,
+      "base_tag": "golang:1.27.1-bookworm",
+      "base_index_digest": "sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195",
+      "base_arm64_digest": "sha256:1668bbf856490c9bd0b77204ae1cdaebe273dc459b5eeb3a31a4ddc78ca6fae1"
+    },
+    "container": {
+      "arch": "arm64",
+      "kernel": "6.12.76-linuxkit",
+      "os_release": "Debian GNU/Linux 12 (bookworm)",
+      "glibc": "2.36",
+      "nproc": 10,
+      "mem_total_kb": 8126480
+    },
+    "toolchain": {
+      "go": {
+        "version": "go version go1.27.1 linux/arm64",
+        "path": "/usr/local/go/bin/go",
+        "sha256": "1675694ef690db0f18fbe7046a886170904bede1d9db6ec96ae27945c1705c64"
+      },
+      "rust": {
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+        "pinned_by": "rust-toolchain.toml"
+      },
+      "clang": {
+        "version": "Debian clang version 14.0.6",
+        "linker": "/usr/bin/ld"
+      }
+    },
+    "volumes": {
+      "cargo_registry": "rgoc-cargo-registry -> /home/dev/.cargo/registry",
+      "cargo_git": "rgoc-cargo-git -> /home/dev/.cargo/git",
+      "target": "rgoc-target -> /work/rgoc/target"
+    },
+    "target": {
+      "triple": "aarch64-unknown-linux-gnu",
+      "object_format": "ELF"
+    },
+    "debug": {
+      "editor": "VSCode Dev Containers",
+      "editor_version": "1.140.0 (host)",
+      "editor_commit": "07f806f999227108933c2e30515b26eecc1fda74",
+      "vs_code_server": {
+        "install_location": "/vscode/vscode-server/bin/linux-arm64/07f806f999227108933c2e30515b26eecc1fda74",
+        "install_location_note": "inside the persistent named volume `vscode`; survives container rebuild",
+        "symlink": "~/.vscode-server/bin/07f806f999227108933c2e30515b26eecc1fda74 -> the above",
+        "lookup_order": "Dev Containers tests the symlink path first, then the volume path; it only downloads when BOTH are missing",
+        "tarball_url": "https://update.code.visualstudio.com/commit:07f806f999227108933c2e30515b26eecc1fda74/server-linux-arm64/stable",
+        "tarball_bytes": 214058758,
+        "tarball_sha256": "91cf7a8598d18594c2ddff13d70f27f024d79f2a8c23d2d4ab4d6a4344c072c6",
+        "tarball_sha256_note": "recorded for forensic comparison only; the installer asserts product.json's commit (semantic) instead of a byte hash, because upstream may repack the tarball",
+        "measured_download": [
+          "HTTP=200 大小=214058758B 用时=20.368187s 速度=10509465B/s",
+          "HTTP=200 大小=214058758B 用时=23.178163s 速度=9235363B/s"
+        ],
+        "installed_size": "601M",
+        "bundled_node": "v24.21.0",
+        "code_server_version": "1.140.0 / 07f806f999227108933c2e30515b26eecc1fda74 / arm64",
+        "both_test_d_paths_exit_zero": true,
+        "installer": "scripts/install-vscode-server.sh (curl --noproxy '*', writes into the persistent volume, idempotent short-circuit)",
+        "recurrence": "each host VSCode upgrade changes the commit -> volume lacks it -> Dev Containers downloads on the HOST side -> blocked by the dead http.proxy (no direct-connection fallback). See M0-benchmarks.md section 9",
+        "why_not_baked_into_image": "the server is bound to the host VSCode commit, so it would go stale on the next upgrade; the persistent volume's lifetime matches it and the container's does not"
+      },
+      "adapter": "CodeLLDB (vadimcn.vscode-lldb) 1.12.3",
+      "launch_config": {
+        "file": ".vscode/launch.json",
+        "configurations": [
+          "调试当前测试 (CodeLLDB)",
+          "调试全部测试 (CodeLLDB)"
+        ],
+        "gotcha_cargo_cwd": "CodeLLDB resolves the cargo working directory from cargo.cwd (source: getCargoCwd(e){return e ?? this.workspaceFolder?.uri?.fsPath}, called with e.cargo.cwd). The TOP-LEVEL cwd is NOT used. Omitting cargo.cwd falls back to workspaceFolder /work, which has no Cargo.toml -> cargo exits 101 -> VSCode reports 'Cargo command did not complete successfully.' See M0-benchmarks.md section 10.",
+        "gotcha_filter_name": "cargo.filter.name is compared against the cargo TARGET name (underscore), not the package name (hyphen). For package `rgoc-harness` the target name is `rgoc_harness`; using the package name yields 0 matches -> 'Cargo has produced no matching compilation artifacts.'",
+        "workspace_folder_variable_ok": "yes -- cargo resolution runs in resolveDebugConfigurationWithSubstitutedVariables, i.e. after variable substitution, so ${workspaceFolder}/rgoc is valid in cargo.cwd",
+        "verified_by": "scripts/check-m0-consistency.py section 1 (4 assertions: cargo.cwd present, Cargo.toml exists under it, filter.name equals the target name) + scripts/debug-smoke-test.sh section 2 (end-to-end replay of the cargo step, A/B/C) + check-m0-consistency.py section 5c (6 assertions: section 2 really replays launch.json)"
+      },
+      "adapter_bundled_lldb": "lldb version 22.1.8-codelldb",
+      "system_lldb_in_image": "lldb version 14.0.6 (fixed via /usr/local/bin/lldb PYTHONPATH wrapper; NOT used by the adapter)",
+      "platform_package": "codelldb-linux-arm64.vsix",
+      "platform_package_bytes": 54544514,
+      "platform_package_sha256": "0887f67d440554617894266f80706f700907c36b95e6e49d23b95a0e05318101",
+      "platform_package_marker": "platform.ok (zero-byte marker inside the CodeLLDB extension dir; ensurePlatformPackage() short-circuits on it)",
+      "platform_package_installer": "scripts/install-codelldb.sh (bypasses VSCode network stack via curl --noproxy '*')",
+      "container_cap_add": [
+        "CAP_SYS_PTRACE"
+      ],
+      "container_security_opt": [
+        "seccomp=unconfined"
+      ],
+      "container_privileged": false,
+      "debug_target": "rgoc/crates/rgoc-harness/src/lib.rs :: double_sum (breakpoint at the `let sum = a + b;` line)",
+      "headless_smoke_test": "scripts/debug-smoke-test.sh -- section 2 replays CodeLLDB's cargo step verbatim from .vscode/launch.json (A: cwd comes from cargo.cwd; B: cargo exit 0; C: filter selects exactly 1 artifact) + 9 lldb assertions on the headless session; all pass, exit=0"
+    }
+  },
+  "gate": {
+    "E1": {
+      "status": "pass",
+      "evidence": "docker build 可从零重放成功（多次 --no-cache 均通过）；docker/image.lock 占位符检查返回 0；base index digest 按 digest 解析成功。image id 不作为门禁，理由见 M0-benchmarks.md section 5。"
+    },
+    "E2": {
+      "status": "pass",
+      "evidence": "T16 校验脚本输出 EMPTY/PLACEHOLDER FIELDS: none，exit=0；并有反向校验（注入 unknown 字样、尖括号包裹的 TBD、数值 0 三种占位符均被抓到）。"
+    },
+    "E10": {
+      "status": "pass",
+      "evidence": "M0-benchmarks.md section 1-4 四组数据齐备：镜像构建时间与体积、容器冷启动、编译基准、bind mount vs 命名卷。"
+    },
+    "E5": {
+      "status": "pending",
+      "evidence": "T28 为人工操作任务，待用户在 VSCode 中实测断点命中。**下层证据已齐**：scripts/debug-smoke-test.sh 第 2 节 A/B/C 三项 + 9 项断言全部通过（exit=0）-- 第 2 节按 .vscode/launch.json 原样复刻 CodeLLDB 的 cargo 步骤（cwd 来自 cargo.cwd、filter 按 target name 筛选、恰好选中 1 个产物），随后 9 项断言：断点解析到 rgoc_harness::double_sum + 20 at lib.rs:27、stop reason = breakpoint 1.1、调用栈 3 帧、a=1/b=2、step over 停到 lib.rs:28、sum = 3、test result: ok. 1 passed; 0 failed。剩余待人工确认的只有**编辑器链路**本身（扩展、launch.json、DAP 接线）。**编辑器链路的三个前提均已实测**：① VS Code Server 1.140.0 装入持久卷 /vscode 且两处 test -d 均 exit=0（environment.debug.vs_code_server）；② CodeLLDB 平台包 platform.ok 存在且 lldb 22.1.8-codelldb 可执行；③ launch.json 的两处 cargo 配置缺陷已修（cargo.cwd 与 filter.name，见 environment.debug.launch_config），且在真实 cargo 产物上复刻 CodeLLDB 的筛选逻辑验证过能选中可执行文件。",
+      "blocking_note": "历史上曾阻塞过三类问题，**都各自独立、且报错可能互相掩盖**：① **扩展平台包**（容器内、走 GitHub releases）-- 曾因宿主下发的 http.proxy 无法下载，见 M0-benchmarks.md section 7，修法 scripts/install-codelldb.sh，容器重建后必丢；② **VS Code Server 本体**（宿主机、连接容器之前、走 update.code.visualstudio.com）-- 宿主 VSCode 每次升级都会改变 commit 而持久卷里没有，判据是日志里的 Path: 是否指向宿主 /var/folders/...，见 section 9，修法 scripts/install-vscode-server.sh --commit HOST_COMMIT（HOST_COMMIT 取宿主 product.json 的 commit 字段）；③ **CodeLLDB 的 cargo 启动配置**（f5 阶段）-- cargo.cwd 缺失会让 cargo 在 workspaceFolder /work 下找不到 Cargo.toml 而退出 101（顶层 cwd 无效），filter.name 用包名而非 target name 会 0 匹配，两者见 section 10。调试目标的形状（中间值必须被第二次读取）见 section 8。"
+    }
+  },
+  "test_ids": [],
+  "unsupported": [],
+  "budget": {},
+  "benchmarks": {
+    "image": {
+      "first_build_with_pull_s": 74,
+      "rebuild_cached_s": 3.03,
+      "rebuild_nocache_s": [
+        59.05,
+        61.32,
+        68.44,
+        84.28,
+        151.54
+      ],
+      "image_size_mb": 2920,
+      "disk_increment_mb": 2909
+    },
+    "cold_start": {
+      "run_true_s": 0.16,
+      "run_rustc_version_s": 0.17
+    },
+    "compile_minimal_workspace": {
+      "cargo_check_incremental_s": 0.08,
+      "cargo_clippy_incremental_s": 0.07,
+      "cargo_test_s": 0.0
+    },
+    "target_layout": {
+      "probe_crate_modules": 120,
+      "probe_crate_target_mb": 6.2,
+      "bind_mount_s": [
+        0.336,
+        0.359,
+        0.287
+      ],
+      "named_volume_s": [
+        0.15,
+        0.137,
+        0.133
+      ],
+      "speedup_x": 2.3,
+      "decision": "named-volume",
+      "volume_name": "rgoc-target",
+      "cost_ownership": "new volume is root:root, needs chown 501:20 (handled by in-container.sh bootstrap and devcontainer postCreateCommand)",
+      "cost_cargo_clean": "cargo clean fails with EBUSY(16) exit=101; use find rgoc/target -mindepth 1 -delete instead"
+    },
+    "reproducibility": {
+      "image_id_stable": "no",
+      "differing_layers_of_14": 6,
+      "pin": "base_index_digest + src.*_sha256"
+    }
+  }
+}

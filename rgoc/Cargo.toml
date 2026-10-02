@@ -1,0 +1,24 @@
+# rgoc —— Rust 版 Go 编译器（项目代号 rgoc）
+#
+# 本 workspace 采用「只创建当期需要的模块」原则（03 §2）：
+# M0 Phase 1 只建 rgoc-harness；其余 crate 按里程碑依赖逐个引入，
+# 【不】一次性建立全部空 crate。
+#
+# 完整 crate 规划见 docs/03-roadmap.md §2。
+
+[workspace]
+resolver = "3"
+members = ["crates/rgoc-harness"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98"
+license = "BSD-3-Clause"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
