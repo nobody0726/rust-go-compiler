@@ -14,13 +14,28 @@
 
 | 类型 | 位置 | 形态 | 驱动方式 |
 |---|---|---|---|
-| A. 语言测试套件 | `test/`（顶层 ~600 个 .go + 子目录） | 独立可编译程序，**不是** `_test.go` | `test/run.go` 按文件首行指令自动发现 |
+| A. 语言测试套件 | `test/`（**实测**顶层 **356** 个 .go + 子目录合计 **3,400** 个 .go；顶层 7 个 `.out`） | 独立可编译程序，**不是** `_test.go` | **`src/cmd/internal/testdir/testdir_test.go`** 按「首个非空且非构建约束行」的注释自动发现 |
 | B. 编译器单测 | `src/cmd/compile/internal/*/*_test.go` | 标准 Go 单测 | `go test` |
 | C. 类型检查黄金语料 | `src/internal/types/testdata/{check,spec,examples,fixedbugs}/` | 带 `// ERROR` 注释的 .go 语料 | `go/types` 与 `types2` 的 `TestCheck/TestSpec/TestExamples/TestFixedbugs/TestLocal` |
 | D. Runtime 单测 | `src/runtime/*_test.go` + `src/runtime/testdata/` | 标准单测 + 子进程程序 | `go test`；testdata 程序由 `TestMain` 分派 |
 | E. 编译器内部导出 | `src/*/export_test.go` | 暴露内部符号供测试 | 被上述单测引用 |
 
-**A 类文件的驱动指令**（首行注释）：`// run`、`// errorcheck`（含 `-0 -m` 等标志）、`// compile`、`// runoutput`、`// rundir`、`// errorcheckdir`、`// asmcheck`、`// build`。故其"测试函数"是文件内的 `main()` 或具名辅助函数，而非 `TestXxx`。
+**A 类文件的驱动指令** —— **实测共 16 个**（源码 `testdir_test.go:542/544/550/552`）：
+
+| 分组 | 指令 |
+|---|---|
+| 编译/运行 | `compile`、`compiledir`、`build`、`builddir`、`buildrundir`、`run`、`buildrun`、`runoutput`、`rundir`、`runindir`、`asmcheck` |
+| 错误检查 | `errorcheck`、`errorcheckdir`、`errorcheckoutput` |
+| 组合/特殊 | `errorcheckandrundir`、`errorcheckwithauto`（内部转为 `errorcheck`）、`skip` |
+| 未知指令 | **`t.Fatalf("unknown pattern: %q")`** —— 硬失败，非静默跳过（`:557`） |
+
+三条必须精确实现的规则（详见 [`milestones/M0-tests.md`](./milestones/M0-tests.md) §1.3）：
+
+1. **指令行不一定是首行** —— 它是「首个非空、且不是 `//go:build` / `// +build` 的行」（`:502-515`）；
+2. **`.out` 缺失 ⇒ 期望输出为空**，而非「任意输出均可通过」（`:1169-1193`）；
+3. **`errorcheck` 即使裸写也会被自动追加 `-d=ssa/check/on`**（`:613-625`）—— 故其期望**不能当纯语言语义验收**。
+
+故其"测试函数"是文件内的 `main()` 或具名辅助函数，而非 `TestXxx`。
 
 ### 0.2 与既有文档不一致之处（已核实修正）
 
@@ -32,6 +47,9 @@
 | `escape/`、`walk/`、`coverage/`、`pkginit/`、`objw/`、`staticdata/`、`arm64/` 有测试 | 这些目录下**无任何 `*_test.go`** |
 | `src/runtime/internal/` | **不存在**；SwissTable 测试在 `src/internal/runtime/maps/` |
 | `sizeclasses_test.go`、`mheap_test.go`、`mcache_test.go`、`mcentral_test.go`、`cgo_test.go` | **均不存在** |
+| `test/run.go` 按**文件首行**指令自动发现 | **`test/run.go` 不存在**；真实驱动器是 `src/cmd/internal/testdir/testdir_test.go`（2,072 行）。且指令行是「**首个非空且非构建约束的行**」，**不能假定在首行**（`:502-515`） |
+| `test/` 顶层约 **600** 个 .go；驱动指令 **8** 个 | 顶层实为 **356** 个（含子目录共 **3,400** 个）；驱动指令实为 **16** 个，且**未知指令硬失败**（`:542/544/550/552`、`:557`） |
+| `.out` 缺失 = 输出不作要求 | **相反：`.out` 缺失 ⇒ 期望输出必须为空**（严格比较，`:1169-1193`） |
 
 ---
 

@@ -25,11 +25,11 @@
 | 维度 | 本修订版固定选择 | 说明 |
 |---|---|---|
 | 语言/语料版本 | 本地 `go_source_code/VERSION` 标记的 `go1.27.1` | 固定输入快照，不宣称它是当前最新官方版本 |
-| 参考工具链 | Lima VM 内与语料匹配的 `go1.27.1`，记录二进制路径和校验值 | 宿主机 Go 版本不作为基线；不能用不匹配版本做 oracle |
-| 首发宿主 | Linux / arm64（由 Lima VM 提供） | 开发、测试和首发 native 验证统一在固定 Lima VM 内完成 |
+| 参考工具链 | 容器内与语料匹配的 `go1.27.1`（基础镜像 `golang:1.27.1` 锁版），记录二进制路径和校验值 | 宿主机 Go（当前 `go1.24.5`）不作为基线；不能用不匹配版本做 oracle |
+| 首发宿主 | Linux / arm64（由 **Docker 容器**提供） | 开发、测试和首发 native 验证统一在固定容器内完成 |
 | 首发目标 | `aarch64-unknown-linux-gnu`，ELF | 本修订版采用单平台首发；更改须更新决策、manifest 和门禁 |
-| 最低系统版本/SDK | M0 锁定 Linux 发行版、镜像摘要、guest kernel 和 libc 基线 | 不依赖宿主 macOS SDK；CI 使用同等 Linux guest |
-| 汇编/对象/链接 | 自研 SSA→arm64 汇编；VM 内系统 `clang` 产出 ELF 对象并链接 | 首版不自研 assembler、ELF writer 或 linker |
+| 最低系统版本/SDK | M0 锁定基础镜像 **digest**、Docker Desktop 版本、容器内核和 libc 基线 | 不依赖宿主 macOS SDK；CI 使用同 digest 的等同容器 |
+| 汇编/对象/链接 | 自研 SSA→arm64 汇编；容器内系统 `clang` 产出 ELF 对象并链接 | 首版不自研 assembler、ELF writer 或 linker |
 | 调用约定 | 首发平台 ABI + 项目私有调用约定，明确 runtime 桥接 | 不读写官方 Go `.a`，不承诺 Go internal ABI 兼容 |
 | 包加载 | 源码加载：同包多文件 + 显式依赖目录映射 | 模块下载、完整 module resolver、官方 export data 格式不在首发 |
 | 标准库 | 起步仅预声明内建；按明确包清单逐步加入源码支持 | 无支持的 `fmt/sync/runtime/reflect` 导入必须报 unsupported，不用静默桩骗过测试 |
@@ -38,11 +38,11 @@
 | runtime | 宿主解释器与 native 实现分离 | 允许系统 libc、线程及虚拟内存 API；不承诺 freestanding |
 | 第二平台 | 候选 `x86_64-unknown-linux-gnu` / ELF | C 稳定后另定资源与测试，不与首发并行承诺 |
 
-**首发非目标**：完整标准库、cgo、race detector、wasm、plugin、用户 Go 汇编兼容、动态链接/插件能力、完整 DWARF/coverage/PGO、Go ABI 兼容、完整反射、性能追平官方 Go、并发 GC和异步抢占。系统链接默认使用 Linux guest 系统库，不承诺全静态可执行文件。
+**首发非目标**：完整标准库、cgo、race detector、wasm、plugin、用户 Go 汇编兼容、动态链接/插件能力、完整 DWARF/coverage/PGO、Go ABI 兼容、完整反射、性能追平官方 Go、并发 GC和异步抢占。系统链接默认使用容器内系统库，不承诺全静态可执行文件。
 
 版本或平台调整须作为独立决策更新语料 manifest 和阶段测试集，不能为了通过某个用例临时换版本。本地快照无 Git 元数据时，采用排序后的源码路径/文件 SHA-256 清单锁定；`VERSION` 文件本身不足以证明内容一致。
 
-**锁定状态**：Go 版本、Linux guest、首发架构和对象格式已在计划中确定。Lima 版本/配置、匹配 Go 工具链的安装与校验、源码 hash 清单、Linux 镜像摘要和 libc 基线的实测锁定仍是 M0 交付；本次文档修改不代表这些环境任务已经执行。
+**锁定状态**：Go 版本、Linux/arm64 宿主、首发架构和对象格式已在计划中确定。基础镜像 digest、Docker Desktop 版本与容器内核、匹配 Go 工具链的安装与校验、源码 hash 清单和 libc 基线的实测锁定仍是 M0 交付；本次文档修改不代表这些环境任务已经执行。
 
 ### 0.3 完成度与功能 ID
 
@@ -69,7 +69,7 @@
 | D2 | runtime | 宿主解释器 → 极小 native runtime → STW → 调度/并发 GC | 不在一个阶段承诺完整 GMP、GC、抢占和定时器 |
 | D3 | 代码基线 | 新实现，参考官方设计和既有仓库 | spike 不视为生产实现完成 |
 | D4 | 泛型 | 类型集/统一地基先设计，按行为实现 | 不以整套 types2 架构照搬替代需求分析 |
-| D5 | 平台 | 首发 arm64/Linux（Lima VM），系统工具链 | 去掉早期双架构与自研链接器承诺 |
+| D5 | 平台 | 首发 arm64/Linux（Docker 容器），系统工具链 | 去掉早期双架构与自研链接器承诺 |
 | D6 | 测试 | 只读语料 + Test IR + 分层执行 | 数量、兼容性和通过率由 manifest 决定 |
 | D7 | 范围控制 | 先正确性，内部算法和性能优化另排期 | SwissTable、shape 共享、内联不阻塞首发 |
 
@@ -128,31 +128,47 @@ GC 链条明确为：类型布局 → typed allocation → SSA 指针活跃集 �
 
 ## 2. 工程骨架与实现边界
 
-建议路径如下；M0 只创建当期需要的模块，后续按依赖引入，不一次性建立全部空 crate：
+**仓库结构（单仓单根）**：文档与代码同处一个仓库；`docs/contracts/` 与 `docs/milestones/` 位于顶层 `docs/` 下、与 `01`–`04` 同级，`rgoc/` 只承载 Rust 工程。M0 只创建当期需要的模块，后续按依赖引入，不一次性建立全部空 crate。
 
 ```text
-rgoc/
-├── Cargo.toml
-├── crates/
-│   ├── rgoc-lex/             # token / SourceMap
-│   ├── rgoc-ast/             # AST / parser
-│   ├── rgoc-const/           # arbitrary-precision constants
-│   ├── rgoc-types/           # scopes / types / inference
-│   ├── rgoc-loader/          # source packages / imports / init graph
-│   ├── rgoc-hir/             # shared semantic lowering
-│   ├── rgoc-interp/          # host execution
-│   ├── rgoc-ssa/             # IR / verifier / diagnostic evaluator
-│   ├── rgoc-codegen/         # arm64 assembly / ABI / metadata
-│   ├── rgoc-runtime/         # native runtime and host boundary
-│   ├── rgoc-harness/         # Test IR / oracle / comparators
-│   └── rgoc-driver/          # lex / parse / check / run / build
-├── tests/{smoke,milestone,corpus}/
-├── runtime/native/aarch64-unknown-linux-gnu/  # startup / assembly bridge
-├── docs/contracts/           # interfaces and revisions
-└── xtask/                    # corpus manifest / reports / environment manifest
+rust_go_compiler/                           # 仓库根
+├── .devcontainer/                         # VSCode Dev Containers 配置（引用 docker/Dockerfile）
+├── .dockerignore                          # 构建上下文裁剪
+├── .vscode/                               # 调试启动配置（CodeLLDB）
+├── AGENTS.md                              # 工程入口
+├── corpus-manifest.sha256                 # 语料锁定清单
+├── rust-toolchain.toml                    # Rust 版本唯一来源（D-M0-8）
+├── docker/
+│   ├── Dockerfile                         # 唯一镜像定义（开发容器与门禁容器共用，D-M0-10）
+│   └── image.lock                         # 基础镜像 digest 与构建元数据
+├── scripts/                               # 容器入口（in-container.sh）与环境探测（env-probe.sh）
+├── docs/
+│   ├── README.md, 01-…, 02-…, 03-…, 04-…
+│   ├── contracts/                         # 跨阶段接口与版本化契约
+│   └── milestones/                        # <阶段ID>-design.md、-tests.md、-plan.md、-manifest.json
+└── rgoc/                                  # Rust 工程（cargo workspace）
+    ├── Cargo.toml
+    ├── crates/
+    │   ├── rgoc-lex/          # token / SourceMap
+    │   ├── rgoc-ast/          # AST / parser
+    │   ├── rgoc-const/        # arbitrary-precision constants
+    │   ├── rgoc-types/        # scopes / types / inference
+    │   ├── rgoc-loader/       # source packages / imports / init graph
+    │   ├── rgoc-hir/          # shared semantic lowering
+    │   ├── rgoc-interp/       # host execution
+    │   ├── rgoc-ssa/          # IR / verifier / diagnostic evaluator
+    │   ├── rgoc-codegen/      # arm64 assembly / ABI / metadata
+    │   ├── rgoc-runtime/      # native runtime and host boundary
+    │   ├── rgoc-harness/      # Test IR / oracle / comparators
+    │   └── rgoc-driver/       # lex / parse / check / run / build
+    ├── tests/{smoke,milestone,corpus}/
+    ├── runtime/native/aarch64-unknown-linux-gnu/  # startup / assembly bridge
+    └── xtask/                 # corpus / reports / environment manifest
 ```
 
-不设首发 `rgoc-linker`；使用 Lima VM 内的 `clang` 输出 ELF 并链接项目 runtime。生产代码不把官方 Go `.s` 直接喂给系统汇编器。runtime 的 Rust/C/汇编桥接方式在 M0 spike 中验证，包括 unwind 边界、符号、栈对齐和工具链适配。
+**M0 只创建当期需要的部分**：`docker/`、`scripts/`、`rust-toolchain.toml`、`.devcontainer/`、`.vscode/`，以及 `rgoc/` 中的 `rgoc-harness`（+ 三个 spike 各自所需的最小 crate）。其余 crate **不建空壳**，按里程碑依赖引入。
+
+不设首发 `rgoc-linker`；使用容器内的 `clang` 输出 ELF 并链接项目 runtime。生产代码不把官方 Go `.s` 直接喂给系统汇编器。runtime 的 Rust/C/汇编桥接方式在 M0 spike 中验证，包括 unwind 边界、符号、栈对齐和工具链适配。
 
 **包/API 边界**：内部 runtime 调用 libc 不等于支持用户 `import "C"`，cgo 仍明确拒绝。`unsafe` 初始白名单仅规划 `Sizeof/Alignof/Offsetof` 的静态求值/布局验证；`unsafe.Pointer` 转换、`uintptr` 往返及内存访问须另列支持条件，并在 native 根协议验证前拒绝执行。`reflect` 首发不提供包实现；M12 的有限反射必须先冻结包/API 白名单，未列入的方法和动态调用显式拒绝，不能以内部 typedesc 已存在作为 `reflect` 支持证据。
 
@@ -202,7 +218,7 @@ Test IR 至少记录：用例 ID、相对路径、输入文件集合、模式、
 - 诊断先对齐拒绝/接受、位置和预定义类别，文本/regex 另列指标；禁止“任意错误即通过”，检测未预期额外错误。官方诊断无统一类别编码时通过明确的适配表/自有语义 fixture 判定，未知类别不强行归类。
 - map 顺序/select 调度不应与参考进程逐字 diff；优先使用程序内语义断言/集合或性质比较器。固定 seed 只保证 rgoc 回放，不控制官方 runtime，也不能替代多 seed 压力/公平性检查。
 - panic 比较消息/语义和退出状态；地址、栈格式等实现细节不纳入首发精确一致性。
-- 子进程隔离、墙钟超时和资源限制；Linux guest 可硬限制的指标使用 cgroup/ulimit 等机制，并记录 guest 与宿主资源边界。
+- 子进程隔离、墙钟超时和资源限制；容器内可硬限制的指标使用 cgroup/ulimit 等机制，并记录容器与宿主资源边界。
 - 失败保存源文件、flags、版本、seed、轨迹、阶段 dump；先人工缩减并固化回归，自动 reducer 在有复现 fixture 后作为独立工具任务。
 
 **差分最小化协议**：先在相同配置下连续复现 3 次；不稳定失败先归入 `nondeterministic-failure` 并保留轨迹，不直接运行普通 reducer。稳定语义差异的缩减候选必须保持 oracle 可接受、仍在已声明支持子集内、失败类别/比较器和目标差异不变；崩溃/诊断差异按其原判据处理，不接受变成无关语法错误或 unsupported 的候选。按文件/声明/语句/表达式逐层人工缩减，保存原始与最小样本、判定命令及每次结果；自动化沿用同一判据。每个失败首轮缩减上限 2 小时，未缩完保留当前样本与阻塞说明，已确认的语义失败仍阻塞所属门禁。
@@ -221,8 +237,8 @@ Test IR 至少记录：用例 ID、相对路径、输入文件集合、模式、
 
 **目标**：先证明管道/边界可行，不承诺完整语言实现。预计资源窗口见 §6。
 
-1. 启动固定 Lima Linux VM：使用版本化 Lima 配置、Linux 镜像摘要和 VM 内固定工具链；环境 manifest 记录 `rustc/cargo`、Go oracle、`clang`、guest kernel、libc 和资源配置。
-2. 锁定源码快照/许可、版本和参考工具链。可用匹配预构建包或可重复构建方案；宿主机工具链不替代 Linux guest 内的首发基线。
+1. 启动固定 Docker 容器：按 digest 钉基础镜像（`golang:1.27.1-bookworm`）并构建含钉版工具链的镜像；环境 manifest 记录 `rustc/cargo`、Go oracle、`clang`、Docker Desktop 版本、容器内核、libc 和资源配置。
+2. 锁定源码快照/许可、版本和参考工具链，并把语料**获取与校验步骤**写入文档。可用匹配预构建包或可重复构建方案；宿主机工具链不替代容器内的首发基线。
 3. 构建 Test IR/manifest 与小型 harness。枚举所有指令；v0 优先执行 run/compile/纯前端 errorcheck，其他模式显式分类，不在 M0 重写完整官方 runner。
 4. **解释 spike**：最小 parser 或明确标识的固定 AST → HIR → `println(1 + 2)`；支持范围只限这个 fixture。
 5. **SSA spike**：固定 HIR → Block/Value → 求值；识别 memory/tuple/调用需求，复杂验证留 M6。
@@ -465,7 +481,7 @@ M0 先测每类 fixture 的适配/开发成本，M2 和首次 native MVP 后重�
 
 初始 CI 目标：smoke ≤5 分钟，milestone ≤30 分钟，full 单次 ≤2 小时；长时 GC/并发 soak 独立手动/夜间 job。M0 按机器实测调整并记录 wall time、峰值 RSS 和 runner 配置；预算不是漏测理由。
 
-每阶段及独立验收子阶段开工前产出 `docs/milestones/<阶段ID>-tests.md` 和机器可读 manifest，列必需 ID、退出结果、比较器、工具链、投入/日历期限、测试资源上限和暂不支持项；进入下一阶段以必需 ID 100% 通过为准。子阶段也沿用 §6.1 的无进展/预算触发规则，并写明超限优先延期项与不可放宽门禁。这些是未来交付要求，本次不把不存在文件标为已完成。
+每阶段及独立验收子阶段开工前产出 `docs/milestones/<阶段ID>-design.md`（设计文档，适用时）、`<阶段ID>-tests.md`（测试先行清单）以及机器可读 manifest，列必需 ID、退出结果、比较器、工具链、投入/日历期限、测试资源上限和暂不支持项；设计经确认后用 `<阶段ID>-plan.md` 承载 **2–5 分钟粒度**的实施任务（文件路径 / 可粘贴内容 / 验证命令）。进入下一阶段以必需 ID 100% 通过为准。子阶段也沿用 §6.1 的无进展/预算触发规则，并写明超限优先延期项与不可放宽门禁。这些是未来交付要求，本次不把不存在文件标为已完成。
 
 ### 6.3 统一退出与需求变更
 
@@ -503,7 +519,7 @@ M0 先测每类 fixture 的适配/开发成本，M2 和首次 native MVP 后重�
 
 ## 8. 下一步行动
 
-1. 仅进入 **M0 的详细计划**：Lima VM/镜像锁定、源码/工具链锁定、harness 自验、三个 spike。
+1. 仅进入 **M0 的详细计划**：容器镜像 digest / 工具链锁定、源码锁定与语料校验步骤、harness 自验、三个 spike。
 2. 为 M0 写精确路径/任务依赖/RED-GREEN 验证命令和预算；不提前拆完 M1–M12 的细任务。
 3. 先查明 Rust 工具链和匹配 Go oracle 获取路径，再编写依赖它们的正式实现。
 4. M0 达到门禁后推进 M1；未达标先修环境/设计，不能把 spike 成功的示例当成语言实现进度。
@@ -519,7 +535,7 @@ M0 先测每类 fixture 的适配/开发成本，M2 和首次 native MVP 后重�
 
 | 原建议 | 本版落实位置 | 文档状态 / 后续执行 |
 |---|---|---|
-| 1. 固定 Go 版本、宿主和首发架构 | §0.2：Go 1.27.1、Linux/arm64（Lima）、ELF | 已确定；Lima/镜像/工具链/hash 校验在 M0 执行 |
+| 1. 固定 Go 版本、宿主和首发架构 | §0.2：Go 1.27.1、Linux/arm64（Docker）、ELF | 已确定；镜像 digest / 工具链 / hash 校验在 M0 执行 |
 | 2. 完成度拆为四类 | §0.3：Frontend/Interpreter/Native/Runtime | 已定义各维度分母/状态/覆盖指标；逐 ID 清单和实际报告待执行 |
 | 3. M0 增加三个架构 spike | M0：解释、SSA、native 验证 | 已列交付与门禁；均尚未实施 |
 | 4. 拆分原 M5/M6/M8/M9 | §1.2 编号对照；M5–M11 子阶段 | 已拆分；M5/M6/M7/M8/M9 独立门禁见各表 |

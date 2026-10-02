@@ -16,11 +16,11 @@
 | 语料快照 | `go_source_code/`，`VERSION` = **`go1.27.1`**（2026-08-28T16:20:06Z） |
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
-| 首发平台 | **Linux / arm64**（Lima VM 提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 之前** —— 只有文档，尚无任何代码 |
+| 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
+| 当前阶段 | **M0 前置已就绪，尚未开工** —— 设计与测试清单齐备，仍只有文档，无任何代码 |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：文档体系（4 篇正文 + 1 索引）已建立并互链，**已发布到 GitHub**；**编译器工程、开发环境、工具链、全部里程碑均尚未开始**。
+**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 设计与测试清单）已建立并互链，**已发布到 GitHub**；M0 **开工前置已就绪**，但**编译器工程、开发环境、工具链、全部里程碑均尚未开始**。
 
 ---
 
@@ -36,18 +36,24 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── 01-feature-set.md             ←   规格：要建什么
 │   ├── 02-test-inventory.md          ←   规格：如何验证
 │   ├── 03-roadmap.md                 ←   计划：按什么顺序建
-│   └── 04-development-environment.md ←   环境：在哪建
+│   ├── 04-development-environment.md ←   环境：在哪建
+│   ├── contracts/                    ←   跨阶段版本化契约（**空**，M0 Phase 4 产出）
+│   └── milestones/                   ←   阶段文档：<ID>-{design,tests,plan}.md + manifest
+│       ├── M0-design.md              ←     M0 设计（**已确认**）
+│       ├── M0-tests.md               ←     M0 测试先行清单（待冻结）
+│       └── M0-plan.md                ←     M0 实施计划 Phase 0–1（待执行）
 ├── go_source_code/                   ← Go 1.27.1 官方语料，**只读**，**不入库**（185 MB）
-└── .workbuddy/
-    ├── memory/
-    │   ├── MEMORY.md                 ←   项目长期事实（★每次请求自动注入）
-    │   └── YYYY-MM-DD.md             ←   按日工作日志（append-only，不改写）
-    └── backup/                       ←   文档快照（不入库）
+├── .workbuddy/
+│   ├── memory/
+│   │   ├── MEMORY.md                 ←   项目长期事实（★每次请求自动注入）
+│   │   └── YYYY-MM-DD.md             ←   按日工作日志（append-only，不改写）
+│   └── backup/                       ←   文档快照（不入库）
 ```
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚不存在**（`03-roadmap.md` 规划，**M0 才创建**）：`docs/contracts/`、`docs/milestones/`、`rgoc/`（Rust 工程根）、`tests/`、`xtask/`。
+**尚不存在**（全部由 M0 创建，结构见 `03` §2）：`rust-toolchain.toml`、`.dockerignore`、`docker/`、`scripts/`、`.devcontainer/`、`.vscode/`、`rgoc/`、`tests/`、`xtask/`。
+**已创建但为空/待填充**：`docs/contracts/`（空）；`docs/milestones/` 已有 M0 三件套，缺 `M0-manifest.json`。
 
 ---
 
@@ -57,21 +63,32 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 | # | 文档 | 层级 | 回答什么问题 | 状态 | 规模 |
 |---|---|---|---|---|---|
-| — | [`docs/README.md`](./docs/README.md) | 索引 | 文档地图是什么 | 已建立 | ≈5 KB |
+| — | [`docs/README.md`](./docs/README.md) | 索引 | 文档地图是什么 | 已建立 | ≈9 KB |
 | 01 | [`docs/01-feature-set.md`](./docs/01-feature-set.md) | 规格 | **要建什么** —— 功能全集 / RTM | 已建立 | ≈46 KB |
-| 02 | [`docs/02-test-inventory.md`](./docs/02-test-inventory.md) | 规格 | **如何验证** —— 功能点 → 官方测试用例 | 已建立 | ≈60 KB |
-| 03 | [`docs/03-roadmap.md`](./docs/03-roadmap.md) | 计划 | **按什么顺序建** —— M0–M12 迭代计划 | 已修订（v2） | ≈50 KB |
-| 04 | [`docs/04-development-environment.md`](./docs/04-development-environment.md) | 环境 | **在哪建** —— Lima Linux VM 方案 | **方案稿（未执行）** | ≈10 KB |
+| 02 | [`docs/02-test-inventory.md`](./docs/02-test-inventory.md) | 规格 | **如何验证** —— 功能点 → 官方测试用例 | 已建立（9 处修正） | ≈61 KB |
+| 03 | [`docs/03-roadmap.md`](./docs/03-roadmap.md) | 计划 | **按什么顺序建** —— M0–M12 迭代计划 | 已修订（v2） | ≈52 KB |
+| 04 | [`docs/04-development-environment.md`](./docs/04-development-environment.md) | 环境 | **在哪建** —— Docker 容器方案 | **方案稿（未执行）** | ≈13 KB |
+| — | [`docs/milestones/M0-design.md`](./docs/milestones/M0-design.md) | 设计 | **怎么建 M0** —— 决策 D-M0-1~12 / 环境基线 / Phase 0–4 / 门禁 E1–E10 | **已确认** | ≈30 KB |
+| — | [`docs/milestones/M0-tests.md`](./docs/milestones/M0-tests.md) | 测试 | **怎么验 M0** —— T-H/T-C/T-S 测试 ID、20 样本、unsupported、超时预算 | 待冻结 | ≈22 KB |
+| — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— Phase 0–1 的 T01–T28 任务（路径 / 可粘贴内容 / 验证） | 待执行 | ≈40 KB |
 
 **阅读顺序**：01 → 02 → 03 → 04。
+
+**阶段文档**（`docs/milestones/`）——每阶段开工前须产出 **三件套**（`03` §6.2）：
+
+| 件 | 回答什么 | M0 状态 |
+|---|---|---|
+| `<ID>-design.md` | **做什么、边界在哪** | ✅ 已确认 |
+| `<ID>-tests.md` | **怎么算通过** | ⏳ 待冻结 |
+| `<ID>-plan.md` + `manifest.json` | **按什么顺序动手** + 环境锁定值 | ⏳ 计划已有（Phase 0–1）；manifest 缺 |
 
 ### 2.2 依赖方向
 
 ```text
 01-feature-set ───┐
-（246 个功能 ID）   ├──► 03-roadmap ──► docs/milestones/<阶段ID>-tests.md
-02-test-inventory ┘    （迭代计划）        （每阶段开工前必产，03 §6.2）
-（测试线索）
+（246 个功能 ID）   ├──► 03-roadmap ──► docs/milestones/<阶段ID>-design.md
+02-test-inventory ┘    （迭代计划）      docs/milestones/<阶段ID>-tests.md
+（测试线索）                             （每阶段开工前必产，03 §6.2）
 
 04-development-environment ──► 落实 03 §0.2 的平台 / 工具链约束
 ```
@@ -111,11 +128,11 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | 项 | 说明 |
 |---|---|
 | 编译器工程 | `rgoc/` **尚不存在**，无任何 Rust 代码 |
-| 开发环境 | Lima VM、Linux guest、Rust / Go 工具链**均未搭建**（04 明示为方案稿） |
-| M0 | 未开始。需先完成环境锁定 + 语料 manifest/harness 自验 + 三个 spike（解释 / SSA / native） |
+| 开发环境 | 容器镜像、Rust / Go 工具链、`.devcontainer` **均未搭建**（04 明示为方案稿；Docker Desktop 已实测可启动） |
+| M0 | **未开工**。**三件套已就绪**：`M0-design.md`（已确认）/ `M0-tests.md`（待冻结）/ `M0-plan.md`（待执行），缺 `M0-manifest.json`。下一步：执行 `M0-plan.md` 的 Phase 0（T01–T19） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
-| 规划中目录 | `docs/contracts/`、`docs/milestones/` 不存在 |
-| 事实修正 | 02 **§0.2** 记录了 6 处对既有表述的修正（如 `syntax/testdata/` 实为 **31** 个文件）——**以该节为准** |
+| 阶段目录 | `docs/contracts/` **已创建但为空**；`docs/milestones/` 含 M0 设计与测试清单 |
+| 事实修正 | 02 **§0.2** 记录了 **9 处**对既有表述的修正（如 `syntax/testdata/` 实为 **31** 个文件；驱动器是 `testdir_test.go` 而非 `test/run.go`）——**以该节为准** |
 
 ---
 
@@ -156,6 +173,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | 里程碑增删或编号变化 | `03` §1.2 依赖图与编号对照表、§4 详细计划、§5 归属表、§6.1 预算表 → **本文件 §3** |
 | 语料版本变更（`VERSION`） | `01` §0.4 行号基准（**全库行号失效**）→ `02` 全部引用 → `03` §0.2 兼容性矩阵 → 重新生成 `corpus-manifest.sha256` → **本文件 §0 §3** |
 | 平台 / 目标 triple 变更 | `03` §0.2 → `04` 全文 → **本文件 §0** |
+| 新增阶段文档（design / tests / manifest） | `docs/README.md` §1 §5 → **本文件 §1 §2.1 §3** |
 | 某阶段完成 / 门禁达成 | 该阶段 `docs/milestones/<ID>-tests.md` → `03` 对应里程碑 → **本文件 §3** |
 | 完成任何实质工作 | 追加 `.workbuddy/memory/YYYY-MM-DD.md`；长期约定写入 `MEMORY.md` |
 
@@ -165,23 +183,24 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 ### 6.1 文档自检
 
-改完文档后跑一遍（三条应分别是：0 行输出、`clean`、目录不存在提示）：
+改完文档后跑一遍（期望：① 无 `BROKEN` 行　② 输出 `clean`　③ 两个目录路径都列出）：
 
 ```sh
 cd /Users/wangfeng/workspace/rust_go_compiler
 
-# 1) 内部相对链接是否都指向存在的文件（期望输出 0 行）
-for f in docs/*.md; do
-  grep -o '](\./[^)]*)' "$f" | sed 's/](\.\///; s/)$//' | while read -r t; do
-    [ -f "docs/$t" ] || echo "BROKEN: $f -> $t"
+# 1) 内部相对链接是否都指向存在的文件（含子目录，期望无 BROKEN 行）
+for f in $(find docs -name '*.md'); do
+  d=$(dirname "$f")
+  grep -o '](\.\.\?/[^)]*)' "$f" 2>/dev/null | sed 's/](//; s/)$//' | while read -r t; do
+    [ -e "$d/$t" ] || echo "BROKEN: $f -> $t"
   done
 done
 
 # 2) 是否残留旧文件名（期望输出 clean）
 grep -rn --include='*.md' -E "COMPILER_FEATURE_SET|TEST_CASE_INVENTORY|DEVELOPMENT_ENVIRONMENT|ROADMAP\.md" docs/ || echo clean
 
-# 3) 规划但尚未创建的目录
-ls -d docs/contracts docs/milestones 2>/dev/null || echo "contracts/ milestones/ 尚未创建（M0 才建）"
+# 3) 阶段目录是否已创建（期望列出两个路径）
+ls -d docs/contracts docs/milestones 2>/dev/null || echo "阶段目录缺失"
 ```
 
 新增文档的约定：顶层命名 `NN-<kebab-topic>.md`（`NN` 体现层级与阅读顺序；`README.md` 固定不编号）；新增后登记进 `docs/README.md` → 更新本文件 §1 §2 → 补头部「文档索引 / 上游 / 下游」行。
@@ -212,10 +231,24 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
 
 ## 7. 下一步
 
-按 `docs/03-roadmap.md` §8：
+**M0 三件套（design / tests / plan）已就绪，可以开工。**
 
-1. **进入 M0 详细计划**：Lima VM / 镜像锁定、源码与工具链锁定、语料 manifest 与 harness 自验、三个 spike（解释 / SSA / native）
-2. 写清精确路径、任务依赖、**RED-GREEN 验证命令**与预算；**不提前拆完 M1–M12**
-3. 先查明 Rust 工具链与匹配 Go oracle 的获取路径，再动手写依赖它们的正式实现
+按序执行：
+
+1. **提交当前文档改动**（建议先做）—— 使 Phase 0 每个任务失败时都能干净回退
+2. **冻结 `M0-tests.md`** —— §4 的 20 个官方样本与 §6 的 unsupported 清单是开工前的白名单
+3. **执行 `M0-plan.md` 的 Phase 0**（T01–T19）：镜像构建 → 工具链验证 → 入口脚本 → 环境 manifest → 基准测试
+4. **执行 Phase 1**（T20–T28）：最小 workspace → `.devcontainer` → **T28 实测断点命中（E5）**
+5. Phase 1 门禁通过后，**基于实测环境事实再拆 Phase 2–4 的计划**
+
+**M0 的 5 个 Phase**（详见 `M0-design.md` §6）：
+
+| Phase | 内容 | 门禁 | 计划状态 |
+|---|---|---|---|
+| 0 | 容器与工具链底座 | E1 镜像 digest 可重放、E2 环境值入 manifest、E10 基准 | ✅ T01–T19 |
+| 1 | VSCode 调试环境 | **E5 实测断点命中** | ✅ T20–T28 |
+| 2 | Rust 工程骨架 + harness | E3 六类自测全绿、E4 20 样本 100% | ⏳ 待拆 |
+| 3 | 三个 spike（解释 / SSA / native） | E6 可复现、E7 native `hello` | ⏳ 待拆 |
+| 4 | 契约初稿 + 报告 | E8/E9/E10 | ⏳ 待拆 |
 
 **原则**：早期可行性验证、单平台首发、独立可退出的能力切片优先；完整 Go toolchain / runtime 是后续扩展，不是首发承诺。
