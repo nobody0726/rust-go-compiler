@@ -109,6 +109,23 @@ package 时 header = action）
 
 > **这条推翻了「缺失 .out 就是任意输出可通过」的猜测** —— 恰恰相反：**缺失 .out 意味着必须无输出**。
 
+**(R2b) 比较的是 `stdout` 与 `stderr` 的【合并流】** —— `testdir_test.go:642-647`
+
+```go
+runcmd := func(args ...string) ([]byte, error) {
+	cmd := exec.Command(args[0], args[1:]...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	cmd.Stderr = &buf        // ← 两个流写进【同一个 buffer】
+	...
+}
+```
+
+> ⚠️ **这条是 T30 复核时才发现的，此前的记载漏了「哪个流」。**
+> `helloworld.go` / `printbig.go` 用的是**内建 `print`**（写 **stderr**），
+> 而 `helloworld.out` 记的正是它。**只捕 stdout 会让这两个样本「输出为空」而误判失败。**
+> → harness 必须复刻「合并流」，不能只看 stdout。
+
 **(R3) 诊断切分** —— `testdir_test.go:1195-1213`
 
 ```text
@@ -151,6 +168,38 @@ lineRx = LINE(([+-])(\d+))?              ← LINE / LINE+n / LINE-n → 替换�
 ```
 
 ---
+
+**(R6) 三层各自的命令形态** —— T30 复核时逐条从源码抄出（**harness 必须照抄**）
+
+| 层 | 命令 | 出处 |
+|---|---|---|
+| `run`（无 flags） | `go tool compile -p=main -importcfg=<cfg> -o pkg.a <file>` → 链接 → 直跑 exe | `:1069-1077`（fast path） |
+| `run`（有 flags / 跨平台） | `go run <gcflags> <flags> <file>` | `:1079-1085` |
+| `compile` | `go tool compile -e -p=p -importcfg=<cfg> <flags> <file>` | `:188`（`compileFile`） |
+| `errorcheck` | `go tool compile -p=p -d=panic -C -e -importcfg=<cfg> -o a.o <flags> <file>` | `:787-790` |
+
+其中 `<cfg>` 是 **stdlibImportcfg**（`:218-220`）：
+`go list -export -f '{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}' std` 写成文件。
+若 oracle 没有 stdlib 的 export 缓存，**这一层根本跑不起来** —— 容器镜像已预置（`04` §7）。
+
+**四个容易踩的细节**：
+
+1. **不是 `go build`**。`errorcheck` 用的是 `go tool compile`，所以 `-d=ssa/check/on`（R5）
+   才是合法参数；`go build -d=…` 会直接报 `flag provided but not defined: -d`。
+   （T30 第一次就踩了这个，8 个 errorcheck 样本全红。）
+2. **`-C` 关掉首行列号**（`:786` 的 TODO 注释也提到它）。于是首行是 `file:line: msg`、
+   续行是 `\t` + `file:line:col: msg` —— 续行由 R3 的 `splitOutput` 拼进上一条。
+3. **诊断里的路径要先换成短名**：`replacePrefix(out, full, short)`（`:1236-1241` + `:2059-2072`），
+   而且是**逐条**替换 `out[i]`，其中有一处专门处理 `\n\t` + 路径（**续行里的路径也要换**）。
+   不做这步，ERROR 前缀 `<short>:<line>` 永远匹配不上 —— T30 的 8 个样本曾因此全红。
+4. **`runcmd` 的 cwd 默认是 `GOROOT/test`**，环境变量固定加 `GOENV=off`、`GOFLAGS=`、
+   `PWD=<dir>`（`:647` / `:656`）。
+
+**errorCheck 的匹配语义**（`:1249-1304`，T35 要照抄）：
+按 `<short>:<line>` 前缀**取走**该行的全部诊断 → 逐条**砍掉第一个空格之前的部分**
+（丢掉 `file:line:col:`，避免误匹配文件名）→ **未锚定**正则匹配；匹配上的算命中，
+**没匹配上的放回池子**（可被别的期望复用）。最后**池子里剩下的就是失败**（Unmatched Errors）。
+因此「同一行有 2 条诊断、只期望 1 条」是**允许**的（T-C-19 `typecheck.go` 实测就是 5 条诊断配 4 条期望）。
 
 ## 2. 测试 ID 命名约定
 
@@ -268,7 +317,7 @@ test/printbig.out   = "-9223372036854775808\n9223372036854775807\n"     (41 B)
 | **T-C-17** | `test/init.go` | 479 B | `init` 不可被引用；含 `undefined: runtime` 备选 | 3 |
 | **T-C-18** | `test/switch4.go` | 526 B | `fallthrough` 出现在最后一个 case | 1 |
 | **T-C-19** | `test/typecheck.go` | 543 B | 参数列表中的未定义类型；参数数量不足 | 4 |
-| **T-C-20** | `test/mainsig.go` | 598 B | `main`/`init` 签名；**同一行两条 ERROR** | 4 |
+| **T-C-20** | `test/mainsig.go` | 598 B | `main`/`init` 签名；**同一行两条 ERROR** | **5** |
 
 **各样本的 ERROR 期望原文**（供 harness 单测直接引用）：
 
@@ -286,8 +335,10 @@ T-C-18 switch4.go        // ERROR "cannot fallthrough final case in switch"
 T-C-19 typecheck.go      // ERROR "undefined.*b"   ×2
                          // ERROR "not enough arguments"
                          // ERROR "undefined.*c|not enough arguments"
-T-C-20 mainsig.go        // ERROR "func main must have no arguments and no return values" "main redeclared in this block"   ← 同行 2 条
-                         // ERROR "func init must have no arguments and no return values"   ×2
+T-C-20 mainsig.go   L9   // ERROR "func main must have no arguments and no return values"
+                    L10  // ERROR "func main must have no arguments and no return values" "main redeclared in this block"   ← 同行 2 条
+                    L12  // ERROR "func init must have no arguments and no return values"
+                    L13  // ERROR "func init must have no arguments and no return values"      ⇒ 合计 1+2+1+1 = 5 条
 ```
 
 **这 8 个样本刻意覆盖的语法特性**：跨行正则、同行多 ERROR、备选模式、`////` 禁用、OK 与 ERROR 混排 —— 即规则 R4 的全部要点。

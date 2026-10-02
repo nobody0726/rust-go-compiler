@@ -198,7 +198,8 @@
       ],
       "scope": "rgoc-harness 扩写 + rgoc-driver + xtask；先冻结 M0-tests.md（T29）",
       "done": [
-        "T29（冻结 M0-tests.md，2026-10-02）"
+        "T29（冻结 M0-tests.md，2026-10-02）",
+        "T30（oracle 侧复核 20 样本期望值，2026-10-02）"
       ]
     },
     "phase3": {
@@ -258,6 +259,23 @@
       "U14": 1
     },
     "dispatch_order": "R1(解析 action) -> R1b(平台过滤 :522) -> switch(:541)。顺序颠倒会让 harness 在 linkmain.go 上误报 T-H-03",
-    "cross_check": "T33 的 Rust 枚举器算出的分母必须等于 279"
+    "cross_check": "T33 的 Rust 枚举器算出的分母必须等于 279",
+    "expected_values_reviewed": {
+      "task": "T30",
+      "reviewed_at": "2026-10-02",
+      "oracle": "go1.27.1 linux/arm64 (容器内)",
+      "result": "19/20 一致；1 处文档错已改（T-C-20 mainsig.go 的 ERROR 条数 4 → 5）",
+      "evidence": "docs/milestones/M0-benchmarks.md section 11（含 20 行复核表）",
+      "host_vs_container_diff": "无差异（20 个样本的期望在 go1.24.5 与 go1.27.1 下完全相同）",
+      "rules_added": [
+        "R2b: stdout+stderr 合并流（testdir_test.go:642-647）",
+        "R6: 三层命令形态是 go tool compile 而非 go build（:188 / :787-790 / :1069-1085）"
+      ],
+      "timing": {
+        "per_sample_max_s": 0.1,
+        "layer_total_s": 0.2,
+        "budget_layer_s": 300
+      }
+    }
   }
 }

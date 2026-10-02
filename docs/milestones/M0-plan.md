@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 ✅ 2026-10-02**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 ✅ 2026-10-02**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1474,6 +1474,24 @@ scripts/in-container.sh bash -lc 'go version'
 
 > 这一步是 **E4 的前置**：期望值错了，harness 的比较器就被喂了一个错的 oracle，
 > 后面 20/20 通过也**没有意义**。宁可在这里发现，不要留到 E4 判定时。
+
+> ✅ **T30 已完成（2026-10-02）**。容器内 `go1.27.1` 逐个复核，原始记录见
+> `M0-benchmarks.md` **§11**（含 20 行复核表）。结果与三处产出：
+>
+> 1. **19/20 与文档一致**；唯一不符的 **T-C-20 `mainsig.go`** 是**文档错** ——
+>    源码里 ERROR 期望实为 **5 条**（L9 / L10×2 / L12 / L13），文档漏记第 9 行那条。
+>    **处置：改文档**（§4.4 表与期望原文块已补），**不改样本**。
+> 2. **查出规则缺失 → 补 R2b**：官方 `runcmd`（`:642-647`）把 **stdout 与 stderr 合并**
+>    再交给 `checkExpectedOutput`。`helloworld.go` / `printbig.go` 用内建 `print`
+>    （写 stderr），**只捕 stdout 会让这两个样本误判失败**。
+> 3. **查出规则缺失 → 补 R6**：三层各自的命令形态。**`errorcheck` 用 `go tool compile`
+>    而不是 `go build`** —— 所以 R5 的 `-d=ssa/check/on` 才合法（`go build -d=…` 直接报
+>    `flag provided but not defined: -d`）。另含 `-C` 关列号、诊断路径要先
+>    `replacePrefix` 成短名（含续行）、`errorCheck` 的匹配语义。
+>
+> **给 T32 / T34 / T35 的直接输入**：R2b（合并流）、R6（三条命令形态 + importcfg 生成）、
+> R3 / R4 / `errorCheck` / `replacePrefix` 的逐条出处都已写进 `M0-tests.md` §1.3。
+> **顺带实测**：20 个样本整层 **0.2 s**（预算 ≤ 5 min），单项 < 0.1 s。
 
 ### 任务 T31：把 `rgoc-harness` 从「调试目标」扩成 Test IR 骨架
 

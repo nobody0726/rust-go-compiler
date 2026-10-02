@@ -274,6 +274,29 @@ def main() -> int:
         # 分派顺序是冻结时实测得到的，漏掉会让 harness 在真实语料上误报 T-H-03
         check("M0-tests.md 记有「平台过滤先于未知指令判定」（R1b）",
               "R1b" in tests_text and "平台过滤**先于**未知指令判定" in tests_text)
+        # T30 复核补的两条规则：R2b（合并流）与 R6（go tool compile 而非 go build）。
+        # 这两条是 harness 的命门 —— 缺任何一条，20 个样本里就会有一片误判。
+        check("M0-tests.md 记有 R2b（stdout 与 stderr 是合并流）",
+              "R2b" in tests_text and "stdout` 与 `stderr` 的【合并流】" in tests_text)
+        check("M0-tests.md 记有 R6（三层命令形态是 go tool compile）",
+              "R6" in tests_text and "不是 `go build`" in tests_text)
+        # T-C-20 的 ERROR 条数：文档曾写成 4，源码实为 5（L9/L10×2/L12/L13）。
+        # 这条被改过，所以钉住它 —— 防止又被人「改回 4 条」而没人发现。
+        check("M0-tests.md 的 T-C-20 ERROR 条数 == 5（T30 实测修正）",
+              "| **T-C-20** | `test/mainsig.go` | 598 B | `main`/`init` 签名；**同一行两条 ERROR** | **5** |"
+              in tests_text)
+        # T30 的复核记录必须在 benchmarks §11（E4 的证据链）
+        bench_text = (REPO_ROOT / "docs/milestones/M0-benchmarks.md").read_text(encoding="utf-8")
+        check("M0-benchmarks.md 含 §11（T30 的 20 行复核表）",
+              "## 11. T30 复核" in bench_text
+              and "T-C-01" in bench_text and "T-C-20" in bench_text)
+        # 复核结论查【机器可读】的 manifest（措辞不会因改写而漂），不查文档字面
+        evr = manifest.get("test_contract", {}).get("expected_values_reviewed", {})
+        check("T30 复核结论已入 manifest（19/20 一致 + 1 处文档错已改）",
+              str(evr.get("result", "")).startswith("19/20")
+              and "T-C-20" in str(evr.get("result", ""))
+              and "R2b" in " ".join(evr.get("rules_added", [])),
+              str(evr.get("result", "(缺失)"))[:52])
 
     # ── 4. 占位符 ──────────────────────────────────────────────────────────
     print("[4] 交付物占位符")
