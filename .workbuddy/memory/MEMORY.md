@@ -10,15 +10,14 @@
 - **`git push` 常被拦**：`github.com` 的 CONNECT 间歇性 502，而 `api.github.com` 正常 → 改用技能 `github-push-via-api` 走 Git Data API（脚本含 `--root` 模式处理空仓引导提交场景）
 - 语料快照一致性以 SHA-256 清单为准，`VERSION` 文件本身不足以证明内容一致
 
-## 当前状态：M0 Phase 0 与 Phase 1 均已完成 —— 四项门禁 E1/E2/E10/E5 全部通过
+## 当前状态：M0 Phase 0 与 Phase 1 均已完成（E1/E2/E10/E5 全过）；Phase 2–4 计划已拆完（T29–T55），待开工
 
 - **入口**：`docs/milestones/` 下的 M0 四件套 + manifest —— `M0-design.md`（**已确认**，D-M0-1~12）、`M0-tests.md`（待冻结）、`M0-plan.md`（**Phase 0 已完成**）、`M0-benchmarks.md`（E10 证据）、`M0-manifest.json`（environment/gate/benchmarks 已填实）
 - **Phase 0 ✅**：T01–T19 全部完成，门禁 **E1 / E2 / E10 通过**（证据在 `M0-manifest.json` 的 `gate`）
 - **Phase 1 ✅**：T20–T28 全部完成。T20–T22 四条统一退出检查全过（调试目标改形状后已**无需任何 `#[allow]`**）；T23–T26 的 devcontainer / launch.json 就绪；**T27/T28 已由用户于 2026-10-02 人工实测通过 —— E5 是 M0 最后一项门禁**，登记在 `M0-manifest.json` 的 `gate.E5`（`status=pass` / `confirmed_at` / `confirmed_by` / `evidence`）。**三项环境前提均已实测**：VS Code Server 1.140.0 在持久卷 `/vscode`（两处 `test -d` 均 exit=0）、CodeLLDB 平台包 `platform.ok` 存在（lldb 22.1.8-codelldb）、`launch.json` 的 `cargo.cwd` 与 `filter.name` 两处静默陷阱已修。
 - **环境已就绪**：镜像 `rgoc:dev` = `sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b`（2.92GB，14 层）
-- **待办（Phase 2 开工前）**：① **冻结 `M0-tests.md`**（§4 的 20 个官方样本 + §6 的 unsupported 清单是白名单）；② **拆 Phase 2–4 计划**（前置条件「Phase 1 门禁通过」已满足，见 `M0-plan.md` §0.1 的状态更新）；③ 跑一遍 `AGENTS.md` §6.1 的自检
-- **决策全部已定**：D-M0-1~6（用户拍板）—— Docker 替代 Lima／严格环境优先／单仓单根／语料不入库只写重建步骤／基础镜像 `golang:1.27.1-bookworm`／调试只覆盖 **Rust 代码级**；D-M0-7~12（2026-10-02 接受）—— index digest 钉镜像／rustup + `rust-toolchain.toml` 钉版／cargo home 用命名卷而 `target/` 待基准／开发容器长驻 + 门禁一次性 `docker run` 同 digest／最小 `rgoc-hir` 标 `SPIKE-ONLY`／环境 manifest 载体为 `M0-manifest.json`
-- `M0-manifest.json` 的 `environment` 节已由 T15 产出并填实；`M0-tests.md` 的冻结、**Phase 2–4 的计划**拆解是 Phase 2 开工前的两件事（后者原设定「等 Phase 1 门禁 E5 通过后再拆」——**该前置条件已于 2026-10-02 满足**，理由见 `M0-plan.md` §0.1）
+- **计划已拆完（2026-10-02）**：`M0-plan.md` 覆盖 **Phase 0–4、T01–T55**（Phase 2 §4 / Phase 3 §5 / Phase 4 §6；原 §4/§5/§6 顺延为 §7/§8/§9）。拆解时定了 **D-M0-13**（crate 严格按当期需要：Phase 2 只建 harness/driver/xtask，Phase 3 才建 rgoc-hir + rgoc-spikes）、**D-M0-14**（三个 spike 放独立 crate `rgoc-spikes`，可整块删除）、**D-M0-15**（`double_sum` **不删** —— 它是 E5 的人工复验锚点，改为 T-H-01 的 fixture）
+- **下一步（Phase 2 开工）**：① **T29 冻结 `M0-tests.md`**（`03` §3.3 要求「白名单开工前冻结」，这是硬前置）→ ② T30 oracle 侧复核 20 样本期望值 → ③ T31–T35 harness 核心 → ④ T36 六类自测（E3）→ ⑤ T38 跑 20 样本（E4）
 - **五个 Phase**：0 容器与工具链底座 → 1 VSCode 调试环境（**门禁 = 实测断点命中**，不是「能开窗口」）→ 2 Rust 骨架 + harness → 3 三个 spike（解释/SSA/native）→ 4 契约 + 报告
 - **关键洞察**：Go oracle 是**硬约束**（必须精确 `go1.27.1`；宿主 `go1.24.5` 不可作基线），Rust 版本是**软约束** → 用 `golang:1.27.1-bookworm` 基础镜像满足 Go，用 `rustup` 满足 Rust
 - **环境实测（2026-10-02 只读侦察，宿主 VSCode 于同日升到 1.140.0）**：Docker 29.6.2／内核 `6.12.76-linuxkit`／`aarch64`／10 CPU、7.75 GiB；镜像 index digest `sha256:69a7b978…9195`，arm64 digest `sha256:1668bbf8…fae1`；**宿主无 rustc/cargo/rustup**；宿主 VSCode **1.140.0 / commit `07f806f9…`**（侦察时为 1.139.1 / `04c0d99f…`），扩展 `rust-lang.rust-analyzer` 与 `vadimcn.vscode-lldb` 由 devcontainer 在**容器内**装；Rust stable 参考值 `1.98.1`
@@ -81,6 +80,8 @@
 - 每个阶段及独立验收子阶段开工前须产出 `docs/milestones/<阶段ID>-tests.md` + 机器可读 manifest
 - 提交仅在明确要求时执行；提交信息引用功能 ID / 验证证据
 - 只读官方语料，**不改动** `go_source_code/`
+- ⚠️ **大段插入已有文档时以 `git show HEAD:<file>` 为基线重建**，不要在磁盘现状上叠加 —— 本轮发生过一次整段回退（已落盘的 6 处编辑丢失，而 HEAD 是对的），成因未能确定。插入后必须**逐条 `grep -cF` 验收**关键内容，不能只看脚本报成功
+- ⚠️ **门禁状态要在两处同步：manifest（机器可读事实）与 M0-plan 的门禁汇总表（人读入口）**。自检原本只校验前者，漂移不会被发现（人反而会以文档为准）。现有 4 条断言做双向校验 + 任务编号连续性
 
 ## 重要事实
 

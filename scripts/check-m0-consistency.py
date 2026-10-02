@@ -215,6 +215,48 @@ def main() -> int:
               manifest["gate"]["E5"].get("confirmed_at", "(缺失)"))
         check("benchmarks 五节齐备", len(manifest["benchmarks"]) == 5)
 
+        # ── 门禁状态在【文档】里也必须同步（2026-10-02 补，因一次真实漂移）────
+        # 事故：gate.E5 改成 pass 之后，M0-plan.md 的门禁汇总表被回退成「☐ 待人工」，
+        # 而自检当时只校验 manifest，**全绿放行**。manifest 是机器可读事实，
+        # 文档是人读的入口 —— 两者不一致时，人会以文档为准，判定就是错的。
+        plan_text = (REPO_ROOT / "docs/milestones/M0-plan.md").read_text(encoding="utf-8")
+        drift = []
+        for gid, status in gate.items():
+            rows = [ln for ln in plan_text.splitlines() if ln.startswith(f"| **{gid}** |")]
+            if not rows:
+                drift.append(f"{gid}=缺行")
+                continue
+            row = rows[0]
+            if status == "pass" and ("待人工" in row or "✅" not in row):
+                drift.append(f"{gid}=manifest.pass 但文档行不是 ✅")
+            elif status != "pass" and "待人工" not in row:
+                drift.append(f"{gid}=manifest.{status} 但文档行没有「待人工」")
+        check("M0-plan 门禁汇总表的状态 == manifest 的 gate（双向）",
+              not drift, "；".join(drift) if drift else f"{len(gate)} 条一致")
+
+        # T28 是 E5 的载体任务；它的状态列同样不能与 gate.E5 脱节
+        t28 = [ln for ln in plan_text.splitlines() if ln.startswith("| T28 |")]
+        t28_ok = bool(t28) and (
+            (gate["E5"] == "pass" and "✅" in t28[0])
+            or (gate["E5"] != "pass" and "✅" not in t28[0])
+        )
+        check("M0-plan 任务总表里 T28 的状态 == gate.E5",
+              t28_ok, t28[0][:60] if t28 else "缺 T28 行")
+
+        # 计划里【声称】的任务范围必须与实际写出来的任务标题连续无缺号。
+        # 本轮一次补写 27 个任务（T29–T55），一个编号笔误不会被任何其他断言发现。
+        heads = [int(m) for m in re.findall(r"^### 任务 T(\d+)[：:]", plan_text, flags=re.M)]
+        expect_ids = list(range(1, max(heads) + 1)) if heads else []
+        check("M0-plan 的任务标题 T01…Tmax 连续无缺号、无重复",
+              heads == expect_ids,
+              f"{len(heads)} 个任务，最大 T{max(heads) if heads else 0}"
+              + ("" if heads == expect_ids else f"；缺号/重复：{sorted(set(expect_ids) - set(heads)) or '有重复'}"))
+        # 任务总表里声称的区间上界必须与实际任务数一致（防止「说 T55 其实只写到 T52」）
+        claimed = re.search(r"\| T48–T(\d+) \| Phase 4", plan_text)
+        check("任务总表声称的 Phase 4 上界 == 实际最后一个任务号",
+              claimed is not None and int(claimed.group(1)) == max(heads),
+              claimed.group(0) if claimed else "总表缺 Phase 4 行")
+
     # ── 4. 占位符 ──────────────────────────────────────────────────────────
     print("[4] 交付物占位符")
     for rel in ("docs/milestones/M0-manifest.json", "docker/image.lock"):

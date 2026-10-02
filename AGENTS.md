@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成** —— 四项门禁 **E1 / E2 / E10 / E5 全部通过**（E5 于 2026-10-02 由用户按 F5 实测确认） |
+| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2–4 的计划已拆完**（T29–T55），Phase 2 待开工 |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；`rgoc/` 下只有用于验证调试链路的最小 `rgoc-harness`（1 函数 + 1 测试），**编译器实现尚未开始**。
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（53 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（57 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -81,14 +81,14 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 | # | 文档 | 层级 | 回答什么问题 | 状态 | 规模 |
 |---|---|---|---|---|---|
-| — | [`docs/README.md`](./docs/README.md) | 索引 | 文档地图是什么 | 已建立 | ≈12 KB |
+| — | [`docs/README.md`](./docs/README.md) | 索引 | 文档地图是什么 | 已建立 | ≈13 KB |
 | 01 | [`docs/01-feature-set.md`](./docs/01-feature-set.md) | 规格 | **要建什么** —— 功能全集 / RTM | 已建立 | ≈45 KB |
 | 02 | [`docs/02-test-inventory.md`](./docs/02-test-inventory.md) | 规格 | **如何验证** —— 功能点 → 官方测试用例 | 已建立（9 处修正） | ≈60 KB |
 | 03 | [`docs/03-roadmap.md`](./docs/03-roadmap.md) | 计划 | **按什么顺序建** —— M0–M12 迭代计划 | 已修订（v2） | ≈51 KB |
 | 04 | [`docs/04-development-environment.md`](./docs/04-development-environment.md) | 环境 | **在哪建** —— Docker 容器方案 | **已落地**（Phase 0 实测通过） | ≈13 KB |
-| — | [`docs/milestones/M0-design.md`](./docs/milestones/M0-design.md) | 设计 | **怎么建 M0** —— 决策 D-M0-1~12 / 环境基线 / Phase 0–4 / 门禁 E1–E10 | **已确认** | ≈30 KB |
+| — | [`docs/milestones/M0-design.md`](./docs/milestones/M0-design.md) | 设计 | **怎么建 M0** —— 决策 D-M0-1~15 / 环境基线 / Phase 0–4 / 门禁 E1–E10 | **已确认** | ≈32 KB |
 | — | [`docs/milestones/M0-tests.md`](./docs/milestones/M0-tests.md) | 测试 | **怎么验 M0** —— T-H/T-C/T-S 测试 ID、20 样本、unsupported、超时预算 | 待冻结 | ≈21 KB |
-| — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— Phase 0–1 的 T01–T28 任务（路径 / 可粘贴内容 / 验证） | **Phase 0 已完成** | ≈66 KB |
+| — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（路径 / 可粘贴内容 / 验证） | **Phase 0–1 已完成；2–4 已拆完待开工** | ≈100 KB |
 | — | [`docs/milestones/M0-benchmarks.md`](./docs/milestones/M0-benchmarks.md) | 实测 | **凭什么是这样** —— 时间/体积/冷启动/挂载布局/可复现性/环境陷阱 + **四则调试环境案例**（§7 平台包 / §8 DWARF / §9 Server / §10 cargo 启动配置） | **已产出** | ≈37 KB |
 
 **阅读顺序**：01 → 02 → 03 → 04。

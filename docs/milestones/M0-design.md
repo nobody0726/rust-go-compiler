@@ -101,8 +101,14 @@ M0 **不承诺语言实现**，只证明三条技术路线在其最小形态下�
 | **D-M0-10** | 容器生命周期 | **开发容器长期驻留** + **门禁用一次性 `docker run`**，两者同 digest | 调试需要长驻进程；门禁需要干净环境保证可复现 |
 | **D-M0-11** | 是否引入 `rgoc-hir` crate | **引入，但只含三个 spike 共享的最小 HIR**，标注 `SPIKE-ONLY` | 三个 spike 需要同一份 HIR 形状，否则「固定 HIR」会漂移成三份；M5 用正式 HIR 替换（§6.5） |
 | **D-M0-12** | 环境 manifest 载体 | **`docs/milestones/M0-manifest.json`** 单一机器可读文件，`environment` 节即 `04` §8 要求的「环境 manifest」 | 避免多份文件漂移；便于脚本校验 |
+| **D-M0-13** | M0 的 crate 落地节奏 | **严格按当期需要**：Phase 2 只建 `rgoc-harness` / `rgoc-driver` / `xtask`；Phase 3 才建 `rgoc-hir` 与 spike 相关 crate。**其余 crate 不建空壳** | 本节原表把 8 个 crate 都列成「M0 建」，与 `../03-roadmap.md` §2 的原文「M0 只创建当期需要的部分……其余 crate **不建空壳**，按里程碑依赖引入」**冲突**。以 `03` §2 为准（它是路线图，规范性更强）。2026-10-02 拍板 |
+| **D-M0-14** | 三个 spike 的代码隔离形态 | 放在**独立 crate `rgoc-spikes`**（三个 bin + 共享固定 HIR fixture），依赖 `SPIKE-ONLY` 的 `rgoc-hir` | §6.4 要求「spike 代码**隔离保留**，后续用测试驱动的正式实现替换，**不盲目演进临时代码**」。隔离成一个 crate 后可**整块删除/归档**，不会与正式实现纠缠在同一模块里。2026-10-02 拍板 |
+| **D-M0-15** | `rgoc-harness` 的 `double_sum` 调试目标 | **保留**，并转为 **T-H-01（成功类）的 fixture** —— 不按原计划在 Phase 2 删除 | 原计划（`M0-plan.md` §8 纪律 + 本文 §6.3 口径）写「Phase 2 引入真实功能后删除」。但 **E5 是人工门禁**，删掉锚点就无法复验（换机器 / 重装 / 升级 VSCode 后要重验）。改为让它承担 T-H-01 的**进程内正例**，从「遗留物」变成「有存在价值的自测输入」。2026-10-02 修正 |
 
 > **D-M0-7 ~ D-M0-12 已于 2026-10-02 由用户全部接受，无条件项。**
+>
+> **D-M0-13 / D-M0-14 于 2026-10-02 由用户拍板**（拆 Phase 2–4 计划时暴露出本文 §6.3 的 crate 表与 `03` §2 冲突）。
+> **D-M0-15 是修正而非新增决策** —— 它推翻了「Phase 2 删除调试目标」这条会**破坏 E5 可复验性**的安排。
 
 ---
 
@@ -305,19 +311,22 @@ shasum -a 256 -c corpus-manifest.sha256 | grep -v ': OK$'   # 期望：无输出
 | **门禁** | **E3**（六类自测全绿）+ **E4**（≥20 个官方样本 100% 通过） |
 | **阻塞信号** | 指令解析发现不可预期的前导格式 / 官方样本的期望输出无法在无 `.out` 时确定 |
 
-**crate 创建范围**（`../03-roadmap.md` §2：**只创建当期需要的模块，不一次性建立全部空 crate**）：
+**crate 创建范围**（`../03-roadmap.md` §2：**只创建当期需要的模块，不一次性建立全部空 crate**）。
+**决策 D-M0-13（2026-10-02）** 明确按 Phase 落地 —— 下表的「建」列即该 crate 的**创建阶段**：
 
-| crate | M0 建？ | 理由 |
+| crate | 创建于 | 理由 |
 |---|---|---|
-| `rgoc-harness` | ✅ | E3/E4 的直接载体 |
-| `rgoc-hir` | ⚠️ **最小**（D-M0-11） | 三个 spike 共享的固定 HIR；标注 `SPIKE-ONLY`，M5 替换 |
-| `rgoc-interp` | ✅ | P1（解释 spike） |
-| `rgoc-ssa` | ✅ | P2（SSA spike） |
-| `rgoc-codegen` | ✅ | P3（arm64 汇编发射） |
-| `rgoc-runtime` | ✅ | P3（最小 runtime 桥接 / startup） |
-| `rgoc-driver` | ✅（骨架） | 统一 CLI 入口的占位，M0 只需能调度 harness 与三个 spike |
-| `xtask` | ✅ | 语料枚举 / 报告 / 环境 manifest 生成 |
+| `rgoc-harness` | ✅ Phase 1 建（调试目标）→ Phase 2 扩写 | E3/E4 的直接载体；Phase 1 已建，此处只是扩展 |
+| `rgoc-driver` | ✅ Phase 2 | 统一 CLI 入口的骨架，M0 只需能调度 harness 与三个 spike |
+| `xtask` | ✅ Phase 2 | 语料枚举 / 报告 / 环境 manifest 生成 |
+| `rgoc-hir` | ⚠️ Phase 3，**最小**（D-M0-11） | 三个 spike 共享的固定 HIR；标 `SPIKE-ONLY`，M5 替换 |
+| `rgoc-spikes` | ✅ Phase 3（D-M0-14） | 三个 spike 的**隔离载体**：三个 bin + 共享 fixture，可整块删除 |
+| `rgoc-interp` / `rgoc-ssa` / `rgoc-codegen` / `rgoc-runtime` | ❌ **M0 不建** | spike 在 `rgoc-spikes` 内实现；正式 crate 按里程碑依赖引入（M5/M6/M7） |
 | `rgoc-lex`、`rgoc-ast`、`rgoc-const`、`rgoc-types`、`rgoc-loader` | ❌ **M0 不建** | M1–M4 才需要（`../03-roadmap.md` §2） |
+
+> ⚠️ **本表原写法**（8 个 crate 全在 M0 建）与 `../03-roadmap.md` §2 的「M0 只创建当期需要的部分……
+> 其余 crate **不建空壳**」**冲突**。已按 D-M0-13 以 `03` §2 为准修正。
+> spike 的隔离形态另见 **D-M0-14**：放独立 crate `rgoc-spikes`，而不是散进各正式 crate。
 
 **harness 的 v0 范围**（`../03-roadmap.md` §4 M0 第 3 条）：
 
@@ -336,7 +345,7 @@ shasum -a 256 -c corpus-manifest.sha256 | grep -v ': OK$'   # 期望：无输出
 
 - 三者的**输入、结果、环境必须全部可复现**（E6）—— 重跑必须一致；
 - S3 完成后，native `hello` **登记为 M1 smoke 回归项**（E7，`../03-roadmap.md` §4）；
-- spike 代码**隔离保留**，后续用测试驱动的正式实现替换，**不盲目演进临时代码**（`../03-roadmap.md` §4）。
+- spike 代码放在**独立 crate `rgoc-spikes`**（D-M0-14），**隔离保留**，后续用测试驱动的正式实现替换，**不盲目演进临时代码**（`../03-roadmap.md` §4）；三个 spike 的**输入一律写死**，不接受命令行传入可变输入 —— 否则「可复现」（E6）无从判定。
 
 ### 6.5 Phase 4 —— 契约初稿与交付报告
 

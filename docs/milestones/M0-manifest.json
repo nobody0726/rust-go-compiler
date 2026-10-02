@@ -176,5 +176,53 @@
       "differing_layers_of_14": 6,
       "pin": "base_index_digest + src.*_sha256"
     }
+  },
+  "phase_plan": {
+    "source": "docs/milestones/M0-plan.md",
+    "phase0_1": {
+      "tasks": "T01-T28",
+      "status": "done",
+      "gates": [
+        "E1",
+        "E2",
+        "E5",
+        "E10"
+      ]
+    },
+    "phase2": {
+      "tasks": "T29-T39",
+      "status": "pending",
+      "gates": [
+        "E3",
+        "E4"
+      ],
+      "scope": "rgoc-harness 扩写 + rgoc-driver + xtask；先冻结 M0-tests.md（T29）"
+    },
+    "phase3": {
+      "tasks": "T40-T47",
+      "status": "pending",
+      "gates": [
+        "E6",
+        "E7"
+      ],
+      "scope": "rgoc-hir(SPIKE-ONLY) + rgoc-spikes 三个 spike"
+    },
+    "phase4": {
+      "tasks": "T48-T55",
+      "status": "pending",
+      "gates": [
+        "E8",
+        "E9"
+      ],
+      "scope": "C1-C5 五份契约初稿 + M0-report + manifest 完整化 + 六条统一退出"
+    },
+    "split_at": "2026-10-02",
+    "note": "E5 通过后拆解；前置条件『Phase 1 门禁通过』已满足"
+  },
+  "decisions": {
+    "source": "docs/milestones/M0-design.md 2.1",
+    "D-M0-13": "M0 的 crate 落地节奏：严格按当期需要（Phase 2 只建 harness/driver/xtask），不建空壳",
+    "D-M0-14": "三个 spike 放独立 crate rgoc-spikes（三个 bin + 共享固定 HIR fixture），可整块删除",
+    "D-M0-15": "rgoc-harness 的 double_sum 不删 —— 它是 E5（人工门禁）的复验锚点，改为 T-H-01 的 fixture"
   }
 }

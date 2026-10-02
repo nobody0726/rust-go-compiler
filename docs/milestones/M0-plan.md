@@ -8,7 +8,7 @@
 
 ## 0. 本计划的覆盖范围
 
-### 0.1 本计划只拆 **Phase 0 与 Phase 1**（环境两阶段）
+### 0.1 Phase 0–1 是「先拆」，Phase 2–4 是「后拆」（现已全部拆完）
 
 **这不是遗漏，是刻意为之**，理由有三条：
 
@@ -18,7 +18,15 @@
 | 2 | **D-M0-2「严格环境优先」** —— Phase 0/1 是环境的全部；**环境门禁未过，Phase 2+ 不得开工**。提前拆出无法执行的任务没有价值。 |
 | 3 | `../03-roadmap.md` §8.2 —— **不提前拆完**；Superpowers 亦规定「计划变了就回头改计划」，而环境实测结果必然影响后续计划。 |
 
-**Phase 2–4 的计划在 Phase 1 门禁（E5）通过后，基于实测到的环境事实再拆。**
+> **已拆（2026-10-02）**：E5 通过后，本文档已补齐 **Phase 2（§4，T29–T39）、Phase 3（§5，T40–T47）、Phase 4（§6，T48–T55）**。下面三条理由是当初**为什么先不拆**，现在它们都已被满足或已用实测结果替代：
+>
+> ① Phase 2 的 harness 结构依赖 Phase 1 实际建成的 workspace 骨架 —— 现在骨架已存在（T20–T22 实测），不再是编造；
+> ② D-M0-2「严格环境优先」—— 环境门禁 E1/E2/E5/E10 已全部通过，**Phase 2 具备开工条件**；
+> ③ `03` §8.2「不提前拆完」—— 已到该拆的时点，且 Phase 3/4 已按实测环境事实校准（`clang` 14 / aarch64 ELF 实测见 `M0-benchmarks.md` §1）。
+>
+> **拆解时另有两处文档缺陷被查出并修正**（Superpowers「计划变了就改计划」）：
+> 一是 `M0-design.md` §6.3 的 crate 表与 `03` §2「只建当期需要的」冲突（→ **D-M0-13**）；
+> 二是「Phase 2 删除 `double_sum`」与「E5 是人工门禁」冲突（→ **D-M0-15**，改为让它当 T-H-01 的 fixture）。
 
 > **状态更新（2026-10-02）**：Phase 0 与 Phase 1 均已完成，四项门禁 **E1/E2/E10/E5 全部通过**
 > （E5 由用户在 VSCode 中按 F5 实测确认，登记在 `M0-manifest.json` 的 `gate.E5`）。
@@ -47,6 +55,9 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 待开工 |
+| T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
+| T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
 ---
 
@@ -506,7 +517,7 @@ scripts/in-container.sh rustc --version
 # 期望：先看到 "rgoc container run" 头部，然后 rustc 1.98.1
 ```
 
-> **实际落地的脚本与本处片段有 3 处不同**（`scripts/in-container.sh` 为准，见 §6 变更记录）：
+> **实际落地的脚本与本处片段有 3 处不同**（`scripts/in-container.sh` 为准，见 §9 变更记录）：
 >
 > | 差异 | 原因 |
 > |---|---|
@@ -663,7 +674,7 @@ env = m['environment']
 
 # 占位符只认【整值等于】占位词，不做子串匹配。
 # 理由：target.triple 的合法字面量 "aarch64-unknown-linux-gnu" 本身含 "unknown"，
-# 子串匹配会把它误判成空缺 —— 这是本计划 v1 的缺陷（见 §6 变更记录）。
+# 子串匹配会把它误判成空缺 —— 这是本计划 v1 的缺陷（见 §9 变更记录）。
 PLACEHOLDERS = {'unknown', 'n/a', 'na', 'todo', 'tbd', 'fixme'}
 
 def walk(o, path=''):
@@ -771,7 +782,7 @@ time (docker run --rm rgoc:dev true)
 
 - **验证**：
 
-> **布局要点（本计划 v1 的缺陷，见 §6 变更记录）**：crate 必须建在**bind mount 之内**，
+> **布局要点（本计划 v1 的缺陷，见 §9 变更记录）**：crate 必须建在**bind mount 之内**，
 > 两种布局只有 `target/` 的落点不同。若把 crate 建在容器内 `/tmp`，那是 overlayfs，
 > 两种布局都测不到宿主文件系统 —— 而这恰恰是 D-M0-9 要问的问题。
 
@@ -997,7 +1008,7 @@ echo "T22 exit=$?"
 # 期望：四条全部成功（fmt 无 diff、check/clippy 无警告、test 通过），T22 exit=0
 ```
 
-> **`set -euo pipefail` 不可省**（本计划 v1 的缺陷，见 §6 变更记录）：
+> **`set -euo pipefail` 不可省**（本计划 v1 的缺陷，见 §9 变更记录）：
 > v1 写的是 `cargo clippy ... | tail -2` 串在 `&&` 链里。管道退出码取自**最后一个命令**
 > （`tail`），因此 clippy 失败时整条链仍返回 0，后续步骤照跑，失败被静默吞掉 ——
 > 实测正是如此：v1 的命令「跑完了」，但 clippy 其实报错退出。
@@ -1060,7 +1071,7 @@ print('devcontainer.json 语法 OK')
 PY
 ```
 
-> **实际落地的文件比本处片段多两项**（`.devcontainer/devcontainer.json` 为准，见 §6 变更记录）：
+> **实际落地的文件比本处片段多两项**（`.devcontainer/devcontainer.json` 为准，见 §9 变更记录）：
 >
 > 1. `mounts` 增加 `source=rgoc-target,target=/work/rgoc/target,type=volume` —— 与
 >    `scripts/in-container.sh` 用**同一个卷名**，保证编辑器与门禁同环境（D-M0-10）；
@@ -1390,7 +1401,539 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 
 ---
 
-## 4. 阶段门禁汇总
+## 4. Phase 2 —— Rust 工程骨架与 harness 自验（门禁 E3 + E4）
+
+> **本 Phase 的 crate 边界**（决策 **D-M0-13**，2026-10-02 拍板）：**只建当期需要的**——
+> `rgoc-harness`（扩写）、`rgoc-driver`（骨架）、`xtask`。
+> 三个 spike 所需的 `rgoc-hir` / `rgoc-spikes` **留到 Phase 3 建**。
+> 依据是 `03` §2 的原文：「M0 只创建当期需要的部分……其余 crate **不建空壳**，按里程碑依赖引入」。
+> （`M0-design.md` §6.3 的 crate 表原写法与此冲突，已按本决策修正并加注。）
+>
+> **纪律变化**：从 T29 起进入 TDD 区间（`03` §3.5）。**凡是行为改动一律 RED → GREEN → REFACTOR**；
+> 纯验证任务（无文件改动）不适用，先确认失败来自缺失行为而非环境/harness。
+
+### 任务 T29：冻结 `M0-tests.md`（白名单 —— 门禁纪律要求「开工前冻结」）
+
+- **文件路径**：`docs/milestones/M0-tests.md`（改文档头状态与 §0 冻结表）
+
+- **要做的**：
+  1. 文档头 `状态：待冻结` → `已冻结（2026-10-02）`；
+  2. §0 冻结表三行（F1 20 样本 / F2 unsupported 清单 / F3 超时与资源上限）标注冻结时点；
+  3. **计算并记录 M0 分母**（§9 待办的最后一项，也是 §6 末尾那条要求）：
+     分母 = 顶层 `test/` 中模式属于 v0 支持集（`run` / `compile` / `errorcheck`）且无排除参数的**文件集**；
+     E3 分母 = 6（T-H-01..06），E4 分母 = 20（T-C-01..20）。写进 §8 的判定表。
+  4. §9 待办分流：「期望值复核」→ T30；「manifest 机器可读版」→ T54。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+head -4 docs/milestones/M0-tests.md | grep -o "状态.*"
+# 期望：状态：已冻结（2026-10-02）
+awk '/^### 4\.[234]/{s=1} /^## 5/{s=0} s && /^\| \*\*T-C-/{n++} END{print "T-C 样本数 =", n}' docs/milestones/M0-tests.md
+# 期望：T-C 样本数 = 20   （F1 变更规则：不得削减到 20 以下）
+```
+
+> **冻结的意义**：此后 M0 的通过与否**只由这些 ID 决定**，不因「总体感觉良好」而改变（§0 末句）。
+> 要新增样本必须单独记录并说明理由；**任何情况下不得把分母改小**。
+
+### 任务 T30：在 oracle 侧复核 20 个样本的期望值
+
+- **文件路径**：`docs/milestones/M0-benchmarks.md`（**追加 §11**，不改既有章节）
+
+- **要做的**：在容器内用 `go1.27.1` 逐个跑 §4 的 20 个样本，把**实际结果**与文档写的期望比对：
+  - `run` 层 8 个（§4.2）：`go run` 的 stdout 与 `.out` 比对。**重点复核缺 `.out` 的样本**——
+    按规则 R2，缺 `.out` 意味着**期望输出为空**，不是「任意输出都通过」；
+  - `compile` 层 4 个（§4.3）：只编译，诊断走 R3 切分后比对；
+  - `errorcheck` 层 8 个（§4.4）：比对错误诊断，并记住 **R5** —— `errorcheck` 即使裸写也会被
+    自动加 `-d=ssa/check/on`，所以它的期望**不能当纯语言语义验收**。
+
+  任何不符，**先判断是文档错、还是样本不适用**，再改文档并记录；**不允许「改期望值让它过」**。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh bash -lc 'go version'
+# 期望：go version go1.27.1 linux/arm64
+# 复核结果表写入 M0-benchmarks.md §11：20 行，每行含 样本 ID / 实际输出摘要 / 与文档是否一致 / 处置
+```
+
+> 这一步是 **E4 的前置**：期望值错了，harness 的比较器就被喂了一个错的 oracle，
+> 后面 20/20 通过也**没有意义**。宁可在这里发现，不要留到 E4 判定时。
+
+### 任务 T31：把 `rgoc-harness` 从「调试目标」扩成 Test IR 骨架
+
+- **文件路径**：`rgoc/crates/rgoc-harness/src/lib.rs`（改）
+
+- **要做的**：
+  1. ⚠️ **不要删 `double_sum`** —— 这条**修正了既有计划**：`M0-design.md` §1.2 与本计划 §8 的纪律
+     原写「Phase 2 引入真实功能后删除」。但 **E5 是人工门禁**，删掉锚点就无法复验。
+     改为：让它成为 **T-H-01（成功类）的 fixture**，从「遗留调试目标」变成「有存在价值的自测输入」。
+     已同步登记为 **D-M0-15**（见 `M0-design.md` §2.1）；
+  2. 新增 Test IR 类型（**C2 契约的载体**），必录字段见 `M0-tests.md` / `03` §3.1：
+     用例 ID、相对路径、输入文件集合、模式、指令参数、build tags、目标/版本、import 需求、
+     功能依赖、比较器、期望退出码/输出/诊断、超时、资源上限、seed、归属阶段、unsupported 原因；
+  3. 结果分类**至少八种且不得合并**：`pass` / `compiler-failure` / `runtime-failure` /
+     `harness-failure` / `target-filtered` / `timeout` / `resource-failure` /
+     `reference-toolchain-failure`
+     —— 合并就等于把基建失败算成语义失败（`03` §3.3）；
+  4. 超时与资源上限**只在 Test IR 里定义一次**，取值照 `M0-tests.md` §7.5，不在别处写死。
+
+- **验证**（先 RED）：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+# 1) 先写 Test IR 字段齐全性与八种分类可枚举的测试 → 跑 → 应当【失败】（类型还不存在）
+scripts/in-container.sh cargo test -p rgoc-harness
+# 2) 最小实现 → 再跑 → 应当全绿
+scripts/in-container.sh cargo test -p rgoc-harness
+# 3) double_sum 仍存在且其测试通过（E5 复验锚点不能丢）
+scripts/in-container.sh cargo test -p rgoc-harness double_sum
+# 期望：test result: ok. 1 passed
+```
+
+### 任务 T32：实现指令行解析（规则 R1）
+
+- **文件路径**：`rgoc/crates/rgoc-harness/src/instruction.rs`（新建）、`lib.rs`
+
+- **要做的**：按 `M0-tests.md` §1.3 的 **R1**（源码出处 `testdir_test.go:502-515`）实现：
+  1. `.go` 文件不得以换行开头（`:497` 硬失败）；
+  2. 从头逐行扫描，**跳过** `//go:build` 与 `// +build` 构建约束行；
+  3. `action = TrimSpace(TrimPrefix(line, "//"))` ← 第一个「非空且非构建约束」的行；
+  4. `action` 为空 → **硬失败**（`execution recipe not found`），不得静默跳过。
+
+  推论要写成注释：**不能假定指令在第 1 行**，也不能假定它前面只有注释。
+
+- **验证**（正反例齐备，`M0-tests.md` §3 的附加要求）：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-harness instruction
+# 期望：至少覆盖 —— 指令在首行 / 指令前有 //go:build 约束 / 指令前有空行与注释 /
+#       未知指令硬失败 / 全是注释时硬失败
+```
+
+### 任务 T33：语料枚举、样本选择与 unsupported 分类
+
+- **文件路径**：`rgoc/crates/rgoc-harness/src/corpus.rs`（新建）
+
+- **要做的**：
+  1. 枚举 `go_source_code/test/` **顶层**（U9：子目录不在 M0 范围）与
+     `src/internal/types/testdata/`（U11，M4 才纳入）—— 后者只统计不纳入；
+  2. 按模式分派：`run` / `compile` / `errorcheck` 为 v0 支持集，其余 15 个指令按
+     `M0-tests.md` §6 的 **U1–U12** 显式分类为 `expected-unsupported`，
+     **每个不通过的用例都要能说清落在哪一条 U**；
+  3. 排除参数用例（`-gcflags` / `-d` / `-goexperiment` / `-godebug`）→ U7；
+  4. 实现平台过滤：build tag 不满足 → 判 `target-filtered`，**不计入分子、仍计入分母**
+     （`03` §3.3；对应 T-H-04）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-harness corpus
+# 期望：枚举结果确定（同样的语料 → 同样的文件集与计数，重复跑一致）
+# 期望：M0 分母与 T29 冻结时记录的一致
+```
+
+### 任务 T34：oracle 调用与版本守门
+
+- **文件路径**：`rgoc/crates/rgoc-harness/src/oracle.rs`（新建）
+
+- **要做的**：
+  1. oracle 就是**容器内精确的 `go1.27.1`**（硬约束，D-M0-1）：调用前先校验 `go version`；
+  2. **版本不符即拒绝**（T-H-06，`04` §7）：报 `reference-toolchain-failure`，
+     **不得**降级用宿主 `go1.24.5` 悄悄跑；
+  3. 每条用例带**超时与 RSS 上限**（`M0-tests.md` §7.5：T-C 单项 60 s / 整层 5 min；
+     单用例峰值 RSS ≤ 512 MiB，`T-C-03` 放宽到 768 MiB）；
+  4. 超时后**真正终止子进程**（T-H-05 要求验证进程被回收，不能只 `kill` 父进程）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-harness oracle
+# 期望：① 正常调用返回结果 ② 伪造版本不符时判 reference-toolchain-failure
+#       ③ 超时用例返回 timeout 且事后 `ps` 查不到残留子进程
+```
+
+### 任务 T35：比较器与诊断切分（规则 R2 / R3 / R4）
+
+- **文件路径**：`rgoc/crates/rgoc-harness/src/compare.rs`（新建）
+
+- **要做的**（三条规则都带源码出处，**不能凭直觉实现**）：
+  - **R2 输出期望**（`testdir_test.go:1169-1193`）：期望文件在 **goroot 的 test 目录**下查找
+    （不是测试文件所在目录）；`.out` 存在则比对，**不存在则期望为空**；比较前把 `\r\n` 归一为 `\n`；
+    **严格相等**；不匹配时区分两种措辞（有 `.out` = 内容不符 / 无 `.out` = 本应为空却非空）；
+  - **R3 诊断切分**（`:1195-1213`）：`\t` 开头追加到上一行；以 `go tool` / `#` / `<autogenerated>`
+    开头的行跳过；仅空白行跳过；其余非空行各自成条；
+  - **R4 ERROR 注释**（`:1432-1499`）：支持 `// ERROR` 与 `// GC_ERROR`、
+    `ERRORAUTO`、**一行多个引号模式**（`mainsig.go` 的 `// ERROR "..." "..."` 是两条独立期望）、
+    `LINE` / `LINE+n` / `LINE-n` 替换为 `文件:行号`；含 `////` 的行跳过。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-harness compare
+# 期望：\r\n 归一 / 缺 .out 判空 / 严格相等不匹配 / 续行拼接 / 多引号双期望 /
+#       LINE±n 替换 / \\\\ 禁用 全部有正反例
+```
+
+### 任务 T36：六类自测全绿（**E3**）
+
+- **文件路径**：`rgoc/crates/rgoc-harness/tests/t_harness.rs`（新建）
+
+- **要做的**：把 `M0-tests.md` §3 的六类逐条落为测试，**正反例齐备、不依赖网络**：
+
+| ID | 类别 | 构造 | 期望 |
+|---|---|---|---|
+| `T-H-01` | 成功 | 一个合法 `// run` 用例 | `pass`；退出码 0；stdout 与 `.out` 一致 |
+| `T-H-02` | 失败 | 与 `.out` 不符 / 非零退出码 | 判 `compiler-failure` 或 `runtime-failure`，**不是 harness 崩溃** |
+| `T-H-03` | 未知指令 | 首行 `// notarealpattern` | 判 `harness-failure` 并报未知指令；**绝不静默跳过、不记 pass** |
+| `T-H-04` | 平台过滤 | 首行 `//go:build windows` | 判 `target-filtered`，**不计入分子、仍计入分母** |
+| `T-H-05` | 超时 | 超时 fixture | 判 `timeout` 且**子进程被真正回收** |
+| `T-H-06` | 不匹配版本 | 伪造 `go version` | **拒绝**该 oracle，判 `reference-toolchain-failure` |
+
+  另：`double_sum`（T31 保留）作为 `T-H-01` 的**进程内**补充正例，说明「成功」不只来自 Go 用例。
+
+- **验证**（**E3 门禁**）：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-harness --test t_harness
+# 期望：T-H-01..06 全绿，且正反例齐备
+scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-harness --test t_harness 2>&1 | tail -3'
+# 期望：test result: ok. 6 passed（E3 达成）
+```
+
+### 任务 T37：`rgoc-driver` CLI 骨架与 `xtask`
+
+- **文件路径**：`rgoc/crates/rgoc-driver/src/main.rs`（新建 crate）、`rgoc/xtask/src/main.rs`（新建 crate）、`rgoc/Cargo.toml`（改 members）
+
+- **要做的**：
+  1. `rgoc-driver`：统一 CLI 入口（M0 只需能调度 harness 与将来的三个 spike）——
+     子命令先只留 `harness`（`run` / `list` / `report`），**不预留**未实现的子命令；
+  2. `xtask`：三个职责 —— 语料枚举、报告生成、**环境 manifest 生成**
+     （把 `M0-manifest.json` 的 `environment` 节从手填改为可重放生成）；
+  3. 两个 crate 的目录名**不能叫 `crate`**（Rust 关键字，`cargo new` 会拒绝 —— Phase 0 已踩过）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo run -p rgoc-driver -- harness list
+# 期望：列出冻结的 20 个 T-C 样本及其模式
+scripts/in-container.sh cargo run -p rgoc-driver -- harness run --all
+# 期望：跑完并给出结果统计（分子/分母/八类分布）
+```
+
+### 任务 T38：跑 20 个官方样本并出报告（**E4**）
+
+- **文件路径**：`rgoc/tests/corpus/`（放本次报告）、`docs/milestones/M0-manifest.json`（登记）
+
+- **要做的**：对 T-C-01..20 逐个执行，按 `M0-tests.md` §4.5 的比较器规格判定，
+  产出**可重放**的报告（哪些通过、哪些按哪条 U 排除、分母是多少、耗时与峰值 RSS）。
+  遵守 §8 的判定纪律：**不得**通过放宽比较器、把跳过记为 pass、或缩小分母来「达成」门禁。
+
+- **验证**（**E4 门禁**）：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo run -p rgoc-driver -- harness run --all
+# 期望：T-C-01..20 全部 pass（20/20），整层耗时 ≤ 5 min，单项 ≤ 60 s
+# 期望：报告中分母 = 20，且没有任何一条是靠「排除」消失的
+```
+
+> ⚠️ 若某个样本**确实跑不通**：先判定是 harness 的缺陷还是样本超出 M0 范围。
+> 属于范围的**修 harness**，不属于的**登记为新的 U 条**并记在报告里 ——
+> **不能沉默地把它从分母里拿掉**。
+
+### 任务 T39：Phase 2 门禁复核与登记
+
+- **文件路径**：`docs/milestones/M0-manifest.json`（改）、`AGENTS.md`（改）
+
+- **要做的**：把 E3 / E4 的证据登记进 manifest（`gate.E3` / `gate.E4`），
+  回写 `AGENTS.md` 的阶段状态；跑一遍 `AGENTS.md` §6.1 的自检。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
+# 期望：四条全过（`03` §6.3 第 2 条）
+python3 scripts/check-m0-consistency.py    # 期望：全部通过，exit 0
+```
+
+---
+
+## 5. Phase 3 —— 三个架构 spike（门禁 E6 + E7）
+
+> **前置**：Phase 2 的 E3 / E4 已通过 —— **环境门禁未过不得开工**（D-M0-2）。
+> **crate 边界**（D-M0-13）：本 Phase 才建 `rgoc-hir`（最小、标 `SPIKE-ONLY`）与 `rgoc-spikes`。
+> **spike 的隔离形态**（决策 **D-M0-14**）：三个 spike 放在**独立 crate `rgoc-spikes`** 下，
+> 三个 bin + 共享的固定 HIR fixture。理由是 `03` §4 的纪律「**不盲目演进临时代码**」——
+> 隔离成一个 crate 后，后续用测试驱动的正式实现替换时**可以整块删掉**，不会与正式代码纠缠。
+
+### 任务 T40：建 `rgoc-hir`（最小、标 `SPIKE-ONLY`）
+
+- **文件路径**：`rgoc/crates/rgoc-hir/Cargo.toml`（新建）、`rgoc/crates/rgoc-hir/src/lib.rs`（新建）
+
+- **要做的**：三个 spike 共享的**固定 HIR**，只覆盖 spike 所需子集
+  （M0 **不做**真实 Go 源码的 lex/parse —— U12）。
+  必须在 crate 头部与 `docs/contracts/` 两处标注 **`SPIKE-ONLY`，M5 替换**（D-M0-11）。
+  C1 契约在此处**只留位**：位置表示与诊断排序规则固定下来，但**不得**被误读为「M0 已实现源码位置跟踪」。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo test -p rgoc-hir
+# 期望：crate 自身测试通过；且 `grep -rn "SPIKE-ONLY" rgoc/crates/rgoc-hir/` 有命中
+```
+
+### 任务 T41：建 `rgoc-spikes` crate 骨架
+
+- **文件路径**：`rgoc/crates/rgoc-spikes/Cargo.toml`（新建）、`src/bin/s1_interp.rs`、`src/bin/s2_ssa.rs`、`src/bin/s3_native.rs`、`src/fixtures/mod.rs`
+
+- **要做的**：三个 bin 各留一个**会失败的**占位（RED），共享 fixture 模块放固定的 HIR
+  （`println(1+2)` 与输出 `hello` 的 native 函数）。三个 spike 的**输入必须写死**，
+  不允许从命令行传入可变输入 —— 否则「可复现」无从判定（E6）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo build -p rgoc-spikes
+# 期望：三个 bin 都能构建（此时它们还只会返回失败）
+```
+
+### 任务 T42：S1 —— 解释 spike（`T-S1-01` … `T-S1-03`）
+
+- **文件路径**：`rgoc/crates/rgoc-spikes/src/bin/s1_interp.rs`
+
+- **要做的**：宿主求值固定 HIR（`println(1 + 2)`）→ stdout。
+  记录：**值表示、内建调用边界、输出流走法**。
+  `T-S1-03` 要与 `T-C-04`（printbig）的语义对齐 —— 即值表示不能只在 64 位上凑巧成立。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo run -p rgoc-spikes --bin s1_interp
+# 期望：stdout 精确为 "3\n"（字节级比较，不是「包含 3」），退出码 0
+```
+
+### 任务 T43：S2 —— SSA spike（`T-S2-01` … `T-S2-03`）
+
+- **文件路径**：`rgoc/crates/rgoc-spikes/src/bin/s2_ssa.rs`
+
+- **要做的**：对**同一份**固定 HIR 构造 Block / Value 图并求值。
+  **两条路线交叉验证是重点**：`T-S2-01` 的求值结果必须与 `T-S1-01` 一致。
+  `T-S2-02` 必须**显式列出** memory / tuple / 调用边界的需求（`03` §4 第 5 条要求识别这三项）；
+  `T-S2-03` 记录与 M6 完整 verifier 的差距（不在 M0 实现 verifier）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo run -p rgoc-spikes --bin s2_ssa
+# 期望：输出 "3\n"，且与 S1 的输出逐字节相同；需求清单已打印并落盘
+```
+
+### 任务 T44：S3 —— native spike（`T-S3-01` … `T-S3-04`）
+
+- **文件路径**：`rgoc/crates/rgoc-spikes/src/bin/s3_native.rs`、`rgoc/runtime/native/aarch64-unknown-linux-gnu/`（新建）
+
+- **要做的**：固定 HIR/SSA 函数 → arm64 汇编 → 经容器内 `clang` 链接成 ELF。
+  **六项都要有记录**（`T-S3-04`）：调用约定、**栈对齐**、输出流、退出码、最小 runtime 桥接、unwind 边界。
+  不设首发 `rgoc-linker`（`03` §2）；生产代码不把官方 `.s` 直接喂给系统汇编器。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh cargo run -p rgoc-spikes --bin s3_native
+# 期望：产出 ELF；file 输出含 "ELF 64-bit LSB" 且含 "ARM aarch64"
+scripts/in-container.sh bash -lc '/work/rgoc/target/s3-hello; echo "exit=$?"'
+# 期望：hello
+#       exit=0
+```
+
+### 任务 T45：可复现性验证（**E6**）
+
+- **文件路径**：`docs/milestones/M0-benchmarks.md`（追加 §12）
+
+- **要做的**：三个 spike 各重复执行 **3 次**，比对三次的
+  **输入、结果、环境**（Go 版本、Rust 版本、镜像 digest、clang 版本）是否完全一致。
+  把实测数据写进 benchmarks（E10 的 benchmarks 节同理扩充）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+for i in 1 2 3; do scripts/in-container.sh cargo run -p rgoc-spikes --bin s1_interp; done | sort -u | wc -l
+# 期望：1（三次结果完全一致）
+# 同法验证 s2_ssa 与 s3_native（T-S1-02 / T-S3-05）
+```
+
+### 任务 T46：native `hello` 登记为 M1 smoke 回归项（**E7**）
+
+- **文件路径**：`docs/03-roadmap.md`（改 M1 小节）、`docs/milestones/M0-manifest.json`（改）
+
+- **要做的**：把 S3 的 `hello` fixture 写进 M1 的 smoke 清单，注明来源是 M0 的 `T-S3-03`。
+  E7 的判定是「**可运行 + 已登记**」两件事，缺一不可。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+grep -n "hello" docs/03-roadmap.md | head
+# 期望：M1 小节里出现该 smoke 项，且注明来自 T-S3-03
+```
+
+### 任务 T47：Phase 3 门禁复核与登记
+
+- **文件路径**：`docs/milestones/M0-manifest.json`（改）、`AGENTS.md`（改）
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+python3 scripts/check-m0-consistency.py
+# 期望：gate.E6 / gate.E7 = pass，且全部断言通过
+```
+
+---
+
+## 6. Phase 4 —— 契约初稿与交付报告（门禁 E8 + E9 + E10 收口）
+
+> 本 Phase **不再产生新行为**，只做两件事：把 spike 验证出的形状**固化为可版本化契约**，
+> 以及交付可复核的报告。D-M0-11 的 `SPIKE-ONLY` 标注在 M5 替换时解除。
+
+### 任务 T48：C1 契约初稿（SourceMap / 位置 / 诊断排序）
+
+- **文件路径**：`docs/contracts/C1-source-map.md`（新建）
+
+- **要做的**：**留位**。M0 不做真实 lexer，只在 Test IR 中固定位置表示与诊断排序规则。
+  **文件头必须显式写「留位」** —— 不得因为文件存在就被误读为「M0 已完成源码位置跟踪」（`M0-design.md` §7）。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+head -20 docs/contracts/C1-source-map.md | grep -n "留位"
+# 期望：命中（文件头就写明）
+```
+
+### 任务 T49：C2 契约初稿（Test IR / 构建条件 / 比较器 / 结果格式）
+
+- **文件路径**：`docs/contracts/C2-test-ir.md`（新建）
+
+- **要做的**：**完整初稿**（消费者：所有阶段）。从 T31–T35 的实现**反推**成契约：
+  Test IR 必录字段、构建条件判定、比较器规格、八种结果分类、超时与资源上限。
+  这一份是 M0 唯一「完整」级契约，写好后它就是后续所有阶段的公共依赖。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+grep -c "" docs/contracts/C2-test-ir.md     # 期望：非空且成体系
+grep -n "SPIKE-ONLY\|留位\|完整初稿" docs/contracts/C2-test-ir.md   # 期望：标注为「完整初稿」
+```
+
+### 任务 T50：C3 契约初稿（HIR 多返回值 / 可寻址性 / 闭包 / 异常传播）
+
+- **文件路径**：`docs/contracts/C3-hir.md`（新建）
+
+- **要做的**：**spike 级**，从 S1/S2 验证出的形状反推。必须写清哪些是**已验证**、
+  哪些是**待 M5 验证**，不得把推测写成结论。
+
+- **验证**：同 T48 的形式检查（文件存在 + 标注级别 + 列出未验证项）。
+
+### 任务 T51：C4 契约初稿（SSA tuple/memory / Phi / 支配关系 / 调用边界）
+
+- **文件路径**：`docs/contracts/C4-ssa.md`（新建）
+
+- **要做的**：**spike 级**，从 S2 反推；消费方是 codegen 与 liveness（`M0-design.md` §7）。
+
+### 任务 T52：C5 契约初稿（ABI / frame layout / 对象布局 / runtime symbol bridge）
+
+- **文件路径**：`docs/contracts/C5-abi.md`（新建）
+
+- **要做的**：**spike 级**，从 S3 反推（M7 做 MVP、M9 完整化）。
+  必须包含 S3 记录的六项：调用约定、栈对齐、输出流、退出码、runtime 桥接、unwind 边界。
+
+### 任务 T53：交付报告 `M0-report.md`
+
+- **文件路径**：`docs/milestones/M0-report.md`（新建）
+
+- **要做的**：面向「下一个接手的人」，必须包含：
+  ① 三个命题各自被**哪个测试 ID** 证明（`M0-design.md` §1.1）；
+  ② 每一项门禁的证据出处；
+  ③ **spike 验证出的形状与留下的差距**（含 S2-02 的需求清单、S2-03 与 M6 的差距、S3-04 的六项）；
+  ④ 明确**未验证/超出范围**的部分（U1–U12）；
+  ⑤ 接手指南：下一阶段该先读哪几份文档。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+grep -n "T-S1-01\|T-S3-04\|U1\b\|U12" docs/milestones/M0-report.md
+# 期望：三类引用都能查到（证明报告不是空话）
+```
+
+### 任务 T54：`M0-manifest.json` 完整化
+
+- **文件路径**：`docs/milestones/M0-manifest.json`（改）
+
+- **要做的**：填掉现在还是空对象的三个节：
+  `test_ids`（T-H / T-C / T-S 全部 ID 与判定结果）、`unsupported`（U1–U12 及各自的实际样本数）、
+  `budget`（实测耗时与 RSS 上限）。
+  同时把 `benchmarks` 节从 Phase 0 的五节扩到含 Phase 3 的可复现性数据。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+python3 -c "import json;d=json.load(open('docs/milestones/M0-manifest.json'));print(len(d['test_ids']),len(d['unsupported']),sorted(d['budget']))"
+# 期望：test_ids 非空（≥ 33）、unsupported 12 条、budget 三节齐
+```
+
+### 任务 T55：六条统一退出检查（**E9**）+ M0 全门禁复核
+
+- **文件路径**：`AGENTS.md`（改状态）、`docs/milestones/M0-plan.md`（改门禁汇总）
+
+- **要做的**：`03` §6.3 的**六条**逐条判定并记录证据：
+  1. 当前阶段必需 smoke 全绿，无未分类 / 基建 / 不稳定失败；
+  2. 四条 cargo 命令（`fmt --check` / `check --workspace --all-targets` /
+     `clippy --workspace --all-targets -- -D warnings` / `test --workspace`）全过，
+     目标集与 native verifier / contract checks 也过；
+  3. 环境、报告、复现材料与契约版本齐全，保留 unsupported 清单；
+  4. 新功能都归属当前冻结测试集或已登记风险；
+  5. 更改 ABI / 布局 / 基线 / 必需用例的决策、迁移与回归影响有记录；
+  6. 不可行时先缩减范围，**不把 recoverable failure 当完成**。
+
+  然后复核 E1–E10 全部状态，回写 `AGENTS.md`。
+
+- **验证**：
+
+```sh
+cd /Users/wangfeng/workspace/rust_go_compiler
+scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace'
+# 期望：四条全过
+python3 scripts/check-m0-consistency.py
+# 期望：全部通过；gate 里 E1–E10 全部 pass
+python3 scripts/debug-smoke-test.sh 2>/dev/null || docker exec <容器名> bash /work/scripts/debug-smoke-test.sh
+# 期望：A/B/C + 9 项全过（E5 的复验锚点仍在，见 T31）
+```
+
+**M0 全部门禁通过后**，Phase 2–4 才算结束；`03` §4 的 M1 才具备开工条件。
+
+---
+
+## 7. 门禁汇总（全部 Phase）
 
 ### Phase 0 出口
 
@@ -1417,9 +1960,38 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 
 **下一步（Phase 2 开工前）**：① 冻结 `M0-tests.md`；② 拆 Phase 2–4 计划；③ 跑一遍 `AGENTS.md` §6.1 的自检。
 
+### Phase 2 出口（⏳ 待开工）
+
+| 门禁 | 判定方式 | 由哪些任务 | 状态 |
+|---|---|---|---|
+| **E3** | harness 六类自测全绿（正反例齐备、不依赖网络） | T36（`T-H-01`~`T-H-06`） | ⏳ 待开工 |
+| **E4** | ≥20 个官方样本 **100%** 通过（**分母不得缩小**） | T38（`T-C-01`~`T-C-20`） | ⏳ 待开工 |
+
+> **硬前置**：T29（冻结 `M0-tests.md`）必须先做 —— `03` §3.3 的门禁纪律要求「白名单**开工前**冻结」，
+> `M0-tests.md` §0 的 F1/F2/F3 三项都指向这一点。
+
+### Phase 3 出口（⏳ 待开工）
+
+| 门禁 | 判定方式 | 由哪些任务 | 状态 |
+|---|---|---|---|
+| **E6** | 三个 spike 的输入 / 结果 / 环境**全部可复现**（各重复 3 次一致） | T45（`T-S1-02` / `T-S3-05`） | ⏳ 待开工 |
+| **E7** | native `hello` 可运行（`T-S3-03`）**且已登记**进 M1 smoke | T46 | ⏳ 待开工 |
+
+> **前置**：Phase 2 的 E3 / E4 必须先过（D-M0-2：harness 门禁未过不得开工内容）。
+
+### Phase 4 出口（⏳ 待开工）
+
+| 门禁 | 判定方式 | 由哪些任务 | 状态 |
+|---|---|---|---|
+| **E8** | `docs/contracts/` 下 **5 份**契约初稿（C1 留位 / C2 完整 / C3–C5 spike 级） | T48–T52 | ⏳ 待开工 |
+| **E9** | `03` §6.3 的**六条**统一退出检查 | T55 | ⏳ 待开工 |
+| **E10** | 基准数据（含 Phase 3 的可复现性）进 manifest | T45 / T54 | ⏳ 待开工 |
+
+> C1 **必须显式标注「留位」** —— 不得因为文件存在就被误读为「M0 已完成源码位置跟踪」。
+
 ---
 
-## 5. 执行纪律
+## 8. 执行纪律
 
 继承 `../03-roadmap.md` §3.5 与 `AGENTS.md` §4：
 
@@ -1428,7 +2000,7 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 | **规格未确认不动手** | 本计划经确认后才开始 T01 |
 | **RED → GREEN → REFACTOR** | 本计划中 T21 之后的每个行为改动都应先有失败测试；环境类任务（T01–T19）以「验证命令」代替测试 |
 | **没有失败的测试就不算实现** | 环境任务至少要有**可判定的验证命令**，且必须真的跑过 |
-| **不盲目演进临时代码** | T21 的 `double_sum()` 是明确的**调试目标**，Phase 2 引入真实功能后删除 |
+| **不盲目演进临时代码** | 三个 spike 一律放独立 crate `rgoc-spikes`（D-M0-14），可整块删除；**例外**：T21 的 `double_sum()` **不删** —— 它是 E5（人工门禁）的复验锚点，改为当 T-H-01 的 fixture（D-M0-15）|
 | **提交仅在明确要求时执行** | 每个任务完成后**不自动提交**；提交信息须引用任务号与验证证据 |
 | **失败不掩盖** | 任何验证失败都要记录原始报错与复现方式，不得通过放宽断言、换镜像 tag 等方式「绕过」 |
 
@@ -1442,7 +2014,7 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 
 ---
 
-## 6. 变更记录
+## 9. 变更记录
 
 | 日期 | 变更 | 原因 |
 |---|---|---|
@@ -1472,3 +2044,5 @@ docker inspect <容器名> --format 'CapAdd={{json .HostConfig.CapAdd}} Security
 | 2026-10-02 | `code_only()`（剔除**整行注释**后再做子串断言）推广到 `install-*.sh` 的既有断言 | 变异测试抓出**两条恒真断言**：`ln -sfn` 与 `[0-9a-f]{40}` 的匹配点被脚本**头部注释**满足 —— 把真实代码行改成注释形态也不会报错。本仓已第二次踩「注释满足断言」的坑（第一次是断点行推导的宽松 `grep`） |
 | 2026-10-02 | **移除 3 个脚本**：`scripts/env-probe.sh`（T14，输出已固化进 manifest）、`scripts/mutation-test-m0-consistency.py`（33 个变异）、`scripts/mutation-test-debug-smoke.sh`（4 个变异）。`check-m0-consistency.py` 由 **63 条断言降为 52 条**（删掉守变异脚本的 9 条 §5c + 2 条 §6）；§6 保留「`AGENTS.md` 记录的断言数 == 实际数」这条防腐断言 | **用户要求「提交前清理掉以后可能不再需要的脚本」**。判据是**是否与自检/门禁耦合、以及是否会复发**：两个 `install-*.sh` 会随容器重建与宿主升级 VSCode 复发，`in-container.sh` 被 `image.lock` 指纹引用，`debug-smoke-test.sh` 是 E5 的下层证据 —— 都不能删。**代价要明确**：移掉两个变异脚本后，「断言是否恒真」不再有任何自动校验，改断言须人工反向验证（把目标改成注释形态/删掉，确认报 ✗）。快照留 `.workbuddy/backup/scripts-removed-20261002-1504/`（不入库），拷回即可重跑。**注意**：`env-probe.sh` 的脚本体仍完整保存在 T14，重新采集 E2 事实时按文重建即可 |
 | 2026-10-02 | **E5 通过**：`M0-manifest.json` 的 `gate.E5` 由 `pending` 改为 `pass`，补 `confirmed_at` / `confirmed_by`；T28 检查表四项补实测列；门禁汇总表与任务总表回写状态；`check-m0-consistency.py` 的门禁断言由「E1/E2/E10=pass, E5=pending」改为「四条全部 pass」并新增「`gate.E5` 登记了确认人与确认时间」（**52 → 53 条断言**） | **用户在 VSCode dev container 中按 F5 实测确认 T28 四项通过**（断点命中未被跳过 / 变量面板 `a=1,b=2` / 调用栈 ≥2 帧 / F10 后停在第 28 行且 `sum==3`）。这是 M0 最后一项门禁 —— 至此 **E1/E2/E10/E5 全部通过**，Phase 0 与 Phase 1 完成。**门禁状态是硬事实，必须与实测同步**：改了 `gate` 就要同步自检里的断言与全部文档，否则自检会红（本轮 `AGENTS.md` 的断言数就又被 §6 抓到一次） |
+| 2026-10-02 | **拆解 Phase 2–4 计划**：新增 §4 Phase 2（T29–T39）、§5 Phase 3（T40–T47）、§6 Phase 4（T48–T55）；原 §4/§5/§6 顺延为 §7/§8/§9（5 处「见 §6 变更记录」自引用同步修正）；§0.1 改为「现已全部拆完」并说明当初为什么先不拆；§0.3 任务总表补三行；§7 补 Phase 2/3/4 出口门禁表；执行纪律的 `double_sum` 条款按 D-M0-15 修正 | **E5 已通过，「等门禁再拆」的前置条件满足**。两处结构性问题由用户拍板：crate 落地节奏（D-M0-13，严格按当期需要）、spike 隔离形态（D-M0-14，独立 crate `rgoc-spikes`）。**同时查出一处既有计划缺陷**：「Phase 2 删除 `double_sum`」会破坏 E5 的人工可复验性 → 改为保留并当 T-H-01 的 fixture（D-M0-15） |
+| 2026-10-02 | 自检新增 2 条断言（**53 → 55**）：「M0-plan 门禁汇总表的状态 == manifest 的 gate（双向）」与「M0-plan 任务总表里 T28 的状态 == gate.E5」 | **本轮发生一次真实文档漂移**：上一轮把 `gate.E5` 改成 `pass` 后，`M0-plan.md` 的门禁汇总表被回退成「☐ 待人工」，而当时自检只校验 manifest，**全绿放行** —— manifest 是机器可读事实、文档是人读入口，两者不一致时人会以文档为准。新断言按**双向**校验（pass↔✅、pending↔待人工），并已**人工反向验证**（把 E5 行改回「☐ 待人工」→ 报 `✗ E5=manifest.pass 但文档行不是 ✅`） |
