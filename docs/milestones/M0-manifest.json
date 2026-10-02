@@ -199,7 +199,8 @@
       "scope": "rgoc-harness 扩写 + rgoc-driver + xtask；先冻结 M0-tests.md（T29）",
       "done": [
         "T29（冻结 M0-tests.md，2026-10-02）",
-        "T30（oracle 侧复核 20 样本期望值，2026-10-02）"
+        "T30（oracle 侧复核 20 样本期望值，2026-10-02）",
+        "T31（Test IR 骨架 + 八种判定分类 + 冻结预算唯一入口，2026-10-02）"
       ]
     },
     "phase3": {
@@ -276,6 +277,40 @@
         "layer_total_s": 0.2,
         "budget_layer_s": 300
       }
+    },
+    "test_ir": {
+      "implemented_at": "2026-10-02",
+      "task": "T31",
+      "files": [
+        "rgoc/crates/rgoc-harness/src/ir.rs",
+        "rgoc/crates/rgoc-harness/tests/test_ir.rs"
+      ],
+      "verdicts": [
+        "pass",
+        "compiler-failure",
+        "runtime-failure",
+        "harness-failure",
+        "target-filtered",
+        "timeout",
+        "resource-failure",
+        "reference-toolchain-failure"
+      ],
+      "required_fields": 16,
+      "budget_entry_point": "Limits::for_layer(layer)（M0-tests §7.5 的冻结值，M0 内唯一入口）",
+      "validate_rules": [
+        "空 ID",
+        "空路径",
+        "比较器与模式错配",
+        "errorcheck 却期望退出码 0",
+        "非 v0 模式缺 unsupported 说明",
+        "unsupported 缺 U 编号或原因"
+      ],
+      "tests": {
+        "integration": 11,
+        "unit": 4,
+        "all_green": true
+      },
+      "kept_double_sum": "D-M0-15：E5 的人工复验锚点，同时充当 T-H-01 的进程内正例"
     }
   }
 }

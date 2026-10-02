@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 ✅ 2026-10-02**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 ✅ 2026-10-02**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1523,6 +1523,35 @@ scripts/in-container.sh cargo test -p rgoc-harness
 scripts/in-container.sh cargo test -p rgoc-harness double_sum
 # 期望：test result: ok. 1 passed
 ```
+
+### ✅ T31 完成记录（2026-10-02）
+
+**RED → GREEN 走完一轮**，产物落在 `rgoc/crates/rgoc-harness/src/ir.rs`（**新增**）
+与 `tests/test_ir.rs`（**新增**），`src/lib.rs` 只加了一行 `pub mod ir;`。
+
+> **与计划的一处偏差**：计划写「文件路径：`src/lib.rs`」，实际把 Test IR 放进了
+> **独立的 `src/ir.rs`**。理由：T32–T35 各自要建 `instruction.rs` / `corpus.rs` /
+> `oracle.rs` / `compare.rs`，`ir.rs` 与它们同构；全塞进 `lib.rs` 会让文件迅速失控。
+
+| 步骤 | 结果 |
+|---|---|
+| 1) RED | 写 11 条验收测试 → `E0432 unresolved import rgoc_harness::ir`（**只此一条**，失败确实来自类型不存在） |
+| 2) GREEN | 实现 `ir.rs` → 11 集成 + 4 单元测试全绿 |
+| 3) 锚点 | `cargo test -p rgoc-harness double_sum` 通过（D-M0-15：`double_sum` 保留） |
+| 4) 门禁 | T22 四条全过：`fmt --check` / `check --workspace --all-targets` / `clippy -D warnings` / `test --workspace` |
+
+**实现的取舍**：`validate()` **只校验 5 条**会让「结果不可信」的规则（空 ID、空路径、
+比较器/模式错配、`errorcheck` 却期望成功、非 v0 模式缺 unsupported 说明）；
+`imports` / `feature_deps` / `build_tags` 等字段目前**只记录不校验** ——
+等 T33/T35 真正用到时再补，避免现在就写没人验证的分支。
+
+**过程中三次踩坑**（都是「手改代码 > 用工具改代码」的代价）：
+1. 测试里写了 `let mut 无 id = …` —— Rust 标识符**不能含空格**，混进了一个与 RED 无关的语法错误。
+   **RED 必须纯净**：失败只能来自缺失行为，否则会把「夹具坏了」误当成「功能没实现」。
+2. 批量给测试函数改 snake_case 时，正则多插了一个 `(`，把 `() {` 变成 `( {`、`Ok(())` 变成 `Ok()`。
+   → 用正则批量改代码后**必须立刻编译一次**，不要攒着。
+3. 三个测试函数名里含 `M0` / `T_H_01` / `512MiB` 等大写片段，触发 `non_snake_case` ——
+   在 `clippy -D warnings` 下会**变成错误**并打爆 T22 门禁。中文函数名可以用，但**不能夹大写 ASCII**。
 
 ### 任务 T32：实现指令行解析（规则 R1）
 

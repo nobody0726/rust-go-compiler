@@ -330,6 +330,33 @@ def main() -> int:
           and re.search(r"^\s*sum \* 2\s*$", harness, flags=re.M) is not None)
     check("调试目标不再需要 clippy allow",
           "allow(clippy::let_and_return)" not in harness)
+
+    # ── T31 的产物：Test IR 骨架（真正「跑起来对不对」由 cargo test 负责）──────
+    # 这里的四条是**静态**判据：防止 ir.rs 被删、被改名，或判定分类被悄悄合并。
+    harness_ir = REPO_ROOT / "rgoc/crates/rgoc-harness/src/ir.rs"
+    ir_text = code_only(harness_ir.read_text(encoding="utf-8")) if harness_ir.is_file() else ""
+    harness_lib = code_only(harness)  # harness 已是 lib.rs 的文本
+    check("T31 产物：ir.rs 存在且 lib.rs 声明 pub mod ir（Test IR 骨架在位）",
+          bool(ir_text) and "pub mod ir;" in harness_lib)
+    # 八种判定分类 —— 合并就等于把基建失败算成语术失败（03 §3.3）
+    missing_v = [v for v in ("Pass", "CompilerFailure", "RuntimeFailure", "HarnessFailure",
+                             "TargetFiltered", "Timeout", "ResourceFailure",
+                             "ReferenceToolchainFailure")
+                 if f"    {v}," not in ir_text]
+    check("Test IR 的 Verdict 八种分类齐全（不得合并）",
+          not missing_v, "缺：" + ", ".join(missing_v) if missing_v else "8 种")
+    # 超时与资源上限只在 for_layer 一处定义（M0-tests §7.5）——
+    # 散落在各处就会出现两套预算，而门禁只看其中一套
+    check("冻结预算只有一个入口：Limits::for_layer + with_rss_override",
+          "pub fn for_layer(layer: Layer) -> Self" in ir_text
+          and "pub fn with_rss_override(" in ir_text)
+    # C2 契约的可执行副本：测试文件在位且覆盖八种标识
+    ir_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/test_ir.rs"
+    ir_test_text = ir_test.read_text(encoding="utf-8") if ir_test.is_file() else ""
+    check("C2 契约的可执行副本 tests/test_ir.rs 在位（含八种判定标识）",
+          all(s in ir_test_text for s in ("compiler-failure", "runtime-failure",
+                                          "harness-failure", "target-filtered",
+                                          "resource-failure", "reference-toolchain-failure")))
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))
