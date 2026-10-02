@@ -191,12 +191,15 @@
     },
     "phase2": {
       "tasks": "T29-T39",
-      "status": "pending",
+      "status": "in_progress",
       "gates": [
         "E3",
         "E4"
       ],
-      "scope": "rgoc-harness 扩写 + rgoc-driver + xtask；先冻结 M0-tests.md（T29）"
+      "scope": "rgoc-harness 扩写 + rgoc-driver + xtask；先冻结 M0-tests.md（T29）",
+      "done": [
+        "T29（冻结 M0-tests.md，2026-10-02）"
+      ]
     },
     "phase3": {
       "tasks": "T40-T47",
@@ -224,5 +227,37 @@
     "D-M0-13": "M0 的 crate 落地节奏：严格按当期需要（Phase 2 只建 harness/driver/xtask），不建空壳",
     "D-M0-14": "三个 spike 放独立 crate rgoc-spikes（三个 bin + 共享固定 HIR fixture），可整块删除",
     "D-M0-15": "rgoc-harness 的 double_sum 不删 —— 它是 E5（人工门禁）的复验锚点，改为 T-H-01 的 fixture"
+  },
+  "test_contract": {
+    "source": "docs/milestones/M0-tests.md",
+    "status": "frozen",
+    "frozen_at": "2026-10-02",
+    "frozen_by_task": "T29",
+    "frozen_items": {
+      "F1": "20 个官方样本清单（不得削减到 20 以下）",
+      "F2": "unsupported 清单（U1-U14，冻结时补了 U13/U14）",
+      "F3": "超时与资源上限（T-H 30s/3min、T-C 60s/5min、S1/S2 30s/1min、S3 120s/5min、整体 15min；RSS ≤512MiB，T-C-03 768MiB）",
+      "F4": "M0 分母 = 279（run 147 / errorcheck 120 / compile 12），含 5 个平台过滤项；排除 77 项"
+    },
+    "baseline_denominator": 279,
+    "baseline_by_mode": {
+      "run": 147,
+      "errorcheck": 120,
+      "compile": 12
+    },
+    "target_filtered_in_denominator": 5,
+    "excluded_total": 77,
+    "excluded_by_u": {
+      "U7": 31,
+      "U2": 14,
+      "U6": 11,
+      "U5": 9,
+      "U1": 5,
+      "U13": 5,
+      "U3": 1,
+      "U14": 1
+    },
+    "dispatch_order": "R1(解析 action) -> R1b(平台过滤 :522) -> switch(:541)。顺序颠倒会让 harness 在 linkmain.go 上误报 T-H-03",
+    "cross_check": "T33 的 Rust 枚举器算出的分母必须等于 279"
   }
 }

@@ -257,6 +257,24 @@ def main() -> int:
               claimed is not None and int(claimed.group(1)) == max(heads),
               claimed.group(0) if claimed else "总表缺 Phase 4 行")
 
+        # ── M0-tests.md 的冻结状态（T29 冻结后不可回退）────────────────────
+        # 冻结是门禁纪律的硬要求（`03` §3.3「白名单须开工前冻结」）。一旦回退成
+        # 「待冻结」，Phase 2 就失去「只由这些 ID 判定」的依据，而没有任何其他断言会发现。
+        tests_text = (REPO_ROOT / "docs/milestones/M0-tests.md").read_text(encoding="utf-8")
+        check("M0-tests.md 已冻结（状态行）",
+              "已冻结（2026-10-02，任务 T29）" in tests_text,
+              tests_text.splitlines()[2][-40:] if len(tests_text.splitlines()) > 2 else "")
+        # F1：20 个官方样本不得削减（`03` §4 门禁写死「至少 20 个」）
+        n_tc = len(re.findall(r"^\| \*\*T-C-\d+", tests_text, flags=re.M))
+        check("M0-tests.md 的 T-C 样本数 == 20（F1 不得削减）",
+              n_tc == 20, f"实际 {n_tc} 个")
+        # F4：M0 分母是冻结数据，改它必须先改文档并说明理由
+        check("M0-tests.md 记录的 M0 分母 == 279（F4，已冻结）",
+              "**279** = `run` 147 + `errorcheck` 120 + `compile` 12" in tests_text)
+        # 分派顺序是冻结时实测得到的，漏掉会让 harness 在真实语料上误报 T-H-03
+        check("M0-tests.md 记有「平台过滤先于未知指令判定」（R1b）",
+              "R1b" in tests_text and "平台过滤**先于**未知指令判定" in tests_text)
+
     # ── 4. 占位符 ──────────────────────────────────────────────────────────
     print("[4] 交付物占位符")
     for rel in ("docs/milestones/M0-manifest.json", "docker/image.lock"):

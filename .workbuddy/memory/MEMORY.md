@@ -17,7 +17,9 @@
 - **Phase 1 ✅**：T20–T28 全部完成。T20–T22 四条统一退出检查全过（调试目标改形状后已**无需任何 `#[allow]`**）；T23–T26 的 devcontainer / launch.json 就绪；**T27/T28 已由用户于 2026-10-02 人工实测通过 —— E5 是 M0 最后一项门禁**，登记在 `M0-manifest.json` 的 `gate.E5`（`status=pass` / `confirmed_at` / `confirmed_by` / `evidence`）。**三项环境前提均已实测**：VS Code Server 1.140.0 在持久卷 `/vscode`（两处 `test -d` 均 exit=0）、CodeLLDB 平台包 `platform.ok` 存在（lldb 22.1.8-codelldb）、`launch.json` 的 `cargo.cwd` 与 `filter.name` 两处静默陷阱已修。
 - **环境已就绪**：镜像 `rgoc:dev` = `sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b`（2.92GB，14 层）
 - **计划已拆完（2026-10-02）**：`M0-plan.md` 覆盖 **Phase 0–4、T01–T55**（Phase 2 §4 / Phase 3 §5 / Phase 4 §6；原 §4/§5/§6 顺延为 §7/§8/§9）。拆解时定了 **D-M0-13**（crate 严格按当期需要：Phase 2 只建 harness/driver/xtask，Phase 3 才建 rgoc-hir + rgoc-spikes）、**D-M0-14**（三个 spike 放独立 crate `rgoc-spikes`，可整块删除）、**D-M0-15**（`double_sum` **不删** —— 它是 E5 的人工复验锚点，改为 T-H-01 的 fixture）
-- **下一步（Phase 2 开工）**：① **T29 冻结 `M0-tests.md`**（`03` §3.3 要求「白名单开工前冻结」，这是硬前置）→ ② T30 oracle 侧复核 20 样本期望值 → ③ T31–T35 harness 核心 → ④ T36 六类自测（E3）→ ⑤ T38 跑 20 样本（E4）
+- **T29 ✅（2026-10-02）**：`M0-tests.md` **已冻结**（F1 20 样本 / F2 U1–U14 / F3 超时上限 / **F4 M0 分母 = 279**）。
+  冻结时查出三处问题：① 分母实算 279（run 147 / errorcheck 120 / compile 12，含 5 个平台过滤项；排除 77 已逐条归 U）；② unsupported 清单**漏了 U13**（`skip` 指令 5 个，上游 `t.Skip`）与 **U14**（`linkmain.go`）；③ **分派顺序此前记漏** → §1.3 新增 **R1b**：官方是「R1 解析 action(:502-515) → **平台过滤(:522)** → switch(:541)」，**顺序颠倒会让 harness 在 `linkmain.go` 上误报 T-H-03**。T33 的 Rust 枚举器算出的分母**必须 == 279**。
+- **下一步（Phase 2）**：① **T30 在 oracle 侧复核 20 个样本的期望值**（E4 的前置）（`03` §3.3 要求「白名单开工前冻结」，这是硬前置）→ ② T30 oracle 侧复核 20 样本期望值 → ③ T31–T35 harness 核心 → ④ T36 六类自测（E3）→ ⑤ T38 跑 20 样本（E4）
 - **五个 Phase**：0 容器与工具链底座 → 1 VSCode 调试环境（**门禁 = 实测断点命中**，不是「能开窗口」）→ 2 Rust 骨架 + harness → 3 三个 spike（解释/SSA/native）→ 4 契约 + 报告
 - **关键洞察**：Go oracle 是**硬约束**（必须精确 `go1.27.1`；宿主 `go1.24.5` 不可作基线），Rust 版本是**软约束** → 用 `golang:1.27.1-bookworm` 基础镜像满足 Go，用 `rustup` 满足 Rust
 - **环境实测（2026-10-02 只读侦察，宿主 VSCode 于同日升到 1.140.0）**：Docker 29.6.2／内核 `6.12.76-linuxkit`／`aarch64`／10 CPU、7.75 GiB；镜像 index digest `sha256:69a7b978…9195`，arm64 digest `sha256:1668bbf8…fae1`；**宿主无 rustc/cargo/rustup**；宿主 VSCode **1.140.0 / commit `07f806f9…`**（侦察时为 1.139.1 / `04c0d99f…`），扩展 `rust-lang.rust-analyzer` 与 `vadimcn.vscode-lldb` 由 devcontainer 在**容器内**装；Rust stable 参考值 `1.98.1`
@@ -43,7 +45,7 @@
 - ⚠️ **`AGENTS.md` 里记录的断言数由自检脚本自己对账**（`check-m0-consistency.py` §6）：用 `TOTAL` 计数器，最后一条断言把自己也数进去，所以它**必须是文件的最后一条**。改断言后只需同步 `AGENTS.md` §1 一处，忘了同步自检会直接报 ✗（本轮已这样抓到过两次）
 - **非 root 用户下 `/proc/self/status` 的 `CapEff` 恒为 0**，不能用它判断容器能力 → 从宿主 `docker inspect … HostConfig.CapAdd/SecurityOpt`
 - ⚠️ **断言必须锚定真实代码，注释里的同名串会把它变成恒真断言** —— 本仓踩过两次：① 推导断点行的 `grep -n 'let sum = a + b;'` 命中**注释行**；② `install-*.sh` 的**头部注释**里也写着 `--noproxy '*'` / `platform.ok` / `ln -sfn` / `[0-9a-f]{40}`，用原文做子串匹配会被注释满足。→ `check-m0-consistency.py` 第 5/5b 节一律作用于 `code_only()`（剔整行注释）
-- 环境陷阱的完整清单在 `docs/milestones/M0-benchmarks.md` §6（**14 项**）；两个可判定自检入口：`scripts/check-m0-consistency.py`（**52 条**断言，含 §6 的「`AGENTS.md` 记录的断言数 == 实际数」防腐断言）、`scripts/debug-smoke-test.sh`（第 2 节按 `launch.json` 复刻 CodeLLDB 的 cargo 步骤 A/B/C + 9 条 lldb 断言）
+- 环境陷阱的完整清单在 `docs/milestones/M0-benchmarks.md` §6（**14 项**）；两个可判定自检入口：`scripts/check-m0-consistency.py`（**61 条**断言，含 §6 的「`AGENTS.md` 记录的断言数 == 实际数」防腐断言）、`scripts/debug-smoke-test.sh`（第 2 节按 `launch.json` 复刻 CodeLLDB 的 cargo 步骤 A/B/C + 9 条 lldb 断言）
 - ⚠️ **原先的两个变异测试脚本已于 2026-10-02 按用户要求移除**（`mutation-test-m0-consistency.py` 33 个变异、`mutation-test-debug-smoke.sh` 4 个变异），以精简交付物。快照在 `.workbuddy/backup/scripts-removed-20261002-1504/`（该目录被 git 忽略），拷回 `scripts/` 即可重跑。**代价**：现在没有自动手段能证明断言「真的会失败」—— 改动 `check-m0-consistency.py` 的断言后必须**人工反向验证**（把目标改成注释形态或删掉，确认报 ✗）。它们曾真实抓到 3 处缺陷（2 条恒真断言 + 夹具缺文件导致断言被整段跳过）
 - `scripts/env-probe.sh`（E2 环境事实数据源）同样已移除，但**脚本体完整保存在 `M0-plan.md` T14**，需要复核 E2 时按文重建即可 —— 它的输出已固化进 `M0-manifest.json`
 

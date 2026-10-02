@@ -1,6 +1,6 @@
 # M0 测试先行清单（M0-tests.md）
 
-> **阶段 ID**：`M0`　|　**状态**：待冻结　|　**日期**：2026-10-02
+> **阶段 ID**：`M0`　|　**状态**：**已冻结（2026-10-02，任务 T29）**　|　**日期**：2026-10-02
 > **文档索引**：[`../README.md`](../README.md)　|　**上游**：[`M0-design.md`](./M0-design.md)（设计决策）、[`../03-roadmap.md`](../03-roadmap.md) §3–§4
 > **下游**：writing-plans（任务级计划）→ 子代理执行
 >
@@ -12,11 +12,15 @@
 
 | 项 | 冻结内容 | 冻结时点 | 变更规则 |
 |---|---|---|---|
-| F1 | §4 的 **20 个官方样本清单** | **开工前**（本文档评审通过即冻结） | 新增须单独记录；**不得削减到 20 以下**（`03` §4 门禁写死「至少 20 个」） |
-| F2 | §6 的 unsupported 清单 | 同上 | 同上 |
-| F3 | §7 的超时与资源上限 | 同上 | 实测后可有记录地调整 |
+| F1 | §4 的 **20 个官方样本清单** | ✅ **2026-10-02（T29）** | 新增须单独记录；**不得削减到 20 以下**（`03` §4 门禁写死「至少 20 个」） |
+| F2 | §6 的 unsupported 清单（**含本轮新增的 U13 / U14**） | ✅ **2026-10-02（T29）** | 同上 |
+| F3 | §7 的超时与资源上限 | ✅ **2026-10-02（T29）** | 实测后可有记录地调整 |
+| **F4** | **§6.1 的 M0 分母 = 279**（含 5 个平台过滤项） | ✅ **2026-10-02（T29）** | **不得因「跑不动」缩小**（`03` §3.3）；口径若要改，必须先改本文档并记变更理由 |
 
-**本文档冻结后，M0 的通过与否只由这些 ID 决定**，不因「总体感觉良好」而改变。
+> **F4 的交叉校验**：T33 用 Rust 实现枚举器后，算出的分母**必须等于 279**。
+> 不等就说明枚举实现与冻结口径不一致 —— 这比任何单测都更早发现问题。
+
+**本文档已于 2026-10-02 冻结**（T29）。此后 M0 的通过与否**只由这些 ID 决定**，不因「总体感觉良好」而改变。冻结时同时**算出并记录了 M0 分母（§6.1）**，并在 §1.3 补上一条**实测得到的分派顺序**（平台过滤先于未知指令判定）。
 
 ---
 
@@ -58,6 +62,38 @@
 ```
 
 > 推论：**不能假定指令在第 1 行**，也不能假定它前面只有注释（`03` §3.1 已警示）。
+
+**(R1b) 分派顺序：平台过滤**先于**未知指令判定** —— `testdir_test.go:517-524` → `:541-558`
+
+```text
+官方 run() 的三步顺序（不可颠倒）：
+  1) R1  解析 action（跳过 //go:build 与 // +build 行）              :502-515
+  2) 平台过滤 shouldTest(header, goos, goarch) → t.Skip(why)        :517-524
+       header = src 中 "
+package" 之前的部分（没有 
+package 时 header = action）
+  3) switch action                                                  :541-558
+       case "skip"      → t.Skip("skip")                           :552-556
+       default          → t.Fatalf("unknown pattern: %q", action)  :558
+```
+
+> ⚠️ **这条顺序是冻结时（2026-10-02）实测发现的，之前的记载漏了它。**
+> 证据：顶层 `test/linkmain.go` 首行是 `//go:build ignore`，按 R1 跳过后
+> 下一条注释被当成 action（`Copyright 2015 The Go Authors…`）—— 一个**非法指令**。
+> 但官方 runner **不会**对它 `Fatalf`，因为第 2 步的平台过滤先把它 `t.Skip` 掉了。
+> **如果 harness 先判「未知指令」再判平台过滤，就会在真实语料上误报 T-H-03。**
+
+`shouldTest` 的 tag 判定（`:380-467`）逐条对齐，冻结时的实测取值（`go1.27.1` / linux / arm64 / `GO_GCFLAGS` 未设）：
+
+| tag | 判定 | 依据 |
+|---|---|---|
+| `go1.1` … `go1.27` | ✅ true | `build.Default.ReleaseTags` |
+| `goexperiment.*` | 查 `build.Default.ToolTags`（默认关闭的实验为 false） | `:441-443` |
+| `linux`、`gc` | ✅ true | `:445-447` |
+| `arm64` | ✅ true | `:452-454`（`allGOARCH` 为 false 时只认 `GOARCH`） |
+| `cgo` | ❌ false（`-cgo` 默认关） | `:442-444` |
+| `gcflags_noopt` | ❌ false（`GO_GCFLAGS` 未含 `-N`/`-l`） | `:456-458` |
+| `test_run` | ✅ true | `:460-462` |
 
 **(R2) 输出期望判定** —— `testdir_test.go:1169-1193`
 
@@ -319,8 +355,69 @@ M0 的 harness **明确不支持**以下内容。**必须显式分类，不得�
 | U10 | 需要 `unsafe` / `reflect` / `cgo` / 汇编内联的用例 | `expected-unsupported` | 首发非目标（`03` §0.2） | M9+/M12 |
 | U11 | `src/internal/types/testdata/` | `expected-unsupported` | 属 types2 内部测试，M0 不纳入 | M4 |
 | U12 | 真实 Go 源码的 lex/parse | `expected-unsupported` | M0 三 spike 用**固定 HIR** | M1/M2 |
+| **U13** | `skip` 指令（顶层 5 个：`cmplxdivide1` / `fibo` / `index` / `linkx` / `rotate`） | `skipped-by-design` | **上游设计即跳过**：官方 `testdir_test.go:552-556` 直接 `t.Skip("skip")`（除非传 `-run_skips`）。它既不是失败也不是「不支持」—— 必须单独记为此类，**不得记为 pass** | 后续 |
+| **U14** | action 解析结果**不是 16 个指令之一**、但文件被平台过滤（顶层 1 个：`linkmain.go`，首行 `//go:build ignore`） | `target-filtered` | 见 §1.3 **R1b**：官方在 `switch` **之前**先做平台过滤（`:522`），所以它被 `t.Skip`，**不会**触发 `unknown pattern` 硬失败 | 后续 |
 
 > **U8/U9 的分母影响**：因 M0 只覆盖 `test/` 顶层，`03` §3.3「过滤项仍在分母」在此处的落地方式是 —— **M0 的分母 = 顶层 `test/` 中模式属于 v0 支持集且无排除参数的文件集**，该分母在冻结时一次性计算并记录，**后续不得因跑不动而缩小**。
+### 6.1 M0 分母（**冻结于 2026-10-02，T29**）
+
+**口径**（`03` §3.3 + 本文 §6）：
+
+```text
+M0 分母 = 顶层 test/*.go 中「action 属于 v0 支持集（run / compile / errorcheck）
+          且 action 不含排除参数（U7）」的【文件集】
+```
+
+- 只扫**顶层**（U8/U9：子目录不在 M0 范围）；`src/internal/types/testdata/` 不纳入（U11）
+- **平台过滤项留在分母内**（`03` §3.3：过滤项不计入分子、仍计入分母）
+
+**实测结果**（`go1.27.1` linux/arm64 容器内，用官方 `testdir_test.go` 的分派顺序逐条复刻）：
+
+| 项 | 数量 |
+|---|---|
+| 顶层 `test/*.go` 总数 | **356** |
+| **⇒ M0 分母** | **279** = `run` 147 + `errorcheck` 120 + `compile` 12 |
+| 　其中平台过滤（`target-filtered`，**仍在分母**） | **5** |
+| 　因此分母内**实际参与执行**的文件 | 274 |
+| 排除合计 | **77**（明细见下表） |
+
+**5 个平台过滤项**（linux/arm64 下不参与执行，但计入分母）：
+
+| 文件 | action | 原因 |
+|---|---|---|
+| `inline_math_bits_rotate.go` | `errorcheck -0 -m` | `//go:build amd64` |
+| `nilptr_aix.go` | `run` | `//go:build aix` |
+| `simd_inline.go` | `errorcheck -0 -m` | `//go:build goexperiment.simd && amd64` |
+| `wasmexport.go` | `errorcheck` | `//go:build wasm` |
+| `wasmexport2.go` | `errorcheck` | `//go:build wasm` |
+
+**77 个排除项的归属**（每个不通过的用例都必须能说清落在哪一条）：
+
+| 归属 | 数量 | 说明 |
+|---|---|---|
+| **U7** | **31** | action 含 `-gcflags` / `-d=` / `-goexperiment` / `-godebug` —— 编译器内部开关，非语言语义 |
+| U2 | 14 | `runoutput` |
+| U6 | 11 | `errorcheckoutput` 3 + `errorcheckandrundir` 3 + `errorcheckwithauto` 5 |
+| U5 | 9 | `build` 4 + `buildrundir` 3 + `compiledir` 2 |
+| U1 | 5 | `rundir` 4 + `runindir` 1 |
+| **U13** | **5** | `skip` 指令（上游设计即跳过） |
+| U3 | 1 | `errorcheckdir` |
+| **U14** | **1** | `linkmain.go`（见 R1b） |
+
+**U7 的 31 个文件**（排除参数的具体形态，便于 T33 校验正则）：
+`char_lit1` / `checkbce` / `convert5` / `defererrcheck` / `devirt` / `escape_alias` /
+`escape_iface_data` / `escape_mutations` / `fuse` / `inline_caller` / `inline_callers` /
+`intrinsic_atomic` / `known_bits` / `loopbce` / `maymorestack` / `nilcheck` / `nilptr3` /
+`nilptr5` / `nilptr5_aix` / `nilptr5_wasm` / `opt_branchlikely` / `phiopt` / `prove` /
+`prove_constant_folding` / `prove_invert_loop_with_unused_iterators` / `prove_popcount` /
+`simd` / `sliceopt` / `tailcall` / `tighten` / `writebarrier`（均为顶层 `test/` 下的 `.go`）
+
+> **计算方法（可复现）**：一次性探针程序，按 §1.3 的 R1 + R1b 顺序遍历
+> `go_source_code/test/*.go`，用 `go/build/constraint` 解析 `//go:build`、
+> 用 `go/build.Default` 的 `ReleaseTags`/`ToolTags` 复刻 `match` 语义，
+> 统计上述五类。**T33 的 Rust 枚举器必须算出同一个 279**（含 5 个平台过滤项）——
+> 这是 `writing-plans` 之外的一道交叉校验。
+
 
 ---
 
@@ -393,12 +490,13 @@ cargo run -p xtask -- test --spike s1|s2|s3           # T-S*-*
 
 ## 8. 门禁判定与冻结规则
 
-| 门禁 | 由哪些 ID 判定 | 通过条件 |
-|---|---|---|
-| **E3** harness 六类自验 | `T-H-01` ~ `T-H-06` | **100%** 通过，且正反例齐备 |
-| **E4** 官方语料基线 | `T-C-01` ~ `T-C-20` | **100%** 通过（20/20） |
-| **E6** 三 spike 可复现 | `T-S1-*`、`T-S2-*`、`T-S3-*` | 全绿 + 重复执行结果一致 |
-| **E7** native `hello` | `T-S3-03` | stdout 精确 `hello\n` + 登记进 M1 smoke |
+| 门禁 | 由哪些 ID 判定 | 分母 | 通过条件 |
+|---|---|---|---|
+| **E3** harness 六类自验 | `T-H-01` ~ `T-H-06` | **6** | **100%** 通过，且正反例齐备 |
+| **E4** 官方语料基线 | `T-C-01` ~ `T-C-20` | **20** | **100%** 通过（20/20） |
+| **E6** 三 spike 可复现 | `T-S1-*`、`T-S2-*`、`T-S3-*` | 3 / 3 / 5 | 全绿 + 重复执行结果一致 |
+| **E7** native `hello` | `T-S3-03` | 1 | stdout 精确 `hello\n` + 登记进 M1 smoke |
+| （基线报告，**非门禁**） | 顶层 `test/` 全量枚举 | **279**（§6.1，已冻结） | 报告须给出分子/分母/八类分布；**平台过滤的 5 个计入分母不计入分子**；**分母不得缩小** |
 
 **判定纪律**：
 
@@ -411,9 +509,11 @@ cargo run -p xtask -- test --spike s1|s2|s3           # T-S*-*
 
 ## 9. 待办
 
-| 项 | 说明 |
-|---|---|
-| `M0-manifest.json` | 机器可读版：环境锁定值 + 本清单的测试 ID + 门禁 + 预算（Phase 4 产出） |
-| 期望值复核 | §4.2 的 8 个 `run` 期望值需在 `go1.27.1` 容器内复核并锁定 |
-| 事实修正回写 | ✅ **已完成**（2026-10-02）：`../02-test-inventory.md` §0.1/§0.2 已修正驱动器位置、指令集（16 个）、顶层 `.go` 数（356）；§0.2 修正项增至 9 处 |
-| 分母计算 | §6 U8/U9 所述「M0 分母」须在冻结时一次性计算并记录 |
+| 项 | 归属 | 说明 |
+|---|---|---|
+| `M0-manifest.json` 机器可读版 | → **T54**（Phase 4） | 环境锁定值 + 本清单的测试 ID + 门禁 + 预算（`test_ids` / `unsupported` / `budget` 三节现仍是空对象） |
+| 期望值复核 | → **T30**（Phase 2） | §4.2 的 8 个 `run` 期望值需在 `go1.27.1` 容器内复核并锁定；这是 **E4 的前置** |
+| 分母计算 | ✅ **已完成**（2026-10-02，T29） | **M0 分母 = 279**（run 147 / errorcheck 120 / compile 12），含 5 个平台过滤项；排除 77 项已按 U1/U2/U3/U5/U6/U7/U13/U14 逐条归属。完整明细见 **§6.1** |
+| unsupported 清单补漏 | ✅ **已完成**（2026-10-02，T29） | 冻结时发现原清单**漏了两类**，已补：**U13**（`skip` 指令，5 个）、**U14**（action 非法但被平台过滤抢先，1 个） |
+| 分派顺序补记 | ✅ **已完成**（2026-10-02，T29） | §1.3 新增 **R1b**：官方在 `switch` **之前**先做平台过滤（`:522` vs `:541`）。漏掉这条会让 harness 在 `linkmain.go` 上**误报 T-H-03** |
+| 事实修正回写 | ✅ **已完成**（2026-10-02） | `../02-test-inventory.md` §0.1/§0.2 已修正驱动器位置、指令集（16 个）、顶层 `.go` 数（356）；§0.2 修正项增至 9 处 |
