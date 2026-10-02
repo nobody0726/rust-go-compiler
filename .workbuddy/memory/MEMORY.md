@@ -5,7 +5,10 @@
 - 目标：用 **Rust 重写 Go 编译器**，项目代号 **`rgoc`**
 - 语料快照：`go_source_code/`（`VERSION` = `go1.27.1`，2026-08-28）；规格基准 `doc/go_spec.html`
 - 首发平台：**Linux / arm64（Lima VM 提供）→ `aarch64-unknown-linux-gnu` / ELF**；不维护 macOS 第二套首发环境
-- 工作区**不是 Git 仓库**：语料一致性靠排序后的源码路径 / 文件 SHA-256 清单锁定，`VERSION` 文件本身不足以证明内容一致
+- **Git 仓库已发布**：<https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`，remote = `origin`）
+- **语料不入库**：`go_source_code/`（185 MB / 15,618 文件）由根目录 `corpus-manifest.sha256` 锁定；校验用 `shasum -a 256 -c corpus-manifest.sha256`
+- **`git push` 常被拦**：`github.com` 的 CONNECT 间歇性 502，而 `api.github.com` 正常 → 改用技能 `github-push-via-api` 走 Git Data API（脚本含 `--root` 模式处理空仓引导提交场景）
+- 语料快照一致性以 SHA-256 清单为准，`VERSION` 文件本身不足以证明内容一致
 
 ## 文档体系（docs/）
 
