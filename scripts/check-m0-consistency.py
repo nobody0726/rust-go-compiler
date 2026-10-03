@@ -397,7 +397,7 @@ def main() -> int:
           's.strip_prefix("//go:build")' in instr_text
           and "let line = line.trim();" not in instr_text)
     # T32 的验收测试在位，且必须含「顺序」与「linkmain.go」两处关键断言
-    instr_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/instruction.rs"
+    instr_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/test_instruction.rs"
     it_text = instr_test.read_text(encoding="utf-8") if instr_test.is_file() else ""
     check("T32 验收测试在位（含顺序契约与 linkmain.go 真实 fixture）",
           "linkmain.go" in it_text and "Dispatch::TargetFiltered" in it_text

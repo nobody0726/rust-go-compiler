@@ -318,7 +318,7 @@
       "task": "T32",
       "files": [
         "rgoc/crates/rgoc-harness/src/instruction.rs",
-        "rgoc/crates/rgoc-harness/tests/instruction.rs"
+        "rgoc/crates/rgoc-harness/tests/test_instruction.rs"
       ],
       "known_commands": 16,
       "api": [

@@ -9,6 +9,10 @@
 //! 就会在真实语料上误报 T-H-03（未知指令硬失败）。
 //!
 //! TDD 位置：**RED**。T32 实现前本文件编译不过（`rgoc_harness::instruction` 尚不存在）。
+//!
+//! **文件命名**：Rust 里 `tests/` 下每个**顶层** `.rs` 都自动成为集成测试 target，
+//! 文件名不参与判断（没有 `test_` 前缀规则）—— target 名就是文件名词干，
+//! 所以 `cargo test --test test_instruction`。本仓库统一加 `test_` 前缀 purely 为了可读性。
 
 use rgoc_harness::instruction::{
     Dispatch, DispatchError, KNOWN_COMMANDS, ParseError, dispatch, is_go_build_line,
@@ -192,7 +196,7 @@ fn r1b_平台过滤先于未知指令判定() {
     let src = "//go:build ignore\n\n// Copyright 2015 The Go Authors. All rights reserved.\n// Use of this source code is governed by a BSD-style\n// license that can be found in the LICENSE file.\n\npackage main\n";
     let ins = parse_action(src).unwrap();
 
-    // 按 R1 跳�� `//go:build ignore` 后，下一条注释被当成 action —— 一个**非法指令**
+    // 按 R1 跳过 `//go:build ignore` 后，下一条注释被当成 action —— 一个**非法指令**
     assert!(
         ins.action.starts_with("Copyright"),
         "R1 的解析结果应是被截断的版权行，实际：{:?}",

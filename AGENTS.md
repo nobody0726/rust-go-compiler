@@ -63,7 +63,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── crates/rgoc-harness/          ←     测试基础设施（Phase 2 起是 harness 主体）
 │       ├── src/ir.rs                ←       Test IR / 八种判定分类 / 冻结预算（T31）
 │       ├── src/instruction.rs      ←       指令行解析 R1 + 分派顺序 R1b（T32）
-│       ├── tests/instruction.rs    ←       14 条验收测试（含顺序契约与 linkmain.go fixture）
+│       ├── tests/test_instruction.rs ←     14 条验收测试（含顺序契约与 linkmain.go fixture）
 │       ├── src/lib.rs               ←       挂载 `pub mod ir` + `double_sum`（E5 复验锚点）
 │       └── tests/test_ir.rs         ←       C2 契约的可执行副本（T31）
 ├── .workbuddy/

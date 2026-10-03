@@ -1577,7 +1577,7 @@ scripts/in-container.sh cargo test -p rgoc-harness instruction
 ### ✅ T32 完成记录（2026-10-02）
 
 RED → GREEN 走完一轮。产物：`rgoc/crates/rgoc-harness/src/instruction.rs`（新增）、
-`tests/instruction.rs`（新增，**14 条**），`ir.rs` 补 `Mode::ALL`（T32 顺带加的，见下）。
+`tests/test_instruction.rs`（新增，**14 条**），`ir.rs` 补 `Mode::ALL`（T32 顺带加的，见下）。
 
 | 步骤 | 结果 |
 |---|---|
