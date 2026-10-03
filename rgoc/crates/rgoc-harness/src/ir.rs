@@ -284,6 +284,15 @@ impl Limits {
         self.max_rss_bytes = bytes;
         self
     }
+
+    /// 覆盖单项 wall time 上限（超时测试用；如 T-H-05 那个「超过设定 wall time 的用例」）。
+    ///
+    /// 与 [`Self::with_rss_override`] 一样是**逐用例覆盖**，不修改全局预算 ——
+    /// 整层预算（`layer_total`）不动，否则一个慢用例就能把整层的闸门放松。
+    pub fn with_per_case_override(mut self, per_case: Duration) -> Self {
+        self.per_case = per_case;
+        self
+    }
 }
 
 /// 测试分层。决定用哪一套冻结预算。

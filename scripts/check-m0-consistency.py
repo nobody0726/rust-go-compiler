@@ -87,9 +87,17 @@ def code_only(text: str) -> str:
     反向校验已验证（当时的变异测试，2026-10-02）：改用本函数后，把真实代码行改成
     注释形态会被抓住。**该变异测试脚本后按用户要求移除**，所以现在改这里的断言时，
     反向验证要人工做一遍（把目标行改成注释形态 / 删掉，确认断言报 ✗）。
+
+    ⚠️ **两种注释前缀都要剥**（2026-10-02 补）：`#`（shell / YAML / TOML）与
+    `//`（Rust / JS）。原先只剥 `#`，于是所有针对 **Rust 文件**的断言其实是在
+    「含注释的文本」上匹配的 —— 注释里写着一句 `unsafe` 就能让
+    「代码里不该有 unsafe」这条断言永远失败；反过来，注释里写着一句目标代码
+    也会让断言永远通过（恒真）。教训与上面那两次同源，只是更深一层。
     """
     return "\n".join(
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
+        line
+        for line in text.splitlines()
+        if not line.lstrip().startswith(("#", "//"))
     )
 
 
@@ -429,6 +437,37 @@ def main() -> int:
           "Some(279)" in ct_text
           and "语料目录不存在" in ct_text
           and "RGOC_CORPUS_TEST_DIR" in ct_text)
+
+    # ── T34 的产物：oracle 调用与版本守门 ───────────────────────────────
+    oracle_rs = REPO_ROOT / "rgoc/crates/rgoc-harness/src/oracle.rs"
+    or_text = code_only(oracle_rs.read_text(encoding="utf-8")) if oracle_rs.is_file() else ""
+    check("T34 产物：oracle.rs 存在且 lib.rs 声明 pub mod oracle",
+          bool(or_text) and "pub mod oracle;" in harness_lib)
+    # 版本守门：建 oracle 前先校验 go version，不符即 Err（T-H-06）
+    check("版本守门：Oracle::new 先查 go version 再建实例（T-H-06）",
+          "probe_version(&cfg.go_tool" in or_text
+          and "VersionMismatch {" in or_text)
+    # **超时判断必须拿 now 比 deadline**：`start >= deadline` 恒为 false（T34 实测踩过，
+    # 30 秒的 sleep 跑满全程都没触发超时）
+    check("超时判断用 Instant::now() >= deadline（不是恒假的 start >= deadline）",
+          "Instant::now() >= deadline" in or_text
+          and "if start >= deadline" not in or_text)
+    # 命令形态：errorcheck 必须是 go tool compile + -C + R5 的 ssa/check（T30 踩过 go build 的坑）
+    check("命令形态：errorcheck 带 -C 与 -d=ssa/check/on（不是 go build）",
+          '"-C".into()' in or_text and '"-d=ssa/check/on".into()' in or_text)
+    # run 层走 fast path（compile -> link -> 直跑 exe），超时时 kill 父进程即杀掉被测程序，
+    # 不需要 unsafe 的 kill(-pgid) —— 而 workspace 是 unsafe_code = "forbid"
+    check("run 层走 fast path 三步（超时不留孤儿，且不需要 unsafe）",
+          "Mode::Run => vec![" in or_text and '"link".into()' in or_text
+          and "unsafe" not in or_text)
+    # T34 的验收测试在位：必须真的调 go1.27.1（版本守门与超时回收对 mock 没有意义）
+    oracle_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/test_oracle.rs"
+    ot_text = oracle_test.read_text(encoding="utf-8") if oracle_test.is_file() else ""
+    check("T34 验收测试在位（含版本拒绝 / 超时回收 / RSS 上限 / 合并流）",
+          "版本_不符时_拒绝建oracle" in ot_text
+          and "子进程被回收" in ot_text
+          and "rss_超上限" in ot_text
+          and "合并流" in ot_text)
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))

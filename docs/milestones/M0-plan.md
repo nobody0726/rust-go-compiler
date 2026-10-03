@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 / T32 / T33 ✅ 2026-10-02**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T34 ✅ 2026-10-03**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1718,6 +1718,63 @@ scripts/in-container.sh cargo test -p rgoc-harness oracle
 # 期望：① 正常调用返回结果 ② 伪造版本不符时判 reference-toolchain-failure
 #       ③ 超时用例返回 timeout 且事后 `ps` 查不到残留子进程
 ```
+
+### ✅ T34 完成记录（2026-10-03）
+
+RED → GREEN 走完一轮。产物 `rgoc/crates/rgoc-harness/src/oracle.rs`（新增）、
+`tests/test_oracle.rs`（新增，**12 条**），`ir.rs` 顺带补 `Limits::with_per_case_override`。
+
+| 步骤 | 结果 |
+|---|---|
+| 1) RED | 12 条验收测试 → `E0432 unresolved import rgoc_harness::oracle` |
+| 2) GREEN | 13 单元 + 12 集成全绿；`cargo test --workspace` 共 **65 条**全绿 |
+| 3) 门禁 | T22 四条全过（`fmt --check` / `check` / `clippy -D warnings` / `test`） |
+
+**约束反过来改善了设计：`run` 层走官方的 fast path**
+
+原本打算用 `go run`（`:1079`），但 T-H-05 要求「超时后真正终止子进程」。`go run` 的子进程是
+`go`，它再拉起被测程序 —— 只 kill `go` 会留下**孤儿进程**。要杀整组得用
+`kill(-pgid, SIGKILL)`，那需要 `unsafe`，而本仓 workspace 是 **`unsafe_code = "forbid"`**。
+
+于是改走官方**首选**的 fast path（`:1069-1077`）：`go tool compile` → `go tool link` → **直跑 exe**。
+父子关系是直的，`child.kill()` 就等于杀掉被测程序本身 —— 既忠实于官方（无 flags 时官方也走这条），
+又完全不需要 unsafe。**约束把设计推向了一个更好的选择。**
+
+**实现中抓到的 5 个 bug**：
+
+1. **`parse_go_version` 的格式假设错了** —— `go version go1.27.1 linux/arm64` 里
+   平台是**斜杠连写的一个 token**，我按空格分隔去取第 2、3 段，于是拿到
+   `"linux/arm64"` 和 `None`，**版本守门对所有输入都失败**。查了半天才发现
+   （用 `rustc` 单独跑最小复现才确认 Rust 没问题，是我的假设错了）。
+2. **`if start >= deadline` 恒为 false** —— `deadline = start + per_case`，而 `start`
+   是个不再变化的快照，**永远小于** `start + per_case`。正确写法是 `Instant::now() >= deadline`。
+   症状：30 秒的 sleep 跑满全程都没触发超时。是插桩打印 `deadline_in=0ns` 才看出来的。
+3. **fast path 的 exe 步骤被当成 `go` 的参数** —— 得到
+   `go /tmp/xxx.exe: unknown command`。根因是「每一步都是 `go` 的子命令」这个假设，
+   于是引入 `Step { program, args }`：最后一步的 program 是 exe 本身。
+4. **中间步骤的失败被吞掉** —— `run_mode` 最后硬编码 `exit_code: Some(0)`，
+   于是 errorcheck 样本明明编译失败却报成功。改为「以最后一步的退出码为准」。
+5. **并发下 importcfg 互相覆盖** —— 固定路径 `/tmp/m0-importcfg-<pid>`，
+   10 个实例同时建就随机失败（单跑必过、并行挂）。改为**实例级唯一**的临时目录；
+   顺带把 fast path 的 `pkg.a` / `exe` 也挪进那里 —— **它们绝不能写进 work_dir**，
+   真实语料（`GOROOT/test`）是**只读挂载**的。
+
+**测试里也有 2 处问题**：
+
+- RSS fixture 只写不读 `b[i] = 1`，被 Go 当成 **dead store 优化掉**，页面从未被触碰，
+  峰值只观测到 13 MiB；必须**读回一个值**，并停留 300 ms 让轮询采得到
+  （轮询采样的固有限制已写进 `read_peak_rss` 的注释：短命进程可能采不到，
+  要精确得用 `wait4` 的 rusage，那需要 unsafe）；
+- 超时测试的计时器把 `Oracle::new` 也算进去了 —— 而 `go list -export std` 在高并发下
+  实测能到 **45 s**（std 导出缓存）。400 ms 的用例预算与它无关，改为只量 `run_mode`。
+
+**给 T35 的输入**：`Oracle::run_mode` 给出 `merged`（**stdout+stderr 合并流**）、
+`exit_code`、`timed_out`、`resource_exceeded`、`peak_rss_bytes`。
+T35 只需实现「拿这些去比 `.out` / 诊断」。
+
+**顺带修掉自检的一个根本缺陷**：`code_only()` 原先只剥 `#` 开头的行（为 shell 写的），
+对 Rust 的 `//` 注释**完全无效** —— 也就是说所有针对 Rust 文件的断言一直在
+「含注释的文本」上匹配。已补上 `//`，并反向验证（把真代码改成注释形态 → 断言报 ✗）。
 
 ### 任务 T35：比较器与诊断切分（规则 R2 / R3 / R4）
 

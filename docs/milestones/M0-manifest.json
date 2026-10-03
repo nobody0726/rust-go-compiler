@@ -200,9 +200,10 @@
       "done": [
         "T29（冻结 M0-tests.md，2026-10-02）",
         "T30（oracle 侧复核 20 样本期望值，2026-10-02）",
-        "T31（Test IR 骨架 + 八种判定分类 + 冻结预算唯一入口，2026-10-02）",
+        "T31（Test IR 骨架，2026-10-02）",
         "T32（指令行解析 R1 + 分派顺序 R1b，2026-10-02）",
-        "T33（平台过滤 shouldTest + 语料枚举 + U 归类，2026-10-02）"
+        "T33（平台过滤 + 语料枚举 + U 归类，2026-10-02）",
+        "T34（oracle 调用与版本守门，2026-10-03）"
       ]
     },
     "phase3": {
@@ -394,6 +395,28 @@
         "all_green": true
       },
       "next": "T34：oracle 调用与版本守门（T-H-06）"
+    },
+    "oracle": {
+      "implemented_at": "2026-10-03",
+      "task": "T34",
+      "files": [
+        "rgoc/crates/rgoc-harness/src/oracle.rs",
+        "rgoc/crates/rgoc-harness/tests/test_oracle.rs"
+      ],
+      "version_gate": "Oracle::new 先跑 go version，版本或 GOOS/GOARCH 不符即 Err（T-H-06），不得降级",
+      "go_version_format": "go version go1.27.1 linux/arm64 —— 平台是斜杠连写的一个 token",
+      "run_path": "fast path：go tool compile -> go tool link -> 直跑 exe（:1069-1077 + :249）",
+      "why_fast_path": "父子关系是直的，超时 kill 父进程即杀掉被测程序，不需要 unsafe 的 kill(-pgid)；workspace 是 unsafe_code=forbid",
+      "env": "GOENV=off、GOFLAGS=（清空）、PWD 指向工作目录（:647/:656）",
+      "limits_source": "只从 Limits 取（per_case / max_rss_bytes），不在 oracle 里写死",
+      "rss_observation": "读 /proc/进程号/status 的 VmHWM，2 ms 轮询 + spawn 后立即采一次；短命进程可能采不到（已在代码注释里记下）",
+      "temp_dir": "实例级唯一（/tmp/m0-oracle-进程号-序号）—— 绝不写进 work_dir（语料是只读挂载）",
+      "tests": {
+        "integration": 12,
+        "unit": 2,
+        "all_green": true
+      },
+      "next": "T35 比较器：拿 merged / exit_code / timed_out / resource_exceeded 去比 .out 与诊断"
     }
   }
 }
