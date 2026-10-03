@@ -357,6 +357,51 @@ def main() -> int:
           all(s in ir_test_text for s in ("compiler-failure", "runtime-failure",
                                           "harness-failure", "target-filtered",
                                           "resource-failure", "reference-toolchain-failure")))
+
+    # ── T32 的产物：指令行解析（R1）+ 分派顺序（R1b）──────────────────────
+    instr_rs = REPO_ROOT / "rgoc/crates/rgoc-harness/src/instruction.rs"
+    instr_text = code_only(instr_rs.read_text(encoding="utf-8")) if instr_rs.is_file() else ""
+    check("T32 产物：instruction.rs 存在且 lib.rs 声明 pub mod instruction",
+          bool(instr_text) and "pub mod instruction;" in harness_lib)
+    # 16 个官方指令一个都不能少（M0-tests §1.2；少一个就会把真实语料误判成未知指令）。
+    # ⚠️ 必须**先截出 KNOWN_COMMANDS 块再逐名核对** —— 光在全文里找 `"buildrun"` 会被
+    # `mode_of` 里的同名匹配骗过（T32 实测：注入漏项后断言仍显示 ✓）。
+    # 数组长度本身是编译期属性，`cargo check` 也会拦一道；这里是更早、更直白的一层。
+    known16 = ["compile", "compiledir", "build", "builddir", "buildrundir", "run",
+               "buildrun", "runoutput", "rundir", "runindir", "asmcheck",
+               "errorcheck", "errorcheckdir", "errorcheckoutput",
+               "errorcheckandrundir", "errorcheckwithauto"]
+    block = ""
+    if "pub const KNOWN_COMMANDS" in instr_text:
+        start = instr_text.index("pub const KNOWN_COMMANDS")
+        end = instr_text.index("];", start) + 2
+        block = instr_text[start:end]
+    missing_cmd = [n for n in known16 if f'"{n}"' not in block]
+    check("KNOWN_COMMANDS 列出 M0-tests §1.2 的 16 个指令（截块后逐名核对）",
+          bool(block) and not missing_cmd,
+          "缺：" + ", ".join(missing_cmd) if missing_cmd else f"16 个齐全（块长 {len(block)}）")
+    # Mode::ALL 让「16 + skip == 17 个变体」成为可断言的不变量（否则漏项查不出来）
+    check("Mode::ALL 在位（16 个指令 + skip 的双射靠它兜住）",
+          "pub const ALL: [Self; 17] = [" in ir_text)
+    # **顺序契约**：platform_ok 是必填参数，调用方无法省略平台过滤这一步。
+    # 顺序颠倒会让 harness 在 linkmain.go 上误报 T-H-03（T29 冻结时查出的坑）。
+    check("R1b 顺序契约：dispatch 的 platform_ok 是必填参数（过滤先于未知指令判定）",
+          "pub fn dispatch(ins: &Instruction, platform_ok: bool)" in instr_text
+          and instr_text.index("if !platform_ok")
+          < instr_text.index("mode_of(&ins.action)"),
+          "platform_ok 检查必须排在 mode_of 之前")
+    # 构建约束判定必须照 go/build/constraint 的边界。**不能把断言锚在注释上** ——
+    # `code_only()` 会剔掉整行注释（这正是它的用途，T32 实测踩到过）。
+    # 所以只锚代码：前缀判定直接作用在未 trim 的 `s` 上，中间没有 `let line = line.trim()`。
+    check("构建约束判定照 go/build/constraint：HasPrefix 判未经 trim 的整行",
+          's.strip_prefix("//go:build")' in instr_text
+          and "let line = line.trim();" not in instr_text)
+    # T32 的验收测试在位，且必须含「顺序」与「linkmain.go」两处关键断言
+    instr_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/instruction.rs"
+    it_text = instr_test.read_text(encoding="utf-8") if instr_test.is_file() else ""
+    check("T32 验收测试在位（含顺序契约与 linkmain.go 真实 fixture）",
+          "linkmain.go" in it_text and "Dispatch::TargetFiltered" in it_text
+          and "DispatchError::UnknownAction" in it_text)
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))

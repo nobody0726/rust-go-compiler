@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 ✅ 2026-10-02**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 / T32 ✅ 2026-10-02**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1573,6 +1573,54 @@ scripts/in-container.sh cargo test -p rgoc-harness instruction
 # 期望：至少覆盖 —— 指令在首行 / 指令前有 //go:build 约束 / 指令前有空行与注释 /
 #       未知指令硬失败 / 全是注释时硬失败
 ```
+
+### ✅ T32 完成记录（2026-10-02）
+
+RED → GREEN 走完一轮。产物：`rgoc/crates/rgoc-harness/src/instruction.rs`（新增）、
+`tests/instruction.rs`（新增，**14 条**），`ir.rs` 补 `Mode::ALL`（T32 顺带加的，见下）。
+
+| 步骤 | 结果 |
+|---|---|
+| 1) RED | 写 14 条验收测试 → `E0432/E0433 unresolved import rgoc_harness::instruction`（只此一条） |
+| 2) GREEN | 实现 `instruction.rs` → 14 集成 + 7 单元全绿；`cargo test --workspace` 共 **32 条**全绿 |
+| 3) 门禁 | T22 四条全过（`fmt` 需先跑 `cargo fmt`） |
+
+**关键设计：把 R1b 的顺序契约写进函数签名**
+
+```rust
+pub fn dispatch(ins: &Instruction, platform_ok: bool) -> Result<Dispatch, DispatchError>
+```
+
+`platform_ok` 是**必填参数**而不是内部计算 —— 官方 `:522` 的平台过滤先于 `:541` 的
+`switch`，若让调用方「先判指令再过滤」，这个顺序就可能被颠倒。
+`Dispatch` 也不做成 `Mode`：官方在这条路上有**三个互不相同的出口**
+（被平台过滤 / 上游设计即跳过 / 正常执行），把前两者塞进 `Mode` 会让
+「这个用例到底跑没跑」变得不可读。
+
+**实现中抓到的 4 个 bug**（都是测试逼出来的，注释里已记下）：
+
+1. `strip_one_trailing_newline` 的 `then_some` **写反了** —— 「不含换行」时返回 `None`，
+   于是**所有单行输入都被当成含换行**，构建约束一个也识别不出来（8 条测试同时红）。
+2. 构建约束的长度比较**拿整行减前缀长度**算错了；比较基准必须是「前缀之后的那部分」。
+3. **前缀判定用在了 trim 之后** —— 官方 `HasPrefix` 发生在 `TrimSpace` **之前**，
+   所以缩进的 `  //go:build linux` **不是**约束。
+4. `split_quoted` 里闭合引号后**漏了 `continue`** —— 闭合引号本身被塞进参数
+   （得到 `"foo bar\""`）。根因是 Go 的 `case quote != 0` 排在 `case unicode.IsSpace` 之前，
+   引号内的空格因此**不是**分隔符；Rust 的 `else if` 链很容易丢掉这个次序。
+
+**另有 3 处是我的测试期望写错了**（实现是对的，已按官方语义改测试）：
+- 源文件以换行开头会触发 `LeadingNewline`（`:497`），我的 fixture 撞上了它；
+- 非注释首行 `package main` → 官方 `splitQuoted` 只取 `f[0]`，action 是 `"package"`；
+- 「全是注释 → `NoRecipe`」我读错了规则：`action == ""` 指**空**注释行，
+  非空的普通注释**就是**合法的 action（`linkmain.go` 即如此）。
+
+**顺带加了 `Mode::ALL`**：「16 个指令名 + `skip` == 全部 17 个 Mode 变体」这条不变量
+在类型层面查不出来（数组长度是编译期属性），有了 `ALL` 才能在**运行时**兜住
+「加了变体却忘了加指令名」的漏项 —— 那种漏项会让真实语料被误判成未知指令。
+
+**给 T33 的输入**：`parse_action` / `dispatch` / `is_go_build_line` / `is_plus_build_line`
+都已就位；T33 只需实现**平台过滤本身**（`shouldTest` 的 build 约束求值 + GOOS/GOARCH），
+然后把结论喂给 `dispatch(ins, platform_ok)`。**枚举出的分母必须等于 279**（T29 冻结值）。
 
 ### 任务 T33：语料枚举、样本选择与 unsupported 分类
 

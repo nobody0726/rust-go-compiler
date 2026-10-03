@@ -200,7 +200,8 @@
       "done": [
         "T29（冻结 M0-tests.md，2026-10-02）",
         "T30（oracle 侧复核 20 样本期望值，2026-10-02）",
-        "T31（Test IR 骨架 + 八种判定分类 + 冻结预算唯一入口，2026-10-02）"
+        "T31（Test IR 骨架 + 八种判定分类 + 冻结预算唯一入口，2026-10-02）",
+        "T32（指令行解析 R1 + 分派顺序 R1b，2026-10-02）"
       ]
     },
     "phase3": {
@@ -311,6 +312,39 @@
         "all_green": true
       },
       "kept_double_sum": "D-M0-15：E5 的人工复验锚点，同时充当 T-H-01 的进程内正例"
+    },
+    "instruction": {
+      "implemented_at": "2026-10-02",
+      "task": "T32",
+      "files": [
+        "rgoc/crates/rgoc-harness/src/instruction.rs",
+        "rgoc/crates/rgoc-harness/tests/instruction.rs"
+      ],
+      "known_commands": 16,
+      "api": [
+        "parse_action(src) -> Instruction  // R1，:502-515",
+        "dispatch(ins, platform_ok) -> Dispatch  // R1b + switch，:517-524 先于 :541-558",
+        "is_go_build_line / is_plus_build_line  // 照 go/build/constraint/expr.go",
+        "split_quoted  // 照 :2009，引号感知"
+      ],
+      "dispatch_outcomes": [
+        "Proceed(Mode)",
+        "TargetFiltered（平台过滤，仍在分母）",
+        "SkippedByDesign（// skip，U13）"
+      ],
+      "order_contract": "platform_ok 是必填参数 —— 顺序颠倒会让 harness 在 linkmain.go 上误报 T-H-03",
+      "hard_failures": [
+        "LeadingNewline（:497）",
+        "NoRecipe（:514）",
+        "UnclosedQuote（:2047）",
+        "UnfinishedEscaping（:2050）"
+      ],
+      "tests": {
+        "integration": 14,
+        "unit": 7,
+        "all_green": true
+      },
+      "next": "T33 实现 shouldTest（build 约束求值 + GOOS/GOARCH），枚举分母必须 == 279"
     }
   }
 }

@@ -97,6 +97,31 @@ pub enum Mode {
 }
 
 impl Mode {
+    /// 全部模式变体（含 v0 支持集与 §6 已冻结的不支持模式）。
+    ///
+    /// 有了它，「**16 个指令名 + `skip` == 全部模式**」这条不变量才能被断言 ——
+    /// 否则「加了 Mode 变体却忘了加指令名」（或反过来）会让真实语料里的文件
+    /// 被误判成未知指令，而这种漏项在类型层面查不出来。
+    pub const ALL: [Self; 17] = [
+        Self::Run,
+        Self::Compile,
+        Self::ErrorCheck,
+        Self::RunDir,
+        Self::RunIndir,
+        Self::RunOutput,
+        Self::ErrorCheckDir,
+        Self::AsmCheck,
+        Self::Build,
+        Self::BuildDir,
+        Self::BuildRun,
+        Self::BuildRunDir,
+        Self::CompileDir,
+        Self::ErrorCheckOutput,
+        Self::ErrorCheckAndRunDir,
+        Self::ErrorCheckWithAuto,
+        Self::Skip,
+    ];
+
     /// 是否属于 **v0 支持集**（决定它是否进入 M0 分母，见 `M0-tests.md` §6.1）。
     pub fn is_v0_supported(self) -> bool {
         matches!(self, Self::Run | Self::Compile | Self::ErrorCheck)

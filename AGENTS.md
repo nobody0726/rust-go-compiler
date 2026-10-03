@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2 进行中**（T29 冻结清单 / T30 复核期望值 / T31 Test IR 骨架 ✅），Phase 2–4 计划已拆完（T29–T55） |
+| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2 进行中**（T29 冻结清单 / T30 复核期望值 / T31 Test IR 骨架 / T32 指令行解析 ✅），Phase 2–4 计划已拆完（T29–T55） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；`rgoc/` 下只有用于验证调试链路的最小 `rgoc-harness`（1 函数 + 1 测试），**编译器实现尚未开始**。
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（70 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（76 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -62,6 +62,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── Cargo.toml                    ←     resolver 3 / edition 2024 / 全局 lint
 │   └── crates/rgoc-harness/          ←     测试基础设施（Phase 2 起是 harness 主体）
 │       ├── src/ir.rs                ←       Test IR / 八种判定分类 / 冻结预算（T31）
+│       ├── src/instruction.rs      ←       指令行解析 R1 + 分派顺序 R1b（T32）
+│       ├── tests/instruction.rs    ←       14 条验收测试（含顺序契约与 linkmain.go fixture）
 │       ├── src/lib.rs               ←       挂载 `pub mod ir` + `double_sum`（E5 复验锚点）
 │       └── tests/test_ir.rs         ←       C2 契约的可执行副本（T31）
 ├── .workbuddy/
@@ -306,7 +308,8 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
 1. ~~冻结 `M0-tests.md`~~ ✅ **已完成**（T29，2026-10-02）：20 样本 + U1–U14 + 超时上限已冻结，**M0 分母 = 279**
    ✅ T30 —— oracle 侧复核 20 个样本期望值（19/20 一致，1 处文档错已改）
    ✅ T31 —— `rgoc-harness` 的 Test IR 骨架（16 个必录字段 / 八种判定分类 / 冻结预算唯一入口）
-   👉 **下一个**：T32 —— 实现指令行解析（R1）+ 平台过滤（R1b），**顺序不可颠倒**
+   ✅ T32 —— 指令行解析（R1）+ 分派顺序（R1b），**顺序写进了函数签名**：`dispatch(ins, platform_ok)`
+   👉 **下一个**：T33 —— 语料枚举 + 平台过滤（`shouldTest`）；**枚举出的分母必须 == 279**
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 
