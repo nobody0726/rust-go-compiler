@@ -468,6 +468,41 @@ def main() -> int:
           and "子进程被回收" in ot_text
           and "rss_超上限" in ot_text
           and "合并流" in ot_text)
+
+    # ── T35 的产物：比较器（R2 / R3 / R4）───────────────────────────────
+    cmp_rs = REPO_ROOT / "rgoc/crates/rgoc-harness/src/compare.rs"
+    cmp_text = code_only(cmp_rs.read_text(encoding="utf-8")) if cmp_rs.is_file() else ""
+    check("T35 产物：compare.rs 存在且 lib.rs 声明 pub mod compare",
+          bool(cmp_text) and "pub mod compare;" in harness_lib)
+    # R2：缺 .out 即期望为空（**不是**「任意输出都通过」），且两种措辞能区分
+    check("R2：缺 .out 时期望为空，且两种不匹配措辞不同",
+          "Option<&str>" in cmp_text and "本应为空" in cmp_text and "不匹配" in cmp_text)
+    # R3：制表符续行必须拼进上一条（诊断的多行补充全靠它）
+    check("R3：制表符开头的行拼进上一条诊断",
+          "strip_prefix('\\t')" in cmp_text or "strip_prefix('\t')" in cmp_text)
+    # R4：同行多引号 ⇒ 多条期望；LINE±n 折算；//// 禁用
+    check("R4：一行多引号产生多条期望 + LINE 折算 + 四斜杠禁用",
+          "quoted_patterns" in cmp_text
+          and "substitute_line" in cmp_text
+          and '"////"' in cmp_text)
+    # **正则子集的关键性质**：不支持的构造必须**报错**，不能静默当成不匹配 ——
+    # 语料里 5435 条模式用到 {n,m}/[]/+/?/^/$，静默不匹配会把它们全误判成「编译器有 bug」
+    # ⚠️ 断言必须锚在**真的会 return Err** 的那一句上。
+    # 第一版只查「UnsupportedRegex 类型存在 + 元字符字面量存在」，结果把
+    # `return Err(unsupported(c))` 换成静默 `lit.push(c)` 也照样显示 ✓ —— 恒真断言。
+    check("正则子集：不支持的构造明确报错（不是静默不匹配）",
+          "UnsupportedRegex" in cmp_text
+          and "return Err(unsupported(c))" in cmp_text
+          and all(f"'{c}'" in cmp_text for c in "+?[](){}"))
+    # errorCheck：未命中的诊断放回池子、剩余判 Unmatched（官方 :1272 / :1281-1304）
+    check("errorCheck：未命中放回池子 + 剩余判 Unmatched Errors",
+          "pool.push(msg)" in cmp_text and "Unmatched Errors" in cmp_text)
+    # T35 的验收测试在位
+    cmp_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/test_compare.rs"
+    ct2_text = cmp_test.read_text(encoding="utf-8") if cmp_test.is_file() else ""
+    check("T35 验收测试在位（续行拼接 / 多引号 / LINE 折算 / 正则子集拒绝）",
+          all(k in ct2_text for k in
+              ("续行拼到上一条", "一行多个引号", "line_占位符", "不支持的构造")))
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))

@@ -8,6 +8,7 @@
 //! 每一步都按 `docs/milestones/M0-tests.md` §1.3 的规则逐条 RED→GREEN 实现，
 //! 规则本身也在那次复核中补齐了两条（**R2b** 合并流、**R6** 命令形态）。
 
+pub mod compare;
 pub mod corpus;
 pub mod instruction;
 pub mod ir;
