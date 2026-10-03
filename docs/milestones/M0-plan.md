@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 / T32 ✅ 2026-10-02**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29 / T30 / T31 / T32 / T33 ✅ 2026-10-02**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1644,6 +1644,59 @@ scripts/in-container.sh cargo test -p rgoc-harness corpus
 # 期望：枚举结果确定（同样的语料 → 同样的文件集与计数，重复跑一致）
 # 期望：M0 分母与 T29 冻结时记录的一致
 ```
+
+### ✅ T33 完成记录（2026-10-02）
+
+RED → GREEN 走完一轮。产物 `rgoc/crates/rgoc-harness/src/corpus.rs`（新增）、
+`tests/test_corpus.rs`（新增，**15 条**），`ir.rs` 顺带补 `Mode` 的 `Ord` 与
+`Comparator::for_mode`。
+
+**★ 本任务的核心是那条交叉校验：枚举真实语料，算出的分母必须等于 279。**
+T29 冻结的文档口径 vs T33 的代码实现，两者对上才算数。结果：
+
+```text
+total 356 · denominator 279（run 147 / compile 12 / errorcheck 120）
+executed 274（分母内真正参与执行）· target_filtered 5 · excluded 77
+U7 31 · U2 14 · U6 11 · U5 9 · U1 5 · U13 5 · U3 1 · U14 1
+```
+
+**实现中抓到的 4 个 bug**（都是测试逼出来的）：
+
+1. **U7 只检查了 `action`，而开关在 `args` 里** —— `parse_action` 按官方 `splitQuoted`
+   把 `// errorcheck -d=panic` 切成 `action="errorcheck"` + `args=["-d=panic"]`。
+   结果 **31 个 U7 文件全漏掉，分母从 279 虚到 310**，另多出一个 11 项的「?」桶。
+2. **旧式 `// +build` 的 `!` 取反没实现** —— `// +build !windows` 本该为真，却算成假。
+3. **「被平台过滤 ⇒ 不进排除清单」这条捷径是错的**。平台过滤与 U 归类是**正交**的两件事：
+   分母口径是「v0 集 ∧ 无排除参数」，与过滤无关。`checkbce.go` 被排除是因为它带 `-d=`
+   （U7），不是因为它被过滤（它同时有 `//go:build amd64`）。修正后 11 个
+   「既带排除参数又带构建约束」的文件各归其位（U7/U5/U6/U1）。
+4. **U7 归因缺 `is_v0_supported` 守卫** —— 非 v0 模式若也带 `-gcflags`
+   （如 `errorcheckwithauto`）会被抢到 U7，冻结口径是 **U7 只收 v0 集内**的用例
+   （「模式本身不支持」比「带内部开关」更根本）。修正后 U6 回到 11、U7 回到 31。
+
+顺带把「`// skip` 是特殊的」抽成 `instruction::is_skip()` —— 原先只有 `dispatch`
+内联知道，语料归类又写了一遍，等于两处各写一次同一个特殊规则。
+
+**测试里也有 2 处口径写错**（已改）：
+- 「被平台过滤的 5 个」原先在**全部文件**里筛，把 11 个 U7 文件也算进去了 →
+  改为只在**分母内**筛（`in_denominator(f) && f.target_filtered`）；
+- 「未知 action 一律报硬错误」漏了 `// skip` → 官方对它 `t.Skip` 而非 `Fatalf`。
+
+**平台过滤的实现**（`shouldTest`，`:380-467` 逐条对齐）：
+- tag 判定：`ReleaseTags`（go1.1…go1.27）→ `goexperiment.*` 查 `ToolTags` →
+  `cgo`（`-cgo` 关）→ `GOOS`/`gc` → `GOARCH` → `gcflags_noopt`（`GO_GCFLAGS` 空）→ `test_run`
+- ⚠️ **`ToolTags` 只对 `goexperiment.` 前缀查** —— 写「任何名字都查」会让
+  `arm64.v8.0` 被错判为真
+- `//go:build` 表达式：`&&` / `||` / `!` / 括号 / tag（递归下降，`&&` 优先于 `||`）；
+  多行之间 AND；`//go:build` 存在时**优先**于旧式 `// +build`
+- 旧式 `// +build`：空格 = OR，逗号 = AND，`!` 取反，多行 AND
+- **解析失败只让该行不参与**（官方 `constraint.Parse` 出错后 `continue`），
+  不会把用例判死
+- tag 集合是 `go1.27.1` 的**实测值**（容器内 `go list` / `go/build.Default`），
+  不是猜的；换 oracle 版本必须重新采集
+
+**给 T34 的输入**：`enumerate` 产出 `CorpusReport`（分母 / 八类分布 / 逐文件归类），
+`should_test` 已就位。T34 只需实现 **oracle 调用 + 版本守门**（T-H-06）。
 
 ### 任务 T34：oracle 调用与版本守门
 

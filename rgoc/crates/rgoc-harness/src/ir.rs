@@ -56,7 +56,7 @@ impl fmt::Display for CaseId {
 ///
 /// 之所以把**不支持**的模式也建模进来：harness 遇到它们必须能**显式分类**
 /// （`expected-unsupported`），而不是静默跳过（`03` §3.3）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Mode {
     // ── v0 支持集（M0-tests §6.1 的口径）──
     /// `// run`：编译并运行，比对输出。
@@ -363,6 +363,21 @@ pub struct TestCase {
     pub unsupported: Option<Unsupported>,
 }
 
+impl Comparator {
+    /// v0 支持集里「模式 → 比较器」的唯一配对（T33 填 Test IR 时用）。
+    ///
+    /// 非 v0 模式返回 `None` —— 它们本来就不跑，没有比较器可言。
+    /// [`TestCase::validate`] 的错配检查用的也是这张表，两处不会漂移。
+    pub fn for_mode(mode: Mode) -> Option<Self> {
+        Some(match mode {
+            Mode::Run => Self::MergedStreamStrictEq,
+            Mode::Compile => Self::ExitCodeOnly,
+            Mode::ErrorCheck => Self::ErrorRegexPerDiag,
+            _ => return None,
+        })
+    }
+}
+
 /// [`TestCase::validate`] 的失败原因。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IrError {
@@ -454,13 +469,9 @@ impl TestCase {
 }
 
 /// v0 支持集的模式与比较器必须一一对应；非 v0 模式不做要求（它们本来就不跑）。
+/// 配对表只有 [`Comparator::for_mode`] 一处 —— 校验与填 Test IR 都用它，两处不会漂移。
 fn comparator_mismatch(mode: Mode, cmp: Comparator) -> Option<&'static str> {
-    let want = match mode {
-        Mode::Run => Comparator::MergedStreamStrictEq,
-        Mode::Compile => Comparator::ExitCodeOnly,
-        Mode::ErrorCheck => Comparator::ErrorRegexPerDiag,
-        _ => return None,
-    };
+    let want = Comparator::for_mode(mode)?;
     (cmp != want).then_some(match want {
         Comparator::MergedStreamStrictEq => {
             "run 层必须用 MergedStreamStrictEq（stdout+stderr 合并流严格相等）"

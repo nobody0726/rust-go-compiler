@@ -1,11 +1,13 @@
 //! rgoc 的测试基础设施：Test IR、官方语料驱动、结果比较器。
 //!
 //! **当前状态**：Phase 2 起步 —— `ir`（Test IR / 判定结果 / 冻结预算，T31）与
-//! `instruction`（指令行解析 R1 + 分派顺序 R1b，T32）已落地，
+//! `instruction`（指令行解析 R1 + 分派顺序 R1b，T32）与
+//! `corpus`（平台过滤 shouldTest + 语料枚举 + unsupported 归类，T33）已落地，
 //! 指令解析（T32）、语料枚举（T33）、oracle 调用（T34）、比较器（T35）待补。
 //! 每一步都按 `docs/milestones/M0-tests.md` §1.3 的规则逐条 RED→GREEN 实现，
 //! 规则本身也在那次复核中补齐了两条（**R2b** 合并流、**R6** 命令形态）。
 
+pub mod corpus;
 pub mod instruction;
 pub mod ir;
 

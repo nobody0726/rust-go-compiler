@@ -201,7 +201,8 @@
         "T29（冻结 M0-tests.md，2026-10-02）",
         "T30（oracle 侧复核 20 样本期望值，2026-10-02）",
         "T31（Test IR 骨架 + 八种判定分类 + 冻结预算唯一入口，2026-10-02）",
-        "T32（指令行解析 R1 + 分派顺序 R1b，2026-10-02）"
+        "T32（指令行解析 R1 + 分派顺序 R1b，2026-10-02）",
+        "T33（平台过滤 shouldTest + 语料枚举 + U 归类，2026-10-02）"
       ]
     },
     "phase3": {
@@ -345,6 +346,54 @@
         "all_green": true
       },
       "next": "T33 实现 shouldTest（build 约束求值 + GOOS/GOARCH），枚举分母必须 == 279"
+    },
+    "corpus_enumeration": {
+      "implemented_at": "2026-10-02",
+      "task": "T33",
+      "files": [
+        "rgoc/crates/rgoc-harness/src/corpus.rs",
+        "rgoc/crates/rgoc-harness/tests/test_corpus.rs"
+      ],
+      "cross_check": "枚举真实语料算出的分母 == 279（T29 冻结值）",
+      "measured": {
+        "total": 356,
+        "denominator": 279,
+        "run": 147,
+        "compile": 12,
+        "errorcheck": 120,
+        "executed": 274,
+        "target_filtered": 5,
+        "excluded": 77,
+        "by_u": {
+          "U7": 31,
+          "U2": 14,
+          "U6": 11,
+          "U5": 9,
+          "U1": 5,
+          "U13": 5,
+          "U3": 1,
+          "U14": 1
+        }
+      },
+      "target_filtered_files": [
+        "inline_math_bits_rotate.go",
+        "nilptr_aix.go",
+        "simd_inline.go",
+        "wasmexport.go",
+        "wasmexport2.go"
+      ],
+      "tag_sets": "go1.27.1 实测：ReleaseTags go1.1…go1.27；ToolTags 含 7 个 goexperiment.* 与 arm64.v8.0",
+      "api": [
+        "should_test(header, cfg) -> bool  // :517-524 + :380-467",
+        "header_of(src, fallback) -> &str  // \"\\npackage\" 之前",
+        "has_exclusion_args(&Instruction) -> bool  // U7，必须看 args 而非 action",
+        "enumerate(dir, cfg) -> CorpusReport  // 不递归；报 UnknownAction 而不是静默归类"
+      ],
+      "tests": {
+        "integration": 15,
+        "all_green": true
+      },
+      "next": "T34：oracle 调用与版本守门（T-H-06）"
     }
   }
 }

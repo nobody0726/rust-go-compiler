@@ -253,6 +253,14 @@ pub fn parse_action(src: &str) -> Result<Instruction, ParseError> {
     Err(ParseError::NoRecipe)
 }
 
+/// `// skip` **不是模式**，而是「上游设计即跳过」（官方 `:552` 直接 `t.Skip`）。
+///
+/// 它刻意不在 [`KNOWN_COMMANDS`] 里，因此 [`mode_of`] 对它返回 `None` ——
+/// 需要单独判定的地方（`dispatch`、语料归类）都用这个函数，**避免两处各写一遍**。
+pub fn is_skip(action: &str) -> bool {
+    action == "skip"
+}
+
 /// 把指令名映射到 [`Mode`]（不在 16 个里则 `None`）。
 pub fn mode_of(action: &str) -> Option<Mode> {
     Some(match action {
@@ -299,7 +307,7 @@ pub fn dispatch(ins: &Instruction, platform_ok: bool) -> Result<Dispatch, Dispat
     if !platform_ok {
         return Ok(Dispatch::TargetFiltered);
     }
-    if ins.action == "skip" {
+    if is_skip(&ins.action) {
         return Ok(Dispatch::SkippedByDesign);
     }
     mode_of(&ins.action)

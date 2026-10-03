@@ -402,6 +402,33 @@ def main() -> int:
     check("T32 验收测试在位（含顺序契约与 linkmain.go 真实 fixture）",
           "linkmain.go" in it_text and "Dispatch::TargetFiltered" in it_text
           and "DispatchError::UnknownAction" in it_text)
+
+    # ── T33 的产物：平台过滤（shouldTest）+ 语料枚举 + unsupported 归类 ──────
+    corpus_rs = REPO_ROOT / "rgoc/crates/rgoc-harness/src/corpus.rs"
+    corpus_text = code_only(corpus_rs.read_text(encoding="utf-8")) if corpus_rs.is_file() else ""
+    check("T33 产物：corpus.rs 存在且 lib.rs 声明 pub mod corpus",
+          bool(corpus_text) and "pub mod corpus;" in harness_lib)
+    # 平台过滤必须在「未知指令」之前判（T29 查出的坑），且要照官方的 tag 语义
+    check("平台过滤照官方 tag 语义（ToolTags 只查 goexperiment.* 前缀）",
+          'name.starts_with("goexperiment.")' in corpus_text
+          and corpus_text.index("goexperiment.") < corpus_text.index("self.goarch"))
+    # tag 集合是 go1.27.1 的实测值：ReleaseTags 恰好 27 项（go1.1…go1.27）
+    check("CorpusConfig::m0 的 ReleaseTags 是 go1.1…go1.27（27 项）",
+          "(1..=27).map(|n| format!(\"go1.{n}\"))" in corpus_text)
+    # 枚举器必须暴露 M0 分母这个概念（279 是 T29 冻结值）
+    check("枚举器暴露 denominator（分母 == 279 是 T29 冻结口径）",
+          "pub denominator: usize" in corpus_text
+          and "pub fn in_denominator(&self)" in corpus_text)
+    # U7 只收 v0 集内的用例（冻结归因表），不能被非 v0 模式抢走
+    check("U7 归因带 is_v0_supported 守卫（冻结口径：U7 只收 v0 集内）",
+          "Some(m) if m.is_v0_supported() => Some(Unsupported" in corpus_text)
+    # T33 的验收测试在位，且必须含「分母 == 279」这条交叉校验
+    corpus_test = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/test_corpus.rs"
+    ct_text = corpus_test.read_text(encoding="utf-8") if corpus_test.is_file() else ""
+    check("T33 验收测试在位（含分母 == 279 的交叉校验与语料缺失时的硬失败）",
+          "Some(279)" in ct_text
+          and "语料目录不存在" in ct_text
+          and "RGOC_CORPUS_TEST_DIR" in ct_text)
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))
