@@ -494,7 +494,7 @@ fn comparator_mismatch(mode: Mode, cmp: Comparator) -> Option<&'static str> {
 ///
 /// 「只有 `pass` 计入分子」是门禁纪律（`03` §3.3）：过滤项、基建失败、
 /// 超时、资源不足都**不得**记为 pass，也**不得**从分母里拿掉。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Verdict {
     /// 通过（唯一计入分子）
     Pass,

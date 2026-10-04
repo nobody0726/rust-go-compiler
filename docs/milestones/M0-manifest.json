@@ -124,6 +124,21 @@
       "blocking_note": "（已解除，保留作故障档案）取得该门禁前曾阻塞过三类问题，**都各自独立、且报错可能互相掩盖**：① **扩展平台包**（容器内、走 GitHub releases）-- 曾因宿主下发的 http.proxy 无法下载，见 M0-benchmarks.md section 7，修法 scripts/install-codelldb.sh，容器重建后必丢；② **VS Code Server 本体**（宿主机、连接容器之前、走 update.code.visualstudio.com）-- 宿主 VSCode 每次升级都会改变 commit 而持久卷里没有，判据是日志里的 Path: 是否指向宿主 /var/folders/...，见 section 9，修法 scripts/install-vscode-server.sh --commit HOST_COMMIT（HOST_COMMIT 取宿主 product.json 的 commit 字段）；③ **CodeLLDB 的 cargo 启动配置**（f5 阶段）-- cargo.cwd 缺失会让 cargo 在 workspaceFolder /work 下找不到 Cargo.toml 而退出 101（顶层 cwd 无效），filter.name 用包名而非 target name 会 0 匹配，两者见 section 10。调试目标的形状（中间值必须被第二次读取）见 section 8。 前两类会随「宿主升级 VSCode」与「容器重建」**各自复发** —— 复现时仍按上面三层辨异，不要看到眼熟的报错就按上一个案子的办法修。",
       "confirmed_at": "2026-10-02",
       "confirmed_by": "用户人工实测（VSCode dev container 内按 F5）—— E5 的判定依据是这次实测本身，「能打开容器窗口」不算通过"
+    },
+    "E3": {
+      "name": "harness 六类自验全绿",
+      "status": "pass",
+      "confirmed_at": "2026-10-04",
+      "confirmed_by": "cargo test -p rgoc-harness --test harness_self_test（19 条，正反例齐备）",
+      "cases": {
+        "T-H-01": "成功：输出与 .out 一致 / 缺 .out 且无输出 / 编译层通过",
+        "T-H-02": "失败：输出不符 / 缺 .out 却有输出 / 编译层编译不过（+ 反例：期望对上就通过）",
+        "T-H-03": "未知指令：判 harness-failure（不是 compiler-failure；+ 反例：三个合法指令不误判）",
+        "T-H-04": "平台过滤：判 target-filtered 且仍计入分母、不计入分子（+ 反例：linux 用例不误过滤）",
+        "T-H-05": "超时：判 timeout 且 /proc 下查不到子进程（+ 反例：快程序不误判）",
+        "T-H-06": "版本不符：整层判 reference-toolchain-failure 且一个用例都不跑（+ 反例：版本相符正常产出）"
+      },
+      "total_tests": 114
     }
   },
   "test_ids": [],
@@ -204,7 +219,8 @@
         "T32（指令行解析 R1 + 分派顺序 R1b，2026-10-02）",
         "T33（平台过滤 + 语料枚举 + U 归类，2026-10-02）",
         "T34（oracle 调用与版本守门，2026-10-03）",
-        "T35（比较器 R2/R3/R4 + 正则子集匹配器，2026-10-03）"
+        "T35（比较器 R2/R3/R4 + 正则子集匹配器，2026-10-03）",
+        "T36（六类自测全绿，E3 门禁通过，2026-10-04）"
       ]
     },
     "phase3": {
@@ -458,6 +474,29 @@
         "all_green": true
       },
       "next": "T36 六类自测（E3）：六条里要能区分「harness 能力不足（UNSUPPORTED-REGEX）」与「真的不匹配」"
+    },
+    "runner": {
+      "implemented_at": "2026-10-04",
+      "task": "T36",
+      "files": [
+        "rgoc/crates/rgoc-harness/src/runner.rs",
+        "rgoc/crates/rgoc-harness/tests/harness_self_test.rs"
+      ],
+      "pipeline": "R1 解析 → R1b 平台过滤（先于指令判定）→ switch → 跑 oracle → R2/R3/R4 比对 → Verdict",
+      "verdict_mapping": {
+        "run 输出不符": "runtime-failure",
+        "run/compile 编译不过": "compiler-failure",
+        "errorcheck 诊断不符": "compiler-failure",
+        "未知指令 / 解析失败 / 非 v0 模式误入": "harness-failure",
+        "UNSUPPORTED-REGEX（正则子集不认识）": "harness-failure",
+        "平台过滤": "target-filtered（仍计入分母、不计入分子、不执行）"
+      },
+      "spec_has_path": "CaseSpec 带磁盘路径（真实语料在只读目录、自测在临时目录），执行器只读不写",
+      "tests": {
+        "integration": 19,
+        "all_green": true
+      },
+      "next": "T37 驱动与 xtask（把 enumerate + run_layer 串成命令行），然后 T38 跑 20 样本出 E4 基线"
     }
   }
 }

@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T35 ✅ 2026-10-03**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T36 ✅；E3 门禁已过 2026-10-04**） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1891,6 +1891,70 @@ scripts/in-container.sh cargo test -p rgoc-harness --test t_harness
 scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-harness --test t_harness 2>&1 | tail -3'
 # 期望：test result: ok. 6 passed（E3 达成）
 ```
+
+### ✅ T36 完成记录（2026-10-04）—— **E3 门禁通过**
+
+RED → GREEN 走完一轮。产物 `rgoc/crates/rgoc-harness/src/runner.rs`（新增）、
+`tests/harness_self_test.rs`（新增，**19 条**）。`cargo test --workspace` 共 **114 条**全绿。
+
+| 步骤 | 结果 |
+|---|---|
+| 1) RED | 19 条自测 → `E0432 unresolved import rgoc_harness::runner` |
+| 2) GREEN | 19 自测 + 95 条既有测试全绿 |
+| 3) 门禁 | T22 四条全过 |
+| 4) **E3** | ✅ **harness 六类自验全绿**（已登记进 `manifest.gate.E3`） |
+
+**这一步补上了 T31–T35 缺的那块：把零件串成「一条用例端到端」。**
+
+```text
+R1 解析 action → R1b 平台过滤（**先于**指令判定）→ switch 判指令是否已知
+   → 跑 oracle → R2/R3/R4 比对 → 八种 Verdict 之一
+```
+
+**判定映射表**（写进 `runner.rs` 与 manifest）：
+
+| 情形 | 判定 |
+|---|---|
+| run 层输出不符 / 缺 `.out` 却有输出 | `runtime-failure` |
+| run/compile 编译不过、errorcheck 诊断不符 | `compiler-failure` |
+| **未知指令 / 解析失败 / 非 v0 模式误入** | `harness-failure`（**基建类**） |
+| **`UNSUPPORTED-REGEX`（正则子集不认识）** | `harness-failure`（**不是** compiler-failure） |
+| 平台过滤 | `target-filtered`（**仍计入分母、不计入分子、且不执行**） |
+| 超时 / 超 RSS | `timeout` / `resource-failure` |
+| oracle 版本或 GOOS/GOARCH 不符 | `reference-toolchain-failure`（**整层，一个都不跑**） |
+
+**六类自测正反例齐备**（`M0-plan` §8 的执行纪律）：
+
+| 类 | 正例 | **反例** |
+|---|---|---|
+| T-H-01 成功 | 输出与 `.out` 一致 / 缺 `.out` 且无输出 / 编译层通过 | — |
+| T-H-02 失败 | 输出不符 / 缺 `.out` 却有输出 / 编译不过 | 同样输入**期望对上就通过**（证明不是「一律失败」） |
+| T-H-03 未知指令 | 判 `harness-failure`、detail 含 `unknown pattern` | 三个合法指令**都不**判 harness-failure |
+| T-H-04 平台过滤 | 判 `target-filtered`、仍计入分母不计入分子 | **`//go:build linux` 的用例不误过滤** |
+| T-H-05 超时 | 判 `timeout` 且 `/proc/<pid>` 查不到子进程 | 同样 500 ms 预算下快程序**通过** |
+| T-H-06 版本不符 | 整层判 `reference-toolchain-failure`、`duration` 全为 0（**没真跑**） | 版本相符时正常产出结果 |
+
+**两个设计决定，都是被测试逼出来的**：
+
+1. **`CaseSpec` 带磁盘路径**（`path`），不只带源码文本。第一版只给源码，oracle 按名字在
+   `work_dir` 里找文件 —— 合成用例根本没落盘，全部 `exit 2`。
+   真实语料在**只读**的 `GOROOT/test`、自测用例在临时目录，两种位置都指向磁盘上真实存在的
+   文件，所以执行器**只读、从不写工作目录**。顺带好处：传绝对路径时诊断里带全路径，
+   正好把 R6 细节 3（`replacePrefix` 含续行）走到。
+2. **平台过滤的用例 `duration` 恒为 0** —— 被过滤的用例**根本不该执行**。
+   省下的不只是时间，更是「不让不该跑的语料影响结果」。
+
+**测试 fixture 踩的一个隐蔽坑**：`//go:build windows` 后面**还得有指令行**（`// run`）。
+只写构建约束的话，R1 跳过后第一条非约束行就成了 `package main`，action 变成 `"package"`
+（未知指令）。而**被过滤的用例会短路、根本走不到指令判定** —— 所以这个错只在
+「约束满足」的那条反例里才暴露。**这正是「每类都要有反例」的价值。**
+
+**自检断言也修了一处会崩的**：顺序断言原先用 `list.index()`，锚点缺失时**抛异常** ——
+脚本崩掉既不是干净的 ✗、也容易被误当成「检查没跑」。已改用 `find()` 并显式判 `-1`。
+
+**给 T37 的输入**：`run_layer(specs, oracle_cfg, corpus_cfg) -> LayerReport`
+（`denominator()` / `passed()` / `count(v)` / `by_verdict()` / `oracle_error`）已就位。
+T37 只需把 `corpus::enumerate` 的结果转成 `CaseSpec` 并调 `run_layer`，再做成命令行。
 
 ### 任务 T37：`rgoc-driver` CLI 骨架与 `xtask`
 

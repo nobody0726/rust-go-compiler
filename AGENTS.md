@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2 进行中**（**T29–T35 ✅**：冻结清单 / 复核期望值 / Test IR / 指令行解析 / 语料枚举（**分母 279 已对上**）/ oracle 调用 / 比较器），Phase 2–4 计划已拆完（T29–T55） |
+| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2 进行中**（**T29–T36 ✅**：冻结清单 / 复核期望值 / Test IR / 指令行解析 / 语料枚举（**分母 279 已对上**）/ oracle 调用 / 比较器 / 六类自测 —— **E3 已过**），Phase 2–4 计划已拆完（T29–T55） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；`rgoc/` 下只有用于验证调试链路的最小 `rgoc-harness`（1 函数 + 1 测试），**编译器实现尚未开始**。
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（95 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（100 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -69,6 +69,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │       ├── tests/test_oracle.rs    ←       12 条，真调容器内 go1.27.1（T34）
 │       ├── src/compare.rs          ←       比较器 R2/R3/R4 + 正则子集匹配器（T35）
 │       ├── tests/test_compare.rs   ←       26 条（T35）
+│       ├── src/runner.rs           ←       一条用例端到端 + 层级报告（T36 / **E3**）
+│       ├── tests/harness_self_test.rs ←    19 条六类自测，正反例齐备（T36 / **E3**）
 │       ├── tests/test_instruction.rs ←     14 条验收测试（含顺序契约与 linkmain.go fixture）
 │       ├── src/lib.rs               ←       挂载 `pub mod ir` + `double_sum`（E5 复验锚点）
 │       └── tests/test_ir.rs         ←       C2 契约的可执行副本（T31）
@@ -159,7 +161,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 |---|---|
 | 编译器工程 | `rgoc/` 下**只有 `rgoc-harness`**，但它已不只是调试目标：T31 落下了 Test IR 骨架（16 个必录字段 + 八种判定分类 + 冻结预算的唯一入口 `Limits::for_layer`）。**编译器实现仍未开始** —— 还没有 lexer / parser / HIR |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
-| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**下一步是冻结 `M0-tests.md` 并拆 Phase 2–4 计划** |
+| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已开工并完成 T29–T36：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、**E3 六类自测已过（T36）**；下一步 T37 驱动 → T38 跑 20 样本出 E4 基线** |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
 | 阶段目录 | `docs/contracts/` **已创建但为空**；`docs/milestones/` 含 M0 四件套 + `M0-manifest.json` |
@@ -318,7 +320,8 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T33 —— 平台过滤 `shouldTest` + 语料枚举 + U 归类，**枚举分母 == 279 与冻结口径对上**
    ✅ T34 —— oracle 调用 + 版本守门（T-H-06）；`run` 层走官方 fast path，超时不留孤儿且不需要 unsafe
    ✅ T35 —— 比较器（R2 输出期望 / R3 诊断切分 / R4 ERROR 期望）+ **正则子集：认识的就匹配，不认识的明确报错**
-   👉 **下一个**：T36 —— 六类自测（**E3**），要能区分「harness 能力不足」与「真的不匹配」
+   ✅ T36 —— 六类自测全绿，**E3 门禁通过**（19 条，正反例齐备）
+   👉 **下一个**：T37 —— `rgoc-driver` CLI 骨架与 `xtask`
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 
@@ -344,7 +347,7 @@ T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。
 |---|---|---|---|
 | 0 | 容器与工具链底座 | E1 镜像 digest 可重放、E2 环境值入 manifest、E10 基准 | ✅ **已完成**（T01–T19；E1/E2/E10 通过） |
 | 1 | VSCode 调试环境 | **E5 实测断点命中** | ✅ **已完成**（T20–T28；四条统一退出检查全过，E5 于 2026-10-02 人工实测确认） |
-| 2 | Rust 工程骨架 + harness | E3 六类自测全绿、E4 20 样本 100% | ⏳ 待拆 |
+| 2 | Rust 工程骨架 + harness | E3 六类自测全绿、E4 20 样本 100% | ⏳ 进行中（**E3 ✅ 已过**，E4 待 T38） |
 | 3 | 三个 spike（解释 / SSA / native） | E6 可复现、E7 native `hello` | ⏳ 待拆 |
 | 4 | 契约初稿 + 报告 | E8/E9/E10 | ⏳ 待拆 |
 

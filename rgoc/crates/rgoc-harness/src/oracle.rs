@@ -201,6 +201,16 @@ impl Oracle {
         (&self.goos, &self.goarch)
     }
 
+    /// 工作目录（runner 用它把诊断里的全路径换回短名，R6 细节 3）
+    pub fn work_dir(&self) -> &Path {
+        &self.cfg.work_dir
+    }
+
+    /// 生效的超时与资源上限（只来自 [`Limits`]，oracle 不写死）
+    pub fn limits(&self) -> Limits {
+        self.cfg.limits
+    }
+
     /// 某层实际使用的**全部**命令（按执行顺序，不含 `go` 本身）。
     ///
     /// 单独暴露是为了让测试能直接断言命令形态 —— T30 复核时踩过的坑
@@ -294,7 +304,18 @@ impl Oracle {
     /// - **非最后**一步失败（fast path 的 compile 或 link）⇒ 早退，后续步骤没意义；
     /// - 否则以**最后一步**的退出码为准。
     pub fn run_mode(&self, mode: Mode, file: &str) -> Result<OracleOutput, OracleError> {
-        let steps = self.steps(mode, file);
+        self.run_mode_path(mode, &self.cfg.work_dir.join(file))
+    }
+
+    /// 按模式跑一个用例，`file` 是**文件路径**。
+    ///
+    /// 真实语料在**只读**的 `GOROOT/test` 里，自测用例在临时目录里 —— 两种位置都指向
+    /// 磁盘上真实存在的文件，所以这里只接收路径、**从不写工作目录**。
+    /// 传绝对路径还有个好处：诊断里会带全路径，正好把 R6 细节 3
+    /// （`replacePrefix` 要把路径换回短名，含续行）走到。
+    pub fn run_mode_path(&self, mode: Mode, file: &Path) -> Result<OracleOutput, OracleError> {
+        let token = file.to_string_lossy().into_owned();
+        let steps = self.steps(mode, &token);
         let start = Instant::now();
         let mut merged = String::new();
         let mut peak = 0u64;

@@ -13,6 +13,7 @@ pub mod corpus;
 pub mod instruction;
 pub mod ir;
 pub mod oracle;
+pub mod runner;
 
 /// 把两个数相加，再把结果翻倍。
 ///

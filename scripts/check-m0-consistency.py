@@ -503,6 +503,36 @@ def main() -> int:
     check("T35 验收测试在位（续行拼接 / 多引号 / LINE 折算 / 正则子集拒绝）",
           all(k in ct2_text for k in
               ("续行拼到上一条", "一行多个引号", "line_占位符", "不支持的构造")))
+
+    # ── T36：六类自测（E3 门禁）─────────────────────────────────────────
+    run_rs = REPO_ROOT / "rgoc/crates/rgoc-harness/src/runner.rs"
+    run_text = code_only(run_rs.read_text(encoding="utf-8")) if run_rs.is_file() else ""
+    check("T36 产物：runner.rs 存在且 lib.rs 声明 pub mod runner",
+          bool(run_text) and "pub mod runner;" in harness_lib)
+    # 端到端顺序不可颠倒：平台过滤必须排在 dispatch 之前（R1b，T29 查出的坑）
+    # ⚠️ 用 find() 而不是 index()：锚点缺失时 index() 会**抛异常**，
+    # 脚本崩掉既不是干净的 ✗、也容易被误当成「检查没跑」。-1 要显式判掉。
+    _f = run_text.find("should_test(header_of")
+    _d = run_text.find("dispatch(&ins, true)")
+    check("runner：平台过滤先于指令判定（R1b 顺序契约）",
+          0 <= _f < _d, f"should_test@{_f} 必须早于 dispatch@{_d}")
+    # 「harness 能力不足」与「真的不匹配」必须分开判
+    # 「harness 能力不足」必须排在「语义失败」之前判 —— 顺序反了就会把
+    # 「正则子集不认识」误报成「编译器有 bug」
+    _u = run_text.find("UNSUPPORTED-REGEX")
+    _c = run_text.find("errs.join")
+    check("runner：UNSUPPORTED-REGEX 判 harness-failure 而不是 compiler-failure",
+          _u > 0 and _c > _u, f"UNSUPPORTED-REGEX@{_u} 必须在语义失败分支@{_c} 之前")
+    # 六类自测：六条 ID 齐备 + 每类都有反例
+    hst = REPO_ROOT / "rgoc/crates/rgoc-harness/tests/harness_self_test.rs"
+    hst_text = hst.read_text(encoding="utf-8") if hst.is_file() else ""
+    six = [f"th0{i}" for i in range(1, 7)]
+    check("E3 六类自测齐备（T-H-01~06 各有测试）",
+          all(any(f"fn {k}" in line for line in hst_text.splitlines()) for k in six),
+          "缺：" + ", ".join(k for k in six if not any(f"fn {k}" in l for l in hst_text.splitlines())))
+    check("E3 六类自测**每类都有反例**（M0-plan §8 执行纪律）",
+          hst_text.count("反例") >= 4 and "仍计入分母但不计入分子" in hst_text
+          and "版本不符_整层判" in hst_text)
     check("冒烟测试从源码推导断点行（锚定行首纯代码行）",
           "grep -nE '^[[:space:]]*let sum = a \\+ b;" in
           code_only((REPO_ROOT / smoke_rel).read_text(encoding="utf-8")))
