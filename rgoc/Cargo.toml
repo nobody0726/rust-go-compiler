@@ -5,10 +5,14 @@
 # 【不】一次性建立全部空 crate。
 #
 # 完整 crate 规划见 docs/03-roadmap.md §2。
+#
+# T37 起新增两个「工具型」crate（它们不含编译器逻辑，别当成编译器模块）：
+#   rgoc-driver —— 统一 CLI 入口（`harness list/run/report`）
+#   xtask       —— 构建期工具（语料枚举 / 报告生成 / manifest 生成）
 
 [workspace]
 resolver = "3"
-members = ["crates/rgoc-harness"]
+members = ["crates/rgoc-driver", "crates/rgoc-harness", "xtask"]
 
 [workspace.package]
 version = "0.0.0"

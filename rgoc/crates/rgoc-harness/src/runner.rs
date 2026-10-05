@@ -68,6 +68,11 @@ pub struct CaseOutcome {
     pub in_denominator: bool,
     /// 最后一步子进程的 pid（超时那类要靠它验证进程被回收）
     pub child_pid: Option<u32>,
+    /// 观测到的峰值 RSS（**字节**）。T38 的报告要求含它 ——
+    /// `M0-tests.md` §7.5 定了「单用例 ≤ 512 MiB、`T-C-03` 放宽到 768 MiB」，
+    /// 报告里没有这个数就看不出预算是否真的够用。
+    /// 未执行（被平台过滤）与观测不到时为 0。
+    pub peak_rss_bytes: u64,
 }
 
 impl CaseOutcome {
@@ -79,6 +84,7 @@ impl CaseOutcome {
             duration: Duration::ZERO,
             in_denominator: true,
             child_pid: None,
+            peak_rss_bytes: 0,
         }
     }
 }
@@ -168,6 +174,7 @@ pub fn run_case(spec: &CaseSpec, cfg: &CorpusConfig, oracle: &Oracle) -> CaseOut
         duration: dur,
         in_denominator: true,
         child_pid: out.pid,
+        peak_rss_bytes: out.peak_rss_bytes,
     }
 }
 

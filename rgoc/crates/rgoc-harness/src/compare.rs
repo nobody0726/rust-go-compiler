@@ -442,7 +442,31 @@ fn split_alternatives(pattern: &str) -> Result<Vec<Vec<Item>>, CompareError> {
             '\\' => match chars.get(i) {
                 Some(&escaped) => {
                     i += 1;
-                    lit.push(escaped) // \. \n \\ …  都按字面处理
+                    // ⚠️ **`\` 后的字符分两类，不能一律当字面量**（T38 实测踩过）：
+                    //
+                    // ① **转义控制字符**（`\n` `\t` `\r` `\f` `\v` `\a`）⇒ 真正的控制符。
+                    //    Go 的 `regexp/syntax` 把它们当 Perl 类转义（`perl.go` 的 `escape` 表），
+                    //    所以 `\n` 匹配的是**换行符**，不是字母 `n`。
+                    //    早先一律 `lit.push(escaped)` ⇒ `\n` 变成字面 `n`，
+                    //    于是 T-C-13 `initloop.go` 的跨行期望
+                    //    （`a refers to b\n.*b refers to c\n.*c refers to a`）永远匹配不上
+                    //    续接后的诊断 —— 判 `compiler-failure`，而编译器其实完全正确。
+                    //
+                    // ② **转义元字符**（`\.` `\*` `\|` `\\` `\+` …）⇒ 字面该字符。
+                    //    这类必须保持字面语义：若把 `\.` 解释成「任意字符」，
+                    //    判定就被**放宽**了（`a\.b` 会匹配 `axb`）—— 那比误判更危险。
+                    //
+                    // 分类之外的 `\x`（如 `\d` `\w`）属于**不支持** ⇒ 已在下面报错。
+                    match escaped {
+                        'n' => lit.push('\n'),
+                        't' => lit.push('\t'),
+                        'r' => lit.push('\r'),
+                        'f' => lit.push('\u{c}'),
+                        'v' => lit.push('\u{b}'),
+                        'a' => lit.push('\u{7}'),
+                        // 其余一律字面（含 `\\` `\.` `\|` 等元字符转义）
+                        other => lit.push(other),
+                    }
                 }
                 None => return Err(unsupported('\\')),
             },

@@ -383,3 +383,92 @@ fn matcher_空模式匹配一切() {
     // 正则语义：空模式匹配任意字符串
     assert!(unanchored_match("", "anything").unwrap());
 }
+
+// ══ T38：跨行正则（`\n` 转义）—— T-C-13 `initloop.go` ═══════════════════════
+//
+// 根因（2026-10-05 实测定位）：`splitOutput` 把 tab 开头的续行拼成**一条**诊断，
+// 续接时插入的是 `\n`（`:1205` 的 `res[len(res)-1] += "\n" + line`），
+// 而 ERROR 期望里写的也是 `\n` —— 但那是**正则转义序列**，必须被解释成换行符。
+// 早先实现把 `\` 后的字符一律当**字面量**（`lit.push(escaped)`），
+// 于是 `\n` 变成字面的字母 `n`，永远匹配不上换行 —— T-C-13 判 `compiler-failure`。
+//
+// 官方对照：Go 的 `regexp.MustCompile("a\\nb")` 里 `\n` 就是换行（`regexp/syntax` 的 Perl 类转义）。
+
+/// T-C-13 的**真实** oracle 输出（容器内 `go tool compile -d=ssa/check/on` 实测，
+/// `cat -A` 确认续行以 `^I` 即 tab 开头）。
+const INITLOOP_RAW: &str = "initloop.go:14:2: initialization cycle for a\n\
+\tinitloop.go:14:2: a refers to b\n\
+\tinitloop.go:15:2: b refers to c\n\
+\tinitloop.go:16:2: c refers to a\n";
+
+#[test]
+fn t38_跨行正则_能匹配_tab_续接成的单条诊断() {
+    // 官方路径：splitOutput 续接 ⇒ **一条**诊断
+    let out = split_output(INITLOOP_RAW, false);
+    assert_eq!(out.len(), 1, "tab 开头的续行应拼进上一条，而不是各自成条");
+    assert!(
+        out[0].contains('\n'),
+        "续接后应含真正的换行符（`\\n`），实际 {:?}",
+        out[0]
+    );
+    // ⚠️ 这里**刻意去掉 `|initialization loop` 备选分支**（ERROR 原文里有它）。
+    // 保留的话这条测试会靠那个不含 `\n` 的分支通过 —— 早先就发生过：
+    // 实现把 `\n` 当字面量，`t38_跨行正则` 照样 ok，掩盖了真正的缺陷。
+    // 只留跨行分支才能测到「`\n` 有没有被解释成换行」。
+    assert!(
+        unanchored_match("a refers to b\n.*b refers to c\n.*c refers to a", &out[0]).unwrap(),
+        "跨行正则应能匹配续接后的单条诊断：{:?}",
+        out[0]
+    );
+}
+
+#[test]
+fn t38_错误检查_整体通过_initloop() {
+    // 端到端：T-C-13 的源码 + 真实 oracle 输出 ⇒ error_check 必须 Ok
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../go_source_code/test/initloop.go"),
+    )
+    .expect("读不到 initloop.go（真实语料只读挂载在 go_source_code/test）");
+    let want = wanted_errors(&src, "initloop.go").expect("解析 ERROR 注释");
+    assert_eq!(want.len(), 1, "T-C-13 只有 1 条 ERROR 期望");
+    assert_eq!(
+        error_check(INITLOOP_RAW, &want),
+        Ok(()),
+        "{:?}",
+        error_check(INITLOOP_RAW, &want)
+    );
+}
+
+#[test]
+fn t38_反斜杠转义_按_go_regexp_语义解释() {
+    // Go 的 regexp/syntax 支持这些 Perl 类转义（`\n` `\t` `\r` `\\` 等）。
+    // ⚠️ **不是所有 `\x` 都该解释**：`\.` `\*` `\|` 是「转义元字符」⇒ 字面字符；
+    // 而 `\n` `\t` 是「转义控制字符」⇒ 真正的控制符。
+    // 混为一谈会让 `\.` 变成「任意字符」这类**放宽判定**的偏差。
+    assert!(unanchored_match(r"a\nb", "a\nb").unwrap(), r"\n 应是换行");
+    assert!(unanchored_match(r"a\tb", "a\tb").unwrap(), r"\t 应是制表符");
+    assert!(unanchored_match(r"a\rb", "a\rb").unwrap(), r"\r 应是回车");
+    assert!(
+        unanchored_match(r"a\\b", r"a\b").unwrap(),
+        r"\\ 应是字面反斜杠"
+    );
+    // 转义元字符仍是字面字符（不是通配）
+    assert!(unanchored_match(r"a\.b", "a.b").unwrap());
+    assert!(
+        !unanchored_match(r"a\.b", "axb").unwrap(),
+        r"\. 不该当通配符"
+    );
+}
+
+#[test]
+fn t38_反例_把_n_当字面量_的实现会失败() {
+    // ★ 变异测试：确认上面那些断言**真的能失败**。
+    // 若实现把 `\n` 当字面字母 `n`，则 `\n` 模式下 `a\nb` 匹配不到真换行。
+    assert!(
+        !unanchored_match(r"a\nb", "anb").unwrap(),
+        "把 \\n 当字面 n 的实现会命中这个反例"
+    );
+    // 同理，未转义的 `n` 不该被当成换行
+    assert!(!unanchored_match("a\nb", "anb").unwrap());
+}

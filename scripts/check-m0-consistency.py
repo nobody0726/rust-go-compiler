@@ -217,6 +217,31 @@ def main() -> int:
         check("gate: E1/E2/E10/E5 全部 pass",
               [gate[k] for k in ("E1", "E2", "E10", "E5")] == ["pass"] * 4,
               str(gate))
+        # E3 / E4 是 Phase 2 的两条门禁（T36 / T38）。它们也必须 pass ——
+        # 「环境门禁过了就算 Phase 2 过了」是错的，D-M0-2 要求的是**全部门禁**。
+        # ⚠️ 上面的 gate 字典**只列了 E1/E2/E10/E5 四个**（Phase 0/1 的），
+        # 所以下面这四条断言此前**从未真正校验过 E3/E4** —— 加门禁时忘了同步这里。
+        # 教训与 T37 的六连坑同形：**「漏了」不会报错，只会让断言恒真**。
+        phase2 = {k: manifest["gate"].get(k, {}).get("status") for k in ("E3", "E4")}
+        check("gate: E3/E4 全部 pass（Phase 2 出口）",
+              list(phase2.values()) == ["pass", "pass"], str(phase2))
+        check("gate.E4 登记了 20/20 与确认时间",
+              manifest["gate"]["E4"].get("denominator") == 20
+              and manifest["gate"]["E4"].get("numerator") == 20
+              and bool(manifest["gate"]["E4"].get("confirmed_at"))
+              and bool(manifest["gate"]["E4"].get("confirmed_by")),
+              f"分母 {manifest['gate']['E4'].get('denominator')} / "
+              f"分子 {manifest['gate']['E4'].get('numerator')}")
+        # E4 的全量基线：分母 279 且 by_mode 三项之和等于它 —— 防止「分母被缩小」
+        full = manifest["gate"]["E4"].get("full_corpus_baseline", {})
+        check("gate.E4 的全量基线分母 == 279 且 by_mode 合计相符",
+              full.get("denominator") == 279
+              and sum(full.get("by_mode", {}).values()) == full.get("denominator"),
+              f"分母 {full.get('denominator')}，by_mode {full.get('by_mode')}")
+        # E4 报告文件必须在（报告与登记脱节时，登记就失去证据支撑）
+        check("gate.E4 登记的报告文件存在",
+              all((REPO_ROOT / p).is_file() for p in manifest["gate"]["E4"].get("reports", [])),
+              str(manifest["gate"]["E4"].get("reports")))
         check("gate.E5 登记了确认人与确认时间",
               bool(manifest["gate"]["E5"].get("confirmed_by"))
               and bool(manifest["gate"]["E5"].get("confirmed_at")),

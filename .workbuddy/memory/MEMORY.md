@@ -8,17 +8,30 @@
 - **`git push` 常被拦**（`github.com` CONNECT 间歇 502，`api.github.com` 正常）→ 技能 `github-push-via-api`
 - **工程入口是根目录 `AGENTS.md`**，任何任务先读它。本文件只保「每轮都要知道」的硬事实
 
-## 状态：M0 Phase 0/1 完成（E1/E2/E10/E5 全过），Phase 2 进行中（T29–T36 ✅，**E3 已过**）
+## 状态：M0 Phase 0/1 完成（E1/E2/E10/E5 全过），Phase 2 进行中（T29–T38 ✅，**E3 + E4 已过**）
 
 - 阶段文档 `docs/milestones/`：`M0-design.md`（已确认，D-M0-1~15）、`M0-tests.md`（**已冻结** T29）、`M0-plan.md`（T01–T55）、`M0-benchmarks.md`、`M0-manifest.json`（environment/gate/benchmarks）
 - **E5 已由用户 2026-10-02 人工实测通过**（登记在 `gate.E5`）；**E3 已于 2026-10-04 通过**（T36 六类自测 19 条正反例齐备，登记在 `gate.E3`）
 - 镜像 `rgoc:dev` = `sha256:21f55802…553b`（2.92 GB / 14 层）
 - 三个 spike 放独立 crate `rgoc-spikes`（D-M0-14，可整块删）；`double_sum` **不删**（D-M0-15，E5 复验锚点）
-- **下一步**：T37 `rgoc-driver` CLI 骨架 + `xtask`（`enumerate` → `CaseSpec` → `run_layer`）→ T38 跑 20 样本出 E4 基线
+- **E4 已于 2026-10-05 通过**（T38：20/20、5.8 s、峰值 15 MiB；修了 `compare.rs` 的 `\n` 转义）
+- **下一步**：T39 Phase 2 门禁复核与登记（E3/E4 证据已进 manifest，剩文档同步与状态收口）
 - 五个 Phase：0 容器底座 → 1 VSCode 调试环境（门禁=实测断点命中）→ 2 Rust 骨架+harness → 3 三 spike → 4 契约+报告
 - 关键洞察：Go oracle 是**硬约束**（必须精确 `go1.27.1`），Rust 是软约束 → 用 `golang:1.27.1-bookworm` + `rustup`
 
-### 已落地模块（`rgoc/crates/rgoc-harness/`，六个模块 + 六套测试，共 **114 条**全绿）
+### workspace 三个 crate（判定逻辑**只有一处**：`runner::run_layer`）
+
+| crate | 角色 | 测试 |
+|---|---|---|
+| `crates/rgoc-harness` | 六个模块的测试基础设施（见下表） | 114 条 |
+| `crates/rgoc-driver` | **统一 CLI**（T37）：`harness list/run/report`；手写解析**不引 clap**；**不预留**未实现子命令 | 23 条 |
+| `xtask` | 构建期工具（T37）：语料枚举（279）/ 报告生成 / manifest environment 生成 | 12 条 |
+
+**共 153 条全绿，门禁四条全过 + 自检 104 条断言。** 两条纪律：① driver 与 xtask 都只**调** `run_layer`，
+不自己判语义（两份判定 ⇒ E4 变成「两份报告说过了」）；② 报告渲染也只有一处
+（`rgoc_driver::report::render_text`），xtask 初稿里从 JSON 反推文本的 `human_text` 已删。
+
+### 已落地模块（`rgoc/crates/rgoc-harness/`，六个模块 + 六套测试，114 条）
 
 | 模块 | 内容 | 测试 |
 |---|---|---|
@@ -29,7 +42,12 @@
 | `compare.rs` | R2/R3/R4 + `errorCheck` 匹配；正则只实现子集，不认识就报 `UnsupportedRegex` | 26 条 |
 | `runner.rs` | 一条用例端到端（R1→R1b→switch→oracle→比对）+ `LayerReport`；被过滤的用例**不执行**（`duration` 恒 0） | 19 条 |
 
-- ⚠️ **未决决策点（T55 前）**：279 全量里多数 errorcheck 会命中 `UNSUPPORTED-REGEX` ⇒ 判 `harness-failure`。要「全量逐条判语义」须先决定扩展子集还是引 regex crate
+- ⚠️ **未决决策点（T38 已消解，但更大问题还在）**：`initloop.go`（T-C-13）的跨行期望是
+  `a refers to b\n.*b refers to c\n.*c refers to a`。根因是 `compare.rs` 把 `\` 后字符**一律字面量**，
+  `\n` 变成字母 `n`；Go 的 `regexp/syntax` 把 `\n \t \r` 当 **Perl 类转义 ⇒ 真控制符**。
+  已修（控制字符 vs 元字符**分两类**，`\.` 仍字面否则就是**放宽判定**）。
+  ⚠️ 但 **279 全量里多数 errorcheck 仍会命中 `UNSUPPORTED-REGEX`**（`{n,m}` `[...]` `+` `?` `^` `$`）
+  ⇒ 判 `harness-failure`。要「全量逐条判语义」须先决定扩展子集还是引 regex crate（T55 前）。
 - ✅ **T36 已完成**（E3）：六类自测正反例齐备；「harness 能力不足」（`UNSUPPORTED-REGEX:`）与「真的不匹配」**已分开判** —— 前者 `harness-failure`、后者 `compiler-failure`
 - ⚠️ **`CaseSpec` 必须带磁盘路径**（不只源码）：真实语料在**只读**的 `GOROOT/test`，执行器只读不写工作目录
 - ⚠️ **fixture 坑**：`//go:build X` 之后**还得有指令行**，否则 R1 跳过后 action 变成 `"package"`（未知指令）；而**被过滤的用例会短路**，这个错只在「约束满足」那条反例里才暴露
@@ -39,13 +57,21 @@
 
 - **所有构建测试在容器内**：`scripts/in-container.sh <命令>`（先探 daemon，失败即报错**不降级**）
 - **镜像不可位级复现**（14 层中 6 层 digest 变）→ **image id 不得写进门禁**；钉子用 `base.index_digest` + `src.*_sha256`
-- `rgoc/target/` 在命名卷 `rgoc-target`（2.3×）。① 新建空卷属主 `root:root`，须先 `chown 501:20`（故镜像装了 `sudo`）；② **`cargo clean` 会 `EBUSY(16)`/exit 101** → 用 `find rgoc/target -mindepth 1 -delete`
+- `rgoc/target/` 在命名卷 `rgoc-target`（2.3×）。① 新建空卷属主 `root:root`，须先 `chown 501:20`（故镜像装了 `sudo`）；② **`cargo clean` 会 `EBUSY(16)`/exit 101** → 用 `find rgoc/target -mindepth 1 -delete`；③ ⚠️ **cargo 的两个 registry/git 卷同样会属主错，且 `in-container.sh` 的 bootstrap 只在「新建空卷」时 chown —— 已存在但属主错的卷不会被接管**，症状是 `Permission denied (os error 13)`。修法 `docker run --rm -v <vol>:/x alpine chown -R 501:20 /x`，**uid 是 501 不是 1000**（dev 用户复用宿主 uid，按 1000 改仍失败）
 - 登录 shell 的 PATH 被 `/etc/profile` 重置 → 镜像层 5 写 `/etc/profile.d/50-rgoc-toolchains.sh`
 - 门禁四条：`cargo fmt --check` / `cargo check --workspace --all-targets` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace`
 - 验证命令别用 `cmd | tail -N` 串 `&&`（退出码取自 `tail`，失败被吞）→ 脚本首行 `set -euo pipefail`
 - 计时器：宿主 `/usr/bin/time` 无 GNU `-f`（用 `-p`），容器内**没有** `/usr/bin/time`（用 bash 内建 `time` + `TIMEFORMAT`）
 - `cargo new <dir>` 目录名不能叫 `crate`（Rust 关键字）
-- **Rust 侧命名坑**：中文标识符可用但**不能夹大写 ASCII**（`512MiB` 触发 `non_snake_case`，在 `-D warnings` 下直接打爆门禁）；正则批量改代码后**立刻编译**
+- **Rust 侧命名坑**：中文标识符可用但**不能夹大写 ASCII**（`512MiB`、`..._ID_...` 触发 `non_snake_case`，在 `-D warnings` 下直接打爆门禁 —— T37 复发一次，改成「编号」）；正则批量改代码后**立刻编译**
+- ⚠️ **「静默失败」六连坑（T37 踩的全是这类，`check-m0-consistency.py` 的空缺检查抓不到 —— 因为值都非空）**：
+  ① `rustc`/`cargo` **不带参数**把完整 help 打到 stdout 且**退出码 0**（必须强制带版本参数 + 只取首行）；
+  ② `cargo test` 子进程的 PATH ≠ 交互 shell，裸 `ldd`/`uname` 找不到（**一律绝对路径**）；
+  ③ 裸 `uname` 只输出 `Linux` 不含版本，**必须 `-r`**；
+  ④ glibc 版本取 `ldd --version` **行尾裸版本**（`2.36`）而非括号里的发行版修订（`2.36-9+deb12u14`）；
+  ⑤ `docker/image.lock` 形态是 `前缀.键<空格>= 值`（**不是 `key: value`**），按冒号解析会「取不到就跳过」⇒ **两层静默叠加**；
+  ⑥ `local.layer_count` 值是 `14（其中容器层 7 个：…）`，`parse::<u64>()` 失败后回退成字符串。
+  **共同形状：失败时字段要么空、要么塞进了别的东西，而 JSON 仍合法 —— 只能靠「断言具体值」而不是「断言非空」抓出来**
 
 ### VSCode / 调试链路（三个独立复发点）
 
@@ -59,10 +85,13 @@
 - ⚠️ **别用 shell 复现 CodeLLDB 的 cargo 命令**：它是无 `shell:true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 得到**假的** TOML 报错。必须用 argv 列表复现
 - `rustc` **不为「尾位置直接返回的 `let` 绑定」生成 DWARF 变量条目** → 调试目标必须让中间值被第二次读取（`double_sum` 写成 `sum * 2`）
 
-### 自检脚本的两个陷阱
+### 自检脚本的三个陷阱
 
-- `check-m0-consistency.py`（**95 条**断言）：用 `TOTAL` 计数器，最后一条断言把自己数进去，**必须是文件最后一条**；改断言数只需同步 `AGENTS.md` §1 一处
+- `check-m0-consistency.py`（**104 条**断言）：用 `TOTAL` 计数器，最后一条断言把自己数进去，**必须是文件最后一条**；改断言数只需同步 `AGENTS.md` §1 一处
 - ⚠️ **断言必须锚定真实代码，注释里的同名串会让它恒真**（本仓踩过两次：`grep` 断点行命中注释行；`install-*.sh` 头部注释里就写着 `platform.ok`/`--noproxy`）→ 第 5/5b 节一律作用于 `code_only()`（剔整行注释）
+- ⚠️ **断言里写死的键列表会变成盲区**（T38 踩到）：门禁双向校验写死 `("E1","E2","E10","E5")`，
+  于是新加的 `gate.E3`/`gate.E4` **从未被校验过**。**加门禁时必须同步这个列表** ——
+  「漏了」不会报错，只会让断言恒真
 - ⚠️ **门禁状态要两处同步**（manifest + `M0-plan.md` 门禁汇总表），现有 4 条断言做双向校验
 - ⚠️ **大段插入已有文档要以 `git show HEAD:<file>` 为基线重建**，插入后逐条 `grep -cF` 验收
 - 两个变异测试脚本已按用户要求移除（快照在 `.workbuddy/backup/scripts-removed-20261002-1504/`）→ 改断言后须**人工反向验证**。`env-probe.sh` 同样已移除，脚本体在 `M0-plan.md` T14

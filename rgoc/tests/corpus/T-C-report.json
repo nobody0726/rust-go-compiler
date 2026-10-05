@@ -1,0 +1,160 @@
+{
+  "by_verdict": {
+    "compiler-failure": 0,
+    "harness-failure": 0,
+    "pass": 20,
+    "reference-toolchain-failure": 0,
+    "resource-failure": 0,
+    "runtime-failure": 0,
+    "target-filtered": 0,
+    "timeout": 0
+  },
+  "cases": [
+    {
+      "detail": "",
+      "duration_ms": 26,
+      "name": "helloworld.go",
+      "peak_rss_bytes": 14168064,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 26,
+      "name": "closure1.go",
+      "peak_rss_bytes": 14163968,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 28,
+      "name": "gc1.go",
+      "peak_rss_bytes": 14176256,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 26,
+      "name": "printbig.go",
+      "peak_rss_bytes": 14172160,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 27,
+      "name": "closure4.go",
+      "peak_rss_bytes": 16281600,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 27,
+      "name": "func6.go",
+      "peak_rss_bytes": 14168064,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 24,
+      "name": "compos.go",
+      "peak_rss_bytes": 14188544,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 31,
+      "name": "method3.go",
+      "peak_rss_bytes": 16265216,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 7,
+      "name": "eof.go",
+      "peak_rss_bytes": 14155776,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "empty.go",
+      "peak_rss_bytes": 14159872,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 7,
+      "name": "parentype.go",
+      "peak_rss_bytes": 14180352,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 7,
+      "name": "rune.go",
+      "peak_rss_bytes": 14163968,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "initloop.go",
+      "peak_rss_bytes": 14180352,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "recover5.go",
+      "peak_rss_bytes": 16273408,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "varerr.go",
+      "peak_rss_bytes": 14172160,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 5,
+      "name": "convlit1.go",
+      "peak_rss_bytes": 14163968,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 5,
+      "name": "init.go",
+      "peak_rss_bytes": 16269312,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "switch4.go",
+      "peak_rss_bytes": 14180352,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 5,
+      "name": "typecheck.go",
+      "peak_rss_bytes": 14176256,
+      "verdict": "pass"
+    },
+    {
+      "detail": "",
+      "duration_ms": 4,
+      "name": "mainsig.go",
+      "peak_rss_bytes": 14180352,
+      "verdict": "pass"
+    }
+  ],
+  "denominator": 20,
+  "numerator": 20,
+  "oracle_error": null,
+  "peak_rss_bytes": 16281600,
+  "success": true,
+  "total_duration_ms": 275
+}

@@ -55,7 +55,7 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T36 ✅；E3 门禁已过 2026-10-04**） |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T38 ✅；E3 过 2026-10-04；E4 过 2026-10-05（20/20）**；剩 T39 复核登记） |
 | T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
@@ -1977,6 +1977,77 @@ scripts/in-container.sh cargo run -p rgoc-driver -- harness run --all
 # 期望：跑完并给出结果统计（分子/分母/八类分布）
 ```
 
+### ✅ T37 完成记录（2026-10-05）
+
+**产出**：`rgoc/crates/rgoc-driver/`（CLI）+ `rgoc/xtask/`（构建期工具），workspace members 扩到 3 个。
+新增测试 **33 条**（driver 21 + xtask 12），workspace 总数 **114 → 147**，门禁四条全过。
+
+**验收命令实测**（两条都在容器内跑通）：
+
+```text
+$ scripts/in-container.sh cargo run -p rgoc-driver -- harness list
+  → 列出 20 个 T-C 样本、模式、.out 存在性（helloworld / printbig 两个「是」）
+
+$ scripts/in-container.sh cargo run -p rgoc-driver -- harness run --all
+  → 分母 = 20　分子 = 19　整层 5.2 s　退出码 1
+```
+
+**⚠️ 19/20 —— `initloop.go`（T-C-13）判 `compiler-failure`，留给 T38**：
+它的 ERROR 期望是**跨行正则** `a refers to b\n.*b refers to c\n.*c refers to a|initialization loop`，
+而实际诊断是 4 条独立诊断（`initialization cycle for a` + 三条 `refers to`），
+正则子集匹配不上。这属于 **T35 比较器的覆盖缺口**，不是 rgoc 的编译错误 ——
+T38 须先判定「扩正则子集 vs 登记新 U」，**不得**为了让 20/20 而放宽判定
+（§8 判定纪律第 3 条）。整层 5.2 s 远低于 5 min 预算，单项最大 0.029 s 远低于 60 s。
+
+**判定逻辑只有一处**：`rgoc_harness::runner::run_layer`。driver 与 xtask 都是调用方 ——
+两个工具各写一份判定，E4 就会变成「两份报告说过了」而不是「harness 判过了」。
+故 `xtask/src/report.rs` 里的报告渲染**直接复用** `rgoc_driver::report::render_text`，
+初稿里写了个从 JSON 反推文本的 `human_text`，已删（两份渲染器迟早漂）。
+
+**20 样本表是 `M0-tests.md` §4.2–4.4 的可执行副本，且与文档逐条对账**
+（`test_driver.rs` 解析文档表格的 `T-C-nn → 路径`，逐条比对）。抓到过一处真实漂移：
+文档写 `test/helloworld.go`（相对仓库根）、表里存 `helloworld.go`（相对语料根），
+对账逻辑因此加了 `strip_corpus_prefix` 归一 —— **不加就会永远红，且看不出是谁错**。
+另有一条交叉校验：每个样本**文件首行的指令**必须与表里 `mode` 一致
+（表里写 `run`、文件却是 `// errorcheck` 时 E4 的 20/20 就没了意义）。
+
+**CLI 纪律：不预留未实现的子命令**。`TOP_COMMANDS = ["harness"]` 是白名单，
+`spike` / `compile` / `test` 等一律报 `UnknownCommand` 并在错误信息里给出当前唯一合法用法
+（三个 spike 属 Phase 3 的 T40–T47）。理由：「命令存在但什么都没做」比
+「unknown command」更难排查。**手写解析不引 clap** —— M0 只需 3 个动作，
+引 4–5 个 crate 会破掉「workspace 零依赖 / 离线可构建」这个属性。
+
+**分母纪律在报告里显式化**：`RunSummary::denominator` = `outcomes.len()`，
+**不因平台过滤而变小**；`is_success()` 要求「分母 > 0 且分子 == 分母且无层错误」，
+`target-filtered` 也算失败（20 个样本一个都不该被过滤）。有专门的反向测试
+（`summarize_分母取_outcomes_长度_不因过滤而变小`）钉住这条。
+
+#### 本轮踩的六个坑（都是「静默失败」，T16 抓不到）
+
+1. **`rustc` / `cargo` 不带参数会把完整 help 打到 stdout 且退出码 0** ——
+   `environment` 里三个字段全变成 help 文本。修法：`cmd_version()` 强制带版本参数
+   **且只取首行**，并有单测钉住 `!contains("Usage:")`。
+2. **`cargo test` 的子进程 PATH 与交互 shell 不同** —— 裸 `ldd` 找不到，
+   `glibc` 静默变空串。一律用绝对路径（`/usr/bin/ldd`）。
+3. **glibc 版本必须取 `ldd --version` 输出里**行尾的裸版本**（`2.36`），
+   不是括号里的发行版修订（`2.36-9+deb12u14`）；早先从 `libc.so.6` 字节里抠字符串抠不到。
+   有单测 `glibc_取行尾裸版本而非括号里的修订号` 钉住。
+4. **`uname` 漏了 `-r`** —— 裸 `uname` 只输出 `Linux`，于是 `kernel` 写成 `"Linux"`。
+   它**非空**，所以 T16 判不出来，只有逐字段比对才发现。单测 `kernel_是版本号而非_uname_的字面输出` 钉住。
+5. **`docker/image.lock` 的真实形态是 `前缀.键<空格>= 值`**（不是 `key: value`）——
+   按冒号解析导致**一个 digest 都取不到**，而 `image_section` 遇到取不到就跳过，
+   于是生成的 JSON 少字段却仍然合法。**两层静默叠加**。修法：按 `=` 解析 + 只认完整键
+   （`base.index_digest` 会被更短的键误命中）+ 取不到时在 JSON 里写 `unresolved_keys` 显式暴露。
+6. **`local.layer_count` 的值是 `14（其中容器层 7 个：…）`** —— 带中文说明，
+   `parse::<u64>()` 失败后回退成字符串，JSON 里数字悄悄变字符串。修法：`leading_u64()` 取开头连续数字。
+
+**环境侧插曲**：`rgoc-cargo-registry` / `rgoc-cargo-git` 两个命名卷的属主是 `root:root`
+（空卷首次创建时如此），`cargo build` 报 `Permission denied (os error 13)`。
+修法 `docker run --rm -v <vol>:/x alpine chown -R 501:20 /x` ——
+**uid 是 501 不是 1000**（dev 用户复用宿主 uid，见 Dockerfile 层 3），
+第一次按 1000 改仍然失败。`in-container.sh` 的 bootstrap 只在「新建空卷」时 chown，
+已存在但属主错的卷不会被它接管。
+
 ### 任务 T38：跑 20 个官方样本并出报告（**E4**）
 
 - **文件路径**：`rgoc/tests/corpus/`（放本次报告）、`docs/milestones/M0-manifest.json`（登记）
@@ -1997,6 +2068,74 @@ scripts/in-container.sh cargo run -p rgoc-driver -- harness run --all
 > ⚠️ 若某个样本**确实跑不通**：先判定是 harness 的缺陷还是样本超出 M0 范围。
 > 属于范围的**修 harness**，不属于的**登记为新的 U 条**并记在报告里 ——
 > **不能沉默地把它从分母里拿掉**。
+
+### ✅ T38 完成记录（2026-10-05）—— **E4 门禁通过** 20/20
+
+**实测结果**（容器内，`cargo run -p rgoc-driver -- harness run --all`）：
+
+```text
+分母 = 20　分子 = 20　退出码 0
+整层 wall time = 5.8 s（预算 300 s）　单项最大 0.031 s（预算 60 s）
+峰值 RSS = 15 MiB（单用例预算 512 MiB；T-C-03 放宽到 768 MiB）
+判定分布：pass 20，其余七类全 0
+```
+
+**报告**（可重放）：
+- `rgoc/tests/corpus/T-C-report.md` —— 人读版 + **全量 279 分母一节**
+- `rgoc/tests/corpus/T-C-report.json` —— 机器读（`denominator/numerator/success/peak_rss_bytes/by_verdict/cases`）
+- `rgoc/tests/corpus/build-report.py` —— 生成全量一节。**分母 ≠ 20 或 `success != true` 就拒绝产出**
+- `rgoc/tests/corpus/register-gate.py` —— 登记 `gate.E4`。**先读报告交叉核验再写 manifest**，
+  防止「登记的数与报告脱节」
+
+#### T-C-13 的根因与修法（这是本任务的主要技术内容）
+
+初判 19/20，`initloop.go` 判 `compiler-failure`。**根因不是编译器，是 harness 的正则子集**：
+
+| 环节 | 事实 |
+|---|---|
+| oracle 真实输出 | 1 条诊断 + 3 行 **tab 续行**（`cat -A` 确认续行以 `^I` 开头） |
+| `splitOutput`（`:1205`） | `res[len(res)-1] += "\n" + line` ⇒ 续接时插入**真换行** |
+| ERROR 期望原文 | `a refers to b\n.*b refers to c\n.*c refers to a|initialization loop` |
+| 官方 `regexp` | `\n` 是 **Perl 类转义 ⇒ 真换行**（`regexp/syntax` 的 `escape` 表） |
+| 我们的实现 | `\` 后字符**一律字面量**（`lit.push(escaped)`）⇒ `\n` 变成字母 `n` ⇒ 永不匹配 |
+
+**判定：属 M0 范围内的 harness 缺陷**（规则 R4 要求忠实还原官方正则语义），
+按 T38 指示「属于范围的**修 harness**」处理，**不**登记新 U，**不**放宽判定。
+
+修法（`compare.rs` 的 `split_alternatives`）：把 `\` 转义**分两类** ——
+① **控制字符**（`\n \t \r \f \v \a`）⇒ 真控制符；
+② **元字符**（`\. \* \| \\ \+` 等）⇒ 字面字符。
+**②绝不能并入①** —— 把 `\.` 解释成通配会让 `a\.b` 匹配 `axb`，那是**放宽判定**，比误判更危险。
+有专门的反例钉住（`t38_反斜杠转义_按_go_regexp_语义解释`）。
+
+> ⚠️ **测试差点假通过**：`t38_跨行正则_能匹配_tab_续接成的单条诊断` 初版保留了
+> `|initialization loop` 那个**不含 `\n` 的备选分支**，于是「把 `\n` 当字面量」的实现照样 ok，
+> 掩盖了真正的缺陷。改成**只留跨行分支**后才真正测到。
+> 这与 T37 的「静默失败」同形：**断言写得宽容，实现就永远测不出对错**。
+
+#### 判定纪律的四条反向校验（确认 20/20 不是恒真）
+
+| 注入的缺陷 | 期望 | 实测 |
+|---|---|---|
+| `helloworld.out` 改成 `WRONG` | `runtime-failure` + 退出码 1 | ✅ 19/20，退出码 1，附「期望/实际」对比 |
+| 删掉 `mainsig.go` 全部 `ERROR` 注释 | `compiler-failure` + 退出码 1 | ✅ 19/20，退出码 1 |
+| 新增的 4 条 manifest 断言 | 篡改后必红 | ✅ 篡改 `numerator=19` 与 `by_mode.run=99` → 2 项失败 |
+
+反向校验在**副本**上做（`.workbuddy/backup/t38-corpus/`，已被 `.gitignore` 排除），
+**绝不改 `go_source_code/`** —— 它由 `corpus-manifest.sha256` 锁定（15,618 条）。
+（第一版曾在原目录改 `helloworld.out`，当场发现并恢复，`shasum -c` 全量 0 失配；
+正确做法是复制到临时目录 + `RGOC_CORPUS_TEST_DIR` 覆盖。）
+
+#### 顺带修掉的一个盲区：自检脚本从未校验 E3/E4
+
+`check-m0-consistency.py` 的双向校验用 `gate = {k: ... for k in ("E1","E2","E10","E5")}`
+—— **写死 4 个键**，所以 manifest 里的 `gate.E3` / `gate.E4` 从未被这条断言看过。
+已改成覆盖 6 个键，并新增 4 条断言（E3/E4 全 pass、E4 的 20/20 与确认时间、
+全量分母 279 且 `by_mode` 合计相符、报告文件存在）。**100 → 104 条**，已做反向验证。
+
+教训与 T37 同形：**「漏了」不会报错，只会让断言恒真**。加门禁时必须同步这个列表。
+
+新增测试：跨行正则 4 条（compare）+ RSS 报告 2 条（driver）= 6 条，workspace **147 → 153**。
 
 ### 任务 T39：Phase 2 门禁复核与登记
 
@@ -2308,12 +2447,12 @@ python3 scripts/debug-smoke-test.sh 2>/dev/null || docker exec <容器名> bash 
 
 **下一步（Phase 2 开工前）**：① 冻结 `M0-tests.md`；② 拆 Phase 2–4 计划；③ 跑一遍 `AGENTS.md` §6.1 的自检。
 
-### Phase 2 出口（⏳ 待开工）
+### Phase 2 出口（✅ 已通过 —— E3 2026-10-04 / E4 2026-10-05）
 
 | 门禁 | 判定方式 | 由哪些任务 | 状态 |
 |---|---|---|---|
-| **E3** | harness 六类自测全绿（正反例齐备、不依赖网络） | T36（`T-H-01`~`T-H-06`） | ⏳ 待开工 |
-| **E4** | ≥20 个官方样本 **100%** 通过（**分母不得缩小**） | T38（`T-C-01`~`T-C-20`） | ⏳ 待开工 |
+| **E3** | harness 六类自测全绿（正反例齐备、不依赖网络） | T36（`T-H-01`~`T-H-06`） | ✅ pass（2026-10-04） |
+| **E4** | ≥20 个官方样本 **100%** 通过（**分母不得缩小**） | T38（`T-C-01`~`T-C-20`） | ✅ pass（2026-10-05，20/20、5.8 s、峰值 15 MiB） |
 
 > **硬前置**：T29（冻结 `M0-tests.md`）必须先做 —— `03` §3.3 的门禁纪律要求「白名单**开工前**冻结」，
 > `M0-tests.md` §0 的 F1/F2/F3 三项都指向这一点。
