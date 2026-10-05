@@ -644,6 +644,117 @@ def main() -> int:
     check("冒烟测试第 2 节的失败信息互引 M0-benchmarks.md §10",
           "M0-benchmarks.md §10" in smoke_code)
 
+    # ── 5d. T39：门禁登记与**可重放产物**一致 ──────────────────────────────
+    # 动机：T38 登记 gate.E4 时，证据是「人写的 JSON 字段」。若报告文件被重跑、
+    # 被手改、或与 manifest 脱节，登记就变成一句无法核验的话。
+    # 这里把 E4 的报告当**可执行证据**：从报告读回数字，与 manifest 对撞。
+    # 报告是 driver/xtask 生成的，所以这条断言同时也在验证「生成器没坏」。
+    print("[5d] T39 门禁登记与 E4 报告一致（可重放证据）")
+    rep_path = REPO_ROOT / "rgoc/tests/corpus/T-C-report.json"
+    if not rep_path.is_file():
+        check("E4 报告 JSON 存在（缺则无法复核登记）", False, str(rep_path))
+    else:
+        rep = json.loads(rep_path.read_text(encoding="utf-8"))
+        e4 = manifest["gate"]["E4"]
+        # ① 报告的三个核心数与 manifest 登记的一致
+        check("E4 报告的 20/20 == manifest 登记",
+              rep["denominator"] == e4["denominator"] == 20
+              and rep["numerator"] == e4["numerator"] == 20,
+              f"报告 {rep['numerator']}/{rep['denominator']}，"
+              f"登记 {e4['numerator']}/{e4['denominator']}")
+        # ② 报告自称 success ⇒ 八类里除 pass 外全 0（**不得靠排除凑数**）
+        nonzero = {k: v for k, v in rep["by_verdict"].items() if v and k != "pass"}
+        check("E4 报告 success=true 且非 pass 判定全为 0",
+              rep["success"] is True and nonzero == {},
+              f"success={rep['success']}，非 pass 分布={nonzero or '空'}")
+        # ③ 分母不被缩小：20 条逐条列出，且全量分母仍是 279
+        check("E4 报告逐条列出 20 条（分母未缩小）",
+              len(rep["cases"]) == 20, f"cases={len(rep['cases'])} 条")
+        # ④ 峰值 RSS 与耗时都在（E4 的登记要求含这两项）
+        check("E4 报告含峰值 RSS 与整层耗时（E4 的登记要求）",
+              rep["peak_rss_bytes"] > 0 and rep["total_duration_ms"] > 0,
+              f"peak_rss={rep['peak_rss_bytes'] // 1024 // 1024} MiB，"
+              f"total={rep['total_duration_ms']} ms")
+        # ⑤ 峰值 RSS 必须在 M0-tests §7.5 的预算内（512 MiB / 单用例）
+        rss_mib = rep["peak_rss_bytes"] / 1024 / 1024
+        check("E4 峰值 RSS 在 512 MiB 预算内",
+              0 < rss_mib <= 512, f"{rss_mib:.0f} MiB（上限 512）")
+        # ⑥ 逐条 RSS 也不超（整层取 max，逐条要各自看）
+        worst = max((c["peak_rss_bytes"] for c in rep["cases"]), default=0) / 1024 / 1024
+        check("E4 逐用例峰值 RSS 都在 512 MiB 预算内",
+              worst <= 512, f"最坏 {worst:.0f} MiB")
+        # ⑦ 登记里声明的两条反向校验（T38 实测过）必须在案
+        check("E4 登记了反向校验证据（判定不是恒真）",
+              len(e4.get("negative_checks", [])) >= 2,
+              f"{len(e4.get('negative_checks', []))} 条")
+        # ⑧ 「修了 harness 而非登记新 U」的理由必须在案 —— T38 的核心判定。
+        # ⚠️ 判据要按**字段实际内容**写：`root_cause` 里有 `compare.rs`（定位到文件）、
+        # `why_fix_not_new_u` 里有「修 harness」（明确不登记新 U）。
+        # 早先写成查「放宽判定」—— 那句话在 `discipline` 节而不在 `fix` 节里，
+        # 断言恒红。**断言必须锚定真实字段，不能凭印象写关键词。**
+        fix = e4.get("fix_required_to_pass", {})
+        fix_text = json.dumps(fix, ensure_ascii=False)
+        check("E4 登记了 T-C-13 的根因与修法（修 harness 而非登记新 U）",
+              "compare.rs" in fix_text and "修 harness" in fix_text
+              and "why_fix_not_new_u" in fix,
+              f"root_cause 片段：{str(fix.get('root_cause'))[:40]}…")
+        # ⑧b 判定纪律本身必须在案（不得通过放宽比较器 / 记跳过为 pass / 缩小分母）
+        check("E4 登记了判定纪律四条（未放宽、未记 pass、未缩分母、未削减样本）",
+              all(k in e4.get("discipline", "")
+                  for k in ("放宽比较器", "记为 pass", "缩小分母", "未削减样本数")),
+              "discipline 节")
+        # ⑨ 跨行正则必须真的有守卫测试（否则下次重构会静默回归）
+        guards = " ".join(fix.get("guards", []))
+        check("E4 登记了跨行正则的守卫测试（含变异测试）",
+              "t38_跨行正则" in guards and "变异测试" in guards,
+              f"{len(fix.get('guards', []))} 条守卫")
+        # ⑩ 人读报告里必须含全量 279 分母一节（证明分母没被缩小的第二处证据）
+        md = (REPO_ROOT / "rgoc/tests/corpus/T-C-report.md").read_text(encoding="utf-8")
+        check("E4 人读报告含全量 279 分母一节",
+              "279" in md and "全量语料基线" in md and "U7" in md,
+              "含 279 / 全量语料基线 / U 归类表")
+
+    # ── 5e. T39：phase_plan 与实际产物一致 ─────────────────────────────────
+    # 动机：`phase_plan.phase2.done` 是「做了哪些任务」的登记位。T38 只补了
+    # phase2 的 E4 证据，**忘了把 T37/T38 写进 done 列表** —— 于是 manifest
+    # 一边说 gate.E4 pass，一边列出的 done 只到 T36。这类漂移不报错，只是
+    # 让「登记」失去意义（读的人会以为 T37/T38 没做）。
+    print("[5e] T39 phase_plan 与实际产物一致")
+    pp = manifest.get("phase_plan", {}).get("phase2", {})
+    done_text = " ".join(pp.get("done", []))
+    check("phase_plan.phase2.done 含 T29–T38 全部任务",
+          all(f"T{n}" in done_text for n in range(29, 39)),
+          f"done 列了 {len(pp.get('done', []))} 条")
+    check("phase_plan.phase2 状态 == done（E3/E4 已全过）",
+          pp.get("status") == "done", f"status={pp.get('status')}")
+    # 登记的三个 crate 必须真的在磁盘上（登记与 workspace 脱节也要抓）
+    crates = pp.get("crates", [])
+    check("phase_plan.phase2 登记的 crate 都在磁盘上",
+          len(crates) == 3
+          and all((REPO_ROOT / "rgoc" / c).is_dir() for c in crates),
+          f"{crates}")
+    # 登记的报告文件必须存在
+    check("phase_plan.phase2 登记的报告文件都存在",
+          all((REPO_ROOT / p).is_file() for p in pp.get("reports", [])),
+          f"{pp.get('reports')}")
+    # 登记的测试数必须与 E3 的 total_tests 一致（两处都写 153 就不会互相矛盾）
+    gr = pp.get("gate_result", {})
+    check("phase_plan 的测试数 == gate.E3.total_tests",
+          gr.get("tests_passed") == manifest["gate"]["E3"].get("total_tests") == 153,
+          f"phase_plan {gr.get('tests_passed')} / "
+          f"E3 {manifest['gate']['E3'].get('total_tests')}")
+    # E4 门禁要求的耗时预算，逐条在案（§7.5：整层 5 min / 单项 60 s）
+    check("E4 整层耗时在 300 s 预算内（03 §6.2 smoke ≤ 5 min）",
+          0 < manifest["gate"]["E4"].get("layer_wall_time_s", 1e9) <= 300,
+          f"{manifest['gate']['E4'].get('layer_wall_time_s')} s")
+    check("E4 单项最慢在 60 s 预算内（M0-tests §7.5）",
+          0 < manifest["gate"]["E4"].get("slowest_case_s", 1e9) <= 60,
+          f"{manifest['gate']['E4'].get('slowest_case_s')} s")
+    # Phase 3 的阻塞条件必须已解除（D-M0-2）
+    check("phase_plan.phase3 的前置阻塞已标记解除",
+          "已全部通过" in manifest["phase_plan"]["phase3"].get("blocked_by", ""),
+          manifest["phase_plan"]["phase3"].get("blocked_by", "(缺失)")[:40])
+
     # ── 6. 文档记录的规模与实际一致 ────────────────────────────────────────
     # 动机：本轮把断言从 45 一路加到 60+，`AGENTS.md` 里的数字靠手工同步
     # （已经漏过一次）。数字漂了比没有数字更糟 —— 它会让人以为「覆盖了 N 条」

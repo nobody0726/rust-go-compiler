@@ -138,7 +138,10 @@
         "T-H-05": "超时：判 timeout 且 /proc 下查不到子进程（+ 反例：快程序不误判）",
         "T-H-06": "版本不符：整层判 reference-toolchain-failure 且一个用例都不跑（+ 反例：版本相符正常产出）"
       },
-      "total_tests": 114
+      "self_test_count": 19,
+      "total_tests": 153,
+      "total_tests_note": "T36 登记时 workspace 共 114 条；T37 加 driver 33 条、T38 加 6 条，现为 153（T39 复核更新）",
+      "confirmed_by_test": "cargo test -p rgoc-harness --test harness_self_test（19 条，正反例齐备）"
     },
     "E4": {
       "name": "官方语料基线 T-C-01..20 全绿",
@@ -267,7 +270,7 @@
     },
     "phase2": {
       "tasks": "T29-T39",
-      "status": "in_progress",
+      "status": "done",
       "gates": [
         "E3",
         "E4"
@@ -281,8 +284,28 @@
         "T33（平台过滤 + 语料枚举 + U 归类，2026-10-02）",
         "T34（oracle 调用与版本守门，2026-10-03）",
         "T35（比较器 R2/R3/R4 + 正则子集匹配器，2026-10-03）",
-        "T36（六类自测全绿，E3 门禁通过，2026-10-04）"
-      ]
+        "T36（六类自测全绿，E3 门禁通过，2026-10-04）",
+        "T37（rgoc-driver CLI + xtask，33 条测试，2026-10-05）",
+        "T38（E4 基线 20/20 通过，5.8 s / 峰值 15 MiB，2026-10-05）"
+      ],
+      "completed_at": "2026-10-05",
+      "crates": [
+        "crates/rgoc-harness",
+        "crates/rgoc-driver",
+        "xtask"
+      ],
+      "reports": [
+        "rgoc/tests/corpus/T-C-report.md",
+        "rgoc/tests/corpus/T-C-report.json"
+      ],
+      "gate_commands": "cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
+      "gate_result": {
+        "tests_passed": 153,
+        "tests_failed": 0,
+        "consistency_assertions": 115,
+        "corpus_sha256_mismatches": 0,
+        "verified_at": "2026-10-05"
+      }
     },
     "phase3": {
       "tasks": "T40-T47",
@@ -291,7 +314,8 @@
         "E6",
         "E7"
       ],
-      "scope": "rgoc-hir(SPIKE-ONLY) + rgoc-spikes 三个 spike"
+      "scope": "rgoc-hir(SPIKE-ONLY) + rgoc-spikes 三个 spike",
+      "blocked_by": "D-M0-2：Phase 2 的 E3/E4 已全部通过（2026-10-05），环境门禁未过的阻塞解除"
     },
     "phase4": {
       "tasks": "T48-T55",

@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 与 Phase 1 均已完成**（E1/E2/E10/E5 全过）；**Phase 2 进行中**（**T29–T38 ✅**：冻结清单 / 复核期望值 / Test IR / 指令行解析 / 语料枚举（**分母 279 已对上**）/ oracle 调用 / 比较器 / 六类自测（**E3**）/ driver CLI + xtask / **E4 基线 20/20 通过**，剩 T39 复核登记），Phase 2–4 计划已拆完（T29–T55） |
+| 当前阶段 | **M0 · Phase 0 / 1 / 2 均已完成**（**E1/E2/E3/E4/E5/E10 六条门禁全过**）；**Phase 3 待开工**（T40–T47：三个架构 spike，门禁 E6 + E7），Phase 4 已拆完（T48–T55） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；`rgoc/` 下是 harness（六个模块，120 条测试）+ driver CLI + xtask（33 条，合计 **153 条全绿**）；**E1/E2/E3/E4/E5/E10 六条门禁已过**，**编译器实现尚未开始**。
+**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–2 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask（**153 条测试全绿**，自检 **123 条断言**）；**E1/E2/E3/E4/E5/E10 六条门禁已过**；**编译器实现尚未开始**，下一步是 Phase 3 的三个架构 spike。
 
 ---
 
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（104 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（123 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -175,9 +175,9 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 | 项 | 说明 |
 |---|---|
-| 编译器工程 | `rgoc/` 下**只有 harness + 两个工具 crate**（`rgoc-harness` / `rgoc-driver` / `xtask`），harness 已不只是调试目标：T31 落下了 Test IR 骨架（16 个必录字段 + 八种判定分类 + 冻结预算的唯一入口 `Limits::for_layer`），T37 加了 CLI 与构建期工具，T38 出了 E4 基线。**编译器实现仍未开始** —— 还没有 lexer / parser / HIR |
+| 编译器工程 | `rgoc/` 下**只有 harness + 两个工具 crate**（`rgoc-harness` / `rgoc-driver` / `xtask`），harness 已不只是调试目标：T31 落下了 Test IR 骨架（16 个必录字段 + 八种判定分类 + 冻结预算的唯一入口 `Limits::for_layer`），T37 加了 CLI 与构建期工具，T38 出了 E4 基线（20/20），T39 复核登记并把登记变成可执行断言。**编译器实现仍未开始** —— 还没有 lexer / parser / HIR（那是 Phase 3 的 `rgoc-hir` 与三个 spike） |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
-| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已开工并完成 T29–T38：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**；下一步 T39 门禁复核与登记，Phase 2 即可收口** |
+| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）**；下一步 Phase 3 的三个架构 spike（T40 建 `rgoc-hir`，T41 建 `rgoc-spikes`）** |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
 | 阶段目录 | `docs/contracts/` **已创建但为空**；`docs/milestones/` 含 M0 四件套 + `M0-manifest.json` |
@@ -339,7 +339,10 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T36 —— 六类自测全绿，**E3 门禁通过**（19 条，正反例齐备）
    ✅ T37 —— `rgoc-driver` CLI 骨架（`harness list/run/report`，**不预留**未实现子命令）+ `xtask`（语料枚举 / 报告生成 / manifest 生成）
    ✅ T38 —— **E4 门禁通过：20/20**，5.8 s / 峰值 15 MiB；修了跨行正则的 `\n` 转义（`compare.rs`）
-   👉 **下一个**：T39 —— Phase 2 门禁复核与登记（E3/E4 证据已进 manifest，剩文档同步与状态收口）
+   ✅ T39 —— Phase 2 门禁复核与登记（`phase_plan.phase2` 标 done；新增 5d/5e 两节共 19 条断言，
+   把「登记的证据」与**可重放产物**（E4 报告）对撞；7 次变异测试确认断言真能失败）
+   👉 **下一个**：**Phase 3** —— T40 建 `rgoc-hir`（最小、标 `SPIKE-ONLY`）→ T41 建 `rgoc-spikes`
+   → T42/T43/T44 三个 spike（S1 解释 / S2 SSA / S3 native）→ T45 可复现性（E6）→ T46/T47（E7）
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 

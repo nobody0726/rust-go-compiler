@@ -55,8 +55,8 @@
 | T20–T22 | Phase 1 · 最小 Rust 工程 | — | ✅ |
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
-| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ⏳ 进行中（**T29–T38 ✅；E3 过 2026-10-04；E4 过 2026-10-05（20/20）**；剩 T39 复核登记） |
-| T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ 待开工 |
+| T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ✅ **完成**（T39 于 2026-10-05 收口；E3 过 10-04、E4 过 10-05（20/20）） |
+| T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ **下一步**（前置已解除，2026-10-05） |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ⏳ 待开工 |
 
 ---
@@ -2155,9 +2155,74 @@ python3 scripts/check-m0-consistency.py    # 期望：全部通过，exit 0
 
 ---
 
-## 5. Phase 3 —— 三个架构 spike（门禁 E6 + E7）
+### ✅ T39 完成记录（2026-10-05）—— Phase 2 收口
+
+**门禁复核（T39 的验证命令，逐条实跑）**：
+
+```text
+cargo fmt --all -- --check                              OK
+cargo check --workspace --all-targets                   OK
+cargo clippy --workspace --all-targets -- -D warnings   OK
+cargo test --workspace                                  153 passed / 0 failed
+python3 scripts/check-m0-consistency.py                 123 条断言全过，exit 0
+语料 sha256 全量校验                                     15,618 条 0 失配
+```
+
+**登记的修正**：
+- `gate.E3.total_tests` 由 **114 → 153**（T36 登记时是 114；T37 +33、T38 +6），
+  并补 `self_test_count: 19`（E3 自己的六类自测条数，与总测试数**分开**记 ——
+  两者混成一个数会让人以为 E3 有 153 条测试）。
+- `phase_plan.phase2` 补 T37/T38 两条 `done`，`status` 由 `in_progress` → **`done`**，
+  补 `crates` / `reports` / `gate_commands` / `gate_result` / `completed_at`。
+- `phase_plan.phase3` 补 `blocked_by`：D-M0-2 的阻塞**已解除**（Phase 2 门禁全过）。
+- `AGENTS.md` 回写：速览、一句话状态、§3.2 状态快照、下一步清单全部同步到「Phase 3 待开工」。
+
+**T39 的实质不是「跑一遍」，而是把登记变成可执行断言**（新增 §5d / §5e 两节，**19 条**）：
+
+登记的证据原本是「人写的 JSON 字段」—— 报告被重跑、被手改、或与 manifest 脱节时，
+登记就成了一句无法核验的话。现在改成**从报告读回数字与 manifest 对撞**：
+
+| 节 | 断言 | 抓什么 |
+|---|---|---|
+| 5d | 报告 20/20 == manifest 登记 | 两处数字脱节 |
+| 5d | 报告 `success=true` 且**非 pass 判定全为 0** | 靠排除/失败凑数 |
+| 5d | 报告逐条列出 20 条 | **分母被缩小** |
+| 5d | 峰值 RSS 与整层耗时都在报告里 | E4 的登记要求含这两项 |
+| 5d | 峰值 RSS（整层 + 逐例）在 512 MiB 内 | §7.5 的资源上限 |
+| 5d | 登记了 ≥2 条反向校验 | 判定是否恒真 |
+| 5d | 登记了 T-C-13 的**根因文件**与「修 harness」理由 | 是否放宽了判定 |
+| 5d | 登记了跨行正则的守卫测试**且含变异测试** | 下次重构静默回归 |
+| 5d | 人读报告含全量 279 分母一节 | 分母缩水的第二处证据 |
+| 5e | `done` 含 T29–T38 全部任务 | 登记漏任务 |
+| 5e | 三个 crate / 两份报告**都在磁盘上** | 登记与产物脱节 |
+| 5e | `phase_plan` 测试数 == `gate.E3.total_tests` | 两处数字互相矛盾 |
+| 5e | 整层 ≤ 300 s、单项 ≤ 60 s | §7.5 与 `03` §6.2 的预算 |
+| 5e | Phase 3 阻塞已标记解除 | D-M0-2 的状态 |
+
+**7 次变异测试**（证明这些断言真能失败，不是恒真）：
+
+| 变异 | 被抓的断言 |
+|---|---|
+| manifest 登记改 19/20 | 报告 20/20 == 登记 + E4 登记 20/20（2 项） |
+| 报告塞一条 `compiler-failure` | 报告 20/20 == 登记 + `success` 且非 pass 全 0（2 项） |
+| 删掉跨行正则的 `guards` | 守卫测试登记（1 项） |
+| `phase2.status` 回退 `in_progress` | 状态 == done（1 项） |
+| `done` 删掉 T37/T38 | `done` 含 T29–T38（1 项） |
+| 耗时改 999 s + 测试数改 147 | 耗时预算 + 测试数一致（2 项） |
+| crate 列表塞不存在的目录 | crate 都在磁盘上（1 项） |
+
+> ⚠️ **写断言时踩了一次**：判据查「放宽判定」这个措辞，但那句话在 `discipline` 节而不在
+> `fix_required_to_pass` 节里 ⇒ 断言恒红。**断言必须锚定真实字段，不能凭印象写关键词** ——
+> 改成分字段查（`root_cause` 查 `compare.rs`、`why_fix_not_new_u` 查「修 harness」、
+> `discipline` 单独一条查四个关键词）才对。这与 T37/T38 的坑同形。
+
+**自检断言数 104 → 123**，`AGENTS.md` §1 已同步。
+
+### ## 5. Phase 3 —— 三个架构 spike（门禁 E6 + E7）
 
 > **前置**：Phase 2 的 E3 / E4 已通过 —— **环境门禁未过不得开工**（D-M0-2）。
+> ✅ **前置已满足（2026-10-05，T39 复核）**：E3（2026-10-04）+ E4（2026-10-05，20/20）全过，
+> D-M0-2 的阻塞解除，本 Phase 可以开工。
 > **crate 边界**（D-M0-13）：本 Phase 才建 `rgoc-hir`（最小、标 `SPIKE-ONLY`）与 `rgoc-spikes`。
 > **spike 的隔离形态**（决策 **D-M0-14**）：三个 spike 放在**独立 crate `rgoc-spikes`** 下，
 > 三个 bin + 共享的固定 HIR fixture。理由是 `03` §4 的纪律「**不盲目演进临时代码**」——

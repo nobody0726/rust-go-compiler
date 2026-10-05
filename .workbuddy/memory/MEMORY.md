@@ -8,14 +8,15 @@
 - **`git push` 常被拦**（`github.com` CONNECT 间歇 502，`api.github.com` 正常）→ 技能 `github-push-via-api`
 - **工程入口是根目录 `AGENTS.md`**，任何任务先读它。本文件只保「每轮都要知道」的硬事实
 
-## 状态：M0 Phase 0/1 完成（E1/E2/E10/E5 全过），Phase 2 进行中（T29–T38 ✅，**E3 + E4 已过**）
+## 状态：M0 **Phase 0/1/2 全部完成**（T01–T39 ✅，**E1/E2/E3/E4/E5/E10 六条门禁全过**），**Phase 3 待开工**
 
 - 阶段文档 `docs/milestones/`：`M0-design.md`（已确认，D-M0-1~15）、`M0-tests.md`（**已冻结** T29）、`M0-plan.md`（T01–T55）、`M0-benchmarks.md`、`M0-manifest.json`（environment/gate/benchmarks）
 - **E5 已由用户 2026-10-02 人工实测通过**（登记在 `gate.E5`）；**E3 已于 2026-10-04 通过**（T36 六类自测 19 条正反例齐备，登记在 `gate.E3`）
 - 镜像 `rgoc:dev` = `sha256:21f55802…553b`（2.92 GB / 14 层）
 - 三个 spike 放独立 crate `rgoc-spikes`（D-M0-14，可整块删）；`double_sum` **不删**（D-M0-15，E5 复验锚点）
 - **E4 已于 2026-10-05 通过**（T38：20/20、5.8 s、峰值 15 MiB；修了 `compare.rs` 的 `\n` 转义）
-- **下一步**：T39 Phase 2 门禁复核与登记（E3/E4 证据已进 manifest，剩文档同步与状态收口）
+- **T39 已完成**（Phase 2 收口）：登记漂移已修（`gate.E3.total_tests` 114→153、`phase_plan.done` 补 T37/T38）+ 新增 §5d/§5e **19 条断言**把登记与 E4 报告**对撞**
+- **下一步**：**Phase 3**（T40 建 `rgoc-hir` 标 `SPIKE-ONLY` → T41 建 `rgoc-spikes` → T42/43/44 三个 spike S1/S2/S3 → T45 E6 → T46/47 E7）。**D-M0-2 阻塞已解除**
 - 五个 Phase：0 容器底座 → 1 VSCode 调试环境（门禁=实测断点命中）→ 2 Rust 骨架+harness → 3 三 spike → 4 契约+报告
 - 关键洞察：Go oracle 是**硬约束**（必须精确 `go1.27.1`），Rust 是软约束 → 用 `golang:1.27.1-bookworm` + `rustup`
 
@@ -27,7 +28,7 @@
 | `crates/rgoc-driver` | **统一 CLI**（T37）：`harness list/run/report`；手写解析**不引 clap**；**不预留**未实现子命令 | 23 条 |
 | `xtask` | 构建期工具（T37）：语料枚举（279）/ 报告生成 / manifest environment 生成 | 12 条 |
 
-**共 153 条全绿，门禁四条全过 + 自检 104 条断言。** 两条纪律：① driver 与 xtask 都只**调** `run_layer`，
+**共 153 条全绿，门禁四条全过 + 自检 123 条断言。** 两条纪律：① driver 与 xtask 都只**调** `run_layer`，
 不自己判语义（两份判定 ⇒ E4 变成「两份报告说过了」）；② 报告渲染也只有一处
 （`rgoc_driver::report::render_text`），xtask 初稿里从 JSON 反推文本的 `human_text` 已删。
 
@@ -85,13 +86,16 @@
 - ⚠️ **别用 shell 复现 CodeLLDB 的 cargo 命令**：它是无 `shell:true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 得到**假的** TOML 报错。必须用 argv 列表复现
 - `rustc` **不为「尾位置直接返回的 `let` 绑定」生成 DWARF 变量条目** → 调试目标必须让中间值被第二次读取（`double_sum` 写成 `sum * 2`）
 
-### 自检脚本的三个陷阱
+### 自检脚本的四个陷阱
 
-- `check-m0-consistency.py`（**104 条**断言）：用 `TOTAL` 计数器，最后一条断言把自己数进去，**必须是文件最后一条**；改断言数只需同步 `AGENTS.md` §1 一处
+- `check-m0-consistency.py`（**123 条**断言；§5d 登记↔报告对撞 / §5e phase_plan↔产物对撞）：用 `TOTAL` 计数器，最后一条断言把自己数进去，**必须是文件最后一条**；改断言数只需同步 `AGENTS.md` §1 一处
 - ⚠️ **断言必须锚定真实代码，注释里的同名串会让它恒真**（本仓踩过两次：`grep` 断点行命中注释行；`install-*.sh` 头部注释里就写着 `platform.ok`/`--noproxy`）→ 第 5/5b 节一律作用于 `code_only()`（剔整行注释）
 - ⚠️ **断言里写死的键列表会变成盲区**（T38 踩到）：门禁双向校验写死 `("E1","E2","E10","E5")`，
   于是新加的 `gate.E3`/`gate.E4` **从未被校验过**。**加门禁时必须同步这个列表** ——
   「漏了」不会报错，只会让断言恒真
+- ⚠️ **断言的关键词必须锚定真实字段，不能凭印象写**（T37/T38/T39 **连续三轮同形**）：
+  T39 查「放宽判定」，那句话却在 `discipline` 节而不在 `fix_required_to_pass` 节里 ⇒ 恒红。
+  改成分字段查才过。**写完断言要反向验证它真能失败**（T39 做了 7 次变异）
 - ⚠️ **门禁状态要两处同步**（manifest + `M0-plan.md` 门禁汇总表），现有 4 条断言做双向校验
 - ⚠️ **大段插入已有文档要以 `git show HEAD:<file>` 为基线重建**，插入后逐条 `grep -cF` 验收
 - 两个变异测试脚本已按用户要求移除（快照在 `.workbuddy/backup/scripts-removed-20261002-1504/`）→ 改断言后须**人工反向验证**。`env-probe.sh` 同样已移除，脚本体在 `M0-plan.md` T14
