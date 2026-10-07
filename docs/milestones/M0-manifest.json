@@ -3,27 +3,29 @@
   "generated_at": "2026-10-02T03:52:12Z",
   "environment": {
     "host": {
-      "os": "macOS 27.2",
+      "os": "macOS 15.6",
       "arch": "arm64",
-      "docker_desktop_version": "29.6.2"
+      "docker_desktop_version": "29.8.2"
     },
     "image": {
       "tag": "rgoc:dev",
-      "digest": "sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b",
+      "digest": "sha256:46a572aa44aee8307bc71821a4085b389e3e9656e9d7a71e0f2c77f49be22093",
       "digest_stability": "per-build (not reproducible; the pin is base_index_digest + src.*_sha256, see M0-benchmarks.md section 5)",
-      "size": "2.92GB",
+      "size": "3.0GB",
       "layer_count": 14,
       "base_tag": "golang:1.27.1-bookworm",
       "base_index_digest": "sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195",
-      "base_arm64_digest": "sha256:1668bbf856490c9bd0b77204ae1cdaebe273dc459b5eeb3a31a4ddc78ca6fae1"
+      "base_arm64_digest": "sha256:1668bbf856490c9bd0b77204ae1cdaebe273dc459b5eeb3a31a4ddc78ca6fae1",
+      "rebuilt_at": "2026-10-07T11:41:00Z",
+      "rebuild_reason": "工作区从 GitHub 重新拉取后本机无 Docker，从零重建。Docker Desktop 4.94.0 / engine 29.6.2->29.8.2、内核 6.12.76->7.0.14-linuxkit（引擎架构仍 aarch64 无偏差）。Dockerfile 层 2 新增 apt 重试配置（不改变镜像内容）、scripts/in-container.sh 修复卷 bootstrap 漏项。变更后已重跑 E1/E3（153 条全绿）/E4（20/20 官方语料）。详见 docker/image.lock 更新记录 2026-10-07。"
     },
     "container": {
       "arch": "arm64",
-      "kernel": "6.12.76-linuxkit",
+      "kernel": "7.0.14-linuxkit",
       "os_release": "Debian GNU/Linux 12 (bookworm)",
       "glibc": "2.36",
       "nproc": 10,
-      "mem_total_kb": 8126480
+      "mem_total_kb": 8124516
     },
     "toolchain": {
       "go": {
@@ -123,7 +125,25 @@
       "evidence": "T28 人工实测通过：在 VSCode dev container 中打开 rgoc/crates/rgoc-harness/src/lib.rs，于 double_sum() 的 `let sum = a + b;`（第 27 行）下断点，F5 运行「调试当前测试 (CodeLLDB)」，T28 检查表四项逐项确认通过 —— ① 断点命中、未被跳过；② 变量面板可见 a=1、b=2；③ 调用栈 ≥2 帧（rgoc_harness::double_sum ← tests::double_sum_works）；④ 按 F10 单步后停止行移到第 28 行且 sum==3。同时与下层证据互相印证：scripts/debug-smoke-test.sh 第 2 节 A/B/C 三项 + 9 项断言全部通过（exit=0），即断点解析到 rgoc_harness::double_sum + 20 at lib.rs:27、stop reason = breakpoint 1.1、调用栈 3 帧、a=1/b=2、step over 停到 lib.rs:28、sum = 3、test result: ok. 1 passed; 0 failed。三个已实测的环境前提：① VS Code Server 1.140.0 装入持久卷 /vscode 且两处 test -d 均 exit=0（environment.debug.vs_code_server）；② CodeLLDB 平台包 platform.ok 存在且 lldb 22.1.8-codelldb 可执行；③ launch.json 的两处 cargo 配置缺陷已修（cargo.cwd 与 filter.name，见 environment.debug.launch_config）。",
       "blocking_note": "（已解除，保留作故障档案）取得该门禁前曾阻塞过三类问题，**都各自独立、且报错可能互相掩盖**：① **扩展平台包**（容器内、走 GitHub releases）-- 曾因宿主下发的 http.proxy 无法下载，见 M0-benchmarks.md section 7，修法 scripts/install-codelldb.sh，容器重建后必丢；② **VS Code Server 本体**（宿主机、连接容器之前、走 update.code.visualstudio.com）-- 宿主 VSCode 每次升级都会改变 commit 而持久卷里没有，判据是日志里的 Path: 是否指向宿主 /var/folders/...，见 section 9，修法 scripts/install-vscode-server.sh --commit HOST_COMMIT（HOST_COMMIT 取宿主 product.json 的 commit 字段）；③ **CodeLLDB 的 cargo 启动配置**（f5 阶段）-- cargo.cwd 缺失会让 cargo 在 workspaceFolder /work 下找不到 Cargo.toml 而退出 101（顶层 cwd 无效），filter.name 用包名而非 target name 会 0 匹配，两者见 section 10。调试目标的形状（中间值必须被第二次读取）见 section 8。 前两类会随「宿主升级 VSCode」与「容器重建」**各自复发** —— 复现时仍按上面三层辨异，不要看到眼熟的报错就按上一个案子的办法修。",
       "confirmed_at": "2026-10-02",
-      "confirmed_by": "用户人工实测（VSCode dev container 内按 F5）—— E5 的判定依据是这次实测本身，「能打开容器窗口」不算通过"
+      "confirmed_by": "用户人工实测（VSCode dev container 内按 F5）—— E5 的判定依据是这次实测本身，「能打开容器窗口」不算通过",
+      "reverified": {
+        "date": "2026-10-07",
+        "reason": "工作区从 GitHub 重新拉取后本机无 Docker，需从零重建环境（含 Phase 1 调试环境）。原登记为 2026-10-02 换机器前的实测。",
+        "host_vscode": "1.139.1 (commit 04c0d99f4fb0d8afe6ce4f0c58e31e183ac3e4b1) —— 注意比原登记的 1.140.0 (07f806f9…) 更旧，故 VS Code Server 必须按宿主当前 commit 重装（原卷内的 07f806f9 版本对新 commit 无效）。",
+        "rebuilt": [
+          "VS Code Server 1.139.1 装入持久卷 /vscode（198 MB / 38 s），两处 test -d 均命中",
+          "rust-analyzer v0.3.3073 与 CodeLLDB v1.12.3 扩展本体由 code-server CLI 装入",
+          "CodeLLDB 平台包离线安装（52 MB / 49 s），platform.ok 在位，lldb 22.1.8-codelldb 可执行",
+          "容器以 --cap-add=SYS_PTRACE --security-opt seccomp=unconfined 启动（宿主 docker inspect 已确认）"
+        ],
+        "evidence": "用户在新容器 nervous_mcnulty 中按 F5 实测通过。容器内 LLDB 扩展日志（data/logs/20261007T121816/exthost2/output_logging_20261007T122303/2-LLDB.log）留下可核查痕迹：`Installing platform package` 与 `PROXY` 出现 **0 次**，`program: /work/rgoc/target/debug/deps/rgoc_harness-…`（cargo 产物已定位）、`Launching adapter`、`Debug adapter exit code=0, signal=null`。同时下层证据 scripts/debug-smoke-test.sh **12 项断言全通过（exit=0）**：断点解析到 rgoc_harness::double_sum + 20 at lib.rs:41、stop reason = breakpoint 1.1、调用栈 3 帧、a=1/b=2、step over 停到 lib.rs:42、sum = 3。（注：该脚本断言⑨ 原写死分母 1 passed，lib.rs 实为 17 个测试，已改为不锚定分母。）",
+        "obstacles_hit": [
+          "宿主 VSCode 用户设置残留 dev.containers.dockerPath=podman —— 机器上 podman machine 早已删除，Reopen in Container 直接报 Cannot connect to Podman。已删除该设置（备份 settings.json.bak-20261007）。",
+          "devcontainer.json 一度被补上 `\"source=vscode,target=/vscode,type=volume\"`，而 Dev Containers 扩展【自带】这条挂载（CLI 传 --mount type=volume,source=vscode,target=/vscode,external=true），重复声明导致 `docker: Duplicate mount point: /vscode`，Reopen 直接失败。已撤销，并在 check-m0-consistency.py 加断言防回归。",
+          "容器重建后 CodeLLDB 平台包必丢（extensions/ 不在任何卷里），F5 报死代理下载失败 —— 与 2026-10-02 记录的 blocking_note ①②同一类，按既定 scripts/install-codelldb.sh 修复。"
+        ],
+        "confirmed_by": "用户人工实测（VSCode dev container 内按 F5）+ 容器内 LLDB 扩展日志佐证"
+      }
     },
     "E3": {
       "name": "harness 六类自验全绿",

@@ -113,13 +113,40 @@ def main() -> int:
     check("runArgs 含 ptrace 与 seccomp",
           "--cap-add=SYS_PTRACE" in dc["runArgs"] and "seccomp=unconfined" in dc["runArgs"])
     volumes = [m for m in dc["mounts"] if "type=volume" in m]
-    check("三个命名卷", len(volumes) == 3, str(len(volumes)))
+    # ⚠️ 2026-10-07：原先是 `len(volumes) == 3`（写死数量），改为**逐卷检查
+    #   是否被 postCreateCommand 的 chown 覆盖** —— 数量写死既会漏（新卷不报错）
+    #   又会误报（加了合法的新卷就变红，而意图其实已满足）。
+    #
+    #   vol_paths: source=卷名 → target=容器内路径（type=volume 才有 source）
+    vol_paths = {}
+    for m in volumes:
+        src = re.search(r"source=([^,]+)", m)
+        tgt = re.search(r"target=([^,]+)", m)
+        if src and tgt:
+            vol_paths[src.group(1)] = tgt.group(1)
+    # cargo 三件套是本项目自己声明的卷（in-container.sh 用同一套名字，见 D-M0-9/D-M0-10）
+    cargo_vols = {"rgoc-target", "rgoc-cargo-registry", "rgoc-cargo-git"}
+    check("cargo 三件套卷都已声明",
+          cargo_vols.issubset(vol_paths), f"声明了: {sorted(vol_paths)}")
+    # ⚠️ `/vscode` **不能**在这里声明：Dev Containers 扩展自带这条挂载
+    #   （CLI 会传 --mount type=volume,source=vscode,target=/vscode,external=true）。
+    #   本文件再声明一次就是重复挂载点，docker 直接拒：
+    #     Duplicate mount point: /vscode      （2026-10-07 实测）
+    #   ⇒ 这条断言的作用是**防回归**：有人（包括我）看到 server 装在 /vscode
+    #   就"顺手补一条挂载"，那会直接让 Reopen in Container 失败。
+    check("未重复声明 /vscode 挂载（扩展自带）",
+          "/vscode" not in vol_paths.values(),
+          f"重复声明了: {[v for v in vol_paths.values() if v == '/vscode']}")
+    # 属主修正必须覆盖本文件声明的每一个卷（+ /vscode，它由扩展挂载但同样需要 chown）
+    chown_targets = set(re.findall(r"chown 501:20 (\S+)", dc.get("postCreateCommand", "")))
+    missing = {src: tgt for src, tgt in vol_paths.items() if tgt not in chown_targets}
+    check("每个声明的命名卷都被 postCreateCommand 修正属主",
+          not missing, f"缺: {missing}" if missing else f"已覆盖 {len(vol_paths)} 个")
+    check("postCreateCommand 也修正 /vscode 属主（扩展挂载但仍是 root:root）",
+          "/vscode" in chown_targets, f"chown 了: {sorted(chown_targets)}")
     target_mount = [m for m in dc["mounts"] if "/work/rgoc/target" in m]
     check("rgoc/target 挂 rgoc-target 卷",
           bool(target_mount) and "rgoc-target" in target_mount[0])
-    check("postCreateCommand 修正命名卷属主",
-          dc.get("postCreateCommand") == "sudo chown 501:20 /work/rgoc/target",
-          repr(dc.get("postCreateCommand")))
     # 回归断言：这两行【保留但已知无效】—— 真正修法是 scripts/install-codelldb.sh
     # （宿主经 AHP root/configChanged 下发 http.proxy，远端设置覆盖不了；见 §7）
     check("http.proxy 显式置空（保留；已知不足以修好 CodeLLDB）",

@@ -33,6 +33,15 @@
     //   宿主 bind mount 0.287–0.359s  vs  命名卷 0.133–0.150s（≈2.3×）
     // 与 scripts/in-container.sh 用【同一个卷名】，保证编辑器与门禁同环境（D-M0-10）。
     "source=rgoc-target,target=/work/rgoc/target,type=volume"
+    // ⚠️ 2026-10-07 注意：不要在这里声明 `/vscode` 挂载。
+    //   Dev Containers 扩展【自带】这一条，会额外传
+    //     --mount type=volume,source=vscode,target=/vscode,external=true
+    //   （external=true = 复用已存在的卷，没有则创建）。
+    //   本文件再声明一次就成了重复，docker 直接拒：
+    //     docker: Error response from daemon: Duplicate mount point: /vscode
+    //   —— 这是实测踩过的（2026-10-07），别再加回来。
+    //   VS Code Server 的持久化由扩展负责，scripts/install-vscode-server.sh
+    //   把 server 装进该卷即可；属主修正见下面的 postCreateCommand。
   ],
 
   // 新建的空卷属主是 root，dev 写不进去（实测 Permission denied）。
@@ -40,7 +49,13 @@
   // 幂等：只改卷根属主，cargo 自己在下面建目录。
   // 注意 `cargo clean` 在此布局下会报 EBUSY，清空请用：
   //     find rgoc/target -mindepth 1 -delete
-  "postCreateCommand": "sudo chown 501:20 /work/rgoc/target",
+  //
+  // ⚠️ 2026-10-07 扩到四个卷：原先只有 target 一个，而 cargo 的
+  //   registry / git 两个卷同样新建即 root:root —— 漏掉它们会让
+  //   第一条 cargo 命令就 Permission denied (os error 13)，
+  //   报错指向「读源码」，极易误判为文件权限问题（scripts/in-container.sh
+  //   已修同一处bug，两处必须同步，见 image.lock 2026-10-07 更新记录）。
+  "postCreateCommand": "sudo chown 501:20 /work/rgoc/target && sudo chown 501:20 /home/dev/.cargo/registry && sudo chown 501:20 /home/dev/.cargo/git && sudo chown 501:20 /vscode",
 
   "customizations": {
     "vscode": {
@@ -49,6 +64,23 @@
       //    二进制）是第二次下载，会被宿主下发的死代理卡住。若断点不生效，
       //    在容器内执行：bash /work/scripts/install-codelldb.sh
       //    判据：<扩展目录>/platform.ok 是否存在。详见下方 settings 里的注释。
+      //
+      // ⚠️ 2026-10-07 补（实测复发两次，这里把「为什么会再坏」写清楚）：
+      //   **每次容器重建都必须重装平台包** —— 因为 ~/.vscode-server/extensions/
+      //   不在任何卷里，它在容器的可写层；Reopen in Container / Build Container
+      //   都会重建容器，那份 extensions 就没了（server 本身在 /vscode 卷里，会留）。
+      //   症状：按 F5 报「Platform package installation failed:
+      //   Failed to establish a socket connection to proxies: PROXY 127.0.0.1:xxxx」。
+      //
+      //   标准动作（三步，缺一不可）：
+      //     1) bash /work/scripts/install-codelldb.sh   # 幂等，已装则立即返回
+      //     2) 命令面板 → Developer: Reload Window      # 让扩展重新读 platform.ok
+      //     3) 再按 F5                                  # 此时断点应能命中
+      //
+      //   ⚠️ 故意**不**把该脚本挂进上面的 postCreateCommand：它是 set -euo pipefail，
+      //   网络抖一下就非 0 退出，而 postCreateCommand 失败会让**容器创建直接失败**
+      //   （窗口都打不开）。用「报错 + 一条命令可修」换掉「可能锁死入口」不划算。
+      //   判据速查：ls ~/.vscode-server/extensions/vadimcn.vscode-lldb-*/platform.ok
       "extensions": [
         "rust-lang.rust-analyzer",
         "vadimcn.vscode-lldb"

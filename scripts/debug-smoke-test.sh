@@ -206,8 +206,12 @@ check "⑦ 单步后停在 lib\.rs:${STEP_LINE}" \
       "lib\.rs:${STEP_LINE}" "${OUT}"
 check "⑧ 中间值 sum = 3 可读" \
       "sum = 3" "${OUT}"
-check "⑨ 测试跑到结束" \
-      "test result: ok\. 1 passed; 0 failed" "${OUT}"
+#⚠️ 2026-10-07 修正：原先写死 `1 passed`，但 lib.rs 里实际有 17 个测试
+#   （cargo test --lib 会跑整个 crate 的单测），实测输出是 `17 passed`。
+#   分母随lib.rs 的测试数变化，把它写死会让这条断言在【测试数一变】时就误报，
+#   而它本意只是「测试跑完了且没失败」。⇒ 只断言 ok + 0 failed。
+check "⑨ 测试跑到结束（无失败）" \
+      "test result: ok\. [0-9]+ passed; 0 failed" "${OUT}"
 echo "------------------------------------------------------------"
 
 if [ "${FAIL}" -ne 0 ]; then

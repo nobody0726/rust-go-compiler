@@ -3,7 +3,7 @@
 > **本文件的作用**：任何 agent / 协作者在本工作区开始任务前，读这一份即可掌握 —— 工程是什么、文档在哪、各自什么状态、遵守什么纪律、下一步做什么。
 > **遇到细节一律跳转 `docs/`，本文件不复制细节。**
 >
-> **最后同步**：2026-10-02　|　**同步触发条件**：见 §5
+> **最后同步**：2026-10-07　|　**同步触发条件**：见 §5
 
 ---
 
@@ -20,7 +20,7 @@
 | 当前阶段 | **M0 · Phase 0 / 1 / 2 均已完成**（**E1/E2/E3/E4/E5/E10 六条门禁全过**）；**Phase 3 待开工**（T40–T47：三个架构 spike，门禁 E6 + E7），Phase 4 已拆完（T48–T55） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–2 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask（**153 条测试全绿**，自检 **123 条断言**）；**E1/E2/E3/E4/E5/E10 六条门禁已过**；**编译器实现尚未开始**，下一步是 Phase 3 的三个架构 spike。
+**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–2 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask（**153 条测试全绿**，自检 **125 条断言**）；**E1/E2/E3/E4/E5/E10 六条门禁已过**；**编译器实现尚未开始**，下一步是 Phase 3 的三个架构 spike。
 
 ---
 
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（123 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（125 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）

@@ -61,22 +61,37 @@ fi
 #      → 对策：下面这次 chown（只改卷根，cargo 自己在下面建目录）
 #   b) `cargo clean` 会因卷挂载点无法 rmdir 而报 EBUSY(16)、exit 101
 #      → 对策：清空用 `find target -mindepth 1 -delete`
-TARGET_VOLUME="rgoc-target"
-docker volume create "${TARGET_VOLUME}" >/dev/null
-# 只在属主不是 dev 时才 chown，避免每次调用都起一个 root 容器
-# 注意 docker 的参数顺序：所有选项必须在【镜像名之前】，镜像名之后是命令与参数。
-if [ "$(docker run --rm --user root --entrypoint stat \
-            -v "${TARGET_VOLUME}:/mnt" "${IMAGE}" -c %u /mnt 2>/dev/null)" != "501" ]; then
-    docker run --rm --user root --entrypoint chown \
-        -v "${TARGET_VOLUME}:/mnt" "${IMAGE}" 501:20 /mnt
-fi
+#
+# ⚠️ 2026-10-07 修复：原先只 bootstrap 了 TARGET_VOLUME 一个卷，漏了
+#   CARGO_REGISTRY_VOLUME 与 CARGO_GIT_VOLUME —— 症状是第一条 cargo 命令就
+#   `Permission denied (os error 13)`，而报错指向「源码读取」而非「卷属主」，
+#   很容易误判为文件权限问题。三个卷都需要同一处理。
+#
+# ⚠️ 关于「chown 明明 exit 0，下一个容器又变回 0:0」：
+#   实测 Docker Desktop 4.94 / engine 29.8.2 下，**卷根属主不会跨容器保留**
+#   （同一容器内 chown 后 su dev 写入 OK，退出后下一个容器 stat 又是 0:0）。
+#   但这不影响正确性 —— 因为脚本每次调用都会重新 stat 并按需 chown，
+#   而真正使用这些卷的就是紧随其后的第 5 步那个容器。
+#   ⇒ 判据必须落在「实际写入」，不是「stat 保持 501」。
+VOLUMES=("rgoc-target" "rgoc-cargo-registry" "rgoc-cargo-git")
+for VOLUME in "${VOLUMES[@]}"; do
+    docker volume create "${VOLUME}" >/dev/null
+    # 只在属主不是 dev 时才 chown，避免每次调用都起一个 root 容器
+    # 注意 docker 的参数顺序：所有选项必须在【镜像名之前】，镜像名之后是命令与参数。
+    if [ "$(docker run --rm --user root --entrypoint stat \
+                -v "${VOLUME}:/mnt" "${IMAGE}" -c %u /mnt 2>/dev/null)" != "501" ]; then
+        docker run --rm --user root --entrypoint chown \
+            -v "${VOLUME}:/mnt" "${IMAGE}" 501:20 /mnt
+    fi
+done
 
 # ── 5. 执行 ──────────────────────────────────────────────────────────────────
 # $CARGO_HOME/registry 与 /git 也挂命名卷：macOS 上 bind mount 随机写慢。
+# 卷名与上面bootstrap 的列表一致—— 少挂一个就会出现「Permission denied」。
 exec docker run "${DOCKER_FLAGS[@]}" \
     -v "${REPO_ROOT}:/work" \
     -w /work \
     -v rgoc-cargo-registry:/home/dev/.cargo/registry \
     -v rgoc-cargo-git:/home/dev/.cargo/git \
-    -v "${TARGET_VOLUME}:/work/rgoc/target" \
+    -v rgoc-target:/work/rgoc/target \
     "${IMAGE}" "$@"

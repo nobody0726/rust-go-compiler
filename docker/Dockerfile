@@ -28,7 +28,20 @@ RUN set -eux; \
 # clang 是 native spike（P3）的唯一驱动；lldb 是容器内的调试备选。
 # 层 3 的 rustup 需要 curl 与 ca-certificates；
 # perl 提供 shasum —— 语料清单校验（T11）要用。
+#
+#⚠️ apt 的重试配置（2026-10-07 新增，见 image.lock 更新记录）：
+#   本机docker 继承宿主的 http_proxy，代理在【大批量下载中途】会回 502
+#   （实测 llvm-14 依赖树 129 MB / ~50 个包，两次构建各有一个不同的包失败：
+#     第一次 libnspr4、第二次 python3-lldb-14 —— 不是特定包的问题）。
+#   宿主机单独 curl 同一个包重试 3 次全是 200 ⇒ 是长连接上的偶发抖动。
+#   APT 默认**不重试**，于是一个抖动就让整层失败、构建重来（2 min）。
+#   加 Retries=5 + 超时后，同类抖动会被就地吸收。
+#   ⚠️ 这【不改变镜像内容】—— 只是让 apt 对同一 URL 再试几次，
+#      成功拿到的还是同一个 .deb（apt 有校验和验证）。
+#   若在无代理的直连网络下构建，本配置无害（不会触发重试）。
 RUN set -eux; \
+    printf 'Acquire::Retries "5";\nAcquire::http::Timeout "60";\nAcquire::https::Timeout "60";\nAcquire::Retries::Timeout "5";\n' \
+        > /etc/apt/apt.conf.d/99-retries; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
         clang \

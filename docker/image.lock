@@ -22,23 +22,23 @@ base.verified_at        = 2026-10-02T03:06:06Z（docker build 时按 digest 解�
 
 # ── 本地构建产物（每次重建都会变，见文件头的⚠️）──────────────────────────────
 local.image_tag         = rgoc:dev
-local.image_id          = sha256:21f55802b6275509bf3c91d8b8f55fdc890048287d671dc94afd7ce500ba553b
-local.image_size        = 2.92GB
-local.layer_count       = 14（其中容器层 7 个：架构断言 / apt+lldb 包装 / dev 用户+sudoers / rustup 钉版 / profile.d / 断言）
-local.built_at          = 2026-10-02T03:36:28Z
+local.image_id          = sha256:46a572aa44aee8307bc71821a4085b389e3e9656e9d7a71e0f2c77f49be22093
+local.image_size        = 3.0GB
+local.layer_count       = 14（其中容器层 7 个：架构断言 / apt+lldb 包装 / dev 用户+sudoers / rustup钉版 / profile.d / 断言）
+local.built_at          = 2026-10-07T11:41:00Z
 
 # ── 源码侧指纹（建立「镜像 ↔ 源码」关联）────────────────────────────────────
 # 这些才是判断「镜像是否与当前源码一致」的依据。
-src.dockerfile_sha256   = 6e93604a36389f0ea6c457701c3e3903324187572680fa8a7a0a44e453be8ae6
+src.dockerfile_sha256   = 99682d054baf8e840b42fc67d927b5e383ced167c92b6218023b53811e8e86c4
 src.toolchain_sha256    = 87ba8fc2e4228f43fc6fb9ebc5426e4dd2e9c747854434469e1ac1a83f89d272
 src.dockerignore_sha256 = 5ff247a9f882e508c90d3eda5465ab1e8d0f313a86af89e68dee63cb60430c66
-src.devcontainer_sha256 = e1a2621e06b324e3a8a5e854ee353b7835252a429696297966496823abd69587
-src.in_container_sha256 = c9285f41ba6882d45163966250fc98c57efe3be9365f939453ec987c54ef16d5
+src.devcontainer_sha256 = b8636f1f92df48eee3530156381f78a4f699b46da2d68b577150ce06c4091637
+src.in_container_sha256 = 4123c5b752ba7bdc8c5a9f6a90955216e598d8075c53e9a299afed947d9a7248
 
 # ── 运行环境 ────────────────────────────────────────────────────────────────
-docker.version          = 29.6.2
+docker.version          = 29.8.2
 docker.engine_arch      = aarch64
-container.kernel        = 6.12.76-linuxkit
+container.kernel        = 7.0.14-linuxkit
 container.user          = dev (uid=501, gid=20, 复用宿主 gid 20)
 container.sudo          = dev 免密（/etc/sudoers.d/90-dev，用途见下「层 5 说明」）
 
@@ -119,3 +119,41 @@ volumes.target          = rgoc-target         → /work/rgoc/target
 #   devcontainer.json 里那两行【保留】（对别的环境可能有效、无副作用），
 #   但已明确标注「不是修法」。故本次 src.devcontainer_sha256 变更同样是有意义的。
 #   注意：本镜像是运行环境，不含编辑器扩展；**无需**为此重建镜像。
+#
+# 2026-10-07  新机器上重建镜像 + 修in-container.sh 的卷 bootstrap 漏项。
+#
+#   触发：本工作区从 GitHub 重新拉取后，本机没有 Docker，需从零重建环境。
+#   重建过程中发现并修复两处问题，故本次 image_id / src.*_sha256 / 内核全部变化。
+#
+#   1) 【环境】Docker Desktop 4.94.0 / engine 29.6.2 → 29.8.2
+#      容器内核 6.12.76-linuxkit → 7.0.14-linuxkit。
+#      内核由 Docker Desktop 控制、无法单独钉（见文件头与 04 §5），
+#      按该节的处置纪律：**记录变更 + 重跑门禁**，而不是默认接受。
+#      本次已重跑：E1（可从零构建）/ E3（153 条全绿）/ E4（20/20 官方语料）均通过。
+#      引擎架构仍为 aarch64，与首发平台一致，无偏差。
+#
+#   2) 【Dockerfile 层 2】增加 apt 重试配置（Acquire::Retries=5 + 超时）。
+#      实测两次构建各失败一次，报502 Bad Gateway [IP: 198.18.0.34]
+#      （Clash TUN 的假 IP 段），且**失败包每次不同**
+#      （第一次 libnspr4、第二次 python3-lldb-14）—— 即不是特定包的问题，
+#      而是 129 MB 批量下载长连接上的偶发抖动。宿主单独 curl 同一URL
+#      连续 3 次全200，确认非配置错误。
+#      apt 默认【不重试】，一个抖动就让整层失败、构建重来（+2 min）。
+#      ⚠️ 该改动【不改变镜像内容】：重试成功拿到的仍是同一个 .deb
+#      （apt 有校验和验证）。此改动仅在抖动/无代理两种网络下都无害。
+#
+#   3) 【scripts/in-container.sh】修一个真实 bug：卷 bootstrap 只覆盖了
+#      3 个命名卷中的 1 个（rgoc-target），漏了 rgoc-cargo-registry 与
+#      rgoc-cargo-git，于是第一条 cargo 命令就 Permission denied (os error 13)。
+#      症状指向「读源码」，易误判为文件权限问题。
+#      修法：三个卷统一进数组处理，第 5 步挂载引用同一套名字。
+#
+#   ⚠️ 本次也记录一个 Docker Desktop 4.94 的反直觉行为，供后来者省时间：
+#      卷根属主【不跨容器保留】—— 同一容器内 chown 后 su dev 写入 OK，
+#      退出后下一个容器 stat 又变回 0:0（连随机新名的卷也如此，
+#      目录时间戳停在 VM 磁盘的旧日期）。
+#      ⇒ 别把「stat 显示 0:0」当成故障，**判据必须落在「实际写入」**。
+#      in-container.sh 每次调用都重新 stat + 按需 chown，故一切正常。
+#
+#   未变的部分（已复核仍与记录一致）：base.index_digest / arm64_digest、
+#   src.toolchain / dockerignore / devcontainer_sha256、layer_count = 14。
