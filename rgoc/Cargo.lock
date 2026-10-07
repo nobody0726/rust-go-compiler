@@ -45,6 +45,17 @@ name = "rgoc-harness"
 version = "0.0.0"
 
 [[package]]
+name = "rgoc-hir"
+version = "0.0.0"
+
+[[package]]
+name = "rgoc-spikes"
+version = "0.0.0"
+dependencies = [
+ "rgoc-hir",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"

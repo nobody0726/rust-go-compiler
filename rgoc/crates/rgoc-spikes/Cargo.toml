@@ -1,0 +1,13 @@
+[package]
+name = "rgoc-spikes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SPIKE-ONLY：三个架构 spike 的隔离载体。正式实现落地后可整块删除（D-M0-14）。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-hir = { path = "../rgoc-hir" }

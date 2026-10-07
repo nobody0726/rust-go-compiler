@@ -360,11 +360,47 @@ T-C-20 mainsig.go   L9   // ERROR "func main must have no arguments and no retur
 
 | ID | 输入 | 期望 | 说明 |
 |---|---|---|---|
-| **T-S1-01** | 固定 HIR：`println(1 + 2)` | stdout **精确** `3\n`；退出码 `0` | `03` §4 第 4 条 |
+| **T-S1-01** | 固定 HIR：`println(1 + 2)` | **stderr 精确** `3\n`，且 **stdout 精确为空**；退出码 `0` | `03` §4 第 4 条。**⚠️ 2026-10-07 修订，原文写「stdout 精确 `3\n`」，已订正 —— 见下方修订说明** |
 | **T-S1-02** | 同上，重复执行 3 次 | 三次结果**完全一致** | 可复现（E6） |
 | **T-S1-03** | 固定 HIR：常量折叠边界（`1<<62` 等） | 与 `T-C-04` 的 printbig 语义一致 | 值表示一致性 |
 
 **范围限制**：只支持这一个 fixture 所需的 HIR 子集，**不做**真实 Go 源码 parser（`03` §4）。
+
+> #### ⚠️ 修订 R1（2026-10-07，Phase 3 开工时实测发现）—— T-S1-01 的「stdout」是错的
+>
+> **原期望**：`stdout 精确 3\n`。**实测（容器内 go1.27.1，`od -c` 逐字节）**：
+>
+> ```text
+> $ go run p.go >out.txt 2>err.txt   # p.go 的 main 里只有 println(1 + 2)
+> exit=0
+> --- stdout(od) --- 0000000            ← 长度 0，一个字节都没有
+> --- stderr(od) --- 0000000   3  \n    ← "3\n" 在这里
+> ```
+>
+> **根因**：Go 的内建 `println` / `print` 按语言规范写**标准错误**（`spec:Lxx-yy` 的 built-in print 家族），
+> 不是 stdout。这不是 rgoc 的实现选择，是**必须对齐的 oracle 行为**。
+>
+> **为什么不改用 `fmt.Println`**（那条路走 stdout）：`fmt.Println` 是**普通函数调用**，
+> 要正确求值就必须先有 import 解析 + 包符号表 + `io.Writer` 接口动态派发 + `Printlner` 约束检查 ——
+> 把 spike 从「零依赖的内建调用」抬高一整个量级，直接违反本节「范围限制：只支持这个 fixture 所需的
+> HIR 子集」与 `03` §4 第 4 条的最小性要求。**内建 `println` 才是这个 spike 该用的形态。**
+>
+> **因此**：期望改为「**stderr 精确 `3\n` 且 stdout 精确为空**」。两者都要断言 ——
+> 只断言 stderr 会漏掉「实现顺手也往 stdout 写了一份」这种错误。
+> 顺带把「内建 print 家族走 stderr」记为 **T-S1 要记录的「输出流走法」结论**（`M0-plan.md` T42 本就要求记录它）。
+>
+> **同批实测到的 T-S1-03 根因证据**（一并存档，供 S1 的值表示设计用）：
+>
+> ```text
+> ./p.go:7:10: cannot use big (untyped int constant 1267650600228229401496703205376)
+>            as int value in argument to built-in println (overflows)
+> ```
+>
+> 即 **untyped constant 在传入内建时按目标类型（本例 `int`，容器内为 64 位）收敛** ——
+> 这正是 T-S1-03「值表示不能只在 64 位上凑巧成立」的机制来源：
+> 常量在 HIR 里必须保留**任意精度**，直到被赋给一个具体类型时才截断。
+> 对照 T-C-04（`printbig.go`）的期望 `-9223372036854775808\n9223372036854775807\n`，
+> 二者的边界是同一个（`int64` 极值），所以 S1 只需证明「截断点与 Go 一致」。
 
 ### 5.2 S2 —— SSA spike（P2）
 

@@ -2522,14 +2522,23 @@ python3 scripts/debug-smoke-test.sh 2>/dev/null || docker exec <容器名> bash 
 > **硬前置**：T29（冻结 `M0-tests.md`）必须先做 —— `03` §3.3 的门禁纪律要求「白名单**开工前**冻结」，
 > `M0-tests.md` §0 的 F1/F2/F3 三项都指向这一点。
 
-### Phase 3 出口（⏳ 待开工）
+### Phase 3 出口（✅ pass，2026-10-07）
 
 | 门禁 | 判定方式 | 由哪些任务 | 状态 |
 |---|---|---|---|
-| **E6** | 三个 spike 的输入 / 结果 / 环境**全部可复现**（各重复 3 次一致） | T45（`T-S1-02` / `T-S3-05`） | ⏳ 待开工 |
-| **E7** | native `hello` 可运行（`T-S3-03`）**且已登记**进 M1 smoke | T46 | ⏳ 待开工 |
+| **E6** | 三个 spike 的输入 / 结果 / 环境**全部可复现**（各重复 3 次一致） | T45（`T-S1-02` / `T-S3-05`） | ✅ pass（2026-10-07：三 spike 各 3 次，退出码全 0、stderr 去重后 1 行、S3 产物 sha256 `a98b603d…` 三次相同；环境五项指纹逐字节相同。证据见 `M0-benchmarks.md` §12） |
+| **E7** | native `hello` 可运行（`T-S3-03`）**且已登记**进 M1 smoke | T46 | ✅ pass（2026-10-07：`SM-M0-NATIVE-HELLO` 已登记进 `03` §M1 smoke 清单，注明来源 `T-S3-03`） |
 
 > **前置**：Phase 2 的 E3 / E4 必须先过（D-M0-2：harness 门禁未过不得开工内容）。
+> ✅ 已满足（E3 2026-10-04 + E4 2026-10-05）。
+
+> ⚠️ **Phase 3 实测推翻了一处契约**：`M0-tests.md` §5.1 的 `T-S1-01` 原写「stdout 精确 `3\n`」，
+> 但 go1.27.1 实测 Go 内建 `println` 写 **stderr**（`od -c` 逐字节，stdout 长度 0）。
+> 期望已订正为「**stderr 精确 `3\n` 且 stdout 精确为空**」，修订 R1 存档在 `M0-tests.md` §5.1。
+> 配套的设计改动：`rgoc-hir` 的 `Stmt::Print` 增加 `Stream` 字段（S1=`Stderr` / S3=`Stdout`），
+> 使「内建 println 走 stderr」与「真实程序输出 hello 到 stdout」在**类型层面**不可混淆。
+> **没有**改用 `fmt.Println` 走 stdout —— 那需要 import 解析 + 包符号表 + 接口动态派发，
+> 会把 spike 从「零依赖内建调用」抬高一整个量级，违反 `03` §4 第 4 条的最小性要求。
 
 ### Phase 4 出口（⏳ 待开工）
 
@@ -2537,7 +2546,7 @@ python3 scripts/debug-smoke-test.sh 2>/dev/null || docker exec <容器名> bash 
 |---|---|---|---|
 | **E8** | `docs/contracts/` 下 **5 份**契约初稿（C1 留位 / C2 完整 / C3–C5 spike 级） | T48–T52 | ⏳ 待开工 |
 | **E9** | `03` §6.3 的**六条**统一退出检查 | T55 | ⏳ 待开工 |
-| **E10** | 基准数据（含 Phase 3 的可复现性）进 manifest | T45 / T54 | ⏳ 待开工 |
+| **E10** | 基准数据（含 Phase 3 的可复现性）进 manifest | T45 / T54 | ⏳ 待人工（T45 那半已完成 2026-10-07：`M0-benchmarks.md` §12 + manifest `gate.E6`；待 T54 补 Phase 4 的交付报告数据） |
 
 > C1 **必须显式标注「留位」** —— 不得因为文件存在就被误读为「M0 已完成源码位置跟踪」。
 

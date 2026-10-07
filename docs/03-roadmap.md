@@ -256,7 +256,19 @@ UTF-8/Unicode、注释、token 最长匹配、分号、数字/rune/string、错�
 
 **门禁**：LEX 各项直接测试、词法 golden、非法 UTF-8/超长输入等负例全绿；token 与位置差异可定位。不需要整个程序通过类型检查。
 
-M0 的 native `hello` fixture 必须继续通过 smoke；该固定 HIR/SSA 验证不代表 M1 已能从 Go 源码生成机器码。
+#### M1 smoke 清单（含 M0 带入的 native fixture）
+
+| smoke ID | 内容 | 来源 | M1 的判定 |
+|---|---|---|---|
+| `SM-M0-NATIVE-HELLO` | 固定 HIR/SSA → arm64 汇编 → `clang -nostartfiles -Wl,-s` → ELF；运行 stdout 精确 `hello\n`、退出码 `0` | **M0 的 `T-S3-03`**（T44，2026-10-07） | **回归**：必须继续通过。**不得**因为 M1 引入真实 lexer 就跳过或改写它 |
+| `SM-M1-LEX-GOLDEN` | 词法 golden（token 序列 + 位置） | M1 新增 | 本阶段门禁 |
+
+> **这条 smoke 的边界（不要误读）**：M0 的 `hello` 是**固定 HIR/SSA** 验证 ——
+> 它证明「后端路线可行」，**不代表 M1 已能从 Go 源码生成机器码**。
+> M1 引入 lexer 后，`SM-M0-NATIVE-HELLO` 仍是**同一个固定 fixture**（`rgoc-spikes` 的
+> `fixtures::s3_hello()`），它的输入**不经过 lexer**。等 M2 有了 parser，
+> 才谈得上「源码 → 机器码」。把它提前当成端到端通过，是 M0 就前移后端验证（`03` §4 第 6 条）
+> 最容易被误用的地方。
 
 ### M2：AST、parser 与版本/指令前置（AST、PIPE-03/04/05/25）
 

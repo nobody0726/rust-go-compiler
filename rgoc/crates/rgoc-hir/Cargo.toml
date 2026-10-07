@@ -1,0 +1,12 @@
+[package]
+name = "rgoc-hir"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SPIKE-ONLY：三个架构 spike 共享的最小 HIR。M5 由正式 HIR 替换。"
+
+[lints]
+workspace = true
+
+[dependencies]

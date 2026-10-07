@@ -240,15 +240,28 @@ def main() -> int:
         # 四条门禁全部通过（E5 于 2026-10-02 由用户在 VSCode 中按 F5 实测确认）。
         # 注意 E5 是**人工**门禁：这里只校验 manifest 的登记状态，不校验实测本身
         # —— 实测证据在 gate.E5.evidence 里（含确认人与确认时间）。
-        gate = {k: manifest["gate"][k]["status"] for k in ("E1", "E2", "E10", "E5")}
-        check("gate: E1/E2/E10/E5 全部 pass",
-              [gate[k] for k in ("E1", "E2", "E10", "E5")] == ["pass"] * 4,
-              str(gate))
+        # ⚠️⚠️ **门禁键必须从 manifest 动态取，不得写死**（T47 修，第三次同形事故）。
+        #
+        # 事故史（同一个坑踩了三次）：
+        #   ① T38：写死 ("E1","E2","E10","E5") → 新加的 E3/E4 **从未被校验过**
+        #   ② T39：同上
+        #   ③ T47：E6/E7 加入时，若仍沿用写死列表，则它们同样不会被校验
+        #
+        # 共同形状：**「漏了」不会报错，只会让断言恒真** —— 断言仍然「通过」，
+        # 但它检查的东西比看起来少。所以这里从 manifest 的 gate 节**枚举全部键**：
+        # 任何新门禁只要登记进 manifest，就自动被这条断言覆盖；要漏掉它，
+        # 只能通过「不登记进 manifest」，而那会被下一条断言抓住。
+        all_gates = {k: v.get("status") for k, v in manifest["gate"].items()}
+        check("gate: 全部已登记门禁都是 pass",
+              bool(all_gates) and set(all_gates.values()) == {"pass"},
+              str(all_gates))
+        # 反向：manifest 里必须至少有这些门禁（防止「全删了也算通过」）
+        required_gates = {"E1", "E2", "E3", "E4", "E5", "E6", "E7", "E10"}
+        check("gate: 八条门禁齐备（E1-E7 + E10）",
+              required_gates.issubset(set(all_gates)),
+              f"缺 {sorted(required_gates - set(all_gates))}")
         # E3 / E4 是 Phase 2 的两条门禁（T36 / T38）。它们也必须 pass ——
         # 「环境门禁过了就算 Phase 2 过了」是错的，D-M0-2 要求的是**全部门禁**。
-        # ⚠️ 上面的 gate 字典**只列了 E1/E2/E10/E5 四个**（Phase 0/1 的），
-        # 所以下面这四条断言此前**从未真正校验过 E3/E4** —— 加门禁时忘了同步这里。
-        # 教训与 T37 的六连坑同形：**「漏了」不会报错，只会让断言恒真**。
         phase2 = {k: manifest["gate"].get(k, {}).get("status") for k in ("E3", "E4")}
         check("gate: E3/E4 全部 pass（Phase 2 出口）",
               list(phase2.values()) == ["pass", "pass"], str(phase2))
@@ -281,7 +294,7 @@ def main() -> int:
         # 文档是人读的入口 —— 两者不一致时，人会以文档为准，判定就是错的。
         plan_text = (REPO_ROOT / "docs/milestones/M0-plan.md").read_text(encoding="utf-8")
         drift = []
-        for gid, status in gate.items():
+        for gid, status in all_gates.items():
             rows = [ln for ln in plan_text.splitlines() if ln.startswith(f"| **{gid}** |")]
             if not rows:
                 drift.append(f"{gid}=缺行")
@@ -292,13 +305,14 @@ def main() -> int:
             elif status != "pass" and "待人工" not in row:
                 drift.append(f"{gid}=manifest.{status} 但文档行没有「待人工」")
         check("M0-plan 门禁汇总表的状态 == manifest 的 gate（双向）",
-              not drift, "；".join(drift) if drift else f"{len(gate)} 条一致")
+              not drift, "；".join(drift) if drift else f"{len(all_gates)} 条一致")
 
         # T28 是 E5 的载体任务；它的状态列同样不能与 gate.E5 脱节
         t28 = [ln for ln in plan_text.splitlines() if ln.startswith("| T28 |")]
+        e5 = all_gates.get("E5")
         t28_ok = bool(t28) and (
-            (gate["E5"] == "pass" and "✅" in t28[0])
-            or (gate["E5"] != "pass" and "✅" not in t28[0])
+            (e5 == "pass" and "✅" in t28[0])
+            or (e5 != "pass" and "✅" not in t28[0])
         )
         check("M0-plan 任务总表里 T28 的状态 == gate.E5",
               t28_ok, t28[0][:60] if t28 else "缺 T28 行")
@@ -777,10 +791,104 @@ def main() -> int:
     check("E4 单项最慢在 60 s 预算内（M0-tests §7.5）",
           0 < manifest["gate"]["E4"].get("slowest_case_s", 1e9) <= 60,
           f"{manifest['gate']['E4'].get('slowest_case_s')} s")
-    # Phase 3 的阻塞条件必须已解除（D-M0-2）
-    check("phase_plan.phase3 的前置阻塞已标记解除",
-          "已全部通过" in manifest["phase_plan"]["phase3"].get("blocked_by", ""),
-          manifest["phase_plan"]["phase3"].get("blocked_by", "(缺失)")[:40])
+    # Phase 3 的阻塞条件必须已解除（D-M0-2）。
+    # ⚠️ 2026-10-07（T47）：Phase 3 **已完成**，phase3 从「带 blocked_by 的待开工」
+    # 变成「done」。原断言查 blocked_by 含「已全部通过」—— 那是对**开工前**状态的断言，
+    # 现在恒红。这正是「断言锚定了会过期的状态」的典型：断言本身没错，
+    # 但它描述的是**上一阶段**的事实，阶段完成后就该改查「完成态」。
+    # 修法不是删掉它，而是**按当前阶段改写判据**，并把「阻塞曾被解除」这一历史事实
+    # 单独留在 blocked_by_resolved 里（Phase 4 要用同样的判据）。
+    p3 = manifest["phase_plan"]["phase3"]
+    check("phase_plan.phase3 状态 == done（E6/E7 已全过）",
+          p3.get("status") == "done", f"status={p3.get('status')}")
+    check("Phase 3 的前置阻塞曾被解除（D-M0-2 的历史事实）",
+          "已全部通过" in p3.get("blocked_by_resolved", ""),
+          p3.get("blocked_by_resolved", "(缺失)")[:40])
+    check("phase_plan.phase3.done 含 T40–T47 全部任务",
+          all(f"T{n}" in " ".join(p3.get("done", [])) for n in range(40, 48)),
+          f"done 列了 {len(p3.get('done', []))} 条")
+
+    # ── 5f. E6 / E7 的登记必须与实测证据对撞（T47）────────────────────────
+    # 动机：E6 是「三个 spike 的输入/结果/环境全部可复现」，E7 是「可运行 + 已登记」
+    # 两件事。**两者都极易退化成「manifest 里写 pass 就完事」**——
+    # 下面每条断言都要求登记里带着**可核对的实物**（sha256 / 文件 / 文档行）。
+    print("[5f] T47 E6/E7 登记与实测证据对撞")
+    e6 = manifest["gate"]["E6"]
+    e7 = manifest["gate"]["E7"]
+    # E6：三个 spike 都在、每个都重复 3 次、退出码全 0
+    check("E6 登记了三个 spike 且各重复 3 次",
+          e6.get("repeats") == 3 and set(e6.get("spikes", {})) == {"s1_interp", "s2_ssa", "s3_native"},
+          f"repeats={e6.get('repeats')} spikes={sorted(e6.get('spikes', {}))}")
+    for name, sp in e6.get("spikes", {}).items():
+        codes = sp.get("exit_codes", [])
+        check(f"E6 的 {name} 三次退出码全为 0",
+              len(codes) == 3 and set(codes) == {0}, f"{codes}")
+    # E6：S1/S2 的 stdout 必须登记为「空」——这是 T-S1-01 修订 R1 的核心
+    for name in ("s1_interp", "s2_ssa"):
+        check(f"E6 的 {name} 登记了 stdout 为空（T-S1-01 修订 R1）",
+              "空" in e6["spikes"][name].get("stdout", ""),
+              e6["spikes"][name].get("stdout", "(缺失)"))
+    # E6：S1 与 S2 的 stderr 必须登记为逐字节相同（交叉验证的登记）
+    check("E6 登记了 S2 与 S1 逐字节相同（T-S2-01 交叉验证）",
+          "S1" in e6["spikes"]["s2_ssa"].get("cross_check", ""),
+          e6["spikes"]["s2_ssa"].get("cross_check", "(缺失)"))
+    # E6：S3 产物必须有 sha256 且指向 benchmarks §12
+    s3 = e6["spikes"]["s3_native"]
+    check("E6 登记了 S3 产物的 sha256 与大小",
+          len(s3.get("elf_sha256", "")) == 32 and s3.get("elf_size", 0) > 0,
+          f"sha256={s3.get('elf_sha256')} size={s3.get('elf_size')}")
+    check("E6 登记了 S3 的 file 判定（含 ELF 64 位 LSB 与 ARM aarch64）",
+          "ELF 64-bit LSB" in s3.get("file_verdict", "")
+          and "ARM aarch64" in s3.get("file_verdict", ""),
+          s3.get("file_verdict", "(缺失)"))
+    check("E6 登记了两个必需链接开关（-nostartfiles 与 -Wl,-s）",
+          set(e6.get("link_flags_required", {})) == {"-nostartfiles", "-Wl,-s"},
+          f"{sorted(e6.get('link_flags_required', {}))}")
+    # E6：环境指纹必须含五个维度（少一个就不足以证明「环境」可复现）
+    envfp = e6.get("environment_fingerprint", {})
+    need_env = {"go", "rustc", "clang", "glibc", "kernel"}
+    check("E6 登记了环境指纹的五个维度（go/rustc/clang/glibc/kernel）",
+          need_env.issubset(set(envfp)),
+          f"缺 {sorted(need_env - set(envfp))}")
+    # E6：benchmarks §12 必须真的存在（登记指向的证据文件）
+    check("E6 指向的证据文档 §12 存在",
+          "## 12." in (REPO_ROOT / "docs/milestones/M0-benchmarks.md").read_text(encoding="utf-8"),
+          "M0-benchmarks.md §12")
+
+    # E7：「可运行」+「已登记」两件事，缺一不可
+    check("E7 登记了来源测试 ID 与 smoke ID",
+          e7.get("source_test_id") == "T-S3-03" and bool(e7.get("smoke_id")),
+          f"{e7.get('source_test_id')} / {e7.get('smoke_id')}")
+    roadmap = (REPO_ROOT / "docs/03-roadmap.md").read_text(encoding="utf-8")
+    check("E7 的 smoke 项真的登记在 03-roadmap.md 且注明来源 T-S3-03",
+          e7.get("smoke_id", "?") in roadmap and "T-S3-03" in roadmap,
+          f"{e7.get('smoke_id')} 在 roadmap 中"
+          f"{'找到' if e7.get('smoke_id') in roadmap else '缺失'}")
+    check("E7 登记了两半（可运行 + 已登记）都非空",
+          len(e7.get("two_halves", {})) == 2
+          and all(v.strip() for v in e7.get("two_halves", {}).values()),
+          f"{list(e7.get('two_halves', {}))}")
+    # E7：必须写明边界（固定 HIR/SSA ≠ 源码到机器码），否则 M1 容易误读
+    check("E7 写明了「固定 HIR/SSA 不等于源码到机器码」的边界",
+          "固定 HIR/SSA" in e7.get("boundary", "")
+          and "不经过 lexer" in e7.get("boundary", ""),
+          e7.get("boundary", "(缺失)")[:50])
+
+    # Phase 3 的两个 crate 必须在磁盘上（登记与产物脱节也要抓）
+    check("phase_plan.phase3 的两个 crate 都在磁盘上",
+          (REPO_ROOT / "rgoc/crates/rgoc-hir").is_dir()
+          and (REPO_ROOT / "rgoc/crates/rgoc-spikes").is_dir(),
+          "rgoc-hir / rgoc-spikes")
+    # SPIKE-ONLY 标注必须在 crate 里（D-M0-11 / D-M0-14：M5 替换时可整块删）
+    hir_src = (REPO_ROOT / "rgoc/crates/rgoc-hir/src/lib.rs").read_text(encoding="utf-8")
+    check("rgoc-hir 标注了 SPIKE-ONLY（D-M0-11）",
+          "SPIKE-ONLY" in hir_src,
+          "rgoc/crates/rgoc-hir/src/lib.rs")
+    # T-S1-01 修订 R1 必须落在 M0-tests.md 里（否则代码与契约脱节）
+    mtests = (REPO_ROOT / "docs/milestones/M0-tests.md").read_text(encoding="utf-8")
+    check("M0-tests.md 含 T-S1-01 的修订 R1（println 走 stderr）",
+          "修订 R1" in mtests and "stderr 精确" in mtests,
+          "M0-tests.md §5.1")
 
     # ── 6. 文档记录的规模与实际一致 ────────────────────────────────────────
     # 动机：本轮把断言从 45 一路加到 60+，`AGENTS.md` 里的数字靠手工同步

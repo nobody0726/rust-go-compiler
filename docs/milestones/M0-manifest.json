@@ -223,6 +223,93 @@
           "t38_反例_把_n_当字面量_的实现会失败（变异测试）"
         ]
       }
+    },
+    "E6": {
+      "name": "三个 spike 的输入/结果/环境全部可复现",
+      "status": "pass",
+      "confirmed_at": "2026-10-07",
+      "confirmed_by": "T45：三个 spike 各重复 3 次（M0-benchmarks.md 12）",
+      "repeats": 3,
+      "evidence_doc": "docs/milestones/M0-benchmarks.md#12",
+      "spikes": {
+        "s1_interp": {
+          "test_ids": [
+            "T-S1-01",
+            "T-S1-02",
+            "T-S1-03"
+          ],
+          "exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "stdout": "空（od 长度 0）",
+          "stderr": "3\\n（三次去重后 1 行）",
+          "record_sha256": "dbbcc20ab0c34861792d6d9a68c87e64"
+        },
+        "s2_ssa": {
+          "test_ids": [
+            "T-S2-01",
+            "T-S2-02",
+            "T-S2-03"
+          ],
+          "exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "stdout": "空",
+          "stderr": "3\\n（与 S1 逐字节相同）",
+          "cross_check": "S2 stderr == S1 stderr（T-S2-01 的交叉验证）"
+        },
+        "s3_native": {
+          "test_ids": [
+            "T-S3-01",
+            "T-S3-02",
+            "T-S3-03",
+            "T-S3-04",
+            "T-S3-05"
+          ],
+          "exit_codes": [
+            0,
+            0,
+            0
+          ],
+          "asm_sha256": "098cac690fbbe662f3c839745aab4507",
+          "elf_sha256": "a98b603df9c7370395903644ec4f37e4",
+          "elf_size": 66480,
+          "file_verdict": "ELF 64-bit LSB pie executable, ARM aarch64"
+        }
+      },
+      "environment_fingerprint": {
+        "go": "go version go1.27.1 linux/arm64",
+        "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+        "clang": "Debian clang version 14.0.6",
+        "glibc": "2.36",
+        "kernel": "7.0.14-linuxkit",
+        "arch": "aarch64",
+        "note": "三次运行逐字节相同（15 行去重得 5 行）"
+      },
+      "link_flags_required": {
+        "-nostartfiles": "不加则链接失败：Scrt1.o 已定义 _start（multiple definition）",
+        "-Wl,-s": "不加则产物不可复现：.strtab 残留 clang 随机中间名 hello-d9450b.o（差在第 66200 字节）"
+      },
+      "discipline": "输入写死且有可执行守卫（rgoc-spikes/tests/no_cli_input.rs）：语义路径禁 env::args，bin 只许 args().len() 拒绝式读取"
+    },
+    "E7": {
+      "name": "native hello 可运行且已登记为 M1 smoke 回归项",
+      "status": "pass",
+      "confirmed_at": "2026-10-07",
+      "confirmed_by": "T44 + T46：T-S3-03 运行通过 + SM-M0-NATIVE-HELLO 已登记",
+      "source_test_id": "T-S3-03",
+      "smoke_id": "SM-M0-NATIVE-HELLO",
+      "registered_in": "docs/03-roadmap.md#m1词法与位置",
+      "two_halves": {
+        "runnable": "T-S3-03：stdout 精确 hello\\n、stderr 空、退出码 0",
+        "registered": "M1 smoke 清单列出 SM-M0-NATIVE-HELLO 并注明来源 T-S3-03"
+      },
+      "boundary": "M0 的 hello 是固定 HIR/SSA 验证，输入不经过 lexer；不代表 M1 已能从 Go 源码生成机器码（03 §4 第 6 条）"
     }
   },
   "test_ids": [],
@@ -329,22 +416,40 @@
     },
     "phase3": {
       "tasks": "T40-T47",
-      "status": "pending",
+      "status": "done",
+      "blocked_by_resolved": "E3（2026-10-04）+ E4（2026-10-05，20/20）已全部通过 —— D-M0-2 的阻塞于 T39 复核时解除（2026-10-07）",
       "gates": [
         "E6",
         "E7"
       ],
-      "scope": "rgoc-hir(SPIKE-ONLY) + rgoc-spikes 三个 spike",
-      "blocked_by": "D-M0-2：Phase 2 的 E3/E4 已全部通过（2026-10-05），环境门禁未过的阻塞解除"
+      "scope": "rgoc-hir（SPIKE-ONLY 最小 HIR）+ rgoc-spikes（三个 bin + 共享 fixture）",
+      "done": [
+        "T40（建 rgoc-hir，标 SPIKE-ONLY，2026-10-07）",
+        "T41（建 rgoc-spikes 骨架 + RED 占位，2026-10-07）",
+        "T42（S1 解释 spike：T-S1-01/02/03，2026-10-07）",
+        "T43（S2 SSA spike：T-S2-01/02/03，2026-10-07）",
+        "T44（S3 native spike：T-S3-01…04，2026-10-07）",
+        "T45（E6 可复现性三次比对，2026-10-07）",
+        "T46（E7 登记 M1 smoke，2026-10-07）",
+        "T47（Phase 3 门禁复核与登记，2026-10-07）"
+      ],
+      "tests_added": 107,
+      "test_breakdown": {
+        "rgoc-hir": 24,
+        "rgoc-spikes": 83
+      },
+      "test_contract_revision": "M0-tests.md 5.1 修订 R1：T-S1-01 的「stdout 精确 3\\n」订正为「stderr 精确 3\\n 且 stdout 精确为空」（go1.27.1 实测 println 走 stderr）",
+      "design_change": "rgoc-hir 的 Stmt::Print 增加 Stream 字段（S1=Stderr / S3=Stdout），使 S1 与 S3 不可被混淆"
     },
     "phase4": {
       "tasks": "T48-T55",
       "status": "pending",
       "gates": [
         "E8",
-        "E9"
+        "E9",
+        "E10"
       ],
-      "scope": "C1-C5 五份契约初稿 + M0-report + manifest 完整化 + 六条统一退出"
+      "note": "契约初稿 + M0-report + 六条统一退出检查"
     },
     "split_at": "2026-10-02",
     "note": "E5 通过后拆解；前置条件『Phase 1 门禁通过』已满足"

@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 / 1 / 2 均已完成**（**E1/E2/E3/E4/E5/E10 六条门禁全过**）；**Phase 3 待开工**（T40–T47：三个架构 spike，门禁 E6 + E7），Phase 4 已拆完（T48–T55） |
+| 当前阶段 | **M0 · Phase 0 / 1 / 2 / 3 均已完成**（**E1/E2/E3/E4/E5/E6/E7/E10 八条门禁全过**）；**Phase 4 待开工**（T48–T55：五份契约初稿 + 交付报告，门禁 E8 + E9） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–2 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask（**153 条测试全绿**，自检 **125 条断言**）；**E1/E2/E3/E4/E5/E10 六条门禁已过**；**编译器实现尚未开始**，下一步是 Phase 3 的三个架构 spike。
+**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–3 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask + **两个 SPIKE-ONLY crate**（`rgoc-hir` / `rgoc-spikes`，共 **260 条测试全绿**，自检 **147 条断言**）；**E1/E2/E3/E4/E5/E6/E7/E10 八条门禁已过**；**编译器实现尚未开始**（三个架构 spike 已证明解释 / SSA / native 三条路线可行），下一步是 Phase 4 的五份契约初稿。
 
 ---
 
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（125 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（147 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -85,6 +85,20 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │           ├── src/samples.rs       ←       20 样本冻结表（与 M0-tests §4 逐条对账）
 │           ├── src/report.rs        ←       分子/分母/八类分布 + JSON（分母不过滤变小）
 │           └── tests/test_driver.rs ←       23 条（含「子命令必须报错」「分母纪律」「峰值 RSS」）
+│       ├── rgoc-hir/                ←     **SPIKE-ONLY** 最小 HIR（T40，**M5 整体替换**）
+│       │   ├── src/lib.rs           ←       crate 级 `SPIKE-ONLY` 标注（D-M0-11）+ C1 留位说明
+│       │   ├── src/hir.rs           ←       `Const`（Big/Bool/Str）+ `Stmt::Print{newline,stream,args}` + `Stream`
+│       │   ├── src/value.rs         ←       `BigInt`（base 2^32 任意精度）+ `Val`；**收敛到 i64 溢出即报错**
+│       │   └── src/diag.rs          ←       `Pos` / `Diag` / `DiagBag`（C1 只留位，**无源码位置跟踪**）
+│       └── rgoc-spikes/             ←     **SPIKE-ONLY** 三个 spike 的隔离载体（T41，可整块删）
+│           ├── src/fixtures/mod.rs   ←       共享固定 HIR（S1/S2 **必须共用** `sum_expr()` 才能交叉验证）
+│           ├── src/interp.rs         ←       S1 求值器（**判定逻辑在 lib，bin 只做 I/O**）
+│           ├── src/ssa.rs            ←       S2 Block/Value 图（后序遍历 ⇒ 使用先于定义）
+│           ├── src/ssa_needs.rs      ←       T-S2-02 需求清单（memory/tuple/调用边界/phi/verifier）
+│           ├── src/native.rs         ←       S3 codegen + `clang -nostartfiles -Wl,-s` 链接
+│           ├── src/native_records.rs ←       T-S3-04 六项记录（每项含「**没记录什么**」栏）
+│           ├── src/bin/{s1_interp,s2_ssa,s3_native}.rs ← 三个进程边界（**均拒绝任何参数**）
+│           └── tests/               ←       26+18+16+3 条（库验收 / 进程边界 / e2e / E6 输入守卫）
 ├── tests/corpus/                  ←     T38 的 E4 基线报告（可重放）
 │   ├── T-C-report.md              ←       人读版 + 全量 279 分母一节
 │   ├── T-C-report.json            ←       机器读（分母/分子/八类/逐例 RSS）
@@ -99,7 +113,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚不存在**（由 M0 后续阶段创建，结构见 `03` §2）：`rgoc/tests/corpus/`，以及 `rgoc/crates/` 下的编译器 crate（lexer / parser / sema / hir / mir / ssa / codegen …）与 Phase 3 的 `rgoc-spikes`。
+**尚不存在**（由 M0 后续阶段创建，结构见 `03` §2）：`rgoc/crates/` 下的编译器正式 crate（lexer / parser / sema / mir / codegen …）—— `rgoc-hir` 虽已存在但**是 SPIKE-ONLY**，M5 会被正式 HIR 整体替换。
 **已创建但为空/待填充**：`docs/contracts/`（空，M0 Phase 4 产出 5 份初稿）。
 
 ---
@@ -341,10 +355,29 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T38 —— **E4 门禁通过：20/20**，5.8 s / 峰值 15 MiB；修了跨行正则的 `\n` 转义（`compare.rs`）
    ✅ T39 —— Phase 2 门禁复核与登记（`phase_plan.phase2` 标 done；新增 5d/5e 两节共 19 条断言，
    把「登记的证据」与**可重放产物**（E4 报告）对撞；7 次变异测试确认断言真能失败）
-   👉 **下一个**：**Phase 3** —— T40 建 `rgoc-hir`（最小、标 `SPIKE-ONLY`）→ T41 建 `rgoc-spikes`
-   → T42/T43/T44 三个 spike（S1 解释 / S2 SSA / S3 native）→ T45 可复现性（E6）→ T46/T47（E7）
+   ✅ T40 —— `rgoc-hir`（**SPIKE-ONLY**，M5 替换）：`BigInt` 任意精度 + `Stream` 输出流 + C1 留位
+   ✅ T41 —— `rgoc-spikes` 骨架（三个 bin 各留 RED 占位，退出码 70）+ **E6「输入写死」的可执行守卫**
+   ✅ T42 —— **S1 解释 spike**（`T-S1-01/02/03`）：stderr 精确 `3\n`、stdout 精确空、`1<<100` 拒绝收敛
+   ✅ T43 —— **S2 SSA spike**（`T-S2-01/02/03`）：图里真有 `bin` 指令，结果与 S1 **逐字节相同**
+   ✅ T44 —— **S3 native spike**（`T-S3-01…04`）：HIR → arm64 汇编 → ELF → 运行输出 `hello`
+   ✅ T45 —— **E6 门禁通过**：三 spike 各 3 次，输入/结果/环境全部一致（`M0-benchmarks.md` §12）
+   ✅ T46 —— **E7 门禁通过**：`SM-M0-NATIVE-HELLO` 登记进 `03` §M1 smoke 清单
+   ✅ T47 —— Phase 3 门禁复核与登记（新增 §5f 共 22 条断言；**门禁键改为从 manifest 动态枚举**）
+   👉 **下一个**：**Phase 4** —— T48–T52 五份契约初稿（C1 留位 / C2 完整 / C3–C5 spike 级）
+   → T53 `M0-report.md` → T54 manifest 完整化 → T55 **E9** 六条统一退出检查
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
+
+> ⚠️ **Phase 3 的两处「实测推翻文档/直觉」（别再踩回去）**：
+>
+> 1. **Go 内建 `println` 写 stderr，不是 stdout**（go1.27.1 实测，`od -c` 逐字节）。
+>    `M0-tests.md` §5.1 的 `T-S1-01` 原写「stdout 精确 `3\n`」是**错的**，已订正
+>    （修订 R1 存档在该节）。配套：`rgoc-hir` 的 `Stmt::Print` 增加 `Stream` 字段，
+>    S1=`Stderr` / S3=`Stdout`，**类型层面**禁止混淆两个 fixture。
+> 2. **`print` 不加分隔符，只有 `println` 加**（实测 `print("a","b",1,2)` → `ab12`）。
+>    Go 规范只把两者列为内建名、**没规定分隔符**，这类行为只能问 oracle。
+> 3. **链接裸汇编必须两个开关**：`-nostartfiles`（否则 `Scrt1.o` 已定义 `_start`，链接失败）
+>    + `-Wl,-s`（否则 `.strtab` 残留 clang 随机中间名 `hello-d9450b.o`，**产物不可复现**）。
 
 **E5 已完成的记录（2026-10-02）**：由用户在 VSCode dev container 中按 F5 实测确认，
 T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。

@@ -9,10 +9,20 @@
 # T37 起新增两个「工具型」crate（它们不含编译器逻辑，别当成编译器模块）：
 #   rgoc-driver —— 统一 CLI 入口（`harness list/run/report`）
 #   xtask       —— 构建期工具（语料枚举 / 报告生成 / manifest 生成）
+#
+# T40/41 起新增（Phase 3 · 三个架构 spike，决策 D-M0-13 / D-M0-14）：
+#   rgoc-hir   —— **SPIKE-ONLY**，三个 spike 共享的最小 HIR，M5 整体替换
+#   rgoc-spikes—— spike 的隔离载体（三个 bin + 共享 fixture），可整块删除
 
 [workspace]
 resolver = "3"
-members = ["crates/rgoc-driver", "crates/rgoc-harness", "xtask"]
+members = [
+    "crates/rgoc-driver",
+    "crates/rgoc-harness",
+    "crates/rgoc-hir",
+    "crates/rgoc-spikes",
+    "xtask",
+]
 
 [workspace.package]
 version = "0.0.0"
