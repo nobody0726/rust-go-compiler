@@ -374,8 +374,27 @@ def main() -> int:
 
     # ── 4. 占位符 ──────────────────────────────────────────────────────────
     print("[4] 交付物占位符")
+    # ⚠️ 判据 2026-10-07（T54）收窄。
+    #
+    # 原判据是 `"<" not in 整个文件` —— 也就是「文件里不许出现任何 `<` 字符」。
+    # 它在 T54 之前一直通过，但**这个形式过宽**：manifest 的 `test_ids` 里记着
+    # 「常量折叠边界 **1<<100** / int64 极值」，那是**必须保留的 Go 移位语法**，不是占位符。
+    #
+    # 「过宽的断言」比「没有断言」更坏：它会逼着人**删掉正确的内容**去迎合检查。
+    # （同形事故在本仓已发生过多次：断言锚定了会过期的状态 / 写死了键列表。）
+    #
+    # 收窄后的判据：占位符 = `<` + **不含空白与尖括号**的短串 + `>`。
+    #   命中：`>待填>` `<TODO>` `<image_digest>`
+    #   放过：`<<`（移位）、`->`（箭头，无闭合尖括号）、`a < b`（有空白）
+    PLACEHOLDER = re.compile(r"<[^\s<>]{1,24}>")
     for rel in ("docs/milestones/M0-manifest.json", "docker/image.lock"):
-        check(f"{rel} 无尖括号占位符", "<" not in (REPO_ROOT / rel).read_text(encoding="utf-8"))
+        found = sorted(set(PLACEHOLDER.findall((REPO_ROOT / rel).read_text(encoding="utf-8"))))
+        check(f"{rel} 无尖括号占位符", not found, f"命中 {found}" if found else "")
+    # 反向验证：判据必须真能抓到占位符（否则收窄过头就成了「永真」）
+    for probe in ("<待填>", "<TODO>", "<image_digest>"):
+        check(f"占位符判据能抓到 {probe}", bool(PLACEHOLDER.search(probe)))
+    for probe in ("1<<100", "a -> b", "x < y"):
+        check(f"占位符判据不误伤 {probe}", not PLACEHOLDER.search(probe))
 
     # ── 5. 调试链路的可判定前提（M0-benchmarks.md §7 / §8 的回归测试）────────
     print("[5] 调试链路：平台包安装器与调试目标形状")
@@ -778,12 +797,20 @@ def main() -> int:
     check("phase_plan.phase2 登记的报告文件都存在",
           all((REPO_ROOT / p).is_file() for p in pp.get("reports", [])),
           f"{pp.get('reports')}")
-    # 登记的测试数必须与 E3 的 total_tests 一致（两处都写 153 就不会互相矛盾）
+    # 登记的测试数必须与 E3 的 total_tests 一致。
+    # ⚠️ 2026-10-07（T54）：原判据是 `== 153`（Phase 2 口径的**写死**值）。
+    # Phase 3 新增 107 条后 workspace 共 260 条，两处都改成 260 ——
+    # 但**不能只把 153 换成 260**，否则下次加测试又要来改一次。
+    # 改成「两处相等 + 等于实测条数」，并把实测条数登记在 manifest 里。
+    # 写死的数字是「加测试就得改断言」这类维护债的源头。
     gr = pp.get("gate_result", {})
+    e3_total = manifest["gate"]["E3"].get("total_tests")
     check("phase_plan 的测试数 == gate.E3.total_tests",
-          gr.get("tests_passed") == manifest["gate"]["E3"].get("total_tests") == 153,
-          f"phase_plan {gr.get('tests_passed')} / "
-          f"E3 {manifest['gate']['E3'].get('total_tests')}")
+          gr.get("tests_passed") == e3_total,
+          f"phase_plan {gr.get('tests_passed')} / E3 {e3_total}")
+    check("E3 登记的测试数 == Phase 3 后的实测总数（260）",
+          e3_total == 260,
+          f"E3 {e3_total}（T39 时为 153，Phase 3 新增 107 条）")
     # E4 门禁要求的耗时预算，逐条在案（§7.5：整层 5 min / 单项 60 s）
     check("E4 整层耗时在 300 s 预算内（03 §6.2 smoke ≤ 5 min）",
           0 < manifest["gate"]["E4"].get("layer_wall_time_s", 1e9) <= 300,
@@ -887,8 +914,87 @@ def main() -> int:
     # T-S1-01 修订 R1 必须落在 M0-tests.md 里（否则代码与契约脱节）
     mtests = (REPO_ROOT / "docs/milestones/M0-tests.md").read_text(encoding="utf-8")
     check("M0-tests.md 含 T-S1-01 的修订 R1（println 走 stderr）",
-          "修订 R1" in mtests and "stderr 精确" in mtests,
-          "M0-tests.md §5.1")
+          "修订 R1" in mtests and "stderr 精确" in mtests,          "M0-tests.md §5.1")
+
+    # ── 5g. T55：E8 五份契约 + E9 六条退出检查的登记与产物对撞 ──────────
+    # 动机：E8 是「五份契约齐备」，最易退化成「目录里有 5 个 .md 就算过」。
+    # 真正要守的是**每份的级别标注** —— C1 若没标「留位」，就会被误读为
+    # 「M0 已实现源码位置跟踪」（那正是 M0-design §7 列的风险）。
+    print("[5g] T55 E8 五份契约 / E9 六条退出检查")
+    e8 = manifest["gate"]["E8"]
+    contracts = e8.get("contracts", {})
+    check("E8 登记了五份契约 C1–C5",
+          set(contracts) == {"C1", "C2", "C3", "C4", "C5"},
+          f"{sorted(contracts)}")
+    LEVELS = {"C1": "留位", "C2": "完整初稿", "C3": "spike 级",
+              "C4": "spike 级", "C5": "spike 级"}
+    for cid, want in LEVELS.items():
+        c = contracts.get(cid, {})
+        f = c.get("file", "")
+        # ① 登记的级别必须与约定一致
+        check(f"{cid} 登记的级别 == {want}", c.get("level") == want, c.get("level", "(缺失)"))
+        # ② 契约文件必须真的在磁盘上
+        check(f"{cid} 的契约文件存在", bool(f) and (REPO_ROOT / f).is_file(), f)
+        if not (f and (REPO_ROOT / f).is_file()):
+            continue
+        text = (REPO_ROOT / f).read_text(encoding="utf-8")
+        # ③ **文件里必须真的写着那个级别**（登记与文件脱节也要抓）
+        check(f"{cid} 正文里写明了「{want}」", want in text,
+              "级别标注缺失 ⇒ 会被误读")
+        # ④ 每份都要有变更记录（决策的迁移与回归影响有记录 —— E9 第 5 条）
+        check(f"{cid} 有变更记录表", "变更记录" in text, "E9 第 5 条要求")
+    # C1 的「留位」必须在**文件头前 20 行** —— 放在末尾等于没标注
+    c1_head = "\n".join((REPO_ROOT / contracts["C1"]["file"]).read_text(
+        encoding="utf-8").splitlines()[:20])
+    check("C1 的「留位」声明在文件头前 20 行内",
+          "留位" in c1_head,
+          "M0-plan T48 的验收要求：不得因文件存在就被误读为已实现位置跟踪")
+    # C2 是唯一「完整」级 —— 别的契约若自称完整会引发误解
+    others_complete = [cid for cid in ("C1", "C3", "C4", "C5")
+                       if "完整初稿" in (REPO_ROOT / contracts[cid]["file"]).read_text(encoding="utf-8")]
+    check("只有 C2 自称「完整初稿」", not others_complete, f"另有 {others_complete}")
+
+    # E9：六条必须逐条登记且都有证据（E9 本身就是「六条逐条判定」）
+    e9 = manifest["gate"]["E9"]
+    six = e9.get("six_checks", [])
+    check("E9 登记了六条退出检查", len(six) == 6, f"{len(six)} 条")
+    check("E9 六条的编号是 1–6 且不重复",
+          [s.get("no") for s in six] == [1, 2, 3, 4, 5, 6],
+          f"{[s.get('no') for s in six]}")
+    for s in six:
+        n = s.get("no")
+        check(f"E9 第 {n} 条判定为 pass", s.get("verdict") == "pass", s.get("verdict", "(缺失)"))
+        check(f"E9 第 {n} 条有证据", len(str(s.get("evidence", ""))) >= 10,
+              f"{str(s.get('evidence', ''))[:40]}")
+    # E9 第 2 条是四条 cargo 命令 —— 登记的实测数要与 E3 的测试数一致
+    meas = e9.get("measured", {})
+    check("E9 登记的测试数与 E3.total_tests 一致",
+          meas.get("workspace_tests") == manifest["gate"]["E3"].get("total_tests"),
+          f"E9 {meas.get('workspace_tests')} / E3 {manifest['gate']['E3'].get('total_tests')}")
+    check("E9 记录了零失败",
+          meas.get("workspace_tests_failed") == 0,
+          f"{meas.get('workspace_tests_failed')}")
+    # Phase 4 的产物必须都在磁盘上
+    p4 = manifest["phase_plan"].get("phase4", {})
+    check("phase_plan.phase4 状态 == done", p4.get("status") == "done", p4.get("status", ""))
+    arts = p4.get("artifacts", [])
+    check("phase_plan.phase4 登记的产物都在磁盘上",
+          len(arts) == 6 and all((REPO_ROOT / a).is_file() for a in arts),
+          f"{len(arts)} 个")
+    check("phase_plan.phase4.done 含 T48–T55 全部任务",
+          all(f"T{n}" in " ".join(p4.get("done", [])) for n in range(48, 56)),
+          f"done 列了 {len(p4.get('done', []))} 条")
+    # 交付报告必须含三类引用（证明不是空话）
+    report_rel = "docs/milestones/M0-report.md"
+    check("M0-report.md 存在", (REPO_ROOT / report_rel).is_file(), report_rel)
+    if (REPO_ROOT / report_rel).is_file():
+        rep = (REPO_ROOT / report_rel).read_text(encoding="utf-8")
+        for token in ("T-S1-01", "T-S3-04", "U1", "U12"):
+            check(f"M0-report.md 引用了 {token}", token in rep, "M0-plan T53 验收要求")
+        check("M0-report.md 如实记录了 P1 判定被推翻",
+              "stdout 精确等于" in rep and "是错的" in rep,
+              "P1 的原期望是 stdout，实际是 stderr —— 必须如实记录")
+        check("M0-report.md 有接手指南", "接手指南" in rep, "E9 第 5 条")
 
     # ── 6. 文档记录的规模与实际一致 ────────────────────────────────────────
     # 动机：本轮把断言从 45 一路加到 60+，`AGENTS.md` 里的数字靠手工同步

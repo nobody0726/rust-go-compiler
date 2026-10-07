@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 · Phase 0 / 1 / 2 / 3 均已完成**（**E1/E2/E3/E4/E5/E6/E7/E10 八条门禁全过**）；**Phase 4 待开工**（T48–T55：五份契约初稿 + 交付报告，门禁 E8 + E9） |
+| 当前阶段 | **M0 全部完成**（T01–T55 ✅，**E1–E10 十条门禁全过**）→ **Phase 4 已收口**（T48–T55：五份契约初稿 + `M0-report.md` + manifest 完整化 + E9 六条退出检查） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：文档体系（4 篇正文 + 1 索引 + M0 四件套）已建立并互链，**已发布到 GitHub**；**容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过**；Phase 0–3 收口 —— `rgoc/` 下是 harness（六个模块）+ driver CLI + xtask + **两个 SPIKE-ONLY crate**（`rgoc-hir` / `rgoc-spikes`，共 **260 条测试全绿**，自检 **147 条断言**）；**E1/E2/E3/E4/E5/E6/E7/E10 八条门禁已过**；**编译器实现尚未开始**（三个架构 spike 已证明解释 / SSA / native 三条路线可行），下一步是 Phase 4 的五份契约初稿。
+**一句话状态**：**M0 全部完成，门禁 E1–E10 十条全过**。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下是 harness（六个模块）+ driver CLI + xtask + **两个 SPIKE-ONLY crate**（`rgoc-hir` / `rgoc-spikes`），**260 条测试全绿**、自检 **154 条断言**全过；**五份契约**（`docs/contracts/`）+ **交付报告 `M0-report.md`** 就位。**编译器实现尚未开始** —— M0 证明的是解释 / SSA / native 三条路线可行 + oracle 流水线可信，**M1（词法与位置）现已具备开工条件**。
 
 ---
 
@@ -52,7 +52,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（147 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（203 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -345,7 +345,7 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    与「有没有 E5 要做」无关。）
 1. ~~冻结 `M0-tests.md`~~ ✅ **已完成**（T29，2026-10-02）：20 样本 + U1–U14 + 超时上限已冻结，**M0 分母 = 279**
    ✅ T30 —— oracle 侧复核 20 个样本期望值（19/20 一致，1 处文档错已改）
-   ✅ T31 —— `rgoc-harness` 的 Test IR 骨架（16 个必录字段 / 八种判定分类 / 冻结预算唯一入口）
+   ✅ T31 —— `rgoc-harness` 的 Test IR 骨架（**15 个必录字段** / 八种判定分类 / 冻结预算唯一入口）
    ✅ T32 —— 指令行解析（R1）+ 分派顺序（R1b），**顺序写进了函数签名**：`dispatch(ins, platform_ok)`
    ✅ T33 —— 平台过滤 `shouldTest` + 语料枚举 + U 归类，**枚举分母 == 279 与冻结口径对上**
    ✅ T34 —— oracle 调用 + 版本守门（T-H-06）；`run` 层走官方 fast path，超时不留孤儿且不需要 unsafe
@@ -363,8 +363,14 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T45 —— **E6 门禁通过**：三 spike 各 3 次，输入/结果/环境全部一致（`M0-benchmarks.md` §12）
    ✅ T46 —— **E7 门禁通过**：`SM-M0-NATIVE-HELLO` 登记进 `03` §M1 smoke 清单
    ✅ T47 —— Phase 3 门禁复核与登记（新增 §5f 共 22 条断言；**门禁键改为从 manifest 动态枚举**）
-   👉 **下一个**：**Phase 4** —— T48–T52 五份契约初稿（C1 留位 / C2 完整 / C3–C5 spike 级）
-   → T53 `M0-report.md` → T54 manifest 完整化 → T55 **E9** 六条统一退出检查
+   ✅ T48 —— C1 契约初稿（**留位**：位置表示与诊断排序已定，但**无源码位置跟踪** —— 那是 M1/M2）
+   ✅ T49 —— C2 契约初稿（**完整初稿**，M0 唯一「完整」级契约，消费者是所有阶段）
+   ✅ T50/T51/T52 —— C3（HIR）/ C4（SSA）/ C5（ABI）契约初稿（**spike 级**，已验证与待验证分节列开）
+   ✅ T53 —— `M0-report.md` 交付报告（面向接手人：三个命题的证明者、门禁证据、差距清单、接手指南）
+   ✅ T54 —— manifest 三节完整化（37 个测试 ID / U1–U14 / 预算三节）
+   ✅ T55 —— **E9** 六条统一退出检查 + M0 全门禁复核（**E1–E10 十条全过**）
+   👉 **下一个**：**M1 · 词法与位置**（`03` §M1）—— 读 **`M0-report.md` §7「接手指南」**，
+   那里列了必读顺序与**开始 M1 之前必须知道的三件事**
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 

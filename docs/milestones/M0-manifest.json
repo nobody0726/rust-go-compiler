@@ -118,7 +118,9 @@
     },
     "E10": {
       "status": "pass",
-      "evidence": "M0-benchmarks.md section 1-4 四组数据齐备：镜像构建时间与体积、容器冷启动、编译基准、bind mount vs 命名卷。"
+      "evidence": "M0-benchmarks.md section 1-4 四组数据齐备：镜像构建时间与体积、容器冷启动、编译基准、bind mount vs 命名卷。",
+      "phase4_done": true,
+      "phase4_evidence": "M0-report.md（T53）+ manifest 的 test_ids/unsupported/budget 三节（T54）"
     },
     "E5": {
       "status": "pass",
@@ -159,8 +161,8 @@
         "T-H-06": "版本不符：整层判 reference-toolchain-failure 且一个用例都不跑（+ 反例：版本相符正常产出）"
       },
       "self_test_count": 19,
-      "total_tests": 153,
-      "total_tests_note": "T36 登记时 workspace 共 114 条；T37 加 driver 33 条、T38 加 6 条，现为 153（T39 复核更新）",
+      "total_tests": 260,
+      "total_tests_note": "T39 登记时为 153（Phase 2 口径）；T47 起含 Phase 3 新增的 107 条（rgoc-hir 24 + rgoc-spikes 83）",
       "confirmed_by_test": "cargo test -p rgoc-harness --test harness_self_test（19 条，正反例齐备）"
     },
     "E4": {
@@ -310,11 +312,636 @@
         "registered": "M1 smoke 清单列出 SM-M0-NATIVE-HELLO 并注明来源 T-S3-03"
       },
       "boundary": "M0 的 hello 是固定 HIR/SSA 验证，输入不经过 lexer；不代表 M1 已能从 Go 源码生成机器码（03 §4 第 6 条）"
+    },
+    "E8": {
+      "name": "五份契约初稿齐备",
+      "status": "pass",
+      "confirmed_at": "2026-10-07",
+      "confirmed_by": "T48–T52：docs/contracts/ 五份齐备，级别标注逐份核对",
+      "contracts": {
+        "C1": {
+          "file": "docs/contracts/C1-source-map.md",
+          "level": "留位",
+          "lines": 210,
+          "must_not_imply": "不得因文件存在就认为「M0 已实现源码位置跟踪」—— lexer/parser 是 M1/M2"
+        },
+        "C2": {
+          "file": "docs/contracts/C2-test-ir.md",
+          "level": "完整初稿",
+          "lines": 242,
+          "note": "M0 唯一「完整」级契约；消费者是所有阶段"
+        },
+        "C3": {
+          "file": "docs/contracts/C3-hir.md",
+          "level": "spike 级",
+          "lines": 210,
+          "note": "已验证项与待 M5 验证项分节列开"
+        },
+        "C4": {
+          "file": "docs/contracts/C4-ssa.md",
+          "level": "spike 级",
+          "lines": 167,
+          "note": "与 ssa_needs.rs 的五条需求逐条对齐"
+        },
+        "C5": {
+          "file": "docs/contracts/C5-abi.md",
+          "level": "spike 级",
+          "lines": 226,
+          "note": "含 T-S3-04 六项记录与链接可复现性的定位过程"
+        }
+      },
+      "correction": "C1 初稿曾写「TestCase 持有一个 pos 字段」—— 代码里没有该字段（TestCase 实为 15 个字段）。已改为如实记录为缺口（失败报告只能定位到文件级，归属 M4/M2）"
+    },
+    "E9": {
+      "name": "03 §6.3 的六条统一退出检查",
+      "status": "pass",
+      "confirmed_at": "2026-10-07",
+      "confirmed_by": "T55：六条逐条判定 + 四条 cargo 命令实测",
+      "six_checks": [
+        {
+          "no": 1,
+          "item": "当前阶段必需测试全绿，无未分类 / 基建 / 不稳定失败",
+          "verdict": "pass",
+          "evidence": "260 条测试 0 失败、0 个失败测试组；八类 Verdict 不合并，HarnessFailure 与 CompilerFailure 严格分开"
+        },
+        {
+          "no": 2,
+          "item": "四条 cargo 命令全过",
+          "verdict": "pass",
+          "evidence": "fmt --check / check --workspace --all-targets / clippy --workspace --all-targets -- -D warnings / test --workspace —— 2026-10-07 实测四条全 PASS"
+        },
+        {
+          "no": 3,
+          "item": "环境、报告、复现材料与契约版本齐全，保留 unsupported 清单",
+          "verdict": "pass",
+          "evidence": "environment 无空缺；M0-report.md；M0-benchmarks.md §1–§12；五份契约；U1–U14 全在案（14 条）"
+        },
+        {
+          "no": 4,
+          "item": "新功能都归属当前冻结测试集或已登记风险",
+          "verdict": "pass",
+          "evidence": "37 个测试 ID（T-H×6 / T-C×20 / T-S×11）全部登记判定结果；两个 SPIKE-ONLY crate 有 milestone 归属与 M5 替换条件"
+        },
+        {
+          "no": 5,
+          "item": "更改 ABI / 布局 / 基线 / 必需用例的决策、迁移与回归影响有记录",
+          "verdict": "pass",
+          "evidence": "五份契约各有变更记录表；M0-plan.md 门禁汇总表；T-S1-01 订正存档在 M0-tests.md 修订 R1"
+        },
+        {
+          "no": 6,
+          "item": "不可行时先缩减范围，不把 recoverable failure 当完成",
+          "verdict": "pass",
+          "evidence": "UNSUPPORTED-REGEX 如实登记为 harness-failure（未放宽判定）；T-S3-04 六项各带「没记录什么」栏"
+        }
+      ],
+      "measured": {
+        "workspace_tests": 260,
+        "workspace_tests_failed": 0,
+        "consistency_assertions": 154,
+        "consistency_result": "全部通过"
+      }
     }
   },
-  "test_ids": [],
-  "unsupported": [],
-  "budget": {},
+  "test_ids": [
+    {
+      "id": "T-H-01",
+      "layer": "harness-self-test",
+      "name": "成功类（进程内 fixture double_sum）",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-H-02",
+      "layer": "harness-self-test",
+      "name": "失败类",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-H-03",
+      "layer": "harness-self-test",
+      "name": "未知指令",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-H-04",
+      "layer": "harness-self-test",
+      "name": "平台过滤",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-H-05",
+      "layer": "harness-self-test",
+      "name": "超时回收",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-H-06",
+      "layer": "harness-self-test",
+      "name": "oracle 版本不匹配即拒绝",
+      "verdict": "pass",
+      "gate": "E3",
+      "evidence": "rgoc/crates/rgoc-harness/tests/harness_self_test.rs（19 条，正反例齐备）"
+    },
+    {
+      "id": "T-C-01",
+      "layer": "corpus",
+      "path": "helloworld.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 26,
+      "peak_rss_bytes": 14168064,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-02",
+      "layer": "corpus",
+      "path": "closure1.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 26,
+      "peak_rss_bytes": 14163968,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-03",
+      "layer": "corpus",
+      "path": "gc1.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 28,
+      "peak_rss_bytes": 14176256,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-04",
+      "layer": "corpus",
+      "path": "printbig.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 26,
+      "peak_rss_bytes": 14172160,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-05",
+      "layer": "corpus",
+      "path": "closure4.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 27,
+      "peak_rss_bytes": 16281600,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-06",
+      "layer": "corpus",
+      "path": "func6.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 27,
+      "peak_rss_bytes": 14168064,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-07",
+      "layer": "corpus",
+      "path": "compos.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 24,
+      "peak_rss_bytes": 14188544,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-08",
+      "layer": "corpus",
+      "path": "method3.go",
+      "mode": "run",
+      "verdict": "pass",
+      "duration_ms": 31,
+      "peak_rss_bytes": 16265216,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-09",
+      "layer": "corpus",
+      "path": "eof.go",
+      "mode": "compile",
+      "verdict": "pass",
+      "duration_ms": 7,
+      "peak_rss_bytes": 14155776,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-10",
+      "layer": "corpus",
+      "path": "empty.go",
+      "mode": "compile",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 14159872,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-11",
+      "layer": "corpus",
+      "path": "parentype.go",
+      "mode": "compile",
+      "verdict": "pass",
+      "duration_ms": 7,
+      "peak_rss_bytes": 14180352,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-12",
+      "layer": "corpus",
+      "path": "rune.go",
+      "mode": "compile",
+      "verdict": "pass",
+      "duration_ms": 7,
+      "peak_rss_bytes": 14163968,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-13",
+      "layer": "corpus",
+      "path": "initloop.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 14180352,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-14",
+      "layer": "corpus",
+      "path": "recover5.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 16273408,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-15",
+      "layer": "corpus",
+      "path": "varerr.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 14172160,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-16",
+      "layer": "corpus",
+      "path": "convlit1.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 5,
+      "peak_rss_bytes": 14163968,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-17",
+      "layer": "corpus",
+      "path": "init.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 5,
+      "peak_rss_bytes": 16269312,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-18",
+      "layer": "corpus",
+      "path": "switch4.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 14180352,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-19",
+      "layer": "corpus",
+      "path": "typecheck.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 5,
+      "peak_rss_bytes": 14176256,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-C-20",
+      "layer": "corpus",
+      "path": "mainsig.go",
+      "mode": "errorcheck",
+      "verdict": "pass",
+      "duration_ms": 4,
+      "peak_rss_bytes": 14180352,
+      "detail": "",
+      "gate": "E4",
+      "evidence": "rgoc/crates/rgoc-driver/src/samples.rs 的 CORPUS_M0_SAMPLES + tests/corpus/T-C-report.json"
+    },
+    {
+      "id": "T-S1-01",
+      "layer": "spike-interp",
+      "name": "固定 HIR println(1+2) 求值",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "stderr 精确 3\\n 且 stdout 精确为空；退出码 0"
+    },
+    {
+      "id": "T-S1-02",
+      "layer": "spike-interp",
+      "name": "同输入重复 3 次",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "三次结果逐字节相同"
+    },
+    {
+      "id": "T-S1-03",
+      "layer": "spike-interp",
+      "name": "常量折叠边界 1<<100 / int64 极值",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "超宽拒绝收敛、边界通过；与 T-C-04 printbig 语义一致"
+    },
+    {
+      "id": "T-S2-01",
+      "layer": "spike-ssa",
+      "name": "同一份 HIR 构造 Block/Value 图并求值",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "图含真 bin 指令；求值结果与 T-S1-01 逐字节相同"
+    },
+    {
+      "id": "T-S2-02",
+      "layer": "spike-ssa",
+      "name": "显式记录 memory/tuple/调用边界需求清单",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "五条需求各带触发形状；见 C4-ssa.md §2"
+    },
+    {
+      "id": "T-S2-03",
+      "layer": "spike-ssa",
+      "name": "记录与 M6 完整 verifier 的差距",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "八项逐条标注具备/不具备；见 C4-ssa.md §3"
+    },
+    {
+      "id": "T-S3-01",
+      "layer": "spike-native",
+      "name": "固定 HIR → arm64 汇编 → ELF",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "clang -nostartfiles -Wl,-s 链接成功"
+    },
+    {
+      "id": "T-S3-02",
+      "layer": "spike-native",
+      "name": "file 判定 target",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "含 ELF 64-bit LSB 且含 ARM aarch64（两条件都断言）"
+    },
+    {
+      "id": "T-S3-03",
+      "layer": "spike-native",
+      "name": "运行该 ELF",
+      "verdict": "pass",
+      "gate": "E7",
+      "evidence": "stdout 精确 hello\\n、stderr 空、退出码 0"
+    },
+    {
+      "id": "T-S3-04",
+      "layer": "spike-native",
+      "name": "记录调用约定/栈对齐/输出流/退出码/runtime 桥接/unwind 边界",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "六项齐备，每项含实测依据与缺口；见 C5-abi.md §2"
+    },
+    {
+      "id": "T-S3-05",
+      "layer": "spike-native",
+      "name": "重复构建 3 次",
+      "verdict": "pass",
+      "gate": "E6",
+      "evidence": "汇编与 ELF 的 sha256 三次相同"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U1",
+      "item": "rundir / runindir",
+      "label": "expected-unsupported",
+      "why": "需要目录级驱动与多包",
+      "planned_phase": "后续",
+      "sample_count": 5,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U2",
+      "item": "runoutput",
+      "label": "expected-unsupported",
+      "why": "需「先运行生成器 → 再编译运行」两阶段",
+      "planned_phase": "后续",
+      "sample_count": 14,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U3",
+      "item": "errorcheckdir",
+      "label": "expected-unsupported",
+      "why": "目录级错误检查",
+      "planned_phase": "后续",
+      "sample_count": 1,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U4",
+      "item": "asmcheck",
+      "label": "expected-unsupported",
+      "why": "需反汇编比对，属编译器内部期望",
+      "planned_phase": "M7+",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U5",
+      "item": "build / builddir / buildrundir / buildrun / compiledir",
+      "label": "expected-unsupported",
+      "why": "需要构建系统语义",
+      "planned_phase": "后续",
+      "sample_count": 9,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U6",
+      "item": "errorcheckoutput / errorcheckandrundir / errorcheckwithauto",
+      "label": "expected-unsupported",
+      "why": "组合模式",
+      "planned_phase": "后续",
+      "sample_count": 11,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U7",
+      "item": "带 -gcflags / -d / -goexperiment / -godebug 的用例",
+      "label": "expected-unsupported",
+      "why": "编译器内部开关，非语言语义（03 §3.1）",
+      "planned_phase": "不定",
+      "sample_count": 31,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U8",
+      "item": "test/fixedbugs/ 全目录",
+      "label": "expected-unsupported",
+      "why": "M0 不重写完整 runner",
+      "planned_phase": "后续",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U9",
+      "item": "test/ken/、test/chan/、test/typeparam/、test/codegen/ 等子目录",
+      "label": "expected-unsupported",
+      "why": "M0 只处理 test/ 顶层",
+      "planned_phase": "后续",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U10",
+      "item": "需要 unsafe / reflect / cgo / 汇编内联的用例",
+      "label": "expected-unsupported",
+      "why": "首发非目标（03 §0.2）",
+      "planned_phase": "M9+/M12",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U11",
+      "item": "src/internal/types/testdata/",
+      "label": "expected-unsupported",
+      "why": "属 types2 内部测试",
+      "planned_phase": "M4",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U12",
+      "item": "真实 Go 源码的 lex/parse",
+      "label": "expected-unsupported",
+      "why": "M0 三 spike 用固定 HIR",
+      "planned_phase": "M1/M2",
+      "sample_count": 0,
+      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+    },
+    {
+      "id": "U13",
+      "item": "skip 指令（顶层 5 个）",
+      "label": "skipped-by-design",
+      "why": "上游设计即跳过：官方 testdir_test.go 直接 t.Skip",
+      "planned_phase": "后续",
+      "sample_count": 5,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    },
+    {
+      "id": "U14",
+      "item": "action 非 16 指令之一但被平台过滤（linkmain.go）",
+      "label": "target-filtered",
+      "why": "R1b：平台过滤先于 switch，故 t.Skip 而非硬失败",
+      "planned_phase": "后续",
+      "sample_count": 1,
+      "count_note": "取自 E4 全量基线（顶层 356 − 排除 77 = 279）"
+    }
+  ],
+  "budget": {
+    "wall_time": {
+      "per_case_s": 60,
+      "layer_corpus_s": 300,
+      "layer_harness_s": 180,
+      "layer_spike_fast_s": 60,
+      "layer_spike_native_s": 300,
+      "overall_s": 900,
+      "source": "rgoc_harness::ir::Limits::for_layer —— M0 只有这一个定义处",
+      "measured": {
+        "e4_layer_s": 5.8,
+        "e4_slowest_case_s": 0.031,
+        "e3_layer_s": 1.03,
+        "note": "E4 整层 5.8 s（预算 300 s）、最慢单项 0.031 s（预算 60 s）"
+      }
+    },
+    "rss": {
+      "per_case_mib": 512,
+      "exception": "T-C-03 (gc1.go) 预算放宽到 768 MiB（须显式 with_rss_override）",
+      "measured_peak_mib": 15,
+      "source": "rgoc_harness::ir::Limits::for_layer 的 max_rss_bytes",
+      "note": "E4 实测峰值 15 MiB，远低于 512 MiB 预算"
+    },
+    "counts": {
+      "corpus_denominator": 279,
+      "corpus_denominator_frozen_at": "T29（2026-10-02）",
+      "corpus_excluded": 77,
+      "corpus_executed": 274,
+      "target_filtered": 5,
+      "corpus_top_level_total": 356,
+      "discipline": "分母不得因跑不动而缩小（03 §3.3）"
+    }
+  },
   "benchmarks": {
     "image": {
       "first_build_with_pull_s": 74,
@@ -358,9 +985,37 @@
       "cost_cargo_clean": "cargo clean fails with EBUSY(16) exit=101; use find rgoc/target -mindepth 1 -delete instead"
     },
     "reproducibility": {
-      "image_id_stable": "no",
-      "differing_layers_of_14": 6,
-      "pin": "base_index_digest + src.*_sha256"
+      "note": "本节含两件不同的事：image 是【镜像位级可复现性】，phase3_spikes 是【三个 spike 的产物可复现性】",
+      "image": {
+        "doc": "M0-benchmarks.md §5",
+        "image_id_stable": "no",
+        "differing_layers_of_14": 6,
+        "pin": "base_index_digest + src.*_sha256"
+      },
+      "phase3_spikes": {
+        "doc": "M0-benchmarks.md §12",
+        "repeats": 3,
+        "spikes": [
+          "s1_interp",
+          "s2_ssa",
+          "s3_native"
+        ],
+        "env_fingerprint": {
+          "go": "go1.27.1 linux/arm64",
+          "rustc": "1.98.1",
+          "clang": "14.0.6",
+          "glibc": "2.36",
+          "kernel": "7.0.14-linuxkit",
+          "arch": "aarch64"
+        },
+        "s3_elf_sha256": "a98b603df9c7370395903644ec4f37e4",
+        "s3_asm_sha256": "098cac690fbbe662f3c839745aab4507",
+        "required_link_flags": [
+          "-nostartfiles",
+          "-Wl,-s"
+        ],
+        "finding": "链接产物默认不可复现：.strtab 残留 clang 随机中间名（BuildID 三次相同 ⇒ 内容可复现）"
+      }
     }
   },
   "phase_plan": {
@@ -407,11 +1062,12 @@
       ],
       "gate_commands": "cargo fmt --all -- --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace",
       "gate_result": {
-        "tests_passed": 153,
+        "tests_passed": 260,
         "tests_failed": 0,
         "consistency_assertions": 115,
         "corpus_sha256_mismatches": 0,
-        "verified_at": "2026-10-05"
+        "verified_at": "2026-10-05",
+        "note": "T39 登记时为 153（Phase 2 口径）；T47 起含 Phase 3 新增的 107 条（rgoc-hir 24 + rgoc-spikes 83），故与 gate.E3.total_tests 同为 260"
       }
     },
     "phase3": {
@@ -439,17 +1095,40 @@
         "rgoc-spikes": 83
       },
       "test_contract_revision": "M0-tests.md 5.1 修订 R1：T-S1-01 的「stdout 精确 3\\n」订正为「stderr 精确 3\\n 且 stdout 精确为空」（go1.27.1 实测 println 走 stderr）",
-      "design_change": "rgoc-hir 的 Stmt::Print 增加 Stream 字段（S1=Stderr / S3=Stdout），使 S1 与 S3 不可被混淆"
+      "design_change": "rgoc-hir 的 Stmt::Print 增加 Stream 字段（S1=Stderr / S3=Stdout），使 S1 与 S3 不可被混淆",
+      "workspace_tests_total": 260
     },
     "phase4": {
       "tasks": "T48-T55",
-      "status": "pending",
+      "status": "done",
       "gates": [
         "E8",
-        "E9",
-        "E10"
+        "E9"
       ],
-      "note": "契约初稿 + M0-report + 六条统一退出检查"
+      "scope": "五份契约初稿 + 交付报告 + manifest 完整化 + 六条统一退出检查（不产生新行为）",
+      "done": [
+        "T48（C1 契约初稿：留位，2026-10-07）",
+        "T49（C2 契约初稿：完整初稿，2026-10-07）",
+        "T50（C3 契约初稿：HIR，spike 级，2026-10-07）",
+        "T51（C4 契约初稿：SSA，spike 级，2026-10-07）",
+        "T52（C5 契约初稿：ABI，spike 级，2026-10-07）",
+        "T53（M0-report.md 交付报告，2026-10-07）",
+        "T54（manifest 三节完整化，2026-10-07）",
+        "T55（E9 六条统一退出检查 + M0 全门禁复核，2026-10-07）"
+      ],
+      "artifacts": [
+        "docs/contracts/C1-source-map.md",
+        "docs/contracts/C2-test-ir.md",
+        "docs/contracts/C3-hir.md",
+        "docs/contracts/C4-ssa.md",
+        "docs/contracts/C5-abi.md",
+        "docs/milestones/M0-report.md"
+      ],
+      "corrections": [
+        "AGENTS.md 的「TestCase 16 个必录字段」订正为 15（真实代码为准）",
+        "C1 曾编造 TestCase::pos 字段 → 改为如实记录缺口",
+        "check-m0-consistency.py 的「无尖括号占位符」判据收窄（放过 1<<100 这类合法内容）"
+      ]
     },
     "split_at": "2026-10-02",
     "note": "E5 通过后拆解；前置条件『Phase 1 门禁通过』已满足"
@@ -708,5 +1387,6 @@
       },
       "next": "T37 驱动与 xtask（把 enumerate + run_layer 串成命令行），然后 T38 跑 20 样本出 E4 基线"
     }
-  }
+  },
+  "test_ids_note": "T-C-nn 的权威来源是 rgoc-driver 的 20 样本冻结表（samples.rs 的 CORPUS_M0_SAMPLES）；T-C-report.json 的 cases 只有 name/verdict/duration_ms/peak_rss_bytes，【没有 id 与 mode】——第一版登记误以为报告里有 id，生成了 20 个 T-C-?? 占位符，而只看 len(test_ids) 的验收仍会通过。两者已按 path 对账，样本集必须完全一致。"
 }
