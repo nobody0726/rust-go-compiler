@@ -5,14 +5,29 @@
 - 目标：用 **Rust 重写 Go 编译器**，代号 **`rgoc`**；Git 已发布 <https://github.com/nobody0726/rust-go-compiler>（public / `main` / remote `origin`）
 - 语料：`go_source_code/`（185 MB / 15,618 文件，`VERSION`=`go1.27.1`，2026-08-28），**只读、不入库**，由根目录 `corpus-manifest.sha256` 锁定（校验 `shasum -a 256 -c corpus-manifest.sha256`；`VERSION` 文件本身不足以证明一致）
 - 首发平台：**Linux / arm64（Docker）→ `aarch64-unknown-linux-gnu` / ELF**，不维护 macOS 第二套环境
-- **`git push` 常被拦**（`github.com` CONNECT 间歇 502，`api.github.com` 正常）→ 技能 `github-push-via-api`
+- **git 身份已配好**（2026-10-07）：`user.name=nobody0726`、
+  `user.email=102368194+nobody0726@users.noreply.github.com`（**noreply 格式才能被 GitHub 关联**，
+  `gh api .../commits/main --jq .author.login` 实测返回 `nobody0726` 而非 null）。
+  ⚠️ 若又看到 `wangf <yhome@yhomedeMac-mini.local>`，是身份丢了，用 `git config --global` 重设
+  （`gh config set git_user_name/email` 在 gh 2.102 **已废弃**，写了 git 也读不到）。
+- **`git push` 曾常被拦**（`github.com` CONNECT 间歇 502），**但 2026-10-07 两次push（普通 + force）均成功**，
+  暂未复现。真被拦时走 `gh api`（已登录，scope `repo`+`workflow`）——
+  ⚠️ 原记录提到的技能 `github-push-via-api` **在本机 `~/.workbuddy/skills/` 下并不存在**，
+  需要时按「gh api 建 blob → commit → update ref」自己走，别指望那条技能
 - **工程入口是根目录 `AGENTS.md`**，任何任务先读它。本文件只保「每轮都要知道」的硬事实
 
 ## 状态：M0 **Phase 0/1/2 全部完成**（T01–T39 ✅，**E1/E2/E3/E4/E5/E10 六条门禁全过**），**Phase 3 待开工**
 
 - 阶段文档 `docs/milestones/`：`M0-design.md`（已确认，D-M0-1~15）、`M0-tests.md`（**已冻结** T29）、`M0-plan.md`（T01–T55）、`M0-benchmarks.md`、`M0-manifest.json`（environment/gate/benchmarks）
-- **E5 已由用户 2026-10-02 人工实测通过**（登记在 `gate.E5`）；**E3 已于 2026-10-04 通过**（T36 六类自测 19 条正反例齐备，登记在 `gate.E3`）
-- 镜像 `rgoc:dev` = `sha256:21f55802…553b`（2.92 GB / 14 层）
+- **2026-10-07 换机复验**：工作区从 GitHub 重新拉取后本机无 Docker，
+  **从 Phase 0 起重建了全套环境**（镜像 / 命名卷 / VS Code Server / CodeLLDB），并修掉两个真bug。
+  六条门禁全部**重新实测通过**（E1 构建、E3 153 条、E4 20/20、E5 断点命中），
+  提交 `2d990d0`，自检 **125 条断言**。详见 `.workbuddy/memory/2026-10-07.md`。
+- **E5 已于 2026-10-02 首次实测通过，并于 2026-10-07 复验通过**（宿主 VSCode 1.139.1；
+  容器内 LLDB 日志 `Installing platform package` 与 `PROXY` 各 0 次为佐证，
+  登记在 `gate.E5.reverified`）；**E3 已于 2026-10-04 通过**（T36 六类自测 19 条正反例齐备）
+- 镜像 `rgoc:dev` = `sha256:46a572aa…2093`（3.0 GB / 14 层；engine 29.8.2、内核 7.0.14-linuxkit）——
+  ⚠️ 2026-10-07 重建，**image id 与旧记录不同属正常**（位级不可复现，钉子是 `base.index_digest` + `src.*_sha256`）
 - 三个 spike 放独立 crate `rgoc-spikes`（D-M0-14，可整块删）；`double_sum` **不删**（D-M0-15，E5 复验锚点）
 - **E4 已于 2026-10-05 通过**（T38：20/20、5.8 s、峰值 15 MiB；修了 `compare.rs` 的 `\n` 转义）
 - **T39 已完成**（Phase 2 收口）：登记漂移已修（`gate.E3.total_tests` 114→153、`phase_plan.done` 补 T37/T38）+ 新增 §5d/§5e **19 条断言**把登记与 E4 报告**对撞**
