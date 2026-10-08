@@ -91,8 +91,8 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | **空** —— 待 M0 Phase 4 产出 5 份初稿（见 `milestones/M0-design.md` §7） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | `M0-design.md`（已确认）、`M0-tests.md`（待冻结）、`M0-plan.md`（Phase 0 已完成）、`M0-benchmarks.md`（E10 证据）、`M0-manifest.json`（environment + gate + benchmarks 已填实） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **5 份初稿已产出**（C1 留位 / **C2 完整初稿** / C3–C5 spike 级，T48–T52 / E8） |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套全部就位**：`M0-design.md`（已确认）、`M0-tests.md`（**已冻结** T29，§5.1 另有修订 R1）、`M0-plan.md`（**T01–T55 全部完成**）、`M0-benchmarks.md`（§1–§12）、`M0-report.md`（交接文档）、`M0-manifest.json`（**E1–E10 十条** + `test_ids` + `unsupported` + `budget` 已填实） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 

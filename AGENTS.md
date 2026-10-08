@@ -37,13 +37,14 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── 02-test-inventory.md          ←   规格：如何验证
 │   ├── 03-roadmap.md                 ←   计划：按什么顺序建
 │   ├── 04-development-environment.md ←   环境：在哪建
-│   ├── contracts/                    ←   跨阶段版本化契约（**空**，M0 Phase 4 产出）
+│   ├── contracts/                    ←   跨阶段版本化契约（**5 份已产出**：C1 留位 / C2 完整初稿 / C3–C5 spike 级）
 │   └── milestones/                   ←   阶段文档：<ID>-{design,tests,plan}.md + manifest
 │       ├── M0-design.md              ←     M0 设计（**已确认**）
-│       ├── M0-tests.md               ←     M0 测试先行清单（待冻结）
-│       ├── M0-plan.md                ←     M0 实施计划 Phase 0–1（**Phase 0 已完成**）
-│       ├── M0-benchmarks.md          ←     M0 实测基准（E10 证据；D-M0-9 决策依据）
-│       └── M0-manifest.json          ←     机器可读事实（environment + gate + benchmarks）
+│       ├── M0-tests.md               ←     M0 测试先行清单（**已冻结** T29；§5.1 有修订 R1）
+│       ├── M0-plan.md                ←     M0 实施计划（**T01–T55 全部完成**）
+│       ├── M0-benchmarks.md          ←     M0 实测基准（§1–§12；E10 证据；D-M0-9 决策依据）
+│       ├── M0-report.md              ←     **交接文档**（命题↔测试 ID / 门禁证据 / 差距 / 接手指南）
+│       └── M0-manifest.json          ←     机器可读事实（**E1–E10 十条** + test_ids + unsupported + budget）
 ├── go_source_code/                   ← Go 1.27.1 官方语料，**只读**，**不入库**（185 MB）
 ├── rust-toolchain.toml               ← Rust 版本唯一来源（1.98.1）
 ├── .dockerignore                     ← 构建上下文收敛（镜像只需要 Dockerfile + toolchain 文件）
@@ -114,7 +115,6 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
 **尚不存在**（由 M0 后续阶段创建，结构见 `03` §2）：`rgoc/crates/` 下的编译器正式 crate（lexer / parser / sema / mir / codegen …）—— `rgoc-hir` 虽已存在但**是 SPIKE-ONLY**，M5 会被正式 HIR 整体替换。
-**已创建但为空/待填充**：`docs/contracts/`（空，M0 Phase 4 产出 5 份初稿）。
 
 ---
 
@@ -193,10 +193,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 |---|---|
 | 编译器工程 | `rgoc/` 下**只有 harness + 两个工具 crate**（`rgoc-harness` / `rgoc-driver` / `xtask`），harness 已不只是调试目标：T31 落下了 Test IR 骨架（16 个必录字段 + 八种判定分类 + 冻结预算的唯一入口 `Limits::for_layer`），T37 加了 CLI 与构建期工具，T38 出了 E4 基线（20/20），T39 复核登记并把登记变成可执行断言。**编译器实现仍未开始** —— 还没有 lexer / parser / HIR（那是 Phase 3 的 `rgoc-hir` 与三个 spike） |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
-| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）**；下一步 Phase 3 的三个架构 spike（T40 建 `rgoc-hir`，T41 建 `rgoc-spikes`）** |
+| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）。**Phase 3 已完成（T40–T47，2026-10-07）**：两个 SPIKE-ONLY crate 落地、三个 spike 跑通、**E6/E7 通过**；**Phase 4 已完成（T48–T55）**：五份契约 + `M0-report.md` + manifest 完整化 + **E9 六条退出检查**。**M0 五个 Phase 全部完成，E1–E10 十条门禁全过；下一步 M1（词法与位置）**—— 开工前读 `M0-report.md` §7 |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
-| 阶段目录 | `docs/contracts/` **已创建但为空**；`docs/milestones/` 含 M0 四件套 + `M0-manifest.json` |
+| 阶段目录 | `docs/contracts/` **5 份契约已产出**（C1 留位 / C2 完整初稿 / C3–C5 spike 级）；`docs/milestones/` 含 M0 四件套 + `M0-report.md` + `M0-manifest.json` |
 | 事实修正 | 02 **§0.2** 记录了 **9 处**对既有表述的修正（如 `syntax/testdata/` 实为 **31** 个文件；驱动器是 `testdir_test.go` 而非 `test/run.go`）——**以该节为准** |
 
 ---
