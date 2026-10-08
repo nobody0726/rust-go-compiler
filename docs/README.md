@@ -21,10 +21,12 @@
 | 阶段 | 文档 | 角色 | 状态 |
 |---|---|---|---|
 | M0 | [`milestones/M0-design.md`](./milestones/M0-design.md) | **怎么建 M0** —— 设计决策 D-M0-1~12、环境基线、Phase 0–4、门禁 E1–E10 | **已确认** |
-| M0 | [`milestones/M0-tests.md`](./milestones/M0-tests.md) | **怎么验 M0** —— 测试 ID（T-H/T-C/T-S1~S3）、20 个官方样本清单、unsupported 清单、超时预算 | 待冻结 |
-| M0 | [`milestones/M0-plan.md`](./milestones/M0-plan.md) | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（文件路径 / 可粘贴内容 / 验证命令） | **Phase 0–1 已完成**；Phase 2–4 已拆完、待开工 |
+| M0 | [`milestones/M0-tests.md`](./milestones/M0-tests.md) | **怎么验 M0** —— 测试 ID（T-H/T-C/T-S1~S3）、20 个官方样本清单、unsupported 清单 U1–U14、超时预算 | **已冻结**（T29，2026-10-02；§5.1 另有**修订 R1**） |
+| M0 | [`milestones/M0-plan.md`](./milestones/M0-plan.md) | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（文件路径 / 可粘贴内容 / 验证命令） | ✅ **全部完成**（T01–T55，2026-10-07） |
 | M0 | [`milestones/M0-benchmarks.md`](./milestones/M0-benchmarks.md) | **实测依据** —— 镜像时间/体积、冷启动、编译、`target/` 挂载布局对比、可复现性结论、环境陷阱清单、调试环境四则案例（CodeLLDB 平台包 / DWARF 变量条目 / VS Code Server / cargo 启动配置） | **已产出**（E10 证据） |
-| M0 | [`milestones/M0-manifest.json`](./milestones/M0-manifest.json) | **机器可读事实** —— `environment`（E2）+ `gate`（E1/E2/E10/E5）+ `test_contract`（冻结口径与分母）+ `phase_plan` + `benchmarks`（E10） | **已填实**（四条门禁全部 `pass`） |
+| M0 | [`milestones/M0-manifest.json`](./milestones/M0-manifest.json) | **机器可读事实** —— `environment`（E2）+ `gate`（**E1–E10 十条**）+ `test_ids`（37 条）+ `unsupported`（U1–U14）+ `budget` + `test_contract` + `phase_plan` + `benchmarks` | ✅ **已填实**（十条门禁全部 `pass`） |
+| M0 | [`milestones/M0-report.md`](./milestones/M0-report.md) | **交接文档** —— 三个命题各由哪个测试 ID 证明、门禁证据出处、spike 留下的差距、未验证范围（U1–U14）、**接手指南** | ✅ **已产出**（T53） |
+| M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 留位 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 

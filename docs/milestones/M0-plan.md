@@ -56,7 +56,7 @@
 | T23–T27 | Phase 1 · devcontainer | — | ✅ |
 | T28 | Phase 1 · **实测断点命中** | **E5** | ✅ 2026-10-02 |
 | T29–T39 | Phase 2 · Rust 工程骨架与 harness 自验 | **E3** + **E4** | ✅ **完成**（T39 于 2026-10-05 收口；E3 过 10-04、E4 过 10-05（20/20）） |
-| T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ⏳ **下一步**（前置已解除，2026-10-05） |
+| T40–T47 | Phase 3 · 三个架构 spike（解释 / SSA / native） | **E6** + **E7** | ✅ **完成**（T47 于 2026-10-07 收口；E6 与 E7 同日过） |
 | T48–T55 | Phase 4 · 契约初稿与交付报告 | **E8** + **E9** | ✅ pass（2026-10-07） |
 
 ---
@@ -2175,7 +2175,9 @@ python3 scripts/check-m0-consistency.py                 123 条断言全过，ex
 - `phase_plan.phase2` 补 T37/T38 两条 `done`，`status` 由 `in_progress` → **`done`**，
   补 `crates` / `reports` / `gate_commands` / `gate_result` / `completed_at`。
 - `phase_plan.phase3` 补 `blocked_by`：D-M0-2 的阻塞**已解除**（Phase 2 门禁全过）。
-- `AGENTS.md` 回写：速览、一句话状态、§3.2 状态快照、下一步清单全部同步到「Phase 3 待开工」。
+- `AGENTS.md` 回写：速览、一句话状态、§3.2 状态快照、下一步清单全部同步。
+  （T39 当时的下一步是「Phase 3 待开工」；Phase 3 已于 **2026-10-07** 完成，
+  故该处现为「M0 全部完成，下一步 M1」。）
 
 **T39 的实质不是「跑一遍」，而是把登记变成可执行断言**（新增 §5d / §5e 两节，**19 条**）：
 
@@ -2507,10 +2509,14 @@ python3 scripts/debug-smoke-test.sh 2>/dev/null || docker exec <容器名> bash 
 | # | 事项 | 状态 |
 |---|---|---|
 | 1 | 交付用户可用的 VSCode 调试环境（用户明确要求的那一项） | ✅ **已交付**：`.devcontainer/` + `.vscode/launch.json` + 两个离线安装脚本，用户在容器内按 F5 实测断开成功 |
-| 2 | 基于**实测到的环境事实**回头拆 **Phase 2–4** 的计划 | ⏳ **待办**（前置条件已满足，见 §0.1 的状态更新） |
+| 2 | 基于**实测到的环境事实**回头拆 **Phase 2–4** 的计划 | ✅ **已完成**（2026-10-02 拆完 T29–T55；Phase 2/3/4 已分别于 10-05、10-07、10-07 收口） |
 | 3 | 更新 `M0-manifest.json` 与 `M0-plan.md` 的执行状态 | ✅ **已完成**：`gate.E5 = pass`（含 `confirmed_at`/`confirmed_by`）、本节的检查表与门禁汇总表均已回写 |
 
-**下一步（Phase 2 开工前）**：① 冻结 `M0-tests.md`；② 拆 Phase 2–4 计划；③ 跑一遍 `AGENTS.md` §6.1 的自检。
+**Phase 2 开工前的三件事（2026-10-02 当时）均已完成**：① 冻结 `M0-tests.md`（T29）；
+② 拆 Phase 2–4 计划（T31 一次性补写 T29–T55）；③ 跑自检。
+
+> **M0 全部完成（2026-10-07）**：T01–T55 全部完成，**E1–E10 十条门禁全过**。
+> 交接指引见 `M0-report.md`（§7 含「开始 M1 之前必须知道的三件事」）。
 
 ### Phase 2 出口（✅ 已通过 —— E3 2026-10-04 / E4 2026-10-05）
 

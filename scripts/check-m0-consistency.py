@@ -256,10 +256,22 @@ def main() -> int:
               bool(all_gates) and set(all_gates.values()) == {"pass"},
               str(all_gates))
         # 反向：manifest 里必须至少有这些门禁（防止「全删了也算通过」）
-        required_gates = {"E1", "E2", "E3", "E4", "E5", "E6", "E7", "E10"}
-        check("gate: 八条门禁齐备（E1-E7 + E10）",
+        required_gates = {"E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "E10"}
+        check("gate: 十条门禁齐备（E1–E10）",
               required_gates.issubset(set(all_gates)),
               f"缺 {sorted(required_gates - set(all_gates))}")
+        # ⚠️ 字段结构必须【十条一致】（2026-10-08 加）。
+        # 事故：E1/E2/E5/E10（Phase 0–1 登记）用 `evidence`，E3–E9 用 `confirmed_by`，
+        # 且前四条**根本没有** `name` / `confirmed_at`。两条路并存时，
+        # 「每条都有证据吗」这类检查得写两种分支 —— **漏一条就不会被发现**。
+        # 字段名不统一还有个更坏的后果：将来写「查所有门禁的证据」的脚本时，
+        # 会静默漏掉一半。
+        GATE_FIELDS = ("status", "name", "confirmed_at", "evidence")
+        for gid in sorted(required_gates):
+            g = manifest["gate"].get(gid, {})
+            miss = [f for f in GATE_FIELDS if f not in g]
+            check(f"gate.{gid} 的登记字段齐全（{'/'.join(GATE_FIELDS)}）",
+                  not miss, f"缺 {miss}" if miss else "")
         # E3 / E4 是 Phase 2 的两条门禁（T36 / T38）。它们也必须 pass ——
         # 「环境门禁过了就算 Phase 2 过了」是错的，D-M0-2 要求的是**全部门禁**。
         phase2 = {k: manifest["gate"].get(k, {}).get("status") for k in ("E3", "E4")}
@@ -995,6 +1007,32 @@ def main() -> int:
               "stdout 精确等于" in rep and "是错的" in rep,
               "P1 的原期望是 stdout，实际是 stderr —— 必须如实记录")
         check("M0-report.md 有接手指南", "接手指南" in rep, "E9 第 5 条")
+
+    # ── 5h. 已知缺口必须【登记在案】，而不是悄悄略过 ──────────────────────
+    # 动机：M0 已完成，但确实有「承诺过却没做」的事（如 `03` §0.3 要求的
+    # 「逐 ID 适用维度清单」就没建）。**没登记 = 下一个人会以为已经做了。**
+    # 这条断言的作用不是要求缺口为零，而是**逼它们出现在 manifest 里**。
+    print("[5h] 已知缺口（open_gaps）已登记且不与报告脱节")
+    gaps = manifest.get("open_gaps", {}).get("items", [])
+    check("manifest 登记了 open_gaps 清单", len(gaps) >= 1, f"{len(gaps)} 条")
+    for g in gaps:
+        gid = g.get("id", "?")
+        # 每条都要说清「是什么 / 状态 / 归谁」—— 少任一栏，接手人就无法行动
+        check(f"{gid} 有 item 描述", len(str(g.get("item", ""))) >= 5, g.get("item", "(缺失)"))
+        check(f"{gid} 有 status", len(str(g.get("status", ""))) >= 5, str(g.get("status", ""))[:36])
+        check(f"{gid} 有 owner（归属）", bool(g.get("owner")), g.get("owner", "(缺失)"))
+    # GAP-01 是个**被 M0 承诺过**的缺口，必须同时出现在报告里
+    if any(g.get("id") == "GAP-01" for g in gaps):
+        check("GAP-01（逐 ID 维度清单）也登记在 M0-report.md",
+              "GAP-01" in (REPO_ROOT / report_rel).read_text(encoding="utf-8"),
+              "承诺过却没做的事，必须在交接文档里可见")
+        # 报告里的规模数字必须与 01 的真实 ID 数一致（防止「随手写个数字」）
+        feat = (REPO_ROOT / "docs/01-feature-set.md").read_text(encoding="utf-8")
+        n_feat = len(set(re.findall(r"\| ([A-Z]{2,4}-[0-9]+) \|", feat)))
+        g1 = next(g for g in gaps if g["id"] == "GAP-01")
+        check("GAP-01 登记的功能 ID 数 == 01 的真实数量",
+              f"共 {n_feat} 个功能 ID" in g1.get("actual_scale", ""),
+              f"01 里实际 {n_feat} 个；登记：{g1.get('actual_scale', '(缺失)')[:40]}")
 
     # ── 6. 文档记录的规模与实际一致 ────────────────────────────────────────
     # 动机：本轮把断言从 45 一路加到 60+，`AGENTS.md` 里的数字靠手工同步

@@ -26,8 +26,8 @@ writing-plans
 |---|---|---|
 | `docs/milestones/M0-design.md` | ✅ 本文件 | 设计决策与边界（**已确认**） |
 | `docs/milestones/M0-tests.md` | ✅ **已产出** | 必需测试 ID、比较器、验证命令、暂不支持项（见 [`M0-tests.md`](./M0-tests.md)） |
-| `docs/milestones/M0-plan.md` | ✅ **已产出（Phase 0–1）** | 2–5 分钟粒度实施任务（见 [`M0-plan.md`](./M0-plan.md)） |
-| 机器可读 manifest | ⏳ 部分 | `M0-manifest.json` 的 `environment` 节由 T15 产出；其余节在 Phase 2–4 填充 |
+| `docs/milestones/M0-plan.md` | ✅ **已产出（T01–T55 全部完成）** | 2–5 分钟粒度实施任务（见 [`M0-plan.md`](./M0-plan.md)） |
+| 机器可读 manifest | ✅ **已填实** | `M0-manifest.json`：`environment`（T15）+ `gate`（**E1–E10 十条**）+ `test_ids`（37 条）+ `unsupported`（U1–U14）+ `budget` + `test_contract` + `phase_plan` + `benchmarks`（T54） |
 
 ---
 
@@ -462,11 +462,22 @@ writing-plans 把 §6 的 Phase 拆成 **2–5 分钟粒度**的任务，每个�
 - **D-M0-7 ~ D-M0-12**（§2.1 六项新增设计决策）—— 2026-10-02 用户全部接受。
 - **`docs/milestones/M0-tests.md`** —— 已产出（§10.2 的全部内容）。
 
-### 11.2 下一步
+### 11.2 下一步（**已于 2026-10-07 全部完成**）
 
-1. 用 **writing-plans** 把 Phase 0–4 拆成 **2–5 分钟**任务（§10.1：文件路径 / 可粘贴代码 / 验证命令）；
-2. 按 §6.1 开始 **Phase 0** 实施（钉 digest 镜像 + Rust 工具链 + `clang` + 环境 manifest）；
-3. Phase 1 完成后交付**用户本地 VSCode 可断点调试的环境**（E5）。
+> ⚠️ 本节原为 M0 **开工前**的「下一步」清单。三项均已完成 ——
+> 保留原文是为了让读者看到当时的顺序，**别再把它们当待办**。
+
+1. ~~用 **writing-plans** 把 Phase 0–4 拆成 **2–5 分钟**任务~~ ✅ **已完成**
+   （`M0-plan.md` 的 T01–T55，2–5 分钟粒度，含文件路径 / 可粘贴内容 / 验证命令）
+2. ~~按 §6.1 开始 **Phase 0** 实施~~ ✅ **已完成**
+   （T01–T19；钉 digest 镜像 + Rust 工具链 + `clang` + 环境 manifest，E1/E2/E10 通过）
+3. ~~Phase 1 完成后交付**用户本地 VSCode 可断点调试的环境**（E5）~~ ✅ **已完成**
+   （T20–T28；E5 于 2026-10-02 由用户按 F5 **实测断点命中**确认）
+
+**M0 现状**：T01–T55 全部完成，**E1–E10 十条门禁全过**。
+未完成 / 主动不做的事**如实登记**在 `M0-manifest.json` 的 `open_gaps` 节
+（`GAP-01` 逐 ID 维度清单未建 / `GAP-02` 正则子集 / `GAP-03` 无位置字段 / `GAP-04` CI 未实施）。
+交接指引见 [`M0-report.md`](./M0-report.md)。
 
 ### 11.3 文档同步（已完成）
 

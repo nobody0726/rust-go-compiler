@@ -199,19 +199,31 @@ M0 不搭建完整 CI、不下载全部依赖、不开始 M1–M12 的实现，�
 
 ---
 
-## 9. 待讨论并需要在 M0 决定的事项
+## 9. 原本待决定的事项 —— **M0 已全部拍板**（2026-10-07 回填）
 
-以下事项现在不强行拍板：
+> ⚠️ **本节原为「待讨论并需要在 M0 决定的事项」，写于 M0 开工前。**
+> M0 已完成（E1–E10 十条门禁全过），七项**全部有了实测结论**。
+> 保留原文是为了让读者看到「当时的判断」，但**下面每一项都已是既定事实** ——
+> 别再把它们当悬而未决的问题。
 
-1. 基础镜像 digest 的钉法与更新策略（tag+digest 并存还是只写 digest）；
-2. 容器的 CPU、内存与磁盘配额；
-3. Rust toolchain 采用 `rustup` + `rust-toolchain.toml` 钉版本，还是直接使用镜像内置；
-4. 依赖缓存放容器卷还是绑定挂载；
-5. 容器是长期运行实例，还是每次命令 `docker run`；
-6. 是否需要 CI 使用与本地同 digest 的等同容器；
-7. 是否需要第二个 Linux target，以及它是否值得承担双 target 维护成本。
+| # | 原本待定 | **M0 的决定** | 依据 |
+|---|---|---|---|
+| 1 | 基础镜像 digest 的钉法与更新策略 | ✅ **tag + digest 并存**：tag 仅作可读性注释，**解析只走 digest** | `docker/image.lock` 的 `base.tag` + `base.index_digest`；D-M0-7 |
+| 2 | 容器的 CPU、内存与磁盘配额 | ✅ **未显式设限**，实测环境为 `nproc=10` / `mem≈7.75 GiB` / Debian 12 bookworm | manifest `environment.resources` |
+| 3 | Rust toolchain 用 `rustup` + 钉版本，还是用镜像内置 | ✅ **`rustup` + `rust-toolchain.toml` 钉版（1.98.1）**，且该文件是版本的**唯一来源** | D-M0-8；`rust-toolchain.toml` |
+| 4 | 依赖缓存放容器卷还是绑定挂载 | ✅ **三个命名卷**：`rgoc-target` / `rgoc-cargo-registry` / `rgoc-cargo-git` | D-M0-9；T18 实测 bind mount 慢 **2.3×**（`M0-benchmarks.md` §4） |
+| 5 | 容器长期运行还是每次 `docker run` | ✅ **双形态同镜像**：开发用长期驻留 devcontainer，门禁用一次性 `docker run` | D-M0-10 |
+| 6 | 是否需要 CI 使用同 digest 的等同容器 | ✅ **暂不建 CI**，但「同 digest 可接入」的能力已具备（`in-container.sh` 即该入口） | `03` §4 M0 砍项「不实施完整 CI」 |
+| 7 | 是否需要第二个 Linux target | ✅ **不建**（首发固定 `aarch64-unknown-linux-gnu`）；双 target 维护成本不划算 | D-M0-3；`03` §0.2 |
 
-默认建议是：先按 digest 固定 `golang:1.27.1-bookworm` 派生的镜像 + 钉版 Rust，先用当前资源完成 M0 测量；依赖缓存优先放**容器卷**，因为 Linux 侧写入绑定挂载在 macOS 上通常明显更慢。
+**两个「定了但要记住后果」的**：
+
+- **第 1 条的代价**：镜像**位级不可复现**（14 层里 6 层 digest 变）⇒
+  **image id 不得写进门禁**，钉子只能用 `base.index_digest` + `src.*_sha256`。
+  实测见 `M0-benchmarks.md` §5。
+- **第 4 条的代价**：命名卷的属主问题（新建空卷为 `root:root`，须 `chown 501:20`；
+  且 `in-container.sh` 的 bootstrap **只在新建空卷时**接管，已存在但属主错的卷不会被修）。
+  这是换机器时最常踩的环境坑，处置见 `M0-benchmarks.md` §6。
 
 ---
 
