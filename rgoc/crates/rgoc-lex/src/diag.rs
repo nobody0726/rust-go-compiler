@@ -18,6 +18,19 @@
 //! `03` §3.4 规定：诊断先对齐**拒绝/接受、位置和预定义类别**，**文本另列指标**。
 //! 所以 golden 只存 `行:列 + DiagCode`（`M1-design.md` D-M1-9），
 //! `message` 是给人看的，不参与任何比对。
+//!
+//! # 这张码表是**枚举**出来的，不是想出来的
+//!
+//! 第一版只有 19 个代号，是**凭印象**从官方 scanner 的报错消息里挑的 —— 结果漏了 4 个
+//! （`LEX-BAD-DIGIT` / `LEX-BAD-RADIX-POINT` / `LEX-STRING-NEWLINE` / `LEX-ESCAPE-BAD-DIGIT`）。
+//! 漏掉时**不会报错**：那 4 条消息出现时行为未定义 —— 与 `AGENTS.md` 记的
+//! 「写死的键列表会变成盲区」同形。
+//!
+//! 现在是**枚举** `scanner.go` / `source.go` 里全部 `errorf`/`errorAtf`/`error` 调用点
+//! （26 处 ⇒ 去重 25 条消息模板）得到 22 个官方代号，再加 1 个本仓自己的限制，共 **23**。
+//!
+//! 两侧（Go 的 `tools/token-oracle/diagmap.go` 与这里）必须逐字一致 ——
+//! 由 `diag_code_的码表与_go_侧映射表逐字一致` 跨语言对撞，而不是靠人记得同步。
 
 use crate::pos::Pos;
 
@@ -33,16 +46,22 @@ use crate::pos::Pos;
 pub enum DiagCode {
     /// 不认识的字符
     BadChar,
+    /// 进制字面量里出现了不属于该进制的数位（如 `0b12` 里的 `2`）
+    BadDigit,
     /// 指数缺数字 / 进制与尾数不匹配
     BadExponent,
     /// 标识符里混入非法字符
     BadIdentChar,
+    /// 进制字面量里出现小数点（如 `0b1.0`）—— 只有十进制与十六进制允许
+    BadRadixPoint,
     /// `_` 没有分隔连续的数码
     BadSep,
     /// 文件中部出现 BOM
     BomMidFile,
     /// 块注释未终止
     CommentUnterminated,
+    /// 转义序列里的数位非法（如 `\xZZ`）
+    EscapeBadDigit,
     /// 八进制转义值 > 255
     EscapeOctalOver,
     /// 转义值超范围或落在代理区
@@ -67,6 +86,8 @@ pub enum DiagCode {
     RuneNewline,
     /// rune 字面量未终止
     RuneUnterminated,
+    /// 解释型字符串里出现裸换行
+    StringNewline,
     /// 字符串未终止
     StringUnterminated,
 }
@@ -76,13 +97,16 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 19] = [
+    pub const ALL: [DiagCode; 23] = [
         DiagCode::BadChar,
+        DiagCode::BadDigit,
         DiagCode::BadExponent,
         DiagCode::BadIdentChar,
+        DiagCode::BadRadixPoint,
         DiagCode::BadSep,
         DiagCode::BomMidFile,
         DiagCode::CommentUnterminated,
+        DiagCode::EscapeBadDigit,
         DiagCode::EscapeOctalOver,
         DiagCode::EscapeRange,
         DiagCode::EscapeUnknown,
@@ -95,6 +119,7 @@ impl DiagCode {
         DiagCode::RuneMulti,
         DiagCode::RuneNewline,
         DiagCode::RuneUnterminated,
+        DiagCode::StringNewline,
         DiagCode::StringUnterminated,
     ];
 
@@ -102,11 +127,14 @@ impl DiagCode {
     pub fn as_str(self) -> &'static str {
         match self {
             DiagCode::BadChar => "LEX-BAD-CHAR",
+            DiagCode::BadDigit => "LEX-BAD-DIGIT",
             DiagCode::BadExponent => "LEX-BAD-EXPONENT",
             DiagCode::BadIdentChar => "LEX-BAD-IDENT-CHAR",
+            DiagCode::BadRadixPoint => "LEX-BAD-RADIX-POINT",
             DiagCode::BadSep => "LEX-BAD-SEP",
             DiagCode::BomMidFile => "LEX-BOM-MIDFILE",
             DiagCode::CommentUnterminated => "LEX-COMMENT-UNTERMINATED",
+            DiagCode::EscapeBadDigit => "LEX-ESCAPE-BAD-DIGIT",
             DiagCode::EscapeOctalOver => "LEX-ESCAPE-OCTAL-OVER",
             DiagCode::EscapeRange => "LEX-ESCAPE-RANGE",
             DiagCode::EscapeUnknown => "LEX-ESCAPE-UNKNOWN",
@@ -119,6 +147,7 @@ impl DiagCode {
             DiagCode::RuneMulti => "LEX-RUNE-MULTI",
             DiagCode::RuneNewline => "LEX-RUNE-NEWLINE",
             DiagCode::RuneUnterminated => "LEX-RUNE-UNTERMINATED",
+            DiagCode::StringNewline => "LEX-STRING-NEWLINE",
             DiagCode::StringUnterminated => "LEX-STRING-UNTERMINATED",
         }
     }

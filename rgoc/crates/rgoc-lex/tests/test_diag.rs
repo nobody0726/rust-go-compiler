@@ -24,8 +24,8 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 }
 
 #[test]
-fn 代号表恰好十九个且无重复() {
-    assert_eq!(DiagCode::ALL.len(), 19);
+fn 代号表恰好二十三个且无重复() {
+    assert_eq!(DiagCode::ALL.len(), 23);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
@@ -106,4 +106,64 @@ fn diag_bag_的_len_与_is_empty_跟随_push() {
     bag.push(d(0, 1, 1, DiagCode::BadChar));
     assert!(!bag.is_empty());
     assert_eq!(bag.len(), 1);
+}
+
+/// 跨语言对撞：Rust 的码表必须与 Go 侧 `allCodes` **逐字一致**。
+///
+/// # 为什么要跨语言去读一个 Go 文件
+///
+/// 这张表曾经只有 19 个代号 —— 是**凭印象**从官方报错消息里挑的，而把
+/// `scanner.go` / `source.go` 里全部 `errorf`/`errorAtf`/`error` 调用点枚举出来，
+/// 实际有 **25 条消息模板**。漏掉的 4 条（`LEX-BAD-DIGIT` / `LEX-BAD-RADIX-POINT` /
+/// `LEX-STRING-NEWLINE` / `LEX-ESCAPE-BAD-DIGIT`）在当时**不会引发任何报错** ——
+/// 只会在那 4 条消息真的出现时行为未定义。
+///
+/// 「两侧各维护一份清单」= 必然漂移（这正是 `AGENTS.md` 记的
+/// 「写死的键列表会变成盲区」，已三次同形）。所以这里用一条断言把它们钉在一起：
+/// 任何一侧改了而另一侧没改，这条测试立刻红。
+///
+/// 用 `CARGO_MANIFEST_DIR` 拼**绝对路径**，所以不受测试工作目录影响。
+#[test]
+fn diag_code_的码表与_go_侧映射表逐字一致() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tools/token-oracle/diagmap.go");
+    let src = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("读不到 Go 侧映射表 {}：{e}", path.display()));
+
+    const HEAD: &str = "var allCodes = []string{";
+    let start = src
+        .find(HEAD)
+        .unwrap_or_else(|| panic!("{} 里找不到 `{HEAD}` 声明", path.display()));
+    let rest = &src[start..];
+    let end = rest
+        .find('}')
+        .unwrap_or_else(|| panic!("{} 的 allCodes 声明未闭合", path.display()));
+    let body = &rest[HEAD.len()..end];
+
+    let mut go_codes: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        let lit = line.strip_suffix(',').unwrap_or(line).trim();
+        let lit = lit.trim_matches('"');
+        if !lit.is_empty() {
+            go_codes.push(lit);
+        }
+    }
+    assert!(
+        !go_codes.is_empty(),
+        "解析 {} 的 allCodes 得到 0 条 —— 解析逻辑坏了（不是数据坏了）",
+        path.display()
+    );
+    go_codes.sort_unstable();
+
+    let mut rs_codes: Vec<&str> = DiagCode::ALL.iter().map(|c| c.as_str()).collect();
+    rs_codes.sort_unstable();
+
+    assert_eq!(
+        rs_codes, go_codes,
+        "Rust 的 DiagCode 与 Go 侧 allCodes 不一致 —— 两侧必须同步（见 `M1-design.md` §7.2 的 D-M1-11）"
+    );
 }

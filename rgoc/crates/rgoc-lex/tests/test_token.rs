@@ -254,20 +254,20 @@ fn lit_kind_的官方编码与实测值一致() {
 fn token_是_位置_加_类别() {
     let t = Token {
         pos: at(3, 7),
-        kind: TokenKind::Ident("变量".to_string()),
+        kind: TokenKind::Ident("变量".as_bytes().to_vec()),
     };
     assert_eq!(t.pos.line, 3);
     assert_eq!(t.pos.col, 7);
-    assert_eq!(t.kind, TokenKind::Ident("变量".to_string()));
+    assert_eq!(t.kind, TokenKind::Ident("变量".as_bytes().to_vec()));
     assert_ne!(t.kind, TokenKind::Eof);
 }
 
 #[test]
 fn 七种_token_kind_分支都能构造且两两不等() {
     let all = [
-        TokenKind::Ident("x".to_string()),
+        TokenKind::Ident(b"x".to_vec()),
         TokenKind::Literal {
-            text: "1".to_string(),
+            text: b"1".to_vec(),
             lit_kind: LitKind::Int,
             bad: false,
         },
@@ -295,12 +295,12 @@ fn literal_的_bad_是载荷的一部分_不能丢() {
     // `0x` 这类畸形字面量**照常产出词元**（实测事实：bad=true + 一条诊断）。
     // 若 bad 不参与相等性，"畸形"与"正常"就会在比对时被当成同一个词元。
     let ok = TokenKind::Literal {
-        text: "0".to_string(),
+        text: b"0".to_vec(),
         lit_kind: LitKind::Int,
         bad: false,
     };
     let bad = TokenKind::Literal {
-        text: "0x".to_string(),
+        text: b"0x".to_vec(),
         lit_kind: LitKind::Int,
         bad: true,
     };
@@ -343,4 +343,63 @@ fn name_of(o: Operator) -> &'static str {
         Operator::Shl => "Shl",
         Operator::Shr => "Shr",
     }
+}
+
+/// R7 的回归断言：词元载荷**必须能装下非法 UTF-8**。
+///
+/// 实测（oracle）：`x\xff y` 里标识符的原文是 `x\xff` —— 那个 `0xFF` 不是合法 UTF-8。
+/// 若载荷是 `String`，这条断言**根本无法构造**（或者被迫做有损转换 ⇒ 静默丢信息，
+/// 而 golden 比对会因为"少了一个字节"而红，红得让人找不到原因）。
+#[test]
+fn 标识符与字面量的载荷能装下非法_utf8() {
+    let ident = TokenKind::Ident(vec![b'x', 0xff]);
+    let lit = TokenKind::Literal {
+        text: vec![b'1', 0xff, b'2'],
+        lit_kind: LitKind::Int,
+        bad: false,
+    };
+    // 关键：字节必须**原样保留**，一个都不能少、不能被替换成 U+FFFD
+    match &ident {
+        TokenKind::Ident(b) => assert_eq!(b, &vec![b'x', 0xff], "非法字节被改写了"),
+        other => panic!("期望 Ident，得到 {other:?}"),
+    }
+    match &lit {
+        TokenKind::Literal { text, .. } => {
+            assert_eq!(text, &vec![b'1', 0xff, b'2'], "非法字节被改写了")
+        }
+        other => panic!("期望 Literal，得到 {other:?}"),
+    }
+}
+
+/// 与上一条配对：合法 UTF-8 的载荷仍应能当 `&str` 用（关键字查询走这条路）。
+#[test]
+fn 合法_utf8_的标识符可以转成_str() {
+    let k = TokenKind::Ident("变量".as_bytes().to_vec());
+    match &k {
+        TokenKind::Ident(b) => {
+            assert_eq!(std::str::from_utf8(b).unwrap(), "变量");
+            // 关键字全是 ASCII ⇒ 这个标识符必然不是关键字
+            assert_eq!(Keyword::lookup(std::str::from_utf8(b).unwrap()), None);
+        }
+        other => panic!("期望 Ident，得到 {other:?}"),
+    }
+}
+
+/// **非法 UTF-8 的标识符必然不是关键字** —— 这是"载荷用字节"之后要保住的性质。
+///
+/// 推导：关键字表全是 ASCII 拼写，而非法的字节序列连 `&str` 都构造不出来，
+/// 所以查询必然返回 `None`。它值得单独一条断言，因为**另一条路是错的**：
+/// 若用 `from_utf8_lossy`（把非法字节换成 U+FFFD）再查，
+/// 会得到一个"看起来正常但内容已被改写"的字符串 —— 静默丢信息。
+#[test]
+fn 非法_utf8_的标识符查不到关键字() {
+    // 经过一层函数参数，避免把常量非法字面量直接喂给 from_utf8
+    fn lookup_bytes(b: &[u8]) -> Option<Keyword> {
+        std::str::from_utf8(b).ok().and_then(Keyword::lookup)
+    }
+
+    let invalid: Vec<u8> = vec![b'x', 0xff];
+    assert_eq!(lookup_bytes(&invalid), None, "非法 UTF-8 不该查出关键字");
+    // 反证：同样是字节，合法拼写能查到 —— 说明上面那个 None 是"因为非法"，不是"因为坏了"
+    assert_eq!(lookup_bytes(b"for"), Some(Keyword::For));
 }

@@ -213,7 +213,7 @@ Expected: 4 passed
 
 ```bash
 git add rgoc/crates/rgoc-lex
-git commit -m "feat(lex): Diag/DiagBag/DiagCode（C1 排序规则 + 19 个诊断代号）"
+git commit -m "feat(lex): Diag/DiagBag/DiagCode（C1 排序规则 + 23 个诊断代号）"
 ```
 
 ---
@@ -316,7 +316,7 @@ git commit -m "feat(lex): TokenKind 及配套枚举（25 关键字 / 48 项运�
 **Files:**
 - Create: `tools/token-oracle/README.md`
 - Create: `tools/token-oracle/gosyntax/{scanner.go,source.go,tokens.go,token_string.go,operator_string.go}`
-- Create: `tools/token-oracle/adapter.go`
+- Create: `tools/token-oracle/{main.go,diagmap.go}` + `gosyntax/export.go`
 - Create: `tools/token-oracle/go.mod`
 
 > **执行期裁决 R4（文件清单修正）**：实际落地是 **`main.go` + `diags.go` + `gosyntax/export.go`**，
@@ -357,13 +357,14 @@ Expected: 失败 —— 目录不存在
 
 1. 从 `go_source_code/src/cmd/compile/internal/syntax/` 复制 **5 个文件**到 `gosyntax/`，
    **不动内容**（保留 BSD-3-Clause 许可头）。
-2. `adapter.go`：调 `next()`，按 `M1-tests.md` §5.2 的格式输出，并实现**四条规范化纪律**：
+2. `main.go`（经 `gosyntax/export.go` 的同包 shim 调 `next()`）：按 `M1-tests.md` §5.2 的格式输出，
+   并实现**四条规范化纪律**：
    只录有效域内的 `lit`、两条流各自排序、诊断只输出 `行:列 + DiagCode`（需要一张
    「官方消息 → DiagCode」映射，照 `M1-design.md` §7.2 的表）、输出确定性。
 3. `README.md` 记：来源路径、go1.27.1、五文件的 sha256、**再生成步骤**、以及
    **「样本文件不能叫 `.go` 且与 adapter 同目录」**这条坑。
 
-> **⚠️ 执行期发现：§7.2 的诊断代号表不全**（详见 R5）。原表 19 条是**凭印象手写**的，
+> **⚠️ 执行期发现：§7.2 的诊断代号表不全**（见 `M1-design.md` D-M1-11 / §12 的 R8）。原表 19 条是**凭印象手写**的，
 > 而把 `scanner.go` / `source.go` 里**全部** `errorf`/`errorAtf`/`error` 调用点枚举出来
 > 得到 **26 处错误点 / 25 条消息模板**，比原表多 4 条：
 > `LEX-BAD-DIGIT`、`LEX-BAD-RADIX-POINT`、`LEX-STRING-NEWLINE`、`LEX-ESCAPE-BAD-DIGIT`。
@@ -482,15 +483,20 @@ git commit -m "feat(lex): 由 oracle 生成 Unicode 分类表（字母 684 / 数
 **Interfaces:**
 - Consumes: `T-L01` `Pos`/`FileTable`；`T-L02` `DiagBag`/`DiagCode`
 - Produces:
-  - `rgoc_lex::SourceReader::new(src: Vec<u8>, file: FileId, table: FileTable) -> Self`
+  - `rgoc_lex::SourceReader::new(src: Vec<u8>, file: FileId) -> Self`
+    ← **预检裁决 P2**：**不收 `FileTable`**（`SourceReader` 造 `Pos` 只需要 `FileId`；
+    把表交给它会让 `Lexer` 拿不到所有权）。表归 `Lexer`（T-L15）持有。
   - `ch(&self) -> Option<char>`（**尚未归属**的字符）
   - `chw(&self) -> u8`（`ch` 的字节宽度）
   - `pos(&self) -> Pos`（**当前 `ch` 的位置**，1 起）
-  - `advance(&mut self)`
-  - `segment(&self) -> &[u8]`
+  - `advance(&mut self) -> Option<Diag>`
+    ← **预检裁决 P1**：**`SourceReader` 不持有诊断集合**。字符层若在一次推进里
+    发现错误（NUL / 非法 UTF-8），返回一条 `Diag` 由 `Lexer` 收进自己的 `DiagBag`；
+    两个 bag 需要合并而排序键相同、来源不同 ⇒ 无谓复杂度。
+    （代价：将来若一次推进可能产出**多条**诊断，需改签名为 `Vec<Diag>` —— 目前不会。）
+  - `segment(&self) -> &[u8]`（**字节**，见 D-M1-12）
   - `start_segment(&mut self)` / `stop_segment(&mut self)`
   - `rewind(&mut self)`（**只服务 `..`**，活动段内不得含换行）
-  - `take_diags(&mut self) -> Vec<Diag>`
 
 - [ ] **Step 1: 写失败测试**
 
@@ -630,7 +636,7 @@ git commit -m "feat(lex): 字符层边界输入（BOM/NUL/非法 UTF-8/CRLF/私�
 #[test]
 fn 标识符的续接谓词_能续接的是一类() {
     for s in ["str1", "str1x", "str_", "_x", "日本語", "ab中cd", "a۰۱۸", "foo६४", "bar９８７６", "ŝ"] {
-        assert_eq!(kind_of(s), Ident(s.to_string()), "{s}");
+        assert_eq!(kind_of(s), Ident(s.as_bytes().to_vec()), "{s}");  // 载荷是字节（D-M1-12）
     }
 }
 
@@ -642,7 +648,7 @@ fn 标识符的续接谓词_不能续接的又是一类() {
 #[test]
 fn 关键字在切完之后查_for_vs_forx() {
     assert_eq!(kind_of("for"), Keyword(Keyword::For));
-    assert_eq!(kind_of("forx"), Ident("forx".into()));
+    assert_eq!(kind_of("forx"), Ident(b"forx".to_vec()));
 }
 
 #[test]
@@ -661,6 +667,11 @@ Expected: 编译失败 —— `Lexer` 不存在
 
 两段循环（照官方）：先 ASCII 快路径（`is_letter || is_digit`），再用 `unicode_tables` 走一般路径。
 **切完再查关键字**（`Keyword::lookup`）。**谓词必须用 `unicode_tables`，不得用 Rust std**（G7/D-M1-6）。
+
+> **⚠️ 载荷是 `Vec<u8>`（D-M1-12）** —— 切出来的原文**直接是字节**，不要先转 `String`。
+> 取 `&str` 一律显式 `str::from_utf8`，**不得** `from_utf8_lossy`：
+> 实测 `x\xff y` 的标识符原文里就有非法字节，`from_utf8_lossy` 会把它换成 U+FFFD ⇒ 静默丢信息。
+> 查关键字天然安全：关键字全是 ASCII，非法 UTF-8 转换必然失败 ⇒ 直接 `None`。
 
 - [ ] **Step 4: 跑测试确认通过**
 

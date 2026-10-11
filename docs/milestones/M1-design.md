@@ -137,6 +137,8 @@ writing-plans
 | D-M1-8 | 注释与诊断的取用方式 | 两个独立收集器 + `take`，不用回调 | 2026-10-11 |
 | D-M1-9 | 诊断的判据口径 | 位置 + `DiagCode`，**不复刻官方消息文本** | 2026-10-11 |
 | D-M1-10 | 运算符词元的建模 | `Op` 增加 `form` 字段（**防止丢信息**） | 2026-10-11 |
+| D-M1-11 | 诊断代号表的导出方式 | **枚举全部报错点** + 冻结条目数 + 跨语言对撞断言（19 → 23） | 2026-10-11 |
+| D-M1-12 | 词元载荷的载体 | **字节**（`Vec<u8>`）而非 `String` —— `String` 装不下非法 UTF-8 | 2026-10-11 |
 
 ### 2.2 五字段记录
 
@@ -268,6 +270,36 @@ writing-plans
 | `<-` | `(Plain, Arrow)` | ✅ |
 | `==` | `(Plain, Eql)` | ✅（与 `=` 的 `op` 不同） |
 
+#### D-M1-11　诊断代号表的导出方式
+
+> **本决策同样是执行期的缺陷修补**（`T-L04`）：设计时那张表是**凭印象手写**的。
+
+| 字段 | 内容 |
+|---|---|
+| **判据** | 官方 scanner 报的每条诊断都要有代号；缺一条时**行为未定义**，且不会报错 |
+| **候选** | ① 保持手写清单 ② 只列"常见"的若干条 ③ **枚举全部报错点 + 冻结条目数 + 跨语言对撞断言** |
+| **结论** | **③**。`DiagCode` 由 **19 → 23**；条目数冻结为 25；Rust 码表与 Go 映射表由断言对撞 |
+| **否决理由** | ① 实测已漏 4 条（`LEX-BAD-DIGIT` / `LEX-BAD-RADIX-POINT` / `LEX-STRING-NEWLINE` / `LEX-ESCAPE-BAD-DIGIT`）且**无任何报错**；② "常见"没有判据，只是把漏项藏得更深 |
+| **失效条件** | 若官方把消息模板改成**不可静态枚举**（比如由数据驱动生成）⇒ 枚举法失效，需改为"运行时落盘再比对" |
+
+**落地**：`tools/token-oracle/diagmap.go`（映射表 + `--selfcheck`）、
+`rgoc-lex/src/diag.rs`（23 个变体）、跨语言对撞断言在 `tests/test_diag.rs`。
+
+#### D-M1-12　词元载荷的载体
+
+> **执行期缺陷修补**（`T-L04`）：`T-L03` 已按 `String` 实现，实测后必须改。
+
+| 字段 | 内容 |
+|---|---|
+| **判据** | 词元载荷要能**原样**承载官方产出的原文，否则 golden 无法逐字节对齐 |
+| **候选** | ① `String`（原设计） ② `String` + 有损转换 ③ **`Vec<u8>`** ④ `Lexeme` newtype 包 `Vec<u8>` |
+| **结论** | **③**。`Ident(Vec<u8>)`、`Literal.text: Vec<u8>` |
+| **否决理由** | ① **表达不了实测行为**：`x\xff y` ⇒ `lit="x\xff"`，`0xFF` 不是合法 UTF-8，`String` 在类型上就装不下；② `from_utf8_lossy` 把非法字节换成 U+FFFD ⇒ **静默丢信息**，golden 会因"少一个字节"而红且找不到原因；④ 只是给 `Vec<u8>` 换个名字，而 M2 真正需要的那一步（转 `&str`）本身就只有一行 `str::from_utf8` |
+| **失效条件** | 若 M2 表明它从不需要原始字节（只吃 `&str`）⇒ 可在 M2 收窄；但那时改动面已在 M2 |
+
+**范围界定**：NUL / BOM（U+FEFF）/ 私有区字符（U+E000）**都是合法 UTF-8**，实测能进 `String` ——
+所以这条**只为非法字节序列**服务。
+
 ### 2.3 事实基线（全部为实测，不是推断）
 
 | # | 事实 | 实测方式 |
@@ -292,6 +324,11 @@ writing-plans
 | F18 | 数字分类：Go **770** vs Rust `is_numeric` **1,924**（多 1,154，全 No） | 同上 |
 | F19 | 官方 Unicode 表版本 = **17.0.0** | `unicode.Version` |
 | F20 | 48 条运算符/标点拼写**全部**能切成单一词元（`++`/`--`/`)`/`]`/`}` 额外带出一个自动分号，属正常） | 批量实测 |
+| F21 | 官方对 `=` / `:=` / `<-` **不设 `op`** —— `op` 的有效域不含 `_Assign`/`_Define`/`_Arrow`（`scanner.go:42`） | 源码 + adapter 实测 |
+| F22 | **标识符的原文可含非法 UTF-8**：`x\xff y` ⇒ `name lit="x\xff"` | oracle 实测 |
+| F23 | **`bad=false` 与「原文含非法字节」可以同时成立**：`1\xff2` ⇒ `kind=0 bad=false` —— `bad` 只反映字面量**语法** | oracle 实测 |
+| F24 | 官方 scanner 的诊断消息模板去重后共 **25** 条（26 处错误调用点：scanner 23 / source 3） | 枚举全部 `errorf`/`errorAtf`/`error` |
+| F25 | 伪终端 ONLCR 会把 stdout 的 `\n` 翻成 `\r\n`（终端里**看不出**）⇒ 冻结 golden 必须 `RGOC_TTY=0` | 实测：20 行输出 20 个 CR vs 0 个 |
 
 ---
 
@@ -326,8 +363,8 @@ Pos  →  {file}:{line}:{col}          例：test/helloworld.go:3:7
 pub struct Token { pub pos: Pos, pub kind: TokenKind }
 
 pub enum TokenKind {
-    Ident(String),                                          // _Name
-    Literal { text: String, lit_kind: LitKind, bad: bool }, // _Literal
+    Ident(Vec<u8>),                                          // _Name   ★ D-M1-12
+    Literal { text: Vec<u8>, lit_kind: LitKind, bad: bool }, // _Literal ★ D-M1-12
     Keyword(Keyword),                                       // 25 个，独立枚举
     Op { form: OpForm, op: Operator, prec: u8 },            // ★ D-M1-10
     Delim(Delim),                                           // ( ) [ ] { } , : . ...
@@ -344,6 +381,24 @@ pub enum SemiOrigin { Explicit, Newline, Eof }
 
 **`OpForm` 为什么必须有**：官方用**不同的 `tok`** 区分 `+`/`+=`/`++`；
 若把它们都压成 `op=Add`，**M2 就无法区分二元表达式与赋值语句**。详见 D-M1-10 的无损性核对表。
+
+**`Vec<u8>` 为什么不是 `String`（D-M1-12）**：官方实测（2026-10-11，本仓 oracle）
+
+```text
+输入 (hex)            输出
+78 FF 20 79           name lit="x\xff"      ← 标识符的原文里就有非法字节
+31 FF 32              literal lit="1\xff2"
+```
+
+`0xFF` 不是合法 UTF-8，而 Rust 的 `String` **在类型上**就装不下它。
+若用 `String`，要么编译不过，要么被迫 `from_utf8_lossy`（把非法字节换成 U+FFFD）——
+**后者是静默丢信息**：golden 比对会因为"少了一个字节"而红，且红得找不到原因。
+
+**注意范围**：NUL / BOM（U+FEFF）/ 私有区字符（U+E000）**都是合法 UTF-8**，实测能正常进 `String`。
+所以这条改动**只为非法字节序列**服务 —— 不要因为"要字节"就顺手把别的东西也改成字节。
+
+**`bad` 不是"原文可信"的判据**：实测 `1\xff2` 是 `kind=0 bad=false` ——
+非法 UTF-8 由字符层（`nextch`）报出，不经数字语法，所以 `bad` 不变真。
 
 **设计要点：`lit` 的有效域从注释变成了类型。**
 
@@ -562,30 +617,54 @@ impl SemicolonPolicy {
 
 ### 7.2 诊断代号表（`DiagCode`）
 
-| DiagCode | 触发 | 官方对应消息 |
-|---|---|---|
-| `LEX-INVALID-UTF8` | 非法 UTF-8 序列 | invalid UTF-8 encoding |
-| `LEX-INVALID-NUL` | NUL 字符 | invalid NUL character |
-| `LEX-BOM-MIDFILE` | 文件中部 BOM | invalid BOM in the middle of the file |
-| `LEX-BAD-CHAR` | 不认识的字符 | invalid character %#U |
-| `LEX-BAD-IDENT-CHAR` | 标识符里混入非法字符 | invalid character %#U in identifier |
-| `LEX-ID-LEADING-DIGIT` | 标识符以数字开头 | identifier cannot begin with digit %#U |
-| `LEX-COMMENT-UNTERMINATED` | 块注释未终止 | comment not terminated |
-| `LEX-LIT-NO-DIGITS` | `0x`/`0b`/`0o` 无数字 | %s literal has no digits |
-| `LEX-BAD-SEP` | `_` 位置非法 | '_' must separate successive digits |
-| `LEX-BAD-EXPONENT` | 指数缺数字 / 进制不匹配 | exponent has no digits；%q exponent requires … mantissa |
-| `LEX-RUNE-EMPTY` | rune 字面量为空 | empty rune literal or unescaped ' |
-| `LEX-RUNE-MULTI` | rune 字面量多字符 | more than one character in rune literal |
-| `LEX-RUNE-NEWLINE` | rune 字面量含换行 | newline in rune literal |
-| `LEX-RUNE-UNTERMINATED` | rune 字面量未终止 | rune literal not terminated |
-| `LEX-ESCAPE-UNKNOWN` | 未知转义 | unknown escape |
-| `LEX-ESCAPE-RANGE` | 转义值超范围 / 代理区 | escape is invalid Unicode code point %#U |
-| `LEX-ESCAPE-OCTAL-OVER` | 八进制转义 > 255 | octal escape value %d > 255 |
-| `LEX-STRING-UNTERMINATED` | 字符串未终止 | string not terminated |
-| `LEX-EXCEEDS-FILE-LIMIT` | 超文件上限 | **官方无对应**（实现限制，D-M1-4） |
+**23 个代号**，按 `as_str()` 字典序（== `diag.rs` 的声明顺序，那条不变量有断言钉住）。
 
-> **最后一行的写法是刻意的**：它必须明确标注「官方无对应」。这是**我们自己的限制**，
-> 不得伪装成对齐官方。
+**导出方式：枚举，不是回忆。** 把 `scanner.go` / `source.go` 里**全部**
+`errorf` / `errorAtf` / `error` 调用点列出来（**26 处**，scanner 23 / source 3），
+去重后得 **25 条消息模板**，逐条给代号。
+
+| DiagCode | 触发 | 官方对应消息（格式化模板） |
+|---|---|---|
+| `LEX-BAD-CHAR` | 不认识的字符 | `invalid character %#U` |
+| `LEX-BAD-DIGIT` | 进制字面量里出现不属于该进制的数位 | `invalid digit %q in %s literal` |
+| `LEX-BAD-EXPONENT` | 指数缺数字 / 进制与尾数不匹配 | `exponent has no digits`；`%q exponent requires … mantissa`；`hexadecimal mantissa requires a 'p' exponent` |
+| `LEX-BAD-IDENT-CHAR` | 标识符里混入非法字符 | `invalid character %#U in identifier` |
+| `LEX-BAD-RADIX-POINT` | 进制字面量里出现小数点（只有十进制/十六进制允许） | `invalid radix point in %s literal` |
+| `LEX-BAD-SEP` | `_` 没有分隔连续数码 | `'_' must separate successive digits` |
+| `LEX-BOM-MIDFILE` | 文件中部出现 BOM | `invalid BOM in the middle of the file` |
+| `LEX-COMMENT-UNTERMINATED` | 块注释未终止 | `comment not terminated` |
+| `LEX-ESCAPE-BAD-DIGIT` | 转义序列里的数位非法 | `invalid character %q in %s escape` |
+| `LEX-ESCAPE-OCTAL-OVER` | 八进制转义 > 255 | `octal escape value %d > 255` |
+| `LEX-ESCAPE-RANGE` | 转义值超范围 / 落在代理区 | `escape is invalid Unicode code point %#U` |
+| `LEX-ESCAPE-UNKNOWN` | 未知转义 | `unknown escape` |
+| `LEX-EXCEEDS-FILE-LIMIT` | 超单文件上限 | **官方无对应**（本仓实现限制，D-M1-4） |
+| `LEX-ID-LEADING-DIGIT` | 标识符以数字开头 | `identifier cannot begin with digit %#U` |
+| `LEX-INVALID-NUL` | NUL 字符 | `invalid NUL character` |
+| `LEX-INVALID-UTF8` | 非法 UTF-8 序列 | `invalid UTF-8 encoding` |
+| `LEX-LIT-NO-DIGITS` | `0x`/`0b`/`0o` 之后没有数字 | `%s literal has no digits` |
+| `LEX-RUNE-EMPTY` | rune 字面量为空 | `empty rune literal or unescaped '` |
+| `LEX-RUNE-MULTI` | rune 字面量多字符 | `more than one character in rune literal` |
+| `LEX-RUNE-NEWLINE` | rune 字面量含换行 | `newline in rune literal` |
+| `LEX-RUNE-UNTERMINATED` | rune 字面量未终止 | `rune literal not terminated` |
+| `LEX-STRING-NEWLINE` | 解释型字符串里出现裸换行 | `newline in string` |
+| `LEX-STRING-UNTERMINATED` | 字符串未终止 | `string not terminated` |
+
+> **`LEX-EXCEEDS-FILE-LIMIT` 那一行是刻意的**：它必须明确标注「官方无对应」——
+> 这是**我们自己的限制**，不得伪装成对齐官方。
+
+**这张表由两道机制守着，不靠人记得同步：**
+
+| 机制 | 位置 | 抓什么 |
+|---|---|---|
+| Go 侧 `--selfcheck` | `tools/token-oracle/diagmap.go` | 映射指向不存在的代号 / **永远不会被产出的死代号** / 条目数（冻结 25）/ 码表无重复 |
+| **跨语言对撞断言** | `rgoc-lex/tests/test_diag.rs` | Rust `DiagCode::ALL` 与 Go `allCodes` **逐字不一致** |
+| 运行时 | adapter | 遇到映射表之外的消息**立刻 `exit 3`**，不许猜、不许跳过 |
+
+> **为什么要有第二道**：第一版这张表只有 **19** 个代号，是**凭印象**挑的，漏了 4 个
+> （`LEX-BAD-DIGIT` / `LEX-BAD-RADIX-POINT` / `LEX-STRING-NEWLINE` / `LEX-ESCAPE-BAD-DIGIT`）。
+> 漏掉时**不会报错** —— 那 4 条消息出现时行为未定义。这与 `AGENTS.md` 记的
+> 「**写死的键列表会变成盲区**」（T38/T39/T47 三次同形）是同一个形状。
+> 只靠"两侧各维护一份清单"，漂移是必然的 ⇒ 用断言把它们钉在一起。
 
 **消息文本**：不复刻（D-M1-9）。`DiagCode` 参与 C1 §4 的排序（第 4 排序键）。
 
@@ -639,6 +718,39 @@ impl SemicolonPolicy {
   4:8    LEX-INVALID-UTF8
 ```
 
+对齐：位置占 7 列、词元名占 9 列（左对齐），即 `"  %-7s%-9slit=%s"`。
+
+**词元行可带两组附加字段，都**只在该类别下有效**时才出现：**
+
+| 附加字段 | 何时出现 | 内容 |
+|---|---|---|
+| `kind=` `bad=` | 仅 `_Literal` | 官方数值（0=Int…4=String）+ `true`/`false` |
+| `op=` `prec=` | 仅 `_Operator` / `_AssignOp` / `_IncOp` / `_Star` | 官方 `Operator.String()` + 优先级数值 |
+
+> **`=` / `:=` / `<-` 不追加 `op`/`prec`** —— 实测 **F21**：官方对这三者**不设 `op`**
+> （有效域不含 `_Assign`/`_Define`/`_Arrow`）。这正是纪律 1 在运算符上的体现。
+
+**`--mode` 开启时多一节**（LEX-03 用）：
+
+```text
+== messages ==
+  <pos>  <escaped-text>
+```
+
+**`lit` / 注释文本的转义规则**（两侧必须一字不差地实现）：
+
+| 字节 | 输出 |
+|---|---|
+| `\` (0x5C) | `\\` |
+| `"` (0x22) | `\"` |
+| 换行 / 回车 / 制表 | `\n` `\r` `\t` |
+| 可打印 ASCII（0x20–0x7E） | 原样 |
+| **其余一切**（0x00–0x1F、0x7F、所有 ≥0x80 的字节） | `\xNN`（两位小写十六进制，**逐字节**） |
+
+> **为什么不用 Go 的 `%q` / Rust 的 `{:?}`**：两者对控制字符的写法不同（`\x00` vs `\u{0}`），
+> 一旦不一致，golden 就成了"只有 Go 能通过"的东西。而且 Rust 的 `String`
+> **根本装不了非法 UTF-8**（F22）—— 见 D-M1-12。
+
 **四条规范化纪律**（全部为实测踩出来的）：
 
 | # | 纪律 | 踩坑经历 |
@@ -647,6 +759,10 @@ impl SemicolonPolicy {
 | 2 | **诊断与词元分两条流、各自有序**（C1 §4 的 `line→col→code`） | 第一版按事件顺序输出 ⇒ 诊断 `E 4:8` 出现在词元 `T 4:7` **之前**，golden 编码了内部时序 |
 | 3 | **只存 `Pos` + `DiagCode`，不存消息文本** | D-M1-9 |
 | 4 | **确定性** —— 同一输入多次运行产出的字节完全相同 | 已实测：3 次 `sha256` 一致 |
+
+> **⚠️ 纪律 5（不是格式，是采集方式）：冻结 golden 时必须 `RGOC_TTY=0`。**
+> `scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，伪终端 ONLCR 把 `\n` 翻成 `\r\n` ——
+> **终端里肉眼看不出**，但 golden 会每行带 CR。实测 F25：默认 20 行含 20 个 CR，设了为 0 个。
 
 **两种来源必须标注**：
 
@@ -685,15 +801,27 @@ impl SemicolonPolicy {
 
 ```text
 tools/token-oracle/
-├── README.md                 来源、版本、校验值、再生成步骤
-├── gosyntax/                 vendor 的官方五文件（BSD-3-Clause，保留许可头）
-│   ├── scanner.go            881 行
-│   ├── source.go             218 行
-│   ├── tokens.go             159 行
-│   ├── token_string.go        70 行
-│   └── operator_string.go     46 行
-└── adapter.go                唯一手写的部分：调 next() 并按 §8.2 格式化
+├── README.md                 来源、版本、校验值、格式、再生成步骤
+├── go.mod                    module tokenoracle（仅标准库）
+├── main.go                ★  命令行入口 + 按 §8.2 格式化
+├── diagmap.go             ★  官方消息 → DiagCode 映射表 + `--selfcheck`
+├── fixtures/
+│   ├── hello.txt             正向样本
+│   └── bad_utf8.txt          负向样本（含裸 0xFF）
+└── gosyntax/
+    ├── LICENSE               BSD-3-Clause 正文（随语料根，27 行）
+    ├── scanner.go            881 行 ┐
+    ├── source.go             218 行 │ vendor 的官方五文件
+    ├── tokens.go             159 行 │ **原样复制、零改动**
+    ├── token_string.go        70 行 │ （共 1,374 行）
+    ├── operator_string.go     46 行 ┘
+    └── export.go            ★  同包 shim：唯一能做转发的地方
 ```
+
+> **★ 三个文件是手写的**，其余是官方原文。设计初稿以为"`adapter.go` 是唯一手写部分"，
+> 实测不成立 —— 官方 scanner 的**全部**标识符都是未导出的（`scanner`/`next`/`tok`/`lit`…），
+> 外部包在语言层面访问不到，而"官方文件零改动"是硬纪律 ⇒ **必须**在同一个 package 里
+> 加一层纯转发 shim（`export.go` 不含任何词法逻辑）。映射表单独成文件是为了安放 `--selfcheck`。
 
 ### 9.2 为什么必须写这个程序
 
@@ -774,6 +902,8 @@ tools/token-oracle/
 | R5 | `char::is_alphabetic` 之类的**近似谓词**在别处复现 | M1 完成后全仓 grep `is_alphabetic`/`is_numeric`/`is_alphanumeric`，确认零使用 |
 | R6 | 位置漂移（"差 1"类错误） | `T-L-1x` 必须含**中文与 emoji** 样本 —— 否则字节列写错也看不出来 |
 | R7 | 超预算 | 按 `03` §6.1 的预算（smoke ≤5 分钟）；**不得**通过砍 LEX 项或放宽判据来达标 |
+| R8 | **码表三处漂移** —— 设计 §7.2 / Go `allCodes` / Rust `DiagCode::ALL`。目前只有 Rust↔Go 有断言（`tests/test_diag.rs`），**设计文档与代码之间没有自动检查** | 由 `T-L21` 的文档同步检查补上；在此之前，改码表必须**同时**改三处并跑 `cargo test -p rgoc-lex --test test_diag` |
+| R9 | **词元载荷是字节，容易被顺手 `String` 化** —— M2 起每个消费方都会想要 `&str` | 取 `&str` 必须显式 `str::from_utf8`（**不得** `from_utf8_lossy` —— 那会静默丢字节）；关键字查询天然安全（全 ASCII） |
 
 ---
 
@@ -816,3 +946,7 @@ tools/token-oracle/
 |---|---|---|
 | 2026-10-11 | **初稿创建**。九个决策（D-M1-1..9）经逐项确认；含 20 条实测事实基线（F1..F20） | 本仓设计会话；D-M1-6 的 2,903 码点差异为实测量化 |
 | 2026-10-11 | **新增 D-M1-10（`Op.form`）**。写任务计划时发现 §3.2 的原型**丢信息**（`+` 与 `+=` 同形）—— 这是缺陷修补，非设计期遗漏。同步改了 §3.2、§3.3、§5.4 | `writing-plans` 阶段的自行核对 |
+| 2026-10-11 | **新增 D-M1-11（诊断代号表导出方式）**：§7.2 由 19 条扩到 **23** 条。原表凭印象手写，漏 4 条且无报错。同步改了 §7.2、§8.3 的引用 | `T-L04` 执行期发现（见 §12 的 R8） |
+| 2026-10-11 | **新增 D-M1-12（词元载荷载体）**：`Ident(String)` / `Literal.text: String` → **`Vec<u8>`**。实测标识符原文可含非法 UTF-8 | `T-L04` 执行期发现（见 §12 的 R9） |
+| 2026-10-11 | §8.2 补全：`op=`/`prec=` 的生效条件、`== messages ==` 一节、**字节级转义规则**、采集必须 `RGOC_TTY=0`（F25） | `T-L04` 冻结格式时定下 |
+| 2026-10-11 | §9.1 组成树修正：手写部分由 1 个文件改为 **3 个**（`main.go` / `diagmap.go` / `gosyntax/export.go`），并随附 LICENSE；实测坑由 1 条增至 5 条 | `T-L04` 实测 |

@@ -85,8 +85,8 @@
 |---|---|---|
 | `T-L-20` | `str1` / `str1x` / `str_` | **各为单个** `Ident` |
 | `T-L-21` | `str x` / `str+x` / `a-b` | **各为两个**词元（成对边界） |
-| `T-L-22` | `for` vs `forx` | 前者 `Keyword(For)`，后者 `Ident("forx")` |
-| `T-L-23` | `1str` | `Literal(Int)` + `Ident("str")`，**无诊断** |
+| `T-L-22` | `for` vs `forx` | 前者 `Keyword(For)`，后者 `Ident(b"forx")`（载荷是**字节**，见 D-M1-12） |
+| `T-L-23` | `1str` | `Literal(Int)` + `Ident(b"str")`，**无诊断** |
 | `T-L-24` | `a۰۱۸` / `foo६४` / `bar９８７６` / `ŝ` / `日本語` / `ab中cd` | 各为**单个** `Ident`（LEX-02 的 Nd 边界） |
 | `T-L-25` | `_x` / `_` | `_` 属字母类 ⇒ 单个 `Ident` |
 | `T-L-26` | `1..2` / `a..b` | **唯一回退点**：切出 `.` `.` 而不是 `...` |
@@ -182,7 +182,7 @@
 |---|---|
 | 基准 | **编译器版** `gc/syntax/` 五文件（`M1-design.md` D-M1-3） |
 | 位置 | `tools/token-oracle/`（含 `README.md` 记来源/版本/校验值/再生成步骤） |
-| 入口 | `adapter.go` —— 调 `next()` 并按 §5.2 格式化 |
+| 入口 | `main.go` + `gosyntax/export.go`（同包 shim）+ `diagmap.go`（映射表）—— 见 `M1-design.md` §9.1 |
 | 运行 | 必须在容器内（`scripts/in-container.sh`） |
 | **禁止** | `go tool compile -E`（给的是语法树，不是词元流） |
 
