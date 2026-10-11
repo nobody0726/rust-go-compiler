@@ -692,35 +692,29 @@ git commit -m "feat(lex): T-L07 字符层边界输入 + 字符级密集对撞（
 
 **Interfaces:**
 - Consumes: `T-L05` `unicode_tables`；`T-L06` `SourceReader`；`T-L03` `Keyword`
-- Produces: `Lexer::{new, next_ident_kind}`（内部）
+- Produces: `Lexer::{new, table, file, peek, take_diags, scan_ident}`
 
-- [ ] **Step 1: 写失败测试（`T-L-20`…`T-L-25`）**
+> **执行期裁决 R14（命名）**：计划原写 `Lexer::next_ident_kind`，落地为 **`scan_ident`**。
+> 理由：① `next_*` 在本仓的语义是"无条件取下一个"（`T-L15` 的 `next()` 才是那个），
+> 而它返回 `Option`、失败时**一个字符都不消耗**；② `next_ident_kind` 里的 `kind` 与
+> 返回值 `TokenKind` 重复。同 R3（`from_str` → `lookup`）的先例：**改名字不改语义**。
+> 另外新增了三个观察用小方法（`table` / `file` / `peek`）与设计 §3.3 已定的 `take_diags`。
 
-```rust
-#[test]
-fn 标识符的续接谓词_能续接的是一类() {
-    for s in ["str1", "str1x", "str_", "_x", "日本語", "ab中cd", "a۰۱۸", "foo६४", "bar９８７６", "ŝ"] {
-        assert_eq!(kind_of(s), Ident(s.as_bytes().to_vec()), "{s}");  // 载荷是字节（D-M1-12）
-    }
-}
+- [ ] **Step 1: 写失败测试（`T-L-20`…`T-L-25`，实写 **17** 条）**
 
-#[test]
-fn 标识符的续接谓词_不能续接的又是一类() {
-    // "str x" → 两个；"str+x" → 两个；"a-b" → 两个
-}
+计划只列了 5 条骨架。实际按"每条钉一个**机制**"展开成 17 条，分七组：
 
-#[test]
-fn 关键字在切完之后查_for_vs_forx() {
-    assert_eq!(kind_of("for"), Keyword(Keyword::For));
-    assert_eq!(kind_of("forx"), Ident(b"forx".to_vec()));
-}
+| 组 | 断言 |
+|---|---|
+| ① 续接谓词 | 能续接的 10 个样本 / 不能续接的 5 对成对边界 / **终止符留在游标上** |
+| ② 关键字 | `for` vs `forx` vs `format` / **遍历 `Keyword::ALL` 25 个** + 大小写敏感 / 预声明标识符（F7） |
+| ③ 入口短路 | **`1str` 必须无诊断** / `٠abc` 才报 `LEX-ID-LEADING-DIGIT` / `_` 属字母 |
+| ④ **F29 组** | `x²` / `²abc` / `x\u{0345}` / `x²1` ⇒ 吸收 + `LEX-BAD-IDENT-CHAR`；`xµ` / `x１` 对照组无诊断 |
+| ⑤ 载荷是字节 | `x\xff y` ⇒ `Ident(b"x\xff")`；`x\0y` ⇒ `Ident(b"x\0y")`（F22 / F8） |
+| ⑥ 不能起头 | 9 个 ASCII 非字母输入 ⇒ `None` 且**零诊断** / emoji 起始会被吸收 |
+| ⑦ `Lexer` 最小面 | 文件登记 / `take_diags` 是取走不是复制 / 诊断位置落在被吸收的字符上 |
 
-#[test]
-fn 数字开头的_1str_切成_int_加_ident_且无诊断() { }
-
-#[test]
-fn 下划线属于字母类() { }
-```
+> **为什么要 F29 组**：它是**先测后写**的产物 —— 见下 Step 3 的裁决。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -729,8 +723,23 @@ Expected: 编译失败 —— `Lexer` 不存在
 
 - [ ] **Step 3: 实现**
 
-两段循环（照官方）：先 ASCII 快路径（`is_letter || is_digit`），再用 `unicode_tables` 走一般路径。
+两段循环（照官方）：先 ASCII 快路径，再用 `unicode_tables` 走一般路径。
 **切完再查关键字**（`Keyword::lookup`）。**谓词必须用 `unicode_tables`，不得用 Rust std**（G7/D-M1-6）。
+
+> **⚠️ 三处最容易被"顺手统一"掉的地方**（都在 `lexer.rs` 的文档注释里写明了）：
+> 1. **入口的短路顺序** —— 官方是 `isLetter(ch) || ch >= RuneSelf && atIdentChar(true)`。
+>    `&&` 比 `||` 紧 ⇒ **ASCII 数字走不到 `atIdentChar`**。写成
+>    `is_letter || is_digit || at_ident_char(true)` 会让 `1str` 凭空多一条
+>    `LEX-ID-LEADING-DIGIT`（实测官方**无诊断**）。
+> 2. **一般循环不能加 `>= 0x80` 守卫** —— `atIdentChar(false)` 对 **ASCII 字母/数字**
+>    也是 `true`。`٠abc` 是活例：吸收 `٠` 之后必须继续吃掉 ASCII 的 `abc`，
+>    否则词元会在 `٠` 处截断。官方那行 `if s.ch >= RuneSelf` 只是"跳过进循环"的优化。
+> 3. **第三条分支是"报错但吸收"** —— 非字母非 Nd 的非 ASCII 字符先 `errorf` 再
+>    `return true` ⇒ `x²` 是**一个**标识符 + 一条诊断，不是"切成两个词元"（**F29**）。
+
+> **⚠️ 既有文档里一条被证伪的断言已订正**：设计 §6 原写「`x²` 在 Go 里是 `x` + 非法字符」，
+> 实测**错**（详见 `M1-design.md` §2.3 F29 与 §12 R5）。同时订正了生成器注释与模板
+> ⇒ `unicode_tables.rs` 的 sha256 锚点随之更新。
 
 > **⚠️ 载荷是 `Vec<u8>`（D-M1-12）** —— 切出来的原文**直接是字节**，不要先转 `String`。
 > 取 `&str` 一律显式 `str::from_utf8`，**不得** `from_utf8_lossy`：
@@ -739,15 +748,18 @@ Expected: 编译失败 —— `Lexer` 不存在
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_ident`
-Expected: 5 passed
+Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_ident'`
+Expected: **17 passed**（计划原写 5 条 —— 见 Step 1 的分组表）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add rgoc/crates/rgoc-lex
-git commit -m "feat(lex): 标识符扫描与关键字判定（切完再查）"
+git add rgoc/crates/rgoc-lex tools/token-oracle docs/milestones
+git commit -m "feat(lex): T-L08 标识符与关键字（切完再查）+ 订正 F29 写错的断言"
 ```
+
+> **落地结果**：`lexer.rs`（`Lexer` + `scan_ident` + `at_ident_char`）与 17 条断言一次全绿。
+> **反向验证 9 道变异**全部变红（见账本 R15/R16）；四条门禁全过、本任务起 workspace **343 passed**。
 
 ---
 

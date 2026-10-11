@@ -23,16 +23,19 @@
 //! | [`token`] | 词元数据模型：`Token` / `TokenKind` / `Keyword` / `Operator` / `Delim` … |
 //! | [`unicode_tables`] | **生成物**：字符分类区间表（字母 684 / 数字 72），来自 oracle |
 //! | [`source`] | 字符层：UTF-8 解码 + 位置推进 + 段切片（**不认识词元**） |
+//! | [`lexer`] | 词元层：分派 + 各类词元扫描（T-L08 先落 `ident`） |
 //!
-//! 后续任务将加入 `semicolon`（分号状态机）、`lexer`（分派层）。
+//! 后续任务将加入 `semicolon`（分号状态机）、`lexer::next`（分派骨架）。
 
 pub mod diag;
+pub mod lexer;
 pub mod pos;
 pub mod source;
 pub mod token;
 pub mod unicode_tables;
 
 pub use diag::{Diag, DiagBag, DiagCode};
+pub use lexer::Lexer;
 pub use pos::{FileId, FileTable, Pos};
 pub use source::SourceReader;
 pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};
