@@ -20,12 +20,15 @@
 //! |---|---|
 //! | [`pos`] | 位置表示：`Pos` / `FileId` / `FileTable`（C1 契约） |
 //! | [`diag`] | 诊断：`Diag` / `DiagBag` / `DiagCode`（C1 契约） |
+//! | [`token`] | 词元数据模型：`Token` / `TokenKind` / `Keyword` / `Operator` / `Delim` … |
 //!
-//! 后续任务将加入 `token`（词元数据模型）、`source`（字符层）、
+//! 后续任务将加入 `source`（字符层）、`unicode_tables`（生成的分类表）、
 //! `semicolon`（分号状态机）、`lexer`（分派层）。
 
 pub mod diag;
 pub mod pos;
+pub mod token;
 
 pub use diag::{Diag, DiagBag, DiagCode};
 pub use pos::{FileId, FileTable, Pos};
+pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};

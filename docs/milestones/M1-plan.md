@@ -232,7 +232,7 @@ git commit -m "feat(lex): Diag/DiagBag/DiagCode（C1 排序规则 + 19 个诊断
   - `rgoc_lex::LitKind`（`Int`/`Float`/`Imag`/`Rune`/`String`）
   - `rgoc_lex::OpForm`（`Plain`/`Assign`/`IncDec`）★ D-M1-10
   - `rgoc_lex::SemiOrigin`（`Explicit`/`Newline`/`Eof`）
-  - `rgoc_lex::Keyword`（25 个；`from_str(&str) -> Option<Keyword>`、`as_str(self) -> &'static str`）
+  - `rgoc_lex::Keyword`（25 个；`lookup(&str) -> Option<Keyword>`、`as_str(self) -> &'static str`）
   - `rgoc_lex::Operator`（语义枚举；`prec(self) -> u8`）
   - `rgoc_lex::Delim`（10 个）
 
@@ -244,13 +244,13 @@ git commit -m "feat(lex): Diag/DiagBag/DiagCode（C1 排序规则 + 19 个诊断
 use rgoc_lex::{Keyword, OpForm, Operator};
 
 #[test]
-fn keyword_from_str_25_个全部命中() { /* 25 个字符串逐个断言 from_str 有值且 as_str 往返一致 */ }
+fn keyword_lookup_25_个全部命中() { /* 25 个字符串逐个断言 lookup 有值且 as_str 往返一致 */ }
 
 #[test]
-fn keyword_from_str_对预声明标识符返回_None() {
+fn keyword_lookup_对预声明标识符返回_None() {
     // 实测事实 F7：这些在官方也是 _Name
     for s in ["true", "false", "nil", "iota", "_", "println", "append", "int", "error", "any"] {
-        assert_eq!(Keyword::from_str(s), None, "{s} 不是关键字");
+        assert_eq!(Keyword::lookup(s), None, "{s} 不是关键字");
     }
 }
 
@@ -284,14 +284,22 @@ Expected: 编译失败 —— 类型不存在
 - [ ] **Step 3: 实现**
 
 按 `M1-design.md` §3.2 / §3.3 的清单定义。
-`Keyword` 的 `from_str` 用 `match` 而不是哈希表 —— 25 个分支的 `match` 编译成跳转表，
+`Keyword` 的 `lookup` 用 `match` 而不是哈希表 —— 25 个分支的 `match` 编译成跳转表，
 比"完美哈希 + 验证"更简单且没有构造期 panic 的可能（官方那套 `keywordMap` 需要 `init()` 校验，
 Rust 的 `match` 把这件事交给编译器）。
+
+> **执行期裁决 R3**：本方法原名 `from_str`，因 `clippy::should_implement_trait`
+> 报「method `from_str` can be confused for `std::str::FromStr::from_str`」而改名 `lookup`。
+> **改的是名字不是语义** —— 返回 `Option` 是刻意的：「不是关键字」不是错误，
+> 是绝大多数标识符的正常归宿；做成 `Result` 会把正常路径写成错误路径。
+> 因此**不加 `#[allow]`**，改叫 `lookup`（"查关键字表"）比 `from_str` 更贴近它做的事。
+> 同时新增 `Operator::ALL` / `Keyword::ALL` / `Delim::ALL` / `LitKind::ALL` / `SemiOrigin::ALL` /
+> `OpForm::ALL` 与 `LitKind::as_official_code`（钉住 F6 的官方数值编码）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_token`
-Expected: 4 passed
+Expected: 17 passed（原计划写 4 —— 实际写了 17 条，见下）
 
 - [ ] **Step 5: 提交**
 
@@ -621,7 +629,7 @@ Expected: 编译失败 —— `Lexer` 不存在
 - [ ] **Step 3: 实现**
 
 两段循环（照官方）：先 ASCII 快路径（`is_letter || is_digit`），再用 `unicode_tables` 走一般路径。
-**切完再查关键字**（`Keyword::from_str`）。**谓词必须用 `unicode_tables`，不得用 Rust std**（G7/D-M1-6）。
+**切完再查关键字**（`Keyword::lookup`）。**谓词必须用 `unicode_tables`，不得用 Rust std**（G7/D-M1-6）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
