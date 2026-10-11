@@ -6,8 +6,11 @@
 //	而 Rust std 的 char::is_alphabetic / is_numeric **都更宽**：
 //	  · is_alphabetic = Alphabetic 属性 = L* + Nl + Other_Alphabetic ⇒ 多 1,749 个 Mn
 //	  · is_numeric    = N*（Nd + Nl + No）                          ⇒ 多 1,154 个 No
-//	差异是**静默的**：`x²` 在 Go 里是 `x` + 非法字符，用 is_numeric 会整个切成一个标识符，
-//	而且"切出来一堆词元、没报错"，看起来完全正常。
+//	差异是**静默的**，但**不在词元边界上** —— 边界通常相同：
+//	  · 官方 atIdentChar 对「不是字母、也不是 Nd」的非 ASCII 字符是**报错但仍然吸收**；
+//	  · 所以 x² 在 Go 里是**一个** name **外加一条** LEX-BAD-IDENT-CHAR；
+//	  · 用 std 的近似谓词时 ² 被当成数字 ⇒ **不报错** ⇒ **少一条诊断**。
+//	**少一条诊断比"词元切错"更难发现** —— 详见 M1-design.md §2.3 的 F29。
 //
 // 所以表**由 oracle 生成**（D-M1-6），不引第三方依赖、也不用 std 的近似谓词。
 //
@@ -132,9 +135,23 @@ const headerTpl = `//! 字符分类表 —— **自动生成，请勿手改**（
 //! | 字母 IsLetter(L*) | %d 码点 | is_alphabetic 147,421 | **多 1,749**（全是 Mn 组合符） |
 //! | 数字 IsDigit(Nd) | %d 码点 | is_numeric 1,924 | **多 1,154**（全是 No） |
 //!
-//! 差异是**静默的**：x² 在 Go 里是 x + 非法字符；
-//! 若用 is_numeric，² 会被当成标识符续接字符 ⇒ **整个切成一个标识符**，
-//! 而且「切出来一堆词元、没报错」，看起来完全正常。
+//! 差异是**静默的**，但**不在词元边界上** —— 边界通常相同。
+//!
+//! 官方 ¶atIdentChar¶ 对「不是字母、也不是 Nd」的非 ASCII 字符是
+//! **报错但仍然吸收**（¶case s.ch >= utf8.RuneSelf: s.errorf(…);¶ 之后 ¶return true¶），
+//! 所以 ¶x²¶ 在 Go 里是**一个** ¶name¶ **外加一条** ¶LEX-BAD-IDENT-CHAR¶。
+//! 而用 Rust std 的近似谓词时 ¶²¶ 被当成数字 ⇒ **不报错** ⇒ **少一条诊断**；
+//! 起始位置（¶²abc¶）还会给出**不同的代号**。
+//!
+//! | 输入 | Go 的词元 | Go 的诊断 | std 近似谓词 |
+//! |---|---|---|---|
+//! | ¶x²¶（U+00B2，No） | ¶name "x\xc2\xb2"¶ | ¶LEX-BAD-IDENT-CHAR¶ @1:2 | ¶is_numeric¶=true ⇒ **静默通过** |
+//! | ¶²abc¶ | ¶name "\xc2\xb2abc"¶ | ¶LEX-BAD-IDENT-CHAR¶ @1:1 | 报成 ¶LEX-ID-LEADING-DIGIT¶（**代号不同**） |
+//! | ¶x\u{0345}¶（Mn） | ¶name "x\xcc\x85"¶ | ¶LEX-BAD-IDENT-CHAR¶ @1:2 | ¶is_alphabetic¶=true ⇒ **静默通过** |
+//! | ¶xµ¶（U+00B5，Ll） | ¶name "x\xc2\xb5"¶ | **无** | 一致（对照组） |
+//! | ¶x１¶（U+FF11，Nd） | ¶name "x\xef\xbc\x91"¶ | **无** | 一致（对照组） |
+//!
+//! **少一条诊断比「词元切错」更难发现** —— 这正是表必须由 oracle 生成的原因。
 //!
 //! # 表的内容边界
 //!
