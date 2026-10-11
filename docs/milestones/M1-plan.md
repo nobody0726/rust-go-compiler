@@ -32,6 +32,7 @@
 | G9 | **分母不缩 / 八类判定不合并 / 断言必须反向验证** | `03` §3.3、`M0-tests.md` §8 |
 | G10 | Rust 侧命名：**中文标识符不得夹大写 ASCII**（会触发 `non_snake_case` 打爆 `-D warnings`） | 本仓 T37 复发过 |
 | G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |
+| G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
 
 ---
 
@@ -318,6 +319,16 @@ git commit -m "feat(lex): TokenKind 及配套枚举（25 关键字 / 48 项运�
 - Create: `tools/token-oracle/adapter.go`
 - Create: `tools/token-oracle/go.mod`
 
+> **执行期裁决 R4（文件清单修正）**：实际落地是 **`main.go` + `diags.go` + `gosyntax/export.go`**，
+> 不是单个 `adapter.go`，另加 `fixtures/{hello.txt,bad_utf8.txt}`。理由有两条，都不可绕：
+> ① 官方 scanner 的**全部标识符都是未导出的**（`scanner` / `next` / `tok` / `lit` / `kind` …），
+> 外部包在语言层面访问不到；而"官方文件零改动"是硬纪律 ⇒ 必须在**同一个 package** 里加一层
+> 纯转发 shim（`gosyntax/export.go`）。`M1-design.md` §9.1 的「`adapter.go` 是唯一手写部分」
+> 因此不成立，已同步修正。
+> ② 只跑 `hello.txt` 的话 `== diags ==` 那一节**永远没被任何验收碰过** ——
+> 映射表、排序键、`\xNN` 转义在负例上的行为全是"看起来写对了"。
+> 故增加 `fixtures/bad_utf8.txt`（含裸 `0xFF`）作为负向样本。
+
 **Interfaces:**
 - Consumes: 无（Go 侧独立）
 - Produces: 一个可运行命令，把 `<file>` 扫成 `M1-tests.md` §5.2 格式的两条流
@@ -337,6 +348,11 @@ git commit -m "feat(lex): TokenKind 及配套枚举（25 关键字 / 48 项运�
 Run: `scripts/in-container.sh go run ./tools/token-oracle tools/token-oracle/fixtures/hello.txt`
 Expected: 失败 —— 目录不存在
 
+> **执行期修正**：命令形态与 G11 同理，实际可运行的是
+> `RGOC_TTY=0 scripts/in-container.sh bash -lc 'cd /work/tools/token-oracle && go run . fixtures/hello.txt'`
+> （本目录自带 `go.mod`，仓库根没有 ⇒ 必须 `cd`；`RGOC_TTY=0` 见 **G12**）。
+> 实测失败输出：`no Go files in /work/tools/token-oracle`。
+
 - [ ] **Step 3: 实现**
 
 1. 从 `go_source_code/src/cmd/compile/internal/syntax/` 复制 **5 个文件**到 `gosyntax/`，
@@ -347,10 +363,25 @@ Expected: 失败 —— 目录不存在
 3. `README.md` 记：来源路径、go1.27.1、五文件的 sha256、**再生成步骤**、以及
    **「样本文件不能叫 `.go` 且与 adapter 同目录」**这条坑。
 
+> **⚠️ 执行期发现：§7.2 的诊断代号表不全**（详见 R5）。原表 19 条是**凭印象手写**的，
+> 而把 `scanner.go` / `source.go` 里**全部** `errorf`/`errorAtf`/`error` 调用点枚举出来
+> 得到 **26 处错误点 / 25 条消息模板**，比原表多 4 条：
+> `LEX-BAD-DIGIT`、`LEX-BAD-RADIX-POINT`、`LEX-STRING-NEWLINE`、`LEX-ESCAPE-BAD-DIGIT`。
+> **`DiagCode` 由 19 扩到 23**，两侧（Go 映射表 + Rust `diag.rs`）必须同步。
+> 这与 `AGENTS.md` 记的「写死的键列表会变成盲区」是同一个形状。
+>
+> **另两条执行期定下的格式口径**（README §5 已冻结）：
+> - `lit` 用**自实现的字节级转义**，**不用 Go `%q`、不用 Rust `{:?}`** ——
+>   两者对控制字符的写法不同，且 Rust `String` 根本装不了非法 UTF-8（F9）。
+>   推论：`rgoc-lex` 的词元载荷必须是 `Vec<u8>`（见 R6）。
+> - 运算符行在 `lit` 之后追加 ` op=<Op> prec=<N>`（官方对 `_Operator`/`_Star`/`_AssignOp`/`_IncOp`
+>   四类**确实设置**这两个字段）；`=`/`:=`/`<-` 官方不设 `op`，故不追加。
+
 - [ ] **Step 4: 跑一遍确认通过**
 
 Run: 同 Step 2 的命令
 Expected: 两节输出；tokens 节逐行等于 README 的黄金文本
+
 
 - [ ] **Step 5: 提交**
 
