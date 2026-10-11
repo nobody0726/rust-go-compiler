@@ -22,14 +22,17 @@
 //! | [`diag`] | 诊断：`Diag` / `DiagBag` / `DiagCode`（C1 契约） |
 //! | [`token`] | 词元数据模型：`Token` / `TokenKind` / `Keyword` / `Operator` / `Delim` … |
 //! | [`unicode_tables`] | **生成物**：字符分类区间表（字母 684 / 数字 72），来自 oracle |
+//! | [`source`] | 字符层：UTF-8 解码 + 位置推进 + 段切片（**不认识词元**） |
 //!
-//! 后续任务将加入 `source`（字符层）、`semicolon`（分号状态机）、`lexer`（分派层）。
+//! 后续任务将加入 `semicolon`（分号状态机）、`lexer`（分派层）。
 
 pub mod diag;
 pub mod pos;
+pub mod source;
 pub mod token;
 pub mod unicode_tables;
 
 pub use diag::{Diag, DiagBag, DiagCode};
 pub use pos::{FileId, FileTable, Pos};
+pub use source::SourceReader;
 pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};

@@ -33,6 +33,7 @@
 | G10 | Rust 侧命名：**中文标识符不得夹大写 ASCII**（会触发 `non_snake_case` 打爆 `-D warnings`） | 本仓 T37 复发过 |
 | G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |
 | G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
+| G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须先 `touch` 那个源文件**（或让容器自己写）。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06 的反验里连续复现两次 | 执行期实测（R9） |
 
 ---
 
@@ -512,14 +513,21 @@ git commit -m "feat(lex): 由 oracle 生成 Unicode 分类表（字母 684 / 数
   - `ch(&self) -> Option<char>`（**尚未归属**的字符）
   - `chw(&self) -> u8`（`ch` 的字节宽度）
   - `pos(&self) -> Pos`（**当前 `ch` 的位置**，1 起）
-  - `advance(&mut self) -> Option<Diag>`
-    ← **预检裁决 P1**：**`SourceReader` 不持有诊断集合**。字符层若在一次推进里
-    发现错误（NUL / 非法 UTF-8），返回一条 `Diag` 由 `Lexer` 收进自己的 `DiagBag`；
-    两个 bag 需要合并而排序键相同、来源不同 ⇒ 无谓复杂度。
-    （代价：将来若一次推进可能产出**多条**诊断，需改签名为 `Vec<Diag>` —— 目前不会。）
+  - `advance(&mut self) -> Vec<Diag>`
+    ← **预检裁决 P1 的方向对（字符层不持有诊断集合），但返回类型必须改**：
+    P1 写的是 `Option<Diag>`，并注明「若一次推进产出多条诊断（**目前不会**）」——
+    **实测推翻了那个前提**（R9）：官方 `nextch` 的 `redo:` 标签在位置推进**之前**，
+    NUL / 非法 UTF-8 / BOM 的「跳过并重读」是**在同一个 `nextch` 里循环**的。
+    `x\0\0y` 的 oracle 输出就是**两条** `LEX-INVALID-NUL`（`1:2` 与 `1:3`）。
+    `Option<Diag>` 只能带回一条 ⇒ **第二条被静默丢弃**。
+    改 `Vec<Diag>` 的代价为零：正常路径 `Vec::new()` **不分配**。
   - `segment(&self) -> &[u8]`（**字节**，见 D-M1-12）
   - `start_segment(&mut self)` / `stop_segment(&mut self)`
-  - `rewind(&mut self)`（**只服务 `..`**，活动段内不得含换行）
+  - `rewind(&mut self) -> Vec<Diag>`（**只服务 `..`**，活动段内不得含换行）
+    ← 同 R9：官方 `rewind` 内部就是 `nextch()`，而 `nextch` 会报错 ⇒ 返回 `()` 也是静默丢弃。
+    实测另证：官方那套「`col -= r-b` 再 `col += chw`」的写法在 Rust 里会
+    **`attempt to subtract with overflow`**（Go 靠 `uint` 回绕兜住）⇒
+    这里把两步合并成一次减法，得到同一终值但**不经过负的中间值**。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -561,7 +569,19 @@ Expected: 编译失败 —— `SourceReader` 不存在
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_source`
-Expected: 5 passed
+Expected: **14 passed**（原计划写 5 条）
+
+> **为什么是 14 条**：计划那 5 条只覆盖"位置推进"的一面。实际这条链上有四类东西会静默出错：
+> ① **位置**（ASCII / 换行 / 中文 / emoji —— 期望值全部**对着 oracle 取**，
+>    本轮就靠它纠正了计划里的一个笔误：`变量 := 1` 的 `:=` 在 **1:8** 而不是 1:7，
+>    计划漏算了中间那个空格；**光看「差 1」是发现不了的**）
+> ② **段**（`segment()` 不含当前字符；没开段时必须 panic 而不是返回空切片 ——
+>    静默返回空会让"空标识符"看起来正常）
+> ③ **rewind**（回退后位置与段都要回到原样；没有活动段时必须 panic）
+> ④ **诊断交出去**（单条 + **一次推进多条**）
+>
+> **反向验证 6 道变异全部变红且与预期一致**（删诊断 / 截断成一条 / 段含当前字符 /
+> 用官方两步算术 / `pos()` 不 +1 / 代号写错）。
 
 - [ ] **Step 5: 提交**
 
