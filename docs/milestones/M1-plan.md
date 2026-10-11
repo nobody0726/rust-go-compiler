@@ -31,7 +31,7 @@
 | G8 | **单文件上限 64 MiB**，超限报 `LEX-EXCEEDS-FILE-LIMIT`，返回只含 `Eof` 的流 | `M1-design.md` §7.3 |
 | G9 | **分母不缩 / 八类判定不合并 / 断言必须反向验证** | `03` §3.3、`M0-tests.md` §8 |
 | G10 | Rust 侧命名：**中文标识符不得夹大写 ASCII**（会触发 `non_snake_case` 打爆 `-D warnings`） | 本仓 T37 复发过 |
-| G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |
+| G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |。⚠️ **文件路径同理**：宿主 `rgoc/...` ↔ 容器 `/work/rgoc/...`（或 `cd /work/rgoc` 后写`crates/...`）—— 反验/取证脚本里拼错时 `touch`/`grep`/`sha256sum` 会**同时**落空，而 `cargo test` 仍给出"看起来对"的结果（T-L10 实测，见 design §12 R13）
 | G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
 | G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须先 `touch` 那个源文件**（或让容器自己写）。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06 的反验里连续复现两次 | 执行期实测（R9） |
 | G14 | **门禁命令用「累积式 + 末条即判据」，且不写显式 `exit $fail`**。两个实测陷阱：① 容器内 `set -e` 生效时**任何显式 `exit N`（含 `exit 0`）都被压成 1**（`bash -lc 'set -e; exit 7'` → 1）⇒ 退出码信息全毁；② 仓库惯用的 `cmd && echo OK` 形态**不中止脚本**（`set -e` 对 AND-OR 列表的非末项不生效），于是**早期失败被后续成功掩盖**（实测 `false && echo OK; true` → 退出码 **0**）。⚠️ 推论：**不能用「末尾命令成功」当判据** | 执行期实测（R12） |
@@ -869,8 +869,19 @@ git commit -m "feat(lex): T-L09 运算符最长匹配与 .. 回退（含 rewind 
 - Create: `rgoc/crates/rgoc-lex/tests/test_number.rs`
 
 **Interfaces:**
-- Consumes: `T-L03` `LitKind`
-- Produces: `Lexer::next_number_kind`（内部）
+- Consumes: `T-L03` `LitKind`；`T-L09` `PunctScan::LeadingDotNumber` 的交接
+- Produces: `Lexer::scan_number(seen_point: bool) -> TokenKind`（+ 私有 `digits()` / `report_at()`、私有自由函数 `invalid_sep()` / `base_name()` / `NumPrefix`）
+
+> **执行期裁决 R18（命名，沿 R14/R16 先例）**：计划原写 `Lexer::next_number_kind`，
+> 落地为 **`scan_number`**。参数 `seen_point` 对应官方 `number(seenPoint bool)`；
+> **入口前置条件统一为"游标在字面量第一个字符上"** —— `false` = 十进制数字起头；
+> `true` = `.` 起头（T-L09 的交接把游标**退回 `.` 上、未消耗**，这里补 `bump()`）。
+> 官方在调用 `number(true)` **之前**已消耗那个 `.`，两种入口的 lit 都从第一个字符起算。
+>
+> **本任务的期望值全部先经 oracle 取**（含 RF3 那条"不得自行发明规则"）。
+> 三条只有 oracle 才说得清、已注册为 F32–F35 的事实：**指数分支的 `digsep` 是 `=` 不是 `|=`**；
+> **进制前缀与前导 `0` 都算一个"数码"**（`0x_1f` / `0_1` 合法）；
+> **非法数字的偏移相对词元起点**（`x:=089` 报 1:5 而不是 1:2）。
 
 - [ ] **Step 1: 写失败测试（`T-L-33`…`T-L-35`、`T-L-38`，含 **RF3**）**
 
@@ -913,8 +924,8 @@ Expected: FAIL
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_number`
-Expected: 7 passed
+Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_number`（命令形态按 **G11** 解释）
+Expected: **13 passed**（计划原估 7 条；另含 11 道变异反向验证）
 
 - [ ] **Step 5: 提交**
 

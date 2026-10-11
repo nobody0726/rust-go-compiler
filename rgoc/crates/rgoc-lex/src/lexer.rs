@@ -1,7 +1,8 @@
 //! 词元层：分派 + 各类词元扫描（`M1-design.md` §5.2）。
 //!
-//! T-L08 只落 **`ident`（标识符 / 关键字）** 与支撑它的最小 `Lexer` 壳。
-//! 分号状态机（T-L14）与 `next()` 分派（T-L15）后续加入。
+//! 已落地：`ident`（T-L08）、`punct`（T-L09）、`number`（T-L10）。
+//! 后续加入：`rune` / `string`（T-L11 / T-L12）、注释（T-L13）、
+//! 分号状态机（T-L14）与 `next()` 分派（T-L15）。
 //!
 //! # 这一层最容易被"顺手统一"掉的三处
 //!
@@ -16,7 +17,7 @@
 use crate::diag::{Diag, DiagBag, DiagCode};
 use crate::pos::{FileId, FileTable, Pos};
 use crate::source::SourceReader;
-use crate::token::{Delim, Keyword, OpForm, Operator, SemiOrigin, TokenKind};
+use crate::token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, TokenKind};
 use crate::unicode_tables::{is_digit, is_letter};
 
 /// 词法器。
@@ -150,6 +151,228 @@ impl Lexer {
         let lit = self.src.segment().to_vec();
         self.src.stop_segment();
         Some(keyword_or_ident(lit))
+    }
+
+    /// 在当前游标处扫一个**数字字面量**（LEX-09 / LEX-10 / LEX-11）。
+    ///
+    /// **入口前置条件**：游标在字面量的第一个字符上 ——
+    /// - `seen_point == false`：那个字符是十进制数字（`0`-`9`）
+    /// - `seen_point == true`：那个字符是 `.`，且**后面跟数字**
+    ///   （由 [`PunctScan::LeadingDotNumber`] 交接，见 [`Lexer::scan_punct`]）
+    ///
+    /// 官方在调 `number(true)` **之前**已经把 `.` 消耗掉了；本仓把交接点定在
+    /// "`.` 未被消耗"，所以这里补上 [`Lexer::bump`]。两种入口的**字面量文本都从
+    /// 第一个字符起算** —— 实测 `.5` 的 `lit` 就是 `".5"`。
+    ///
+    /// # 三处必须照抄官方的细节
+    ///
+    /// 1. **`digsep` 位集**：bit0 = 吃到过数码、bit1 = 吃到过 `_`。扫描时**只记位集**，
+    ///    `_` 的位置是否非法交给切完之后的 [`invalid_sep`] 再扫一遍 —— 边扫边判会
+    ///    写出另一套规则，两套在 `1__2` / `0b__1000` 这类输入上**不等价**。
+    /// 2. **指数分支里 `digsep` 是 `=` 不是 `|=`**（官方 `digsep = s.digits(10, nil) | digsep&2`）：
+    ///    尾数的"有数字"位被**丢弃**，只保留"有 `_`"位。写成 `|=` 会让 `1.5e_`
+    ///    **少报**一条 `LEX-BAD-EXPONENT`、**多报**一条 `LEX-BAD-SEP`。
+    /// 3. **`invalid`（进制里第一个越界数字的偏移）只在 `base <= 10` 记**：
+    ///    `base > 10` 时 [`Lexer::digits`] 根本不看"数字是否越界"（十六进制里没有
+    ///    越界数字，非十六进制字符直接停下）⇒ `0x1g` 是 "`0x1` + 标识符 `g`"、
+    ///    **零诊断**（实测）。
+    ///
+    /// 畸形输入**照常产出**词元（`bad = true`）—— 恢复纪律见 `M1-design.md` §7.1。
+    pub fn scan_number(&mut self, seen_point: bool) -> TokenKind {
+        self.ensure_started();
+        let start = self.pos();
+        self.src.start_segment();
+
+        let mut ok = true;
+        let mut kind = LitKind::Int;
+        let mut base: u8 = 10;
+        let mut prefix = NumPrefix::None;
+        let mut digsep: u8 = 0;
+        let mut invalid: Option<u32> = None;
+        let mut seen_point = seen_point;
+
+        if seen_point {
+            self.bump(); // 交接时未消耗的那个 `.`（官方在调用前已消耗）
+        }
+
+        // ── 整数部分
+        if !seen_point {
+            if self.src.ch() == Some('0') {
+                self.bump();
+                match self.src.ch() {
+                    Some('x' | 'X') => {
+                        self.bump();
+                        base = 16;
+                        prefix = NumPrefix::X;
+                    }
+                    Some('o' | 'O') => {
+                        self.bump();
+                        base = 8;
+                        prefix = NumPrefix::O;
+                    }
+                    Some('b' | 'B') => {
+                        self.bump();
+                        base = 2;
+                        prefix = NumPrefix::B;
+                    }
+                    // 前导 `0` **自己算一个数码**（所以 `0_1` 合法，而 `0x` 仍报缺数字）
+                    _ => {
+                        base = 8;
+                        prefix = NumPrefix::Zero;
+                        digsep = 1;
+                    }
+                }
+            }
+            digsep |= self.digits(base, &mut invalid, start);
+            if self.src.ch() == Some('.') {
+                if matches!(prefix, NumPrefix::O | NumPrefix::B) {
+                    self.report(
+                        DiagCode::BadRadixPoint,
+                        format!("{}字面量里不能有小数点", base_name(base)),
+                    );
+                    ok = false;
+                }
+                self.bump();
+                seen_point = true;
+            }
+        }
+
+        // ── 小数部分
+        if seen_point {
+            kind = LitKind::Float;
+            digsep |= self.digits(base, &mut invalid, start);
+        }
+
+        if digsep & 1 == 0 && ok {
+            self.report(
+                DiagCode::LitNoDigits,
+                format!("{}字面量里没有数字", base_name(base)),
+            );
+            ok = false;
+        }
+
+        // ── 指数
+        let is_p = matches!(self.src.ch(), Some('p' | 'P'));
+        if matches!(self.src.ch(), Some('e' | 'E' | 'p' | 'P')) {
+            if ok {
+                if !is_p && !matches!(prefix, NumPrefix::None | NumPrefix::Zero) {
+                    self.report(
+                        DiagCode::BadExponent,
+                        "'e'/'E' 指数要求十进制尾数".to_string(),
+                    );
+                    ok = false;
+                } else if is_p && prefix != NumPrefix::X {
+                    self.report(
+                        DiagCode::BadExponent,
+                        "'p'/'P' 指数要求十六进制尾数".to_string(),
+                    );
+                    ok = false;
+                }
+            }
+            self.bump();
+            kind = LitKind::Float;
+            if matches!(self.src.ch(), Some('+' | '-')) {
+                self.bump();
+            }
+            // 官方给这里传 `nil`（不记 invalid）。传一个 scratch 与之等价：
+            // `base == 10` 时 `ch >= max` 恒假（`'9' < ':'`），永远写不进去。
+            let mut scratch = None;
+            digsep = self.digits(10, &mut scratch, start) | digsep & 2;
+            if digsep & 1 == 0 && ok {
+                self.report(DiagCode::BadExponent, "指数里没有数字".to_string());
+                ok = false;
+            }
+        } else if prefix == NumPrefix::X && kind == LitKind::Float && ok {
+            self.report(
+                DiagCode::BadExponent,
+                "十六进制尾数要求 'p' 指数".to_string(),
+            );
+            ok = false;
+        }
+
+        // ── 虚数后缀
+        if self.src.ch() == Some('i') {
+            kind = LitKind::Imag;
+            self.bump();
+        }
+
+        let lit = self.src.segment().to_vec();
+        self.src.stop_segment();
+
+        // ── 事后校验（官方在 `setLit` 之后做的两段，都靠 `ok` 守卫）
+        if kind == LitKind::Int
+            && ok
+            && let Some(off) = invalid
+        {
+            let c = char::from(lit[off as usize]);
+            self.report_at(
+                start,
+                off,
+                DiagCode::BadDigit,
+                format!("{}字面量里的非法数字 {c:?}", base_name(base)),
+            );
+            ok = false;
+        }
+        if digsep & 2 != 0
+            && ok
+            && let Some(i) = invalid_sep(&lit)
+        {
+            self.report_at(
+                start,
+                i as u32,
+                DiagCode::BadSep,
+                "'_' 必须分隔连续的数码".to_string(),
+            );
+            ok = false;
+        }
+
+        TokenKind::Literal {
+            text: lit,
+            lit_kind: kind,
+            bad: !ok,
+        }
+    }
+
+    /// 官方 `scanner.digits(base, invalid)` 的逐条翻译：吃掉 `{ 数码 | '_' }`。
+    ///
+    /// 返回 **`digsep` 位集**：bit0 = 吃到过数码、bit1 = 吃到过 `_`。
+    /// `base <= 10` 时**还**记录第一个越界数字相对**词元起点**的字节偏移；
+    /// `base > 10` 时不记 —— 十六进制里没有"越界数字"这回事，
+    /// 不是十六进制字符就直接停下（所以 `0x1g` 的 `g` 原样留给下一个词元）。
+    fn digits(&mut self, base: u8, invalid: &mut Option<u32>, start: Pos) -> u8 {
+        let mut digsep = 0u8;
+        if base <= 10 {
+            let max = b'0' + base;
+            while let Some(ch) = self.src.ch() {
+                let ds = if ch == '_' {
+                    2
+                } else if ch.is_ascii_digit() {
+                    if ch as u8 >= max && invalid.is_none() {
+                        // 相对词元起点的**字节**偏移（官方 `col - s.col`）。
+                        // 这条循环只吃单字节 ASCII ⇒ 列差 == 字节差。
+                        *invalid = Some(self.pos().col - start.col);
+                    }
+                    1
+                } else {
+                    break;
+                };
+                digsep |= ds;
+                self.bump();
+            }
+        } else {
+            while let Some(ch) = self.src.ch() {
+                let ds = if ch == '_' {
+                    2
+                } else if ch.is_ascii_hexdigit() {
+                    1
+                } else {
+                    break;
+                };
+                digsep |= ds;
+                self.bump();
+            }
+        }
+        digsep
     }
 
     /// 在当前游标处扫一个**运算符或标点**（LEX-04 最长匹配）。
@@ -435,6 +658,23 @@ impl Lexer {
         });
     }
 
+    /// 在**相对词元起点 `offset` 字节**处报一条诊断（对应官方 `errorAtf`）。
+    ///
+    /// 官方 `errorAtf(offset, …)` 报在 `Pos { 词元起点行, 词元起点列 + offset }`。
+    /// 数字字面量不可能跨行（[`Lexer::digits`] 只吃单字节 ASCII），
+    /// 所以行号直接沿用词元起点行。
+    fn report_at(&mut self, start: Pos, offset: u32, code: DiagCode, message: String) {
+        self.diags.push(Diag {
+            pos: Pos {
+                file: start.file,
+                line: start.line,
+                col: start.col + offset,
+            },
+            code,
+            message,
+        });
+    }
+
     /// 官方 `scanner.atIdentChar` 的逐条翻译。**分支顺序不能动。**
     ///
     /// | # | 条件 | 报错 | 返回 |
@@ -575,4 +815,79 @@ pub enum PunctScan {
     /// 与官方调 `lineComment()` / `fullComment()` 时的状态一致。
     /// 注释本体由 T-L13 处理。
     Comment,
+}
+
+/// 数字字面量的进制前缀（官方 `number()` 里那个 `prefix rune`）。
+///
+/// `None` = 十进制（没有前导零）；`Zero` = **前导 `0`**（退化成八进制）——
+/// 官方用 `0` 与 `'0'` 两个不同常量区分这两者，Rust 里用两个变体。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NumPrefix {
+    None,
+    Zero,
+    X,
+    O,
+    B,
+}
+
+/// 诊断消息里的进制名（官方 `baseName`）。消息文本不参与比对，只为人读。
+fn base_name(base: u8) -> &'static str {
+    match base {
+        2 => "二进制",
+        8 => "八进制",
+        10 => "十进制",
+        16 => "十六进制",
+        _ => "未知进制",
+    }
+}
+
+/// 官方 `invalidSep(x)` 的逐条翻译：**事后**定位 `_` 的非法位置。
+///
+/// 一次正扫，`prev` 记住"上一个字符是哪一类"：
+/// - `b'0'` = 数码（`0x` / `0o` / `0b` 前缀**也算一个数码** ⇒ `0x_1f` 合法）
+/// - `b'_'` = 下划线
+/// - `b'.'` = 其他任何东西（小数点、`e`/`p`、正负号、`i`）
+///
+/// 返回非法 `_` 相对字面量起点的**字节下标**；全部合法时 `None`。
+/// "收尾的 `_`"要单独处理 —— 循环里发现不了"后面什么都没有"。
+///
+/// 字面量不可能含非 ASCII（扫描阶段只吃 ASCII 字符），所以按字节扫是安全的。
+fn invalid_sep(x: &[u8]) -> Option<usize> {
+    let mut prefix = b' '; // 官方 `x1`：只关心是不是 'x'（决定 `a`-`f` 算不算数码）
+    let mut prev = b'.';
+    let mut i = 0;
+
+    // 前缀 `0x` / `0o` / `0b` 算一个数码
+    if x.len() >= 2 && x[0] == b'0' {
+        prefix = x[1].to_ascii_lowercase();
+        if matches!(prefix, b'x' | b'o' | b'b') {
+            prev = b'0';
+            i = 2;
+        }
+    }
+
+    while i < x.len() {
+        let p = prev; // 上一个字符的类别（官方 `p := d`）
+        let c = x[i];
+        if c == b'_' {
+            if p != b'0' {
+                return Some(i);
+            }
+            prev = b'_';
+        } else if c.is_ascii_digit() || (prefix == b'x' && c.is_ascii_hexdigit()) {
+            prev = b'0';
+        } else {
+            if p == b'_' {
+                // `i >= 1` 必然成立：`p == b'_'` 只可能由上轮写进，而上轮至少是 i-1
+                return Some(i - 1);
+            }
+            prev = b'.';
+        }
+        i += 1;
+    }
+
+    if prev == b'_' {
+        return Some(x.len() - 1);
+    }
+    None
 }
