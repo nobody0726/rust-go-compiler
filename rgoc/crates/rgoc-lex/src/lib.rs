@@ -21,13 +21,14 @@
 //! | [`pos`] | 位置表示：`Pos` / `FileId` / `FileTable`（C1 契约） |
 //! | [`diag`] | 诊断：`Diag` / `DiagBag` / `DiagCode`（C1 契约） |
 //! | [`token`] | 词元数据模型：`Token` / `TokenKind` / `Keyword` / `Operator` / `Delim` … |
+//! | [`unicode_tables`] | **生成物**：字符分类区间表（字母 684 / 数字 72），来自 oracle |
 //!
-//! 后续任务将加入 `source`（字符层）、`unicode_tables`（生成的分类表）、
-//! `semicolon`（分号状态机）、`lexer`（分派层）。
+//! 后续任务将加入 `source`（字符层）、`semicolon`（分号状态机）、`lexer`（分派层）。
 
 pub mod diag;
 pub mod pos;
 pub mod token;
+pub mod unicode_tables;
 
 pub use diag::{Diag, DiagBag, DiagCode};
 pub use pos::{FileId, FileTable, Pos};
