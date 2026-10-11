@@ -19,10 +19,13 @@
 //! | 模块 | 职责 |
 //! |---|---|
 //! | [`pos`] | 位置表示：`Pos` / `FileId` / `FileTable`（C1 契约） |
+//! | [`diag`] | 诊断：`Diag` / `DiagBag` / `DiagCode`（C1 契约） |
 //!
-//! 后续任务将加入 `token`（词元数据模型）、`diag`（诊断）、`source`（字符层）、
+//! 后续任务将加入 `token`（词元数据模型）、`source`（字符层）、
 //! `semicolon`（分号状态机）、`lexer`（分派层）。
 
+pub mod diag;
 pub mod pos;
 
+pub use diag::{Diag, DiagBag, DiagCode};
 pub use pos::{FileId, FileTable, Pos};
