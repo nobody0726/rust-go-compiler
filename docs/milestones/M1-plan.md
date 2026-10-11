@@ -771,7 +771,14 @@ git commit -m "feat(lex): T-L08 标识符与关键字（切完再查）+ 订正 
 
 **Interfaces:**
 - Consumes: `T-L03` `OpForm`/`Operator`/`Delim`；`T-L06` `rewind()`
-- Produces: `Lexer::next_punct_kind`（内部）
+- Produces: `Lexer::{scan_punct, pos}` + `PunctScan`（新公开类型）
+
+> **执行期裁决 R16（命名，沿 R14 先例）**：计划原写 `Lexer::next_punct_kind`，
+> 落地为 **`scan_punct`**（理由同 `scan_ident`：`next_*` 意味着"无条件取下一个"，
+> 而它返回 `Option<PunctScan>`、失败时不消耗任何字符）。
+> `PunctScan` 是新增的**三去向**类型：`Token` / `LeadingDotNumber` / `Comment` ——
+> 官方 `next()` 里那三条非词元出口，与其让调用方从 `None` 里猜，不如建成类型。
+> 另加 `Lexer::pos()`（词元起点 = 扫描**前**的游标位置，`next()` 要用它填 `Token::pos`）。
 
 - [ ] **Step 1: 写失败测试（`T-L-26`…`T-L-29`，含 **RF1**）**
 
@@ -811,22 +818,47 @@ Expected: FAIL
 
 - [ ] **Step 3: 实现**
 
-用 `match` 对首字符分派 + 显式前瞻，**`+=` 一族收敛到同一段逻辑**（`assignop` 汇合点）。
+用 `match` 对首字符分派 + 显式前瞻，**`+=` 一族收敛到同一段逻辑**（[`assignop`] 汇合点）。
 `..` 是**唯一**需要 `rewind()` 的地方：先吃掉第一个 `.`，若下一个是 `.` 则再看第三个；
 不是第三个就 `rewind()` 回退到段起点。
 `*` 不需要单独照搬官方的 `_Star` —— `(Plain, Mul)` 已经唯一（D-M1-10）。
 
+> **⚠️ 三处执行期的发现（都已落进代码与测试）**
+>
+> 1. **`rewind` 内部那次重读要按前一个字符判换行**（**F30**）。
+>    官方 `rewind()` 调的是**完整**的 `nextch()` —— 于是 `..` 后面紧跟 `
+` 时，
+>    这次回退会把**行号多加一次**，且**后续所有位置都偏移**。
+>    实测 `x\n..\ny\n` ⇒ `.`@2:1、`.`@**3:2**、`y`@**4:1**（正确值应是 2:2 / 3:1）。
+>    T-L06 的 `rewind` 少了这一步 ⇒ **本条是 T-L09 对 `source.rs` 的修正**。
+>    判为**照抄**：这条规则可以精确写下来（不像 F26 那种依赖缓冲填充时机的产物）。
+> 2. **`..` 回退之后还有一次 `nextch()`** —— 官方原文里 `s.rewind()` 紧跟着
+>    `s.nextch() // consume 1st '.' again`。少了它 `..` 会**原地打转**。
+> 3. **`.` 后面紧跟数字是数字字面量**（官方 `number(true)`）⇒ `.5` 是**一个** Float。
+>    交接用 `PunctScan::LeadingDotNumber`，且**把游标退回 `.` 上** ——
+>    这样数字扫描器（T-L10）的前置条件保持统一（"总是从字面量第一个字符开始"），
+>    不必区分"数字起头"与"点号起头"两种入口状态。
+>    代价是 `rewind` 多了**第二个**调用点（见 design §5.1 的 I5）。
+>
+> **另纠正一处测试清单的期望值**（**F31**）：`M1-tests.md` 的 `T-L-26` 用 `1..2`
+> 来测"唯一回退点"，但实测 `1..2` 会变成 `literal "1."` + `literal ".2"` ——
+> **两个 Float，根本没有 `..`**。已换成 `..x` / `..中`。
+
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_punct`
-Expected: 6 passed
+Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_punct'`
+Expected: **16 passed**（计划原写 6 条 —— 另有 48 条表驱动、ASCII 全域穷举、`..\n` 行号、`.5` 交接）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add rgoc/crates/rgoc-lex
-git commit -m "feat(lex): 运算符最长匹配与 .. 回退（唯一回退点）"
+git add rgoc/crates/rgoc-lex docs/milestones
+git commit -m "feat(lex): T-L09 运算符最长匹配与 .. 回退（含 rewind 的换行判定修正）"
 ```
+
+> **落地结果**：`scan_punct`（+ `PunctScan` + `assign_op` 汇合点）与 **16** 条断言全绿；
+> `source.rs` 的 `rewind` 补上换行判定。
+> **反向验证 10/10 全部变红**（含 `rewind` 那道）；四条门禁全过、本任务起 workspace **359 passed**。
 
 ---
 

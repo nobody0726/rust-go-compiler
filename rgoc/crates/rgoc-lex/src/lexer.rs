@@ -14,9 +14,9 @@
 //!    不是"切成两个词元"（F29）。
 
 use crate::diag::{Diag, DiagBag, DiagCode};
-use crate::pos::{FileId, FileTable};
+use crate::pos::{FileId, FileTable, Pos};
 use crate::source::SourceReader;
-use crate::token::{Keyword, TokenKind};
+use crate::token::{Delim, Keyword, OpForm, Operator, SemiOrigin, TokenKind};
 use crate::unicode_tables::{is_digit, is_letter};
 
 /// 词法器。
@@ -73,6 +73,15 @@ impl Lexer {
     #[must_use]
     pub fn peek(&self) -> Option<char> {
         self.src.ch()
+    }
+
+    /// 当前游标的位置（即 [`Lexer::peek`] 那个字符的 `Pos`）。
+    ///
+    /// 在扫描**之前**取它，得到的就是下一个词元的起点 —— `next()`（T-L15）
+    /// 正是这么用它来填 [`crate::Token::pos`] 的。
+    #[must_use]
+    pub fn pos(&self) -> Pos {
+        self.src.pos()
     }
 
     /// 取走诊断包（取走之后本对象里就是空的）。
@@ -141,6 +150,265 @@ impl Lexer {
         let lit = self.src.segment().to_vec();
         self.src.stop_segment();
         Some(keyword_or_ident(lit))
+    }
+
+    /// 在当前游标处扫一个**运算符或标点**（LEX-04 最长匹配）。
+    ///
+    /// 返回值有三种去向，见 [`PunctScan`]。当前字符不是标点的起始字符时返回 `None`
+    /// 且**一个字符都不消耗**。
+    ///
+    /// # 三条要从官方照抄的地方
+    ///
+    /// 1. **最长匹配用手写前瞻**，不是"扫到最长再回退"。
+    ///    唯一需要回退的是 `.` 分支（`..` 与 `.`+数字两种情形），
+    ///    全阶段**只有这一处**会调 [`SourceReader::rewind`]。
+    /// 2. **`+=` 一族收敛到同一段逻辑**（[`Lexer::assign_op`]，官方 `assignop` 标签）。
+    ///    11 个复合赋值运算符共用它 —— 逐个分支手写必然漏一两个。
+    /// 3. **`*` 不需要单独照搬官方的 `_Star`**：`(Plain, Mul)` 已经唯一（D-M1-10）。
+    ///
+    /// # 官方在这里顺手设的 `nlsemi` 不在这里
+    ///
+    /// `)` `]` `}` `++` `--` 会让"下一个换行译成 `;`"。那属于 `SemicolonPolicy`
+    /// （`T-L14`），由 `T-L15` 的 `next()` 在拿到 `kind` 之后设置 —— 与本模块
+    /// 对 `ident` 的处理一致。
+    pub fn scan_punct(&mut self) -> Option<PunctScan> {
+        self.ensure_started();
+        let ch = self.src.ch()?;
+        if !is_punct_start(ch) {
+            return None;
+        }
+        Some(match ch {
+            '(' => self.simple(Delim::LParen),
+            '[' => self.simple(Delim::LBrack),
+            '{' => self.simple(Delim::LBrace),
+            ',' => self.simple(Delim::Comma),
+            ')' => self.simple(Delim::RParen),
+            ']' => self.simple(Delim::RBrack),
+            '}' => self.simple(Delim::RBrace),
+            ';' => {
+                self.bump();
+                PunctScan::Token(TokenKind::Semi(SemiOrigin::Explicit))
+            }
+            ':' => {
+                self.bump();
+                if self.src.ch() == Some('=') {
+                    self.bump();
+                    op_expr(OpForm::Plain, Operator::Define)
+                } else {
+                    PunctScan::Token(TokenKind::Delim(Delim::Colon))
+                }
+            }
+            '.' => {
+                // 只有 `.` 分支可能需要回退（`..` / `.`+数字），所以只有它要活动段。
+                self.src.start_segment();
+                let r = self.scan_dot();
+                self.src.stop_segment();
+                r
+            }
+            '+' => {
+                self.bump();
+                if self.src.ch() == Some('+') {
+                    self.bump();
+                    op_expr(OpForm::IncDec, Operator::Add)
+                } else {
+                    self.assign_op(Operator::Add)
+                }
+            }
+            '-' => {
+                self.bump();
+                if self.src.ch() == Some('-') {
+                    self.bump();
+                    op_expr(OpForm::IncDec, Operator::Sub)
+                } else {
+                    self.assign_op(Operator::Sub)
+                }
+            }
+            '*' => {
+                // 官方特意注释「don't goto assignop - want _Star token」——
+                // 因为 `a * b` 与 `*p` 在语法上要分开。本仓用 `(Plain, Mul)` 表达前者，
+                // 不需要额外类别（D-M1-10 的无损性核对表）。
+                self.bump();
+                if self.src.ch() == Some('=') {
+                    self.bump();
+                    op_expr(OpForm::Assign, Operator::Mul)
+                } else {
+                    op_expr(OpForm::Plain, Operator::Mul)
+                }
+            }
+            '/' => {
+                self.bump();
+                if matches!(self.src.ch(), Some('/' | '*')) {
+                    // `//` / `/*`：官方把**两个字符都吃掉**再调 lineComment/fullComment。
+                    // 注释本体归 T-L13；这里只做交接（与官方调用点状态一致）。
+                    self.bump();
+                    PunctScan::Comment
+                } else {
+                    self.assign_op(Operator::Div)
+                }
+            }
+            '%' => {
+                self.bump();
+                self.assign_op(Operator::Rem)
+            }
+            '&' => {
+                self.bump();
+                if self.src.ch() == Some('&') {
+                    self.bump();
+                    op_expr(OpForm::Plain, Operator::AndAnd)
+                } else {
+                    // `&^` 与 `&` 共用 `assignop`，只有 op 不同
+                    let mut operator = Operator::And;
+                    if self.src.ch() == Some('^') {
+                        self.bump();
+                        operator = Operator::AndNot;
+                    }
+                    self.assign_op(operator)
+                }
+            }
+            '|' => {
+                self.bump();
+                if self.src.ch() == Some('|') {
+                    self.bump();
+                    op_expr(OpForm::Plain, Operator::OrOr)
+                } else {
+                    self.assign_op(Operator::Or)
+                }
+            }
+            '^' => {
+                self.bump();
+                self.assign_op(Operator::Xor)
+            }
+            '<' => {
+                self.bump();
+                match self.src.ch() {
+                    Some('=') => {
+                        self.bump();
+                        op_expr(OpForm::Plain, Operator::Leq)
+                    }
+                    Some('<') => {
+                        self.bump();
+                        self.assign_op(Operator::Shl)
+                    }
+                    // `<-` 是 `_Arrow`：官方**不设 op**（F21），本仓给语义值但不给优先级
+                    Some('-') => {
+                        self.bump();
+                        op_expr(OpForm::Plain, Operator::Arrow)
+                    }
+                    _ => op_expr(OpForm::Plain, Operator::Lss),
+                }
+            }
+            '>' => {
+                self.bump();
+                match self.src.ch() {
+                    Some('=') => {
+                        self.bump();
+                        op_expr(OpForm::Plain, Operator::Geq)
+                    }
+                    Some('>') => {
+                        self.bump();
+                        self.assign_op(Operator::Shr)
+                    }
+                    _ => op_expr(OpForm::Plain, Operator::Gtr),
+                }
+            }
+            '=' => {
+                self.bump();
+                if self.src.ch() == Some('=') {
+                    self.bump();
+                    op_expr(OpForm::Plain, Operator::Eql)
+                } else {
+                    // 官方 `_Assign`，**不设 op**（F21）；本仓给 `Operator::Assign`、prec 0
+                    op_expr(OpForm::Plain, Operator::Assign)
+                }
+            }
+            '!' => {
+                self.bump();
+                if self.src.ch() == Some('=') {
+                    self.bump();
+                    op_expr(OpForm::Plain, Operator::Neq)
+                } else {
+                    op_expr(OpForm::Plain, Operator::Not)
+                }
+            }
+            '~' => {
+                self.bump();
+                op_expr(OpForm::Plain, Operator::Tilde)
+            }
+            other => unreachable!("is_punct_start 已排除 {other:?}"),
+        })
+    }
+
+    /// 单字符分隔符。
+    fn simple(&mut self, d: Delim) -> PunctScan {
+        self.bump();
+        PunctScan::Token(TokenKind::Delim(d))
+    }
+
+    /// 官方 `assignop` **汇合点**：`+=` 一族与它们的裸形式共用这段。
+    ///
+    /// 每个分支只需把 `operator` 摆好 —— 剩下的"后面是不是 `=`"在这里统一判。
+    /// 11 个复合赋值运算符（F3）全靠这一段。
+    fn assign_op(&mut self, operator: Operator) -> PunctScan {
+        let form = if self.src.ch() == Some('=') {
+            self.bump();
+            OpForm::Assign
+        } else {
+            OpForm::Plain
+        };
+        op_expr(form, operator)
+    }
+
+    /// `.` 分支 —— 官方 `case '.'` 的逐条翻译，**全阶段唯一的回退点**。
+    ///
+    /// 官方原文（`scanner.go` 的 `case '.'`）：
+    ///
+    /// ```text
+    /// s.nextch()                     // 吃掉第一个 '.'
+    /// if isDecimal(s.ch) { s.number(true); break }
+    /// if s.ch == '.' {
+    ///     s.nextch()                 // 吃掉第二个 '.'
+    ///     if s.ch == '.' { s.nextch(); s.tok = _DotDotDot; break }
+    ///     s.rewind()                 // now s.ch holds 1st '.'
+    ///     s.nextch()                 // consume 1st '.' again
+    /// }
+    /// s.tok = _Dot
+    /// ```
+    ///
+    /// 注意回退之后**还有一次 `nextch()`** —— 少了它 `..` 会原地打转。
+    fn scan_dot(&mut self) -> PunctScan {
+        self.bump(); // 吃掉第一个 `.`
+
+        if self.src.ch().is_some_and(is_ascii_digit) {
+            // 官方在这里调 `number(true)`：`.5` 是**一个** Float 字面量。
+            // 数字扫描器在 T-L10 —— 把游标**退回 `.` 上**再交接，
+            // 这样它的前置条件保持统一（"总是从字面量的第一个字符开始"），
+            // 不必区分"数字起头"与"点号起头"两种入口状态。
+            self.rewind_to_segment_start();
+            return PunctScan::LeadingDotNumber;
+        }
+
+        if self.src.ch() == Some('.') {
+            self.bump(); // 吃掉第二个 `.`
+            if self.src.ch() == Some('.') {
+                self.bump(); // 吃掉第三个 `.`
+                return PunctScan::Token(TokenKind::Delim(Delim::Ellipsis));
+            }
+            // 不是三个点 ⇒ 回到段首（第一个 `.`），再吃掉它
+            self.rewind_to_segment_start();
+            self.bump();
+        }
+
+        PunctScan::Token(TokenKind::Delim(Delim::Dot))
+    }
+
+    /// 回退到活动段起点。
+    ///
+    /// `SourceReader::rewind` 返回诊断（它内部会重读段首字符），这里照 [`Lexer::bump`]
+    /// 的做法收进自己的包。
+    fn rewind_to_segment_start(&mut self) {
+        for d in self.src.rewind() {
+            self.diags.push(d);
+        }
     }
 
     /// 首次调用时读入第一个字符（幂等）。
@@ -231,6 +499,49 @@ fn is_ascii_letter_or_underscore(c: char) -> bool {
     is_ascii_letter(c) || c == '_'
 }
 
+/// 全部**能起头**一个运算符或标点的字符（23 个）。
+///
+/// 与官方 `next()` 那个 `switch` 的 `case` 列表**逐条对应** ——
+/// 多认一个字符（比如把 `@` 也收进来）会让"非法字符"诊断永远不触发，
+/// 少认一个会让合法程序切出 `None`。两边都是静默的，
+/// 所以 `tests/test_punct.rs` 里有一条**ASCII 全域穷举**盯着这个集合。
+fn is_punct_start(c: char) -> bool {
+    matches!(
+        c,
+        '(' | '['
+            | '{'
+            | ','
+            | ';'
+            | ')'
+            | ']'
+            | '}'
+            | ':'
+            | '.'
+            | '+'
+            | '-'
+            | '*'
+            | '/'
+            | '%'
+            | '&'
+            | '|'
+            | '^'
+            | '<'
+            | '>'
+            | '='
+            | '!'
+            | '~'
+    )
+}
+
+/// 造一个 `Op` 词元，优先级直接取自 [`Operator::prec`]（与官方 `precXxx` 常量同编号）。
+fn op_expr(form: OpForm, operator: Operator) -> PunctScan {
+    PunctScan::Token(TokenKind::Op {
+        form,
+        op: operator,
+        prec: operator.prec(),
+    })
+}
+
 /// **整串切完**再查关键字（LEX-05）；查不到就是普通标识符。
 ///
 /// 边扫边匹配会让 `forx` 变成 `for` + `x` —— `forx` / `format` 两条测试专门盯它。
@@ -242,4 +553,26 @@ fn keyword_or_ident(lit: Vec<u8>) -> TokenKind {
         return TokenKind::Keyword(k);
     }
     TokenKind::Ident(lit)
+}
+
+/// [`Lexer::scan_punct`] 的结果。
+///
+/// 三种结果各自对应官方 `next()` 里的一条**非词元**出口 —— 把它们显式建模成类型，
+/// 而不是让调用方从 `None` 里猜，是因为"没扫到标点"与"扫到一半要交接给别人"
+/// 在后续处理上**完全不同**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PunctScan {
+    /// 一个完整的运算符 / 标点词元。
+    Token(TokenKind),
+    /// `.` 后面紧跟数字 ⇒ 这是**数字字面量**的开头（官方 `case '.'` 里的 `number(true)`）。
+    ///
+    /// `.5` 是**一个** Float 词元。交接时游标已由 `rewind` 退回那个 `.` 上、
+    /// **一个字符都没消耗** —— 数字扫描器（T-L10）从字面量第一个字符开始。
+    LeadingDotNumber,
+    /// `//` 或 `/*`：注释开头。
+    ///
+    /// **两个字符都已被消耗**，游标在注释体的第一个字符上（EOF 时是 `None`）——
+    /// 与官方调 `lineComment()` / `fullComment()` 时的状态一致。
+    /// 注释本体由 T-L13 处理。
+    Comment,
 }

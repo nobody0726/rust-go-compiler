@@ -35,7 +35,7 @@ pub mod token;
 pub mod unicode_tables;
 
 pub use diag::{Diag, DiagBag, DiagCode};
-pub use lexer::Lexer;
+pub use lexer::{Lexer, PunctScan};
 pub use pos::{FileId, FileTable, Pos};
 pub use source::SourceReader;
 pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};

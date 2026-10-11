@@ -198,6 +198,22 @@ impl SourceReader {
         self.col -= ((self.r - usize::from(self.chw)) - b) as u32;
         self.r = b;
 
+        // ★ 官方 `rewind` 内部调的是**完整**的 `nextch()`，而 `nextch` 会按
+        //   **前一个字符**判断换行。于是 `..` 后面紧跟 `\n` 时，这次回退会把
+        //   行号**多加一次**，而且**后续所有位置都跟着偏移**。
+        //
+        //   实测（oracle，go1.27.1）：
+        //     `..\n`       ⇒ `.`@1:1、`.`@**2:2**、EOF@3:1
+        //     `x\n..\ny\n` ⇒ `.`@2:1、`.`@**3:2**、`y`@**4:1**
+        //
+        //   这个规则**可以精确写下来**（不像首字节 NUL 那种依赖缓冲填充时机的产物），
+        //   所以照抄 —— 否则文件中 `..` 之后的每个位置都会与 oracle 差一行。
+        //   顺序也要照官方：先加 `chw`（已折进上面那次减法），**再**判换行。
+        if self.ch == Some('\n') {
+            self.line += 1;
+            self.col = 0;
+        }
+
         let mut diags = Vec::new();
         // 只重读字符，**不再动 (line, col)** —— 位置已经置成段首。
         let again = self.read_step(&mut diags);
