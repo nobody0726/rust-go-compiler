@@ -66,18 +66,26 @@
 
 ### 3.1 切面 ① 解码与位置（`T-L-1x`）—— 判据全 `O`
 
+> **本切面的主力判据是「字节级密集对撞」（见 §5.2.1）**：1177 个字节串逐个跑，
+> 与 oracle **逐事件**比较。下面这 10 条是**可读代表用例** —— 每条钉住一个机制，
+> 对撞红了的时候先看它们，能立刻判断"错的是哪个机制"。
+>
+> 手写用例**不可能**替代密集对撞：切面 ① 的判据原文是「位置必须与 oracle
+> **逐字节**相等」，而位置是**每个字节**推出来的。T-L07 实测：密集对撞一次就找出了
+> 一处**文档从未提到**的官方行为（首字节 NUL，见 §5.2.1 与 `M1-design.md` §12 R11）。
+
 | ID | 用例 | 断言要点 |
 |---|---|---|
 | `T-L-10` | 纯 ASCII 单行 `x := 1` | 5 个词元的位置逐个与 oracle 相等 |
 | `T-L-11` | **中文标识符** `\t变量 := 1` | `变量` @ 4:2、`:=` @ **4:9**（字节列，非 rune 列） |
 | `T-L-12` | **emoji**（4 字节 UTF-8） | 列号按 4 递增 |
-| `T-L-13` | BOM 在**文件首** | 被吃掉；首个词元列号 = 4 |
-| `T-L-14` | BOM 在**文件中** | 报 `LEX-BOM-MIDFILE`；**并入标识符** |
-| `T-L-15` | NUL `x\0y` | 报 `LEX-INVALID-NUL`；**并入标识符** |
-| `T-L-16` | 非法 UTF-8 `1\xff2` | 报 `LEX-INVALID-UTF8`；**并入字面量**；后续词元继续正确 |
-| `T-L-17` | CRLF `x\r\ny` | `\r` 当空白；行号正常推进 |
+| `T-L-13` | BOM 在**文件首** | **被跳过**（不作为字符送出），但那 3 个字节**各占一列** ⇒ 首个可见字符在 **1:4**；**无诊断** |
+| `T-L-14` | BOM 在**文件中** | 报 `LEX-BOM-MIDFILE`（位置 = BOM 自己）；BOM **同样被跳过** —— 与文件首的差别**只在报不报错**；标识符层的原文仍含那三字节（F8） |
+| `T-L-15` | NUL `x\0y` | 报 `LEX-INVALID-NUL`；NUL **被跳过**、但**仍占一列**（`y` @1:3）；连续两个 NUL ⇒ **两条**诊断（`advance() -> Vec<Diag>` 的依据） |
+| `T-L-16` | 非法 UTF-8 `1\xff2` | 报 `LEX-INVALID-UTF8`；**只消费 1 个字节**（截断的 4 字节序列 ⇒ **2** 条、代理区 ⇒ **3** 条）；后续字符继续正确 |
+| `T-L-17` | CRLF `x\r\ny` | `\r` 在**字符层只是普通字符**（"当空白"是 `next()` 的事）；只有 `\n` 改行号 |
 | `T-L-18` | 多行 + 空行 | 行号推进与「换行归零」逐行相等 |
-| `T-L-19` | 私有区字符 `x\ue000` | 报 `LEX-BAD-IDENT-CHAR` |
+| `T-L-19` | 私有区字符 `x\ue000` | ★ **订正**：字符层**不报错**（合法 UTF-8、`w=3`）；`LEX-BAD-IDENT-CHAR` 由**标识符层**产出（`scanner.go:411` 的 `atIdentChar`）⇒ 归 `T-L-2x`（`T-L08`） |
 
 ### 3.2 切面 ② 切分边界（`T-L-2x`）—— 判据全 `O`
 
@@ -206,6 +214,40 @@
 3. **诊断只存 `行:列 + DiagCode`**，不存消息文本（D-M1-9）
 4. **确定性** —— 同一输入多次运行字节相同
 
+### 5.2.1 字符级 golden（`T-L07` 立）—— 切面 ① 的主力判据
+
+词元级 golden 在**词元边界**上取样；而位置是**每个字节**推出来的，
+`source.nextch` 是 byte-column 语义的唯一来源。所以另有一条**字符级**通道。
+
+| 项 | 值 |
+|---|---|
+| 语料 | `tools/token-oracle/fixtures/char_corpus.txt` —— **1177 个字节串**（全部单字节 256 + 30 个"结构相关字节"的两两组合 + 27 个有名字的多字节用例；去重保序） |
+| golden | `tools/token-oracle/fixtures/char_golden.txt`（3279 行），由 `go run . --chars-golden` 生成 |
+| 生成器 | `tools/token-oracle/charcorpus.go`（语料）/ `chargolden.go`（渲染）/ `gosyntax/export.go` 的 `DumpChars` |
+| 比对 | `rgoc-lex/tests/test_char_golden.rs`，**逐事件** |
+| 实测结果 | **1146 例逐字节一致 + 31 例已登记偏离** |
+
+```text
+## <hex>                             ← 用例（输入字节串的 hex；空串为 -）
+D <line>:<col>      <CODE>          ← 诊断
+C <line>:<col>      U+<HEX> w=<n>   ← 读到一个字符；EOF 不进事件流
+```
+
+**与词元级唯一的格式差异：这里不需要排序。** 官方 `nextch` 的 `redo:` 标签在位置
+推进**之前**，所以"违规字节先报诊断、再让出下一个字符"是**语义**（每个被跳过的字节
+各占一列），不是内部时序 —— 词元级恰好相反（"诊断何时触发"是实现细节，必须分开排）。
+
+**`w` 是 byte-column 语义的直接证据**，必须进 golden。
+**合成**的 `U+FFFD`（非法编码的替身）**从不进入事件流** —— 官方 `goto redo` 会重读它，
+只作中间值存在；事件流里的 `U+FFFD` 一定来自源码（`w=3`）。
+
+**一处已登记的偏离（首字节为 `0x00`）**：官方**漏报**（它把 NUL 的检查只写在 ASCII
+快路径里，而懒填充让首次 `nextch` 的 `buf[0]` 还是 sentinel），我们**总是**报
+`LEX-INVALID-NUL`。**两侧都报错**，差别只在代号。
+判为**实现产物**、按 D-M1-7 不照抄；偏离在测试里用**谓词 + 形状**双重断言登记
+（判据是谓词而不是写死的 hex 列表 —— 本仓三次踩过「写死的键列表变成盲区」）。
+详见 `M1-design.md` §5.1 / §8.2.1 / §12 R11。
+
 ### 5.3 两种来源必须标注
 
 | 来源 | 覆盖 | 标记 |
@@ -233,8 +275,12 @@
 ### 7.1 腿甲（crate 内）
 
 ```sh
-scripts/in-container.sh cargo test -p rgoc-lex
+scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex'                    # 全部
+scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_char_golden'  # 只看字符级对撞
 ```
+
+> ⚠️ **紧密循环**里改完源文件马上跑，必须先在容器内 `touch` 那个文件（计划 **G13**）——
+> 否则 cargo 可能仍看到缓存的 mtime，**跑的是上一版二进制**（内容/哈希/指纹都对，只有失败清单是旧的）。
 
 ### 7.2 腿乙（门禁级 golden）
 
@@ -243,14 +289,30 @@ scripts/in-container.sh cargo run -p rgoc-driver -- lex <file>   # 产出词元�
 scripts/check-lex-golden.sh                                       # 与 golden 逐行 diff
 ```
 
-### 7.3 四条门禁命令（不变）
+### 7.3 四条门禁命令（**判据不变，调用形态有规范**）
+
+四条命令本身不变（`cargo fmt --check` / `check --workspace --all-targets` /
+`clippy --workspace --all-targets -- -D warnings` / `test --workspace`），
+但**调用形态**必须按 `M1-plan.md` 的 **G14**：
 
 ```sh
-scripts/in-container.sh cargo fmt --check
-scripts/in-container.sh cargo check --workspace --all-targets
-scripts/in-container.sh cargo clippy --workspace --all-targets -- -D warnings
-scripts/in-container.sh cargo test --workspace
+scripts/in-container.sh bash -lc 'set -eo pipefail; cd /work/rgoc
+fail=0
+cargo fmt --check > /tmp/g1.log 2>&1 || { echo "  fmt FAIL";    head -20 /tmp/g1.log; fail=1; }
+cargo check   --workspace --all-targets > /tmp/g2.log 2>&1 || { echo "  check FAIL";  grep -E "^error" -A6 /tmp/g2.log | head -20; fail=1; }
+cargo clippy  --workspace --all-targets -- -D warnings > /tmp/g3.log 2>&1 || { echo "  clippy FAIL"; grep -E "^error" -A8 /tmp/g3.log | head -24; fail=1; }
+cargo test    --workspace > /tmp/g4.log 2>&1 || { echo "  test FAIL";   grep -E "^error|FAILED|panicked" /tmp/g4.log | head -20; fail=1; }
+if [ $fail -eq 0 ]; then echo "  四条门禁全过"; else echo "  有门禁未通过"; fi
+[ $fail -eq 0 ]'
 ```
+
+**为什么不能逐条调、也不能靠 `&&`**（两条都是实测）：
+
+1. **容器内 `set -e` 生效时，任何显式 `exit N`（含 `exit 0`）都被压成 1**
+   （`bash -lc 'set -e; exit 7'` → 1）⇒ 退出码信息全毁，所以末条写成 `[ $fail -eq 0 ]`。
+2. **`cmd && echo OK` 形态不中止脚本**（`set -e` 对 AND-OR 列表的非末项不生效），
+   于是**早期失败被后续成功掩盖**（实测 `false && echo OK; true` → 退出码 **0**）。
+3. 取退出码时**不要 `cmd | grep`** —— 管道的状态会被覆盖。用变量捕获。
 
 ### 7.4 资源上限（冻结）
 

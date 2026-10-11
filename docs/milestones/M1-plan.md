@@ -34,6 +34,25 @@
 | G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |
 | G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
 | G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须先 `touch` 那个源文件**（或让容器自己写）。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06 的反验里连续复现两次 | 执行期实测（R9） |
+| G14 | **门禁命令用「累积式 + 末条即判据」，且不写显式 `exit $fail`**。两个实测陷阱：① 容器内 `set -e` 生效时**任何显式 `exit N`（含 `exit 0`）都被压成 1**（`bash -lc 'set -e; exit 7'` → 1）⇒ 退出码信息全毁；② 仓库惯用的 `cmd && echo OK` 形态**不中止脚本**（`set -e` 对 AND-OR 列表的非末项不生效），于是**早期失败被后续成功掩盖**（实测 `false && echo OK; true` → 退出码 **0**）。⚠️ 推论：**不能用「末尾命令成功」当判据** | 执行期实测（R12） |
+
+**G14 的规范形态**（`fail` 累积 + 末条即判据）：
+
+```bash
+scripts/in-container.sh bash -lc 'set -eo pipefail; cd /work/rgoc
+fail=0
+cargo fmt --check > /tmp/g1.log 2>&1 || { echo "  fmt FAIL";    head -20 /tmp/g1.log; fail=1; }
+cargo check   --workspace --all-targets > /tmp/g2.log 2>&1 || { echo "  check FAIL";  grep -E "^error" -A6 /tmp/g2.log | head -20; fail=1; }
+cargo clippy  --workspace --all-targets -- -D warnings > /tmp/g3.log 2>&1 || { echo "  clippy FAIL"; grep -E "^error" -A8 /tmp/g3.log | head -24; fail=1; }
+cargo test    --workspace > /tmp/g4.log 2>&1 || { echo "  test FAIL";   grep -E "^error|FAILED|panicked" /tmp/g4.log | head -20; fail=1; }
+if [ $fail -eq 0 ]; then echo "  四条门禁全过"; else echo "  有门禁未通过"; fi
+[ $fail -eq 0 ]'
+```
+
+> 末条**必须是 `[ $fail -eq 0 ]`**，不能是 `exit $fail`（陷阱 ①），
+> 也不能是 `[ ... ] && echo 全过 || echo 有失败`（`||` 分支的 `echo` 会让末条状态变 0，
+> 实测 fail=1 时退出码仍是 0）。**要取退出码时用变量捕获**，不要 `cmd | grep` ——
+> 管道会覆盖 `$?`（本次自检里我连续踩了两回）。
 
 ---
 
@@ -602,60 +621,62 @@ git commit -m "feat(lex): SourceReader 字符层（UTF-8 解码 + 位置推进 +
 - Consumes: `T-L06`
 - Produces: 无新接口；`SourceReader` 在边界输入上产出诊断并继续
 
-- [ ] **Step 1: 写失败测试（对应 `M1-tests.md` 的 `T-L-13`…`T-L-19`）**
+- [ ] **Step 1: 写测试（`M1-tests.md` 的 `T-L-13`…`T-L-19`）—— 判据分两层**
 
-```rust
-#[test]
-fn bom_在文件首被吃掉且计入字节列() {
-    // "\u{feff}x" → x@1:4，无诊断
-}
+**第一层：密集对撞（主力）** —— `tests/test_char_golden.rs`
 
-#[test]
-fn bom_在文件中报错但仍并入标识符() {
-    // "x\u{feff}y" → 一条 LEX-BOM-MIDFILE，且 segment 含 BOM
-}
+把 `tools/token-oracle/fixtures/char_corpus.txt`（**1177 个字节串**）逐个走一遍
+`SourceReader::advance`，与 `char_golden.txt` **逐事件**比较。
 
-#[test]
-fn nul_报错但仍并入() {
-    // "x\0y" → LEX-INVALID-NUL，segment 含 NUL
-}
+> **为什么把 6 条手写用例升成 1177 例的密集对撞**：切面 ① 的判据原文就是
+> 「位置必须与 oracle **逐字节**相等」，而位置是**每个字节**推出来的。
+> 手写用例只在"想得到的地方"取样 —— 而 T-L06 已经证明一次 oracle 对照就能同时
+> 纠正一个笔误（`:=` @1:7 vs 1:8）并推翻一条预检裁决（`Option<Diag>` vs `Vec<Diag>`）。
+> 语料生成器在 `tools/token-oracle/charcorpus.go`，golden 由 `--chars-golden` 产出 ——
+> **两侧读同一份 committed 文件**（单一事实来源；「两侧各维护一份清单」本仓已三次同形）。
 
-#[test]
-fn 非法_utf8_报错但仍并入() {
-    // b"1\xff2" → LEX-INVALID-UTF8 @正确的列，segment 含该字节
-}
+**第二层：少量可读代表用例** —— `tests/test_source.rs` §⑥。每条钉住一个**机制**，
+`test_char_golden` 红了的时候先看这里，能立刻判断"错的是哪个机制"：
 
-#[test]
-fn crlf_的_r_当空白() { }
+| 用例 | 钉住的机制 |
+|---|---|
+| `bom_仅允许文件首字符且计入字节列` | BOM 被跳过但**占 3 列**（`x` @1:4）；只有 BOM 时无字符事件 |
+| `bom_在文件中报错但仍被跳过` | 报错与跳过**是两件独立的事**（两条路都走 `redo`） |
+| `双_bom_的第二个才报错` | 判据是 `line>0 \|\| col>0`，不是"第几个字符" |
+| `nul_报错但被跳过且仍占一列` | 报错 → 跳过 → 读下一个；连续 NUL 各占一列 |
+| `非法_utf8_只消费一个字节` | **逐字节退**（截断的 4 字节序列报 **2** 条、代理区报 **3** 条）；合法编码的 `U+FFFD` **不是**错误 |
+| `回车不算换行只有换行改行号` | `\r` 在字符层只是普通字符（"当空白"是 `next()` 的事） |
+| `私有区字符在字符层是合法的且宽度为三` | ★ **修正**：计划原写"报 `LEX-BAD-IDENT-CHAR`" —— 那是 `T-L08`（`scanner.go:411` 的 `atIdentChar`）。字符层对 U+E000 **不报错** |
 
-#[test]
-fn 私有区字符在标识符里报错() {
-    // "x\u{e000}" → LEX-BAD-IDENT-CHAR
-}
-```
+- [ ] **Step 2: 跑测试确认 RED，并记录 RED 的**形态**
 
-- [ ] **Step 2: 跑测试确认失败**
+Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_char_golden'`
+Expected: **首次必然红** —— golden 是 oracle 产的，实现要与它对齐。
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_source`
-Expected: FAIL —— 边界分支未实现
+> **实测**：1146 例逐字节一致、**31 例不一致**（全部是"首字节为 `0x00`"）。
+>
+> ⚠️ **RED 不在 `test_source.rs` 上**：T-L06 已把 `redo` 三条分支完整落地
+> （当时选择"一次落全"而不是先打桩）⇒ 那 7 条代表用例**一开始就是绿的**。
+> 真正的 RED 来自密集对撞 —— 它一次就找出了一处**文档从未提到**的官方行为。
 
-- [ ] **Step 3: 实现**
+- [ ] **Step 3: 实现（本任务是"测试侧重"）**
 
-BOM：仅允许 `line == 0 && col == 0`，否则报 `BomMidFile` 并**继续读**（但段内保留那三个字节）。
-NUL：报 `InvalidNul` 后继续。
-非法 UTF-8：`utf8::decode` 失败 ⇒ 报 `InvalidUtf8`，**前进 1 个字节**（不是整个序列），继续。
-CRLF：`\r` 当作空白；`\n` 才推进行号。
+`source.rs` **不需要改动**。唯一的裁决是那 31 例偏离：判为**实现产物**
+（官方 `nextch` 的 NUL 检查只写在 ASCII 快路径里，懒填充让首字节走不到那条路），
+按 `D-M1-7`「照抄语义、不照抄实现」**不照抄**；偏离用**谓词 + 形状**
+双重断言登记在 `test_char_golden.rs` 里。详见 `M1-design.md` §5.1 / §8.2.1 / §12 R11。
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_source`
-Expected: 11 passed
+Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_source --test test_char_golden'`
+Expected: `test_source` **21 passed**（T-L06 的 14 + 本任务 7）、`test_char_golden` **3 passed**
+（逐字节一致 1146 / 已登记偏离 31）
 
 - [ ] **Step 5: 提交**
 
 ```bash
-git add rgoc/crates/rgoc-lex
-git commit -m "feat(lex): 字符层边界输入（BOM/NUL/非法 UTF-8/CRLF/私有区）"
+git add rgoc/crates/rgoc-lex tools/token-oracle docs/milestones
+git commit -m "feat(lex): T-L07 字符层边界输入 + 字符级密集对撞（1177 例）"
 ```
 
 ---

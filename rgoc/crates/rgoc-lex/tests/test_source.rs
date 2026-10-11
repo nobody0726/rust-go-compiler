@@ -17,10 +17,28 @@
 //!
 //! **光看"列号差 1"是发现不了这种错的** —— 所以位置类断言必须有 oracle 对照。
 
-use rgoc_lex::{FileId, Pos, SourceReader};
+use rgoc_lex::{DiagCode, FileId, Pos, SourceReader};
 
 fn reader(src: &[u8]) -> SourceReader {
     SourceReader::new(src.to_vec(), FileId::from_index(0))
+}
+
+/// 走一遍并收集**诊断**（位置 + 代号）。
+///
+/// 与 `walk()` 分开：诊断是"旁路产物"，与字符序列是两条不同的流。
+/// 只断言其中一条就会漏掉一半行为（本仓对负例的纪律：诊断与后续词元**两条都要断言**）。
+fn diags_of(src: &[u8]) -> Vec<(u32, u32, DiagCode)> {
+    let mut r = reader(src);
+    let mut out = Vec::new();
+    loop {
+        for d in r.advance() {
+            out.push((d.pos.line, d.pos.col, d.code));
+        }
+        if r.ch().is_none() {
+            break;
+        }
+    }
+    out
 }
 
 /// 逐字符走一遍，返回 `(字符, 行, 列, 字节宽度)`。
@@ -286,4 +304,146 @@ fn 非法_utf8_也走同一条通道() {
             .all(|d| d.code == rgoc_lex::DiagCode::InvalidUtf8)
     );
     assert_eq!(r.ch(), Some('y'));
+}
+
+// ── ⑥ 边界输入（T-L07，LEX-01/02）────────────────────────────────────
+//
+// 期望值**全部**取自 `fixtures/char_golden.txt`（oracle = go1.27.1 的 `source.nextch`），
+// 不是推的。整段字节空间的密集对撞在 `test_char_golden.rs`；这里是**可读的少量代表**，
+// 每条钉住一个具体机制 —— 对撞测试红了的时候，先看这里能立刻判断"错的是哪个机制"。
+//
+// ⚠️ 一句容易写错的话：**非法 / 被跳过的字节仍然占一个列号**。
+// 官方 `nextch` 的 `redo:` 标签在 `col += chw` 的**上方**，所以每次"跳过并重读"
+// 都会先推进一次列。`x\0\0y` 里 `y` 在 1:4 而不是 1:2，就是这条的直接后果。
+
+#[test]
+fn bom_仅允许文件首字符且计入字节列() {
+    // BOM 被吃掉（不作为字符送出），但它**占了 3 个字节列** ⇒ x 在 1:4
+    assert_eq!(walk("\u{feff}x".as_bytes()), vec![('x', 1, 4, 1)]);
+    assert!(
+        diags_of("\u{feff}x".as_bytes()).is_empty(),
+        "文件首的 BOM 不报错"
+    );
+
+    // 文件只有 BOM：不产出任何字符，EOF 落在 1:4
+    assert!(walk("\u{feff}".as_bytes()).is_empty());
+    assert!(diags_of("\u{feff}".as_bytes()).is_empty());
+}
+
+#[test]
+fn bom_在文件中报错但仍被跳过() {
+    // 实测事件流：C 1:1 'x'、D 1:2 BOM-MIDFILE、C 1:5 'y'。
+    // 也就是说文件中的 BOM **和文件首一样被跳过**（都不作为字符送出），
+    // 区别**只在报不报错** —— 这点靠 oracle 才看得出来：
+    // 光看官方那行 `goto redo` 会以为"报错就走另一条路"，实际两条路都走 redo。
+    assert_eq!(
+        walk("x\u{feff}y".as_bytes()),
+        vec![('x', 1, 1, 1), ('y', 1, 5, 1)]
+    );
+    assert_eq!(
+        diags_of("x\u{feff}y".as_bytes()),
+        vec![(1, 2, DiagCode::BomMidFile)]
+    );
+}
+
+#[test]
+fn 双_bom_的第二个才报错() {
+    // 判据是 `line > 0 || col > 0` —— 不是"第几个字符"。
+    // 第二个 BOM 起 col 已经是 3 ⇒ 报错，且位置是 1:4（它自己的位置）
+    assert_eq!(walk("\u{feff}\u{feff}x".as_bytes()), vec![('x', 1, 7, 1)]);
+    assert_eq!(
+        diags_of("\u{feff}\u{feff}x".as_bytes()),
+        vec![(1, 4, DiagCode::BomMidFile)],
+        "只有第二个 BOM 报错（第一个在 1:1，line=col=0）"
+    );
+}
+
+#[test]
+fn nul_报错但被跳过且仍占一列() {
+    // 官方：`if s.ch == 0 { error; goto redo }` —— 报错 → 跳过 → 重新读
+    assert_eq!(walk(b"x\0y"), vec![('x', 1, 1, 1), ('y', 1, 3, 1)]);
+    assert_eq!(
+        diags_of(b"x\0y"),
+        vec![(1, 2, DiagCode::InvalidNul)],
+        "诊断位置是被污染的那个字节"
+    );
+
+    // 连续两个 NUL：各自报一次，各自占一列
+    assert_eq!(walk(b"x\0\0y"), vec![('x', 1, 1, 1), ('y', 1, 4, 1)]);
+    assert_eq!(
+        diags_of(b"x\0\0y"),
+        vec![(1, 2, DiagCode::InvalidNul), (1, 3, DiagCode::InvalidNul)]
+    );
+}
+
+#[test]
+fn 非法_utf8_只消费一个字节() {
+    // ★ 这条最容易写错：非法序列**不是**整段跳过，而是**只消费 1 字节**
+    //   （Go 的 `utf8.DecodeRune` 对非法输入返回 `(RuneError, 1)`）。
+    //   所以 `\xf0\x9f`（截断的 4 字节序列）会报**两条**诊断，不是一条。
+    assert_eq!(walk(b"1\xff2"), vec![('1', 1, 1, 1), ('2', 1, 3, 1)]);
+    assert_eq!(diags_of(b"1\xff2"), vec![(1, 2, DiagCode::InvalidUtf8)]);
+
+    // 截断的 4 字节序列：两个字节各报一次
+    assert!(walk(b"\xf0\x9f").is_empty());
+    assert_eq!(
+        diags_of(b"\xf0\x9f"),
+        vec![(1, 1, DiagCode::InvalidUtf8), (1, 2, DiagCode::InvalidUtf8)]
+    );
+
+    // 代理区 `\xed\xa0\x80`：UTF-8 层面就是非法的 ⇒ 3 个字节各报一次
+    assert_eq!(
+        diags_of(b"\xed\xa0\x80"),
+        vec![
+            (1, 1, DiagCode::InvalidUtf8),
+            (1, 2, DiagCode::InvalidUtf8),
+            (1, 3, DiagCode::InvalidUtf8)
+        ]
+    );
+
+    // ★ 但**合法编码的 U+FFFD** 不是错误 —— 这是最容易被"顺手统一"掉的一条：
+    //   判据是 `ch == RuneError && chw == 1`，两个条件缺一不可。
+    assert_eq!(walk("\u{fffd}".as_bytes()), vec![('\u{fffd}', 1, 1, 3)]);
+    assert!(diags_of("\u{fffd}".as_bytes()).is_empty());
+}
+
+#[test]
+fn 回车不算换行只有换行改行号() {
+    // 官方 `nextch` 只在 `s.ch == '\n'` 时 `line++; col = 0`。
+    // `\r` 是**下一位**（`next()` 的空白跳过）才处理的事情 —— 字符层不管它，
+    // 所以 `\r` 在这里只是一个普通字符，占一列。
+    assert_eq!(
+        walk(b"x\ry"),
+        vec![('x', 1, 1, 1), ('\r', 1, 2, 1), ('y', 1, 3, 1)]
+    );
+    assert!(diags_of(b"x\ry").is_empty());
+
+    // CRLF：只有那个 `\n` 改行号，`\r` 仍占 1:2
+    assert_eq!(
+        walk(b"x\r\ny"),
+        vec![
+            ('x', 1, 1, 1),
+            ('\r', 1, 2, 1),
+            ('\n', 1, 3, 1),
+            ('y', 2, 1, 1)
+        ]
+    );
+}
+
+#[test]
+fn 私有区字符在字符层是合法的且宽度为三() {
+    // ★ 计划把这条写成"报 LEX-BAD-IDENT-CHAR" —— 那是**标识符层**的事
+    //   （官方 `scanner.go:411` 的 `atIdentChar`），不是字符层。
+    //
+    // 字符层对 U+E000 的态度：它是**合法 UTF-8**，宽度 3，**不报错**。
+    // 这里刻意只断言字符层的那一半，把"标识符里报错"留给 T-L08 ——
+    // 否则这条测试会因为"早了一层"而永远红，或者被迫在 source.rs 里塞词法逻辑。
+    assert_eq!(
+        walk("x\u{e000}y".as_bytes()),
+        vec![('x', 1, 1, 1), ('\u{e000}', 1, 2, 3), ('y', 1, 5, 1)]
+    );
+    assert!(
+        diags_of("x\u{e000}y".as_bytes()).is_empty(),
+        "字符层不判断「这个字符能不能出现在标识符里」"
+    );
 }
