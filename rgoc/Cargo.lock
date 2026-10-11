@@ -49,6 +49,10 @@ name = "rgoc-hir"
 version = "0.0.0"
 
 [[package]]
+name = "rgoc-lex"
+version = "0.0.0"
+
+[[package]]
 name = "rgoc-spikes"
 version = "0.0.0"
 dependencies = [

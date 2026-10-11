@@ -20,6 +20,7 @@ members = [
     "crates/rgoc-driver",
     "crates/rgoc-harness",
     "crates/rgoc-hir",
+    "crates/rgoc-lex",
     "crates/rgoc-spikes",
     "xtask",
 ]
