@@ -20,3 +20,8 @@ rgoc/target/
 ._*
 *.swp
 *~
+
+# ── Superpowers 执行账本（临时工作区，不入库）─────────────────────────
+# executing-plans / subagent-driven-development 的进度账本与任务简报。
+# 这些是「本次执行的草稿纸」，不是交付物 —— 交付物是代码与 docs/ 下的文档。
+.superpowers/

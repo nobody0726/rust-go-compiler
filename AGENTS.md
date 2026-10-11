@@ -17,10 +17,12 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 全部完成**（T01–T55 ✅，**E1–E10 十条门禁全过**）→ **Phase 4 已收口**（T48–T55：五份契约初稿 + `M0-report.md` + manifest 完整化 + E9 六条退出检查） |
+| 当前阶段 | **M0 全部完成**（T01–T55 ✅，**E1–E10 十条门禁全过**）→ **M1 设计中**：`M1-design.md` **已确认**（D-M1-1~9，2026-10-11），`M1-tests.md` / `M1-plan.md` **待产出** |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0 全部完成，门禁 E1–E10 十条全过**。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下是 harness（六个模块）+ driver CLI + xtask + **两个 SPIKE-ONLY crate**（`rgoc-hir` / `rgoc-spikes`），**260 条测试全绿**、自检 **228 条断言**全过；**五份契约**（`docs/contracts/`）+ **交付报告 `M0-report.md`** 就位。**编译器实现尚未开始** —— M0 证明的是解释 / SSA / native 三条路线可行 + oracle 流水线可信，**M1（词法与位置）现已具备开工条件**。
+**一句话状态**：**M0 全部完成，门禁 E1–E10 十条全过**。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下是 harness（六个模块）+ driver CLI + xtask + **两个 SPIKE-ONLY crate**（`rgoc-hir` / `rgoc-spikes`），**260 条测试全绿**、自检 **228 条断言**全过；**五份契约**（`docs/contracts/`）+ **交付报告 `M0-report.md`** 就位。**编译器实现尚未开始** —— M0 证明的是解释 / SSA / native 三条路线可行 + oracle 流水线可信。
+
+**M1（词法与位置）已进入设计收口**：`M1-design.md` **已确认**（九个决策 D-M1-1~9、20 条实测事实基线 F1–F20、六切面测试组、诊断代号表），下一步产出 `M1-tests.md`（冻结测试 ID）与 `M1-plan.md`（RED-GREEN 任务分解）。**注意**：`rgoc-lex` **尚未创建**，本文件对它的所有描述都是**设计约定而非既成事实**。
 
 ---
 
@@ -44,7 +46,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │       ├── M0-plan.md                ←     M0 实施计划（**T01–T55 全部完成**）
 │       ├── M0-benchmarks.md          ←     M0 实测基准（§1–§12；E10 证据；D-M0-9 决策依据）
 │       ├── M0-report.md              ←     **交接文档**（命题↔测试 ID / 门禁证据 / 差距 / 接手指南）
-│       └── M0-manifest.json          ←     机器可读事实（**E1–E10 十条** + test_ids + unsupported + budget）
+│       ├── M0-manifest.json          ←     机器可读事实（**E1–E10 十条** + test_ids + unsupported + budget）
+│       ├── M1-design.md              ←     **M1 设计（已确认 2026-10-11；D-M1-1~9 + 事实基线 F1–F20）**
+│       ├── M1-tests.md               ←     M1 测试先行清单（⬜ 待产出）
+│       └── M1-plan.md                ←     M1 实施计划（⬜ 待产出）
 ├── go_source_code/                   ← Go 1.27.1 官方语料，**只读**，**不入库**（185 MB）
 ├── rust-toolchain.toml               ← Rust 版本唯一来源（1.98.1）
 ├── .dockerignore                     ← 构建上下文收敛（镜像只需要 Dockerfile + toolchain 文件）
@@ -135,16 +140,17 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | — | [`docs/milestones/M0-benchmarks.md`](./docs/milestones/M0-benchmarks.md) | 实测 | **凭什么是这样** —— 时间/体积/冷启动/挂载布局/可复现性/环境陷阱 + **四则调试环境案例**（§7 平台包 / §8 DWARF / §9 Server / §10 cargo 启动配置）+ §11 期望值复核 + **§12 Phase 3 可复现性** | **已产出** | ≈52 KB |
 | — | [`docs/milestones/M0-report.md`](./docs/milestones/M0-report.md) | **交接** | **给下一个接手的人** —— 三个命题各由哪个测试 ID 证明 / 门禁证据出处 / spike 留下的差距 / 未验证范围 / **接手指南** | ✅ **已产出**（T53） | ≈13 KB |
 | — | [`docs/contracts/`](./docs/contracts/) | 契约 | **五份契约** —— [C1](./docs/contracts/C1-source-map.md) 留位（位置+诊断排序）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI | ✅ **已产出**（T48–T52 / E8） | ≈35 KB |
+| — | [`docs/milestones/M1-design.md`](./docs/milestones/M1-design.md) | 设计 | **怎么建 M1** —— 决策 D-M1-1~9（五字段）/ **实测事实基线 F1–F20** / 数据模型 / 六切面测试组 / 诊断代号表 / oracle adapter | **已确认**（2026-10-11） | ≈42 KB |
 
 **阅读顺序**：01 → 02 → 03 → 04。
 
 **阶段文档**（`docs/milestones/`）——每阶段开工前须产出 **三件套**（`03` §6.2）：
 
-| 件 | 回答什么 | M0 状态 |
-|---|---|---|
-| `<ID>-design.md` | **做什么、边界在哪** | ✅ 已确认 |
-| `<ID>-tests.md` | **怎么算通过** | ✅ **已冻结**（T29，2026-10-02；§5.1 另有**修订 R1**） |
-| `<ID>-plan.md` + `manifest.json` | **按什么顺序动手** + 环境锁定值 | ✅ **计划全部完成**（T01–T55）；manifest **已填实**（`environment` + `gate` **十条** + `test_ids` + `unsupported` + `budget`） |
+| 件 | 回答什么 | M0 | M1 |
+|---|---|---|---|
+| `<ID>-design.md` | **做什么、边界在哪** | ✅ 已确认 | ✅ **已确认**（2026-10-11） |
+| `<ID>-tests.md` | **怎么算通过** | ✅ **已冻结**（T29，2026-10-02；§5.1 另有**修订 R1**） | ⬜ 待产出 |
+| `<ID>-plan.md` + `manifest.json` | **按什么顺序动手** + 环境锁定值 | ✅ **计划全部完成**（T01–T55）；manifest **已填实**（`environment` + `gate` **十条** + `test_ids` + `unsupported` + `budget`） | ⬜ 待产出 |
 
 ### 2.2 依赖方向
 
@@ -193,7 +199,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 |---|---|
 | 编译器工程 | `rgoc/` 下**只有 harness + 两个工具 crate**（`rgoc-harness` / `rgoc-driver` / `xtask`），harness 已不只是调试目标：T31 落下了 Test IR 骨架（16 个必录字段 + 八种判定分类 + 冻结预算的唯一入口 `Limits::for_layer`），T37 加了 CLI 与构建期工具，T38 出了 E4 基线（20/20），T39 复核登记并把登记变成可执行断言。**编译器实现仍未开始** —— 还没有 lexer / parser / HIR（那是 Phase 3 的 `rgoc-hir` 与三个 spike） |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
-| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）。**Phase 3 已完成（T40–T47，2026-10-07）**：两个 SPIKE-ONLY crate 落地、三个 spike 跑通、**E6/E7 通过**；**Phase 4 已完成（T48–T55）**：五份契约 + `M0-report.md` + manifest 完整化 + **E9 六条退出检查**。**M0 五个 Phase 全部完成，E1–E10 十条门禁全过；下一步 M1（词法与位置）**—— 开工前读 `M0-report.md` §7 |
+| M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）。**Phase 3 已完成（T40–T47，2026-10-07）**：两个 SPIKE-ONLY crate 落地、三个 spike 跑通、**E6/E7 通过**；**Phase 4 已完成（T48–T55）**：五份契约 + `M0-report.md` + manifest 完整化 + **E9 六条退出检查**。**M0 五个 Phase 全部完成，E1–E10 十条门禁全过。** |
+| **M1（词法与位置）** | **设计中**：`docs/milestones/M1-design.md` **已确认**（2026-10-11，D-M1-1~9）；`M1-tests.md` / `M1-plan.md` 待产出。⚠️ **`rgoc-lex` 尚未创建**、`crates/rgoc-lex/` 与 `tools/token-oracle/` 都还不存在 —— **本阶段的全部内容目前仍是设计约定**。开工前读 `M0-report.md` §7（三条必知）与 `M1-design.md` |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
 | 阶段目录 | `docs/contracts/` **5 份契约已产出**（C1 留位 / C2 完整初稿 / C3–C5 spike 级）；`docs/milestones/` 含 M0 四件套 + `M0-report.md` + `M0-manifest.json` |
@@ -315,6 +322,23 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
 
 ## 7. 下一步
 
+**M0 已全部完成（T01–T55，E1–E10 十条门禁全过）。当前处于 M1（词法与位置）的设计收口阶段。**
+
+### 7.1 M1 的下一步（按序）
+
+| # | 事项 | 状态 |
+|---|---|---|
+| 1 | `docs/milestones/M1-design.md` —— 设计决策与边界 | ✅ **已确认**（2026-10-11，D-M1-1~9） |
+| 2 | `docs/milestones/M1-tests.md` —— 冻结 LEX-01..13 的测试 ID、六切面用例、负例的双向断言、**分母** | ⬜ 待产出 |
+| 3 | `docs/milestones/M1-plan.md` + `M1-manifest.json` —— RED-GREEN 任务分解 | ⬜ 待产出 |
+| 4 | 执行：创建 `rgoc-lex` + vendor `tools/token-oracle/` + 门禁 | ⬜ 未开始 |
+
+> ⚠️ **开工前必须先裁决两条**（`M1-design.md` §12）：
+> **R1** —— `01-feature-set.md` LEX-06 的「47 个操作符与标点」与 spec 实测的 **48 条**不一致；
+> **R2** —— **GAP-02 正则子集**（扩展还是引 crate），M0 交接 §7.1 点名它会在 M1 之后暴露。
+
+### 7.2 环境层复验（任何一次「连不上容器」或环境异常时的起手式）
+
 **Phase 0 与 Phase 1 均已完成 —— M0 的四项门禁（E1 / E2 / E10 / E5）全部通过。**
 
 **E5 的完成记录**：2026-10-02 由用户在 VSCode dev container 中按 F5 实测确认，T28 检查表四项逐项通过（断点命中未被跳过 / 变量面板 `a=1,b=2` / 调用栈 ≥2 帧 / F10 后停在第 28 行且 `sum==3`），登记在 `M0-manifest.json` 的 `gate.E5`。
@@ -371,8 +395,9 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T53 —— `M0-report.md` 交付报告（面向接手人：三个命题的证明者、门禁证据、差距清单、接手指南）
    ✅ T54 —— manifest 三节完整化（37 个测试 ID / U1–U14 / 预算三节）
    ✅ T55 —— **E9** 六条统一退出检查 + M0 全门禁复核（**E1–E10 十条全过**）
-   👉 **下一个**：**M1 · 词法与位置**（`03` §M1）—— 读 **`M0-report.md` §7「接手指南」**，
-   那里列了必读顺序与**开始 M1 之前必须知道的三件事**
+   👉 **下一个**：**M1 · 词法与位置**（`03` §M1）—— ✅ **设计已确认**（`M1-design.md`，2026-10-11，D-M1-1~9）；
+   下一步产出 `M1-tests.md` 与 `M1-plan.md`。开工前读 **`M0-report.md` §7「接手指南」**（必读顺序 + 三件必知）
+   与 **`M1-design.md` §12**（R1/R2 两条待裁决）
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 
@@ -414,7 +439,8 @@ T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。
 | 4 | 契约初稿 + 报告 | E8 / E9 / E10 收口 | ✅ **已完成**（T48–T55；E8 五份契约、E9 六条退出检查，2026-10-07） |
 
 > **M0 五个 Phase 全部完成**（T01–T55，2026-10-07），**E1–E10 十条门禁全过**。
-> **M1（词法与位置）已具备开工条件** —— 开工前先读 [`M0-report.md`](./docs/milestones/M0-report.md) §7，
-> 那里列了必读顺序与**必须知道的三件事**。
+> **M1（词法与位置）设计已确认**（[`M1-design.md`](./docs/milestones/M1-design.md)，2026-10-11），
+> 下一步产出 `M1-tests.md` / `M1-plan.md`；开工前先读 [`M0-report.md`](./docs/milestones/M0-report.md) §7
+> 与 `M1-design.md` §12（**R1 / R2 两条待裁决**）。
 
 **原则**：早期可行性验证、单平台首发、独立可退出的能力切片优先；完整 Go toolchain / runtime 是后续扩展，不是首发承诺。
