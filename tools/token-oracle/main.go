@@ -28,6 +28,9 @@ func main() {
 	mode := flag.String("mode", "", "注释上报模式：留空=不上报 | comments | directives")
 	listCodes := flag.Bool("list-codes", false, "打印 DiagCode ↔ 官方消息模板对照表后退出")
 	selfCheck := flag.Bool("selfcheck", false, "自检映射表与码表是否一致后退出")
+	genCorpus := flag.Bool("gen-char-corpus", false, "生成**字符级**对撞语料到 stdout 后退出")
+	charsGolden := flag.Bool("chars-golden", false, "读语料，输出**字符级** golden 到 stdout 后退出")
+	corpus := flag.String("corpus", "fixtures/char_corpus.txt", "字符级语料路径（--chars-golden 用）")
 	flag.Parse()
 
 	if *selfCheck {
@@ -37,10 +40,18 @@ func main() {
 		printCodeTable()
 		return
 	}
+	if *genCorpus {
+		printCharCorpus()
+		return
+	}
+	if *charsGolden {
+		os.Exit(charGolden(*corpus))
+	}
 
 	args := flag.Args()
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "用法：go run . [--mode comments|directives] <source-file>")
+		fmt.Fprintln(os.Stderr, "      go run . --selfcheck | --list-codes | --gen-char-corpus | --chars-golden")
 		os.Exit(2)
 	}
 	path := args[0]

@@ -64,6 +64,73 @@ const (
 	ModeDirectives = directives
 )
 
+// CharEvent 一条**字符级**事件。事件流按**发生顺序**排列。
+//
+// # 为什么需要字符级（在 token 级之外再加一层）
+//
+// token 级 golden 只覆盖到"词元边界上的位置"，而位置是**每个字节**推出来的。
+// `source.nextch` 是 byte-column 语义的**唯一来源** —— 它的 off-by-one 会**静默地**
+// 污染下游所有位置，而且 token 级用例的密度远不足以发现它（手写的几十条里
+// 未必有一条恰好落在出错的字节上）。
+//
+// 所以这里直接把 `nextch()` 暴露出来做**逐事件对撞**。
+type CharEvent struct {
+	// 诊断（true）还是"读到一个字符"（false）
+	IsDiag bool
+
+	// 位置（1 起；列按字节）。诊断与字符都用它。
+	Line, Col uint
+
+	// 官方诊断消息原文（仅 IsDiag）。**代号映射在 main 包里做** ——
+	// 本文件保持"不含任何逻辑"的纪律，不认识 DiagCode。
+	Msg string
+
+	// 字符（仅 !IsDiag）。EOF **不会**出现在事件流里。
+	Ch rune
+	// Ch 的字节宽度（仅 !IsDiag）。**这是 byte-column 语义的直接证据**：
+	// 一个 3 字节的 CJK 字符会让下一列 +3。
+	Chw int
+}
+
+// DumpChars 逐字符推进整段源码，返回**按发生顺序**的字符级事件流。
+//
+// # 与 Scan 的分工
+//
+//   - Scan 走 `next()`，产出**词元**；诊断与词元分两条流各自排序（因为"诊断何时
+//     触发"在词元级别属于内部时序，会因实现不同而不同）。
+//   - 这里走 `nextch()`，只观察**字符层**的推进：位置、`chw`、以及被跳过的字节
+//     报出的诊断。
+//
+// # 顺序在这里是有意义的，不需要排序
+//
+// "先报诊断、再让出下一个字符"是 `nextch` 里 `goto redo` 的直接后果 —— 那是**语义**
+// （违规字节必须各自占一个列号），不是实现细节。所以事件流可以直接逐行比对。
+func DumpChars(src string) []CharEvent {
+	var out []CharEvent
+	var s scanner
+	s.init(strings.NewReader(src), func(line, col uint, msg string) {
+		out = append(out, CharEvent{IsDiag: true, Line: line, Col: col, Msg: msg})
+	}, 0)
+
+	for {
+		s.nextch()
+		if s.ch < 0 { // EOF
+			break
+		}
+		// ★ 必须写 s.source.line / s.source.col —— `scanner` 自己的 line/col 是
+		//   **词元**位置且会遮蔽嵌入字段 `source` 的同名字段。写 s.line 拿到的是
+		//   上一个词元的起点（在这里永远是 0），位置会全错。
+		//   位置对外 1 起（官方的 linebase / colbase）。
+		out = append(out, CharEvent{
+			Line: s.source.line + 1,
+			Col:  s.source.col + 1,
+			Ch:   s.ch,
+			Chw:  s.chw,
+		})
+	}
+	return out
+}
+
 // Scan 扫完整段源码，返回**按源码顺序**的全部词元（含最后那个 EOF）。
 //
 // errh 收到的消息有两类，靠**首字符是否为 '/'** 区分（官方 parser.go 用的也是这个约定）：

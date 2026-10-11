@@ -1,0 +1,3279 @@
+# char-golden: 字符层逐事件（oracle = go1.27.1 的 gc/syntax `source.nextch`）
+# 顺序即发生顺序：D = 诊断，C = 读到一个字符。EOF 不进事件流。
+# 位置 1 起；列按**字节**。该文件由 `go run . --chars-golden` 生成 —— 勿手改。
+## 00
+C 1:1      U+0000 w=1
+## 01
+C 1:1      U+0001 w=1
+## 02
+C 1:1      U+0002 w=1
+## 03
+C 1:1      U+0003 w=1
+## 04
+C 1:1      U+0004 w=1
+## 05
+C 1:1      U+0005 w=1
+## 06
+C 1:1      U+0006 w=1
+## 07
+C 1:1      U+0007 w=1
+## 08
+C 1:1      U+0008 w=1
+## 09
+C 1:1      U+0009 w=1
+## 0a
+C 1:1      U+000A w=1
+## 0b
+C 1:1      U+000B w=1
+## 0c
+C 1:1      U+000C w=1
+## 0d
+C 1:1      U+000D w=1
+## 0e
+C 1:1      U+000E w=1
+## 0f
+C 1:1      U+000F w=1
+## 10
+C 1:1      U+0010 w=1
+## 11
+C 1:1      U+0011 w=1
+## 12
+C 1:1      U+0012 w=1
+## 13
+C 1:1      U+0013 w=1
+## 14
+C 1:1      U+0014 w=1
+## 15
+C 1:1      U+0015 w=1
+## 16
+C 1:1      U+0016 w=1
+## 17
+C 1:1      U+0017 w=1
+## 18
+C 1:1      U+0018 w=1
+## 19
+C 1:1      U+0019 w=1
+## 1a
+C 1:1      U+001A w=1
+## 1b
+C 1:1      U+001B w=1
+## 1c
+C 1:1      U+001C w=1
+## 1d
+C 1:1      U+001D w=1
+## 1e
+C 1:1      U+001E w=1
+## 1f
+C 1:1      U+001F w=1
+## 20
+C 1:1      U+0020 w=1
+## 21
+C 1:1      U+0021 w=1
+## 22
+C 1:1      U+0022 w=1
+## 23
+C 1:1      U+0023 w=1
+## 24
+C 1:1      U+0024 w=1
+## 25
+C 1:1      U+0025 w=1
+## 26
+C 1:1      U+0026 w=1
+## 27
+C 1:1      U+0027 w=1
+## 28
+C 1:1      U+0028 w=1
+## 29
+C 1:1      U+0029 w=1
+## 2a
+C 1:1      U+002A w=1
+## 2b
+C 1:1      U+002B w=1
+## 2c
+C 1:1      U+002C w=1
+## 2d
+C 1:1      U+002D w=1
+## 2e
+C 1:1      U+002E w=1
+## 2f
+C 1:1      U+002F w=1
+## 30
+C 1:1      U+0030 w=1
+## 31
+C 1:1      U+0031 w=1
+## 32
+C 1:1      U+0032 w=1
+## 33
+C 1:1      U+0033 w=1
+## 34
+C 1:1      U+0034 w=1
+## 35
+C 1:1      U+0035 w=1
+## 36
+C 1:1      U+0036 w=1
+## 37
+C 1:1      U+0037 w=1
+## 38
+C 1:1      U+0038 w=1
+## 39
+C 1:1      U+0039 w=1
+## 3a
+C 1:1      U+003A w=1
+## 3b
+C 1:1      U+003B w=1
+## 3c
+C 1:1      U+003C w=1
+## 3d
+C 1:1      U+003D w=1
+## 3e
+C 1:1      U+003E w=1
+## 3f
+C 1:1      U+003F w=1
+## 40
+C 1:1      U+0040 w=1
+## 41
+C 1:1      U+0041 w=1
+## 42
+C 1:1      U+0042 w=1
+## 43
+C 1:1      U+0043 w=1
+## 44
+C 1:1      U+0044 w=1
+## 45
+C 1:1      U+0045 w=1
+## 46
+C 1:1      U+0046 w=1
+## 47
+C 1:1      U+0047 w=1
+## 48
+C 1:1      U+0048 w=1
+## 49
+C 1:1      U+0049 w=1
+## 4a
+C 1:1      U+004A w=1
+## 4b
+C 1:1      U+004B w=1
+## 4c
+C 1:1      U+004C w=1
+## 4d
+C 1:1      U+004D w=1
+## 4e
+C 1:1      U+004E w=1
+## 4f
+C 1:1      U+004F w=1
+## 50
+C 1:1      U+0050 w=1
+## 51
+C 1:1      U+0051 w=1
+## 52
+C 1:1      U+0052 w=1
+## 53
+C 1:1      U+0053 w=1
+## 54
+C 1:1      U+0054 w=1
+## 55
+C 1:1      U+0055 w=1
+## 56
+C 1:1      U+0056 w=1
+## 57
+C 1:1      U+0057 w=1
+## 58
+C 1:1      U+0058 w=1
+## 59
+C 1:1      U+0059 w=1
+## 5a
+C 1:1      U+005A w=1
+## 5b
+C 1:1      U+005B w=1
+## 5c
+C 1:1      U+005C w=1
+## 5d
+C 1:1      U+005D w=1
+## 5e
+C 1:1      U+005E w=1
+## 5f
+C 1:1      U+005F w=1
+## 60
+C 1:1      U+0060 w=1
+## 61
+C 1:1      U+0061 w=1
+## 62
+C 1:1      U+0062 w=1
+## 63
+C 1:1      U+0063 w=1
+## 64
+C 1:1      U+0064 w=1
+## 65
+C 1:1      U+0065 w=1
+## 66
+C 1:1      U+0066 w=1
+## 67
+C 1:1      U+0067 w=1
+## 68
+C 1:1      U+0068 w=1
+## 69
+C 1:1      U+0069 w=1
+## 6a
+C 1:1      U+006A w=1
+## 6b
+C 1:1      U+006B w=1
+## 6c
+C 1:1      U+006C w=1
+## 6d
+C 1:1      U+006D w=1
+## 6e
+C 1:1      U+006E w=1
+## 6f
+C 1:1      U+006F w=1
+## 70
+C 1:1      U+0070 w=1
+## 71
+C 1:1      U+0071 w=1
+## 72
+C 1:1      U+0072 w=1
+## 73
+C 1:1      U+0073 w=1
+## 74
+C 1:1      U+0074 w=1
+## 75
+C 1:1      U+0075 w=1
+## 76
+C 1:1      U+0076 w=1
+## 77
+C 1:1      U+0077 w=1
+## 78
+C 1:1      U+0078 w=1
+## 79
+C 1:1      U+0079 w=1
+## 7a
+C 1:1      U+007A w=1
+## 7b
+C 1:1      U+007B w=1
+## 7c
+C 1:1      U+007C w=1
+## 7d
+C 1:1      U+007D w=1
+## 7e
+C 1:1      U+007E w=1
+## 7f
+C 1:1      U+007F w=1
+## 80
+D 1:1      LEX-INVALID-UTF8
+## 81
+D 1:1      LEX-INVALID-UTF8
+## 82
+D 1:1      LEX-INVALID-UTF8
+## 83
+D 1:1      LEX-INVALID-UTF8
+## 84
+D 1:1      LEX-INVALID-UTF8
+## 85
+D 1:1      LEX-INVALID-UTF8
+## 86
+D 1:1      LEX-INVALID-UTF8
+## 87
+D 1:1      LEX-INVALID-UTF8
+## 88
+D 1:1      LEX-INVALID-UTF8
+## 89
+D 1:1      LEX-INVALID-UTF8
+## 8a
+D 1:1      LEX-INVALID-UTF8
+## 8b
+D 1:1      LEX-INVALID-UTF8
+## 8c
+D 1:1      LEX-INVALID-UTF8
+## 8d
+D 1:1      LEX-INVALID-UTF8
+## 8e
+D 1:1      LEX-INVALID-UTF8
+## 8f
+D 1:1      LEX-INVALID-UTF8
+## 90
+D 1:1      LEX-INVALID-UTF8
+## 91
+D 1:1      LEX-INVALID-UTF8
+## 92
+D 1:1      LEX-INVALID-UTF8
+## 93
+D 1:1      LEX-INVALID-UTF8
+## 94
+D 1:1      LEX-INVALID-UTF8
+## 95
+D 1:1      LEX-INVALID-UTF8
+## 96
+D 1:1      LEX-INVALID-UTF8
+## 97
+D 1:1      LEX-INVALID-UTF8
+## 98
+D 1:1      LEX-INVALID-UTF8
+## 99
+D 1:1      LEX-INVALID-UTF8
+## 9a
+D 1:1      LEX-INVALID-UTF8
+## 9b
+D 1:1      LEX-INVALID-UTF8
+## 9c
+D 1:1      LEX-INVALID-UTF8
+## 9d
+D 1:1      LEX-INVALID-UTF8
+## 9e
+D 1:1      LEX-INVALID-UTF8
+## 9f
+D 1:1      LEX-INVALID-UTF8
+## a0
+D 1:1      LEX-INVALID-UTF8
+## a1
+D 1:1      LEX-INVALID-UTF8
+## a2
+D 1:1      LEX-INVALID-UTF8
+## a3
+D 1:1      LEX-INVALID-UTF8
+## a4
+D 1:1      LEX-INVALID-UTF8
+## a5
+D 1:1      LEX-INVALID-UTF8
+## a6
+D 1:1      LEX-INVALID-UTF8
+## a7
+D 1:1      LEX-INVALID-UTF8
+## a8
+D 1:1      LEX-INVALID-UTF8
+## a9
+D 1:1      LEX-INVALID-UTF8
+## aa
+D 1:1      LEX-INVALID-UTF8
+## ab
+D 1:1      LEX-INVALID-UTF8
+## ac
+D 1:1      LEX-INVALID-UTF8
+## ad
+D 1:1      LEX-INVALID-UTF8
+## ae
+D 1:1      LEX-INVALID-UTF8
+## af
+D 1:1      LEX-INVALID-UTF8
+## b0
+D 1:1      LEX-INVALID-UTF8
+## b1
+D 1:1      LEX-INVALID-UTF8
+## b2
+D 1:1      LEX-INVALID-UTF8
+## b3
+D 1:1      LEX-INVALID-UTF8
+## b4
+D 1:1      LEX-INVALID-UTF8
+## b5
+D 1:1      LEX-INVALID-UTF8
+## b6
+D 1:1      LEX-INVALID-UTF8
+## b7
+D 1:1      LEX-INVALID-UTF8
+## b8
+D 1:1      LEX-INVALID-UTF8
+## b9
+D 1:1      LEX-INVALID-UTF8
+## ba
+D 1:1      LEX-INVALID-UTF8
+## bb
+D 1:1      LEX-INVALID-UTF8
+## bc
+D 1:1      LEX-INVALID-UTF8
+## bd
+D 1:1      LEX-INVALID-UTF8
+## be
+D 1:1      LEX-INVALID-UTF8
+## bf
+D 1:1      LEX-INVALID-UTF8
+## c0
+D 1:1      LEX-INVALID-UTF8
+## c1
+D 1:1      LEX-INVALID-UTF8
+## c2
+D 1:1      LEX-INVALID-UTF8
+## c3
+D 1:1      LEX-INVALID-UTF8
+## c4
+D 1:1      LEX-INVALID-UTF8
+## c5
+D 1:1      LEX-INVALID-UTF8
+## c6
+D 1:1      LEX-INVALID-UTF8
+## c7
+D 1:1      LEX-INVALID-UTF8
+## c8
+D 1:1      LEX-INVALID-UTF8
+## c9
+D 1:1      LEX-INVALID-UTF8
+## ca
+D 1:1      LEX-INVALID-UTF8
+## cb
+D 1:1      LEX-INVALID-UTF8
+## cc
+D 1:1      LEX-INVALID-UTF8
+## cd
+D 1:1      LEX-INVALID-UTF8
+## ce
+D 1:1      LEX-INVALID-UTF8
+## cf
+D 1:1      LEX-INVALID-UTF8
+## d0
+D 1:1      LEX-INVALID-UTF8
+## d1
+D 1:1      LEX-INVALID-UTF8
+## d2
+D 1:1      LEX-INVALID-UTF8
+## d3
+D 1:1      LEX-INVALID-UTF8
+## d4
+D 1:1      LEX-INVALID-UTF8
+## d5
+D 1:1      LEX-INVALID-UTF8
+## d6
+D 1:1      LEX-INVALID-UTF8
+## d7
+D 1:1      LEX-INVALID-UTF8
+## d8
+D 1:1      LEX-INVALID-UTF8
+## d9
+D 1:1      LEX-INVALID-UTF8
+## da
+D 1:1      LEX-INVALID-UTF8
+## db
+D 1:1      LEX-INVALID-UTF8
+## dc
+D 1:1      LEX-INVALID-UTF8
+## dd
+D 1:1      LEX-INVALID-UTF8
+## de
+D 1:1      LEX-INVALID-UTF8
+## df
+D 1:1      LEX-INVALID-UTF8
+## e0
+D 1:1      LEX-INVALID-UTF8
+## e1
+D 1:1      LEX-INVALID-UTF8
+## e2
+D 1:1      LEX-INVALID-UTF8
+## e3
+D 1:1      LEX-INVALID-UTF8
+## e4
+D 1:1      LEX-INVALID-UTF8
+## e5
+D 1:1      LEX-INVALID-UTF8
+## e6
+D 1:1      LEX-INVALID-UTF8
+## e7
+D 1:1      LEX-INVALID-UTF8
+## e8
+D 1:1      LEX-INVALID-UTF8
+## e9
+D 1:1      LEX-INVALID-UTF8
+## ea
+D 1:1      LEX-INVALID-UTF8
+## eb
+D 1:1      LEX-INVALID-UTF8
+## ec
+D 1:1      LEX-INVALID-UTF8
+## ed
+D 1:1      LEX-INVALID-UTF8
+## ee
+D 1:1      LEX-INVALID-UTF8
+## ef
+D 1:1      LEX-INVALID-UTF8
+## f0
+D 1:1      LEX-INVALID-UTF8
+## f1
+D 1:1      LEX-INVALID-UTF8
+## f2
+D 1:1      LEX-INVALID-UTF8
+## f3
+D 1:1      LEX-INVALID-UTF8
+## f4
+D 1:1      LEX-INVALID-UTF8
+## f5
+D 1:1      LEX-INVALID-UTF8
+## f6
+D 1:1      LEX-INVALID-UTF8
+## f7
+D 1:1      LEX-INVALID-UTF8
+## f8
+D 1:1      LEX-INVALID-UTF8
+## f9
+D 1:1      LEX-INVALID-UTF8
+## fa
+D 1:1      LEX-INVALID-UTF8
+## fb
+D 1:1      LEX-INVALID-UTF8
+## fc
+D 1:1      LEX-INVALID-UTF8
+## fd
+D 1:1      LEX-INVALID-UTF8
+## fe
+D 1:1      LEX-INVALID-UTF8
+## ff
+D 1:1      LEX-INVALID-UTF8
+## 0000
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-NUL
+## 0009
+C 1:1      U+0000 w=1
+C 1:2      U+0009 w=1
+## 000a
+C 1:1      U+0000 w=1
+C 1:2      U+000A w=1
+## 000d
+C 1:1      U+0000 w=1
+C 1:2      U+000D w=1
+## 001f
+C 1:1      U+0000 w=1
+C 1:2      U+001F w=1
+## 0020
+C 1:1      U+0000 w=1
+C 1:2      U+0020 w=1
+## 0022
+C 1:1      U+0000 w=1
+C 1:2      U+0022 w=1
+## 0027
+C 1:1      U+0000 w=1
+C 1:2      U+0027 w=1
+## 0030
+C 1:1      U+0000 w=1
+C 1:2      U+0030 w=1
+## 0041
+C 1:1      U+0000 w=1
+C 1:2      U+0041 w=1
+## 005c
+C 1:1      U+0000 w=1
+C 1:2      U+005C w=1
+## 0061
+C 1:1      U+0000 w=1
+C 1:2      U+0061 w=1
+## 007f
+C 1:1      U+0000 w=1
+C 1:2      U+007F w=1
+## 0080
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 009f
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00a0
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00bf
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00c0
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00c1
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00c2
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00df
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00e0
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00e4
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00ed
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00ef
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00f0
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00f4
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00f5
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00fe
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 00ff
+C 1:1      U+0000 w=1
+D 1:2      LEX-INVALID-UTF8
+## 0900
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-NUL
+## 0909
+C 1:1      U+0009 w=1
+C 1:2      U+0009 w=1
+## 090a
+C 1:1      U+0009 w=1
+C 1:2      U+000A w=1
+## 090d
+C 1:1      U+0009 w=1
+C 1:2      U+000D w=1
+## 091f
+C 1:1      U+0009 w=1
+C 1:2      U+001F w=1
+## 0920
+C 1:1      U+0009 w=1
+C 1:2      U+0020 w=1
+## 0922
+C 1:1      U+0009 w=1
+C 1:2      U+0022 w=1
+## 0927
+C 1:1      U+0009 w=1
+C 1:2      U+0027 w=1
+## 0930
+C 1:1      U+0009 w=1
+C 1:2      U+0030 w=1
+## 0941
+C 1:1      U+0009 w=1
+C 1:2      U+0041 w=1
+## 095c
+C 1:1      U+0009 w=1
+C 1:2      U+005C w=1
+## 0961
+C 1:1      U+0009 w=1
+C 1:2      U+0061 w=1
+## 097f
+C 1:1      U+0009 w=1
+C 1:2      U+007F w=1
+## 0980
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 099f
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09a0
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09bf
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09c0
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09c1
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09c2
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09df
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09e0
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09e4
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09ed
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09ef
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09f0
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09f4
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09f5
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09fe
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 09ff
+C 1:1      U+0009 w=1
+D 1:2      LEX-INVALID-UTF8
+## 0a00
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-NUL
+## 0a09
+C 1:1      U+000A w=1
+C 2:1      U+0009 w=1
+## 0a0a
+C 1:1      U+000A w=1
+C 2:1      U+000A w=1
+## 0a0d
+C 1:1      U+000A w=1
+C 2:1      U+000D w=1
+## 0a1f
+C 1:1      U+000A w=1
+C 2:1      U+001F w=1
+## 0a20
+C 1:1      U+000A w=1
+C 2:1      U+0020 w=1
+## 0a22
+C 1:1      U+000A w=1
+C 2:1      U+0022 w=1
+## 0a27
+C 1:1      U+000A w=1
+C 2:1      U+0027 w=1
+## 0a30
+C 1:1      U+000A w=1
+C 2:1      U+0030 w=1
+## 0a41
+C 1:1      U+000A w=1
+C 2:1      U+0041 w=1
+## 0a5c
+C 1:1      U+000A w=1
+C 2:1      U+005C w=1
+## 0a61
+C 1:1      U+000A w=1
+C 2:1      U+0061 w=1
+## 0a7f
+C 1:1      U+000A w=1
+C 2:1      U+007F w=1
+## 0a80
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0a9f
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0aa0
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0abf
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0ac0
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0ac1
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0ac2
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0adf
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0ae0
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0ae4
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0aed
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0aef
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0af0
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0af4
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0af5
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0afe
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0aff
+C 1:1      U+000A w=1
+D 2:1      LEX-INVALID-UTF8
+## 0d00
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-NUL
+## 0d09
+C 1:1      U+000D w=1
+C 1:2      U+0009 w=1
+## 0d0a
+C 1:1      U+000D w=1
+C 1:2      U+000A w=1
+## 0d0d
+C 1:1      U+000D w=1
+C 1:2      U+000D w=1
+## 0d1f
+C 1:1      U+000D w=1
+C 1:2      U+001F w=1
+## 0d20
+C 1:1      U+000D w=1
+C 1:2      U+0020 w=1
+## 0d22
+C 1:1      U+000D w=1
+C 1:2      U+0022 w=1
+## 0d27
+C 1:1      U+000D w=1
+C 1:2      U+0027 w=1
+## 0d30
+C 1:1      U+000D w=1
+C 1:2      U+0030 w=1
+## 0d41
+C 1:1      U+000D w=1
+C 1:2      U+0041 w=1
+## 0d5c
+C 1:1      U+000D w=1
+C 1:2      U+005C w=1
+## 0d61
+C 1:1      U+000D w=1
+C 1:2      U+0061 w=1
+## 0d7f
+C 1:1      U+000D w=1
+C 1:2      U+007F w=1
+## 0d80
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0d9f
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0da0
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dbf
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dc0
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dc1
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dc2
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0ddf
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0de0
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0de4
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0ded
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0def
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0df0
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0df4
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0df5
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dfe
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 0dff
+C 1:1      U+000D w=1
+D 1:2      LEX-INVALID-UTF8
+## 1f00
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-NUL
+## 1f09
+C 1:1      U+001F w=1
+C 1:2      U+0009 w=1
+## 1f0a
+C 1:1      U+001F w=1
+C 1:2      U+000A w=1
+## 1f0d
+C 1:1      U+001F w=1
+C 1:2      U+000D w=1
+## 1f1f
+C 1:1      U+001F w=1
+C 1:2      U+001F w=1
+## 1f20
+C 1:1      U+001F w=1
+C 1:2      U+0020 w=1
+## 1f22
+C 1:1      U+001F w=1
+C 1:2      U+0022 w=1
+## 1f27
+C 1:1      U+001F w=1
+C 1:2      U+0027 w=1
+## 1f30
+C 1:1      U+001F w=1
+C 1:2      U+0030 w=1
+## 1f41
+C 1:1      U+001F w=1
+C 1:2      U+0041 w=1
+## 1f5c
+C 1:1      U+001F w=1
+C 1:2      U+005C w=1
+## 1f61
+C 1:1      U+001F w=1
+C 1:2      U+0061 w=1
+## 1f7f
+C 1:1      U+001F w=1
+C 1:2      U+007F w=1
+## 1f80
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1f9f
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fa0
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fbf
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fc0
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fc1
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fc2
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fdf
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fe0
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fe4
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fed
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fef
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1ff0
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1ff4
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1ff5
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1ffe
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 1fff
+C 1:1      U+001F w=1
+D 1:2      LEX-INVALID-UTF8
+## 2000
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-NUL
+## 2009
+C 1:1      U+0020 w=1
+C 1:2      U+0009 w=1
+## 200a
+C 1:1      U+0020 w=1
+C 1:2      U+000A w=1
+## 200d
+C 1:1      U+0020 w=1
+C 1:2      U+000D w=1
+## 201f
+C 1:1      U+0020 w=1
+C 1:2      U+001F w=1
+## 2020
+C 1:1      U+0020 w=1
+C 1:2      U+0020 w=1
+## 2022
+C 1:1      U+0020 w=1
+C 1:2      U+0022 w=1
+## 2027
+C 1:1      U+0020 w=1
+C 1:2      U+0027 w=1
+## 2030
+C 1:1      U+0020 w=1
+C 1:2      U+0030 w=1
+## 2041
+C 1:1      U+0020 w=1
+C 1:2      U+0041 w=1
+## 205c
+C 1:1      U+0020 w=1
+C 1:2      U+005C w=1
+## 2061
+C 1:1      U+0020 w=1
+C 1:2      U+0061 w=1
+## 207f
+C 1:1      U+0020 w=1
+C 1:2      U+007F w=1
+## 2080
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 209f
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20a0
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20bf
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20c0
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20c1
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20c2
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20df
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20e0
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20e4
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20ed
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20ef
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20f0
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20f4
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20f5
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20fe
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 20ff
+C 1:1      U+0020 w=1
+D 1:2      LEX-INVALID-UTF8
+## 2200
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-NUL
+## 2209
+C 1:1      U+0022 w=1
+C 1:2      U+0009 w=1
+## 220a
+C 1:1      U+0022 w=1
+C 1:2      U+000A w=1
+## 220d
+C 1:1      U+0022 w=1
+C 1:2      U+000D w=1
+## 221f
+C 1:1      U+0022 w=1
+C 1:2      U+001F w=1
+## 2220
+C 1:1      U+0022 w=1
+C 1:2      U+0020 w=1
+## 2222
+C 1:1      U+0022 w=1
+C 1:2      U+0022 w=1
+## 2227
+C 1:1      U+0022 w=1
+C 1:2      U+0027 w=1
+## 2230
+C 1:1      U+0022 w=1
+C 1:2      U+0030 w=1
+## 2241
+C 1:1      U+0022 w=1
+C 1:2      U+0041 w=1
+## 225c
+C 1:1      U+0022 w=1
+C 1:2      U+005C w=1
+## 2261
+C 1:1      U+0022 w=1
+C 1:2      U+0061 w=1
+## 227f
+C 1:1      U+0022 w=1
+C 1:2      U+007F w=1
+## 2280
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 229f
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22a0
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22bf
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22c0
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22c1
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22c2
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22df
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22e0
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22e4
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22ed
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22ef
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22f0
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22f4
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22f5
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22fe
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 22ff
+C 1:1      U+0022 w=1
+D 1:2      LEX-INVALID-UTF8
+## 2700
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-NUL
+## 2709
+C 1:1      U+0027 w=1
+C 1:2      U+0009 w=1
+## 270a
+C 1:1      U+0027 w=1
+C 1:2      U+000A w=1
+## 270d
+C 1:1      U+0027 w=1
+C 1:2      U+000D w=1
+## 271f
+C 1:1      U+0027 w=1
+C 1:2      U+001F w=1
+## 2720
+C 1:1      U+0027 w=1
+C 1:2      U+0020 w=1
+## 2722
+C 1:1      U+0027 w=1
+C 1:2      U+0022 w=1
+## 2727
+C 1:1      U+0027 w=1
+C 1:2      U+0027 w=1
+## 2730
+C 1:1      U+0027 w=1
+C 1:2      U+0030 w=1
+## 2741
+C 1:1      U+0027 w=1
+C 1:2      U+0041 w=1
+## 275c
+C 1:1      U+0027 w=1
+C 1:2      U+005C w=1
+## 2761
+C 1:1      U+0027 w=1
+C 1:2      U+0061 w=1
+## 277f
+C 1:1      U+0027 w=1
+C 1:2      U+007F w=1
+## 2780
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 279f
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27a0
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27bf
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27c0
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27c1
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27c2
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27df
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27e0
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27e4
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27ed
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27ef
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27f0
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27f4
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27f5
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27fe
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 27ff
+C 1:1      U+0027 w=1
+D 1:2      LEX-INVALID-UTF8
+## 3000
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-NUL
+## 3009
+C 1:1      U+0030 w=1
+C 1:2      U+0009 w=1
+## 300a
+C 1:1      U+0030 w=1
+C 1:2      U+000A w=1
+## 300d
+C 1:1      U+0030 w=1
+C 1:2      U+000D w=1
+## 301f
+C 1:1      U+0030 w=1
+C 1:2      U+001F w=1
+## 3020
+C 1:1      U+0030 w=1
+C 1:2      U+0020 w=1
+## 3022
+C 1:1      U+0030 w=1
+C 1:2      U+0022 w=1
+## 3027
+C 1:1      U+0030 w=1
+C 1:2      U+0027 w=1
+## 3030
+C 1:1      U+0030 w=1
+C 1:2      U+0030 w=1
+## 3041
+C 1:1      U+0030 w=1
+C 1:2      U+0041 w=1
+## 305c
+C 1:1      U+0030 w=1
+C 1:2      U+005C w=1
+## 3061
+C 1:1      U+0030 w=1
+C 1:2      U+0061 w=1
+## 307f
+C 1:1      U+0030 w=1
+C 1:2      U+007F w=1
+## 3080
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 309f
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30a0
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30bf
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30c0
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30c1
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30c2
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30df
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30e0
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30e4
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30ed
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30ef
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30f0
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30f4
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30f5
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30fe
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 30ff
+C 1:1      U+0030 w=1
+D 1:2      LEX-INVALID-UTF8
+## 4100
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-NUL
+## 4109
+C 1:1      U+0041 w=1
+C 1:2      U+0009 w=1
+## 410a
+C 1:1      U+0041 w=1
+C 1:2      U+000A w=1
+## 410d
+C 1:1      U+0041 w=1
+C 1:2      U+000D w=1
+## 411f
+C 1:1      U+0041 w=1
+C 1:2      U+001F w=1
+## 4120
+C 1:1      U+0041 w=1
+C 1:2      U+0020 w=1
+## 4122
+C 1:1      U+0041 w=1
+C 1:2      U+0022 w=1
+## 4127
+C 1:1      U+0041 w=1
+C 1:2      U+0027 w=1
+## 4130
+C 1:1      U+0041 w=1
+C 1:2      U+0030 w=1
+## 4141
+C 1:1      U+0041 w=1
+C 1:2      U+0041 w=1
+## 415c
+C 1:1      U+0041 w=1
+C 1:2      U+005C w=1
+## 4161
+C 1:1      U+0041 w=1
+C 1:2      U+0061 w=1
+## 417f
+C 1:1      U+0041 w=1
+C 1:2      U+007F w=1
+## 4180
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 419f
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41a0
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41bf
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41c0
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41c1
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41c2
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41df
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41e0
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41e4
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41ed
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41ef
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41f0
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41f4
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41f5
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41fe
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 41ff
+C 1:1      U+0041 w=1
+D 1:2      LEX-INVALID-UTF8
+## 5c00
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-NUL
+## 5c09
+C 1:1      U+005C w=1
+C 1:2      U+0009 w=1
+## 5c0a
+C 1:1      U+005C w=1
+C 1:2      U+000A w=1
+## 5c0d
+C 1:1      U+005C w=1
+C 1:2      U+000D w=1
+## 5c1f
+C 1:1      U+005C w=1
+C 1:2      U+001F w=1
+## 5c20
+C 1:1      U+005C w=1
+C 1:2      U+0020 w=1
+## 5c22
+C 1:1      U+005C w=1
+C 1:2      U+0022 w=1
+## 5c27
+C 1:1      U+005C w=1
+C 1:2      U+0027 w=1
+## 5c30
+C 1:1      U+005C w=1
+C 1:2      U+0030 w=1
+## 5c41
+C 1:1      U+005C w=1
+C 1:2      U+0041 w=1
+## 5c5c
+C 1:1      U+005C w=1
+C 1:2      U+005C w=1
+## 5c61
+C 1:1      U+005C w=1
+C 1:2      U+0061 w=1
+## 5c7f
+C 1:1      U+005C w=1
+C 1:2      U+007F w=1
+## 5c80
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5c9f
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5ca0
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cbf
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cc0
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cc1
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cc2
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cdf
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5ce0
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5ce4
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5ced
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cef
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cf0
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cf4
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cf5
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cfe
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 5cff
+C 1:1      U+005C w=1
+D 1:2      LEX-INVALID-UTF8
+## 6100
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-NUL
+## 6109
+C 1:1      U+0061 w=1
+C 1:2      U+0009 w=1
+## 610a
+C 1:1      U+0061 w=1
+C 1:2      U+000A w=1
+## 610d
+C 1:1      U+0061 w=1
+C 1:2      U+000D w=1
+## 611f
+C 1:1      U+0061 w=1
+C 1:2      U+001F w=1
+## 6120
+C 1:1      U+0061 w=1
+C 1:2      U+0020 w=1
+## 6122
+C 1:1      U+0061 w=1
+C 1:2      U+0022 w=1
+## 6127
+C 1:1      U+0061 w=1
+C 1:2      U+0027 w=1
+## 6130
+C 1:1      U+0061 w=1
+C 1:2      U+0030 w=1
+## 6141
+C 1:1      U+0061 w=1
+C 1:2      U+0041 w=1
+## 615c
+C 1:1      U+0061 w=1
+C 1:2      U+005C w=1
+## 6161
+C 1:1      U+0061 w=1
+C 1:2      U+0061 w=1
+## 617f
+C 1:1      U+0061 w=1
+C 1:2      U+007F w=1
+## 6180
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 619f
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61a0
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61bf
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61c0
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61c1
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61c2
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61df
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61e0
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61e4
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61ed
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61ef
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61f0
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61f4
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61f5
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61fe
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 61ff
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-UTF8
+## 7f00
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-NUL
+## 7f09
+C 1:1      U+007F w=1
+C 1:2      U+0009 w=1
+## 7f0a
+C 1:1      U+007F w=1
+C 1:2      U+000A w=1
+## 7f0d
+C 1:1      U+007F w=1
+C 1:2      U+000D w=1
+## 7f1f
+C 1:1      U+007F w=1
+C 1:2      U+001F w=1
+## 7f20
+C 1:1      U+007F w=1
+C 1:2      U+0020 w=1
+## 7f22
+C 1:1      U+007F w=1
+C 1:2      U+0022 w=1
+## 7f27
+C 1:1      U+007F w=1
+C 1:2      U+0027 w=1
+## 7f30
+C 1:1      U+007F w=1
+C 1:2      U+0030 w=1
+## 7f41
+C 1:1      U+007F w=1
+C 1:2      U+0041 w=1
+## 7f5c
+C 1:1      U+007F w=1
+C 1:2      U+005C w=1
+## 7f61
+C 1:1      U+007F w=1
+C 1:2      U+0061 w=1
+## 7f7f
+C 1:1      U+007F w=1
+C 1:2      U+007F w=1
+## 7f80
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7f9f
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fa0
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fbf
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fc0
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fc1
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fc2
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fdf
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fe0
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fe4
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fed
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fef
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7ff0
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7ff4
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7ff5
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7ffe
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 7fff
+C 1:1      U+007F w=1
+D 1:2      LEX-INVALID-UTF8
+## 8000
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## 8009
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## 800a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## 800d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## 801f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## 8020
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## 8022
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## 8027
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## 8030
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## 8041
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## 805c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## 8061
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## 807f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## 8080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 809f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 80ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9f00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## 9f09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## 9f0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## 9f0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## 9f1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## 9f20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## 9f22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## 9f27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## 9f30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## 9f41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## 9f5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## 9f61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## 9f7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## 9f80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9f9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fa0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fbf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fdf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fe0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fe4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9ff0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9ff4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9ff5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9ffe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## 9fff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a000
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## a009
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## a00a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## a00d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## a01f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## a020
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## a022
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## a027
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## a030
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## a041
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## a05c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## a061
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## a07f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## a080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a09f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## a0ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bf00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## bf09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## bf0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## bf0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## bf1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## bf20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## bf22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## bf27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## bf30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## bf41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## bf5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## bf61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## bf7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## bf80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bf9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfa0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfbf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfdf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfe0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfe4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bff0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bff4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bff5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bffe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## bfff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c000
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## c009
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## c00a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## c00d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## c01f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## c020
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## c022
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## c027
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## c030
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## c041
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## c05c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## c061
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## c07f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## c080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c09f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c0ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c100
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## c109
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## c10a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## c10d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## c11f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## c120
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## c122
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## c127
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## c130
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## c141
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## c15c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## c161
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## c17f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## c180
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c19f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c1ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c200
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## c209
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## c20a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## c20d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## c21f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## c220
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## c222
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## c227
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## c230
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## c241
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## c25c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## c261
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## c27f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## c280
+C 1:1      U+0080 w=2
+## c29f
+C 1:1      U+009F w=2
+## c2a0
+C 1:1      U+00A0 w=2
+## c2bf
+C 1:1      U+00BF w=2
+## c2c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## c2ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## df00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## df09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## df0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## df0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## df1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## df20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## df22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## df27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## df30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## df41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## df5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## df61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## df7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## df80
+C 1:1      U+07C0 w=2
+## df9f
+C 1:1      U+07DF w=2
+## dfa0
+C 1:1      U+07E0 w=2
+## dfbf
+C 1:1      U+07FF w=2
+## dfc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfdf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfe0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfe4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dff0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dff4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dff5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dffe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## dfff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e000
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## e009
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## e00a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## e00d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## e01f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## e020
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## e022
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## e027
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## e030
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## e041
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## e05c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## e061
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## e07f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## e080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e09f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e0ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e400
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## e409
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## e40a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## e40d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## e41f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## e420
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## e422
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## e427
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## e430
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## e441
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## e45c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## e461
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## e47f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## e480
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e49f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## e4ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ed00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## ed09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## ed0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## ed0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## ed1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## ed20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## ed22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## ed27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## ed30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## ed41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## ed5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## ed61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## ed7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## ed80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ed9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eda0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edbf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eddf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ede0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ede4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eded
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edf0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edf4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edf5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edfe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## edff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ef00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## ef09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## ef0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## ef0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## ef1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## ef20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## ef22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## ef27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## ef30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## ef41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## ef5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## ef61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## ef7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## ef80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ef9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efa0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efbf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efdf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efe0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efe4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eff0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eff4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## eff5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## effe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f000
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## f009
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## f00a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## f00d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## f01f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## f020
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## f022
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## f027
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## f030
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## f041
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## f05c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## f061
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## f07f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## f080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f09f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f0ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f400
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## f409
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## f40a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## f40d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## f41f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## f420
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## f422
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## f427
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## f430
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## f441
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## f45c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## f461
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## f47f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## f480
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f49f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f4ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f500
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## f509
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## f50a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## f50d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## f51f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## f520
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## f522
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## f527
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## f530
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## f541
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## f55c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## f561
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## f57f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## f580
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f59f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5a0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5bf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5c0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5c1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5c2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5df
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5e0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5e4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5ed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5ef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5f0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5f4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5f5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5fe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## f5ff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fe00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## fe09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## fe0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## fe0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## fe1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## fe20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## fe22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## fe27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## fe30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## fe41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## fe5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## fe61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## fe7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## fe80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fe9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fea0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## febf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fec0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fec1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fec2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fedf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fee0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fee4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## feed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## feef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fef0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fef4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fef5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fefe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## feff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ff00
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-NUL
+## ff09
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0009 w=1
+## ff0a
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000A w=1
+## ff0d
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+000D w=1
+## ff1f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+001F w=1
+## ff20
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0020 w=1
+## ff22
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0022 w=1
+## ff27
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0027 w=1
+## ff30
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0030 w=1
+## ff41
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0041 w=1
+## ff5c
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+005C w=1
+## ff61
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+0061 w=1
+## ff7f
+D 1:1      LEX-INVALID-UTF8
+C 1:2      U+007F w=1
+## ff80
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ff9f
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffa0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffbf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffc0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffc1
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffc2
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffdf
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffe0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffe4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffed
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffef
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fff0
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fff4
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fff5
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## fffe
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## ffff
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+## efbbbf
+## efbbbf78
+C 1:4      U+0078 w=1
+## efbbbfefbbbf78
+D 1:4      LEX-BOM-MIDFILE
+C 1:7      U+0078 w=1
+## 78efbbbf79
+C 1:1      U+0078 w=1
+D 1:2      LEX-BOM-MIDFILE
+C 1:5      U+0079 w=1
+## 780d0a79
+C 1:1      U+0078 w=1
+C 1:2      U+000D w=1
+C 1:3      U+000A w=1
+C 2:1      U+0079 w=1
+## 780d79
+C 1:1      U+0078 w=1
+C 1:2      U+000D w=1
+C 1:3      U+0079 w=1
+## e4b8ad0a
+C 1:1      U+4E2D w=3
+C 1:4      U+000A w=1
+## f09f98800a
+C 1:1      U+1F600 w=4
+C 1:5      U+000A w=1
+## efbfbd
+C 1:1      U+FFFD w=3
+## f48fbfbf
+C 1:1      U+10FFFF w=4
+## f4908080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+D 1:3      LEX-INVALID-UTF8
+D 1:4      LEX-INVALID-UTF8
+## eda080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+D 1:3      LEX-INVALID-UTF8
+## ed9fbf
+C 1:1      U+D7FF w=3
+## e08080
+D 1:1      LEX-INVALID-UTF8
+D 1:2      LEX-INVALID-UTF8
+D 1:3      LEX-INVALID-UTF8
+## e0a080
+C 1:1      U+0800 w=3
+## ee8080
+C 1:1      U+E000 w=3
+## 6100620a
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-NUL
+C 1:3      U+0062 w=1
+C 1:4      U+000A w=1
+## 61000062
+C 1:1      U+0061 w=1
+D 1:2      LEX-INVALID-NUL
+D 1:3      LEX-INVALID-NUL
+C 1:4      U+0062 w=1
+## 6162630a
+C 1:1      U+0061 w=1
+C 1:2      U+0062 w=1
+C 1:3      U+0063 w=1
+C 1:4      U+000A w=1
+## 61620a63
+C 1:1      U+0061 w=1
+C 1:2      U+0062 w=1
+C 1:3      U+000A w=1
+C 2:1      U+0063 w=1
+## 090b0c
+C 1:1      U+0009 w=1
+C 1:2      U+000B w=1
+C 1:3      U+000C w=1

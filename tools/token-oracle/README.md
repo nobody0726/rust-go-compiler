@@ -37,9 +37,13 @@ tools/token-oracle/
 ├── go.mod                 module tokenoracle（仅标准库依赖）
 ├── main.go                ★ 我们的：命令行入口 + 格式化（三条纪律的落地点）
 ├── diagmap.go             ★ 我们的：官方消息 → DiagCode 映射表 + 码表自检
+├── charcorpus.go          ★ 我们的：**字符级**对撞语料的生成（1177 个字节串）
+├── chargolden.go          ★ 我们的：**字符级** golden 的渲染
 ├── fixtures/
 │   ├── hello.txt          正向样本（48 字节）
-│   └── bad_utf8.txt       负向样本（40 字节，含裸 0xFF）
+│   ├── bad_utf8.txt       负向样本（40 字节，含裸 0xFF）
+│   ├── char_corpus.txt    **字符级语料**：一行一个 hex（1177 行）
+│   └── char_golden.txt    **字符级 golden**：3279 行，由 --chars-golden 生成
 └── gosyntax/
     ├── LICENSE           ┐ BSD-3-Clause 正文（随附，见 §3）
     ├── scanner.go        │
@@ -50,7 +54,7 @@ tools/token-oracle/
     └── export.go         ★ 我们的：唯一的同包 shim
 ```
 
-**★ 标记的三个文件是我们写的，其余是官方的。** 官方文件**不得改动** ——
+**★ 标记的五个文件是我们写的，其余是官方的。** 官方文件**不得改动** ——
 `M1-design.md` §9.1 原本设想「`adapter.go` 是唯一手写部分」，实测后必须改成三个文件，
 理由有两条：
 
@@ -121,11 +125,39 @@ scripts/in-container.sh bash -lc 'cd /work/tools/token-oracle && go run . fixtur
 用法：
 
 ```text
-go run . [--mode comments|directives] <source-file>
+go run . [--mode comments|directives] <source-file>   # 词元级
+go run . --selfcheck                                  # 映射表/码表自检
+go run . --list-codes                                 # 打印对照表
+go run . --gen-char-corpus                            # 生成字符级语料 → stdout
+go run . --chars-golden [--corpus <path>]             # 生成字符级 golden → stdout
 ```
 
 `--mode` 默认**不开启** ⇒ 注释与指令**一律不上报**，输出只有 `== tokens ==` / `== diags ==`
 （即冻结的 golden 格式）。开启后会多出 `== messages ==` 一节（LEX-03 用）。
+
+### 4.1 字符级通道（`DumpChars`）—— 与词元级**互补**，不是替代
+
+词元级 golden 在**词元边界**上取样；而位置是**每个字节**推出来的，`source.nextch`
+是 byte-column 语义的唯一来源。所以另有一条**字符级**通道：
+
+```go
+// gosyntax/export.go
+func DumpChars(src string) []CharEvent
+```
+
+它**直接调 `nextch()`**（不走 `next()`），只观察字符层：位置、`chw`、
+以及被跳过的字节各自报出的诊断。事件流**按发生顺序**，**不需要排序** ——
+"违规字节先报诊断、再让出下一个字符"是 `goto redo` 的直接后果，
+那是**语义**（每个被跳过的字节各占一列），不是内部时序
+（与词元级恰好相反：那里"诊断何时触发"是实现细节，两条流必须分开排序）。
+
+⚠️ **字符级的 golden 必须 `RGOC_TTY=0` 采集**（同 §8 第 4 条）。
+
+⚠️ **一处已登记的偏离**：输入**首字节是 `0x00`** 时官方不报 NUL
+（它的 NUL 检查只写在 ASCII 快路径里，而懒填充让首次 `nextch` 的 `buf[0]` 还是 sentinel）。
+我们**总是**报。两侧都报错，差别只在代号。判为**实现产物**、不照抄
+（`M1-design.md` §12 R11）；偏离由 `rgoc-lex/tests/test_char_golden.rs` 用
+**谓词 + 形状**双重断言登记。
 
 ## 5. 输出格式（冻结）
 
