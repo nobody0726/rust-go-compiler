@@ -17,14 +17,15 @@
 use crate::diag::{Diag, DiagBag, DiagCode};
 use crate::message::{Message, MessageKind, Mode};
 use crate::pos::{FileId, FileTable, Pos};
+use crate::semicolon::SemicolonPolicy;
 use crate::source::SourceReader;
-use crate::token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, TokenKind};
+use crate::token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};
 use crate::unicode_tables::{is_digit, is_letter};
 
 /// 词法器。
 ///
-/// 持有四样东西：字符层（[`SourceReader`]）、文件表、诊断包、注释上报（按 mode）。
-/// **不持有**分号状态（那是 `T-L14` 的 `SemicolonPolicy`）。
+/// 持有五样东西：字符层（[`SourceReader`]）、文件表、诊断包、注释上报（按 mode）、
+/// 分号状态（[`SemicolonPolicy`]）。
 #[derive(Debug)]
 pub struct Lexer {
     src: SourceReader,
@@ -40,6 +41,8 @@ pub struct Lexer {
     /// 上报的注释与指令。**与 `diags` 独立**（D-M1-8）—— 注释不是诊断，
     /// `C1` §4 的排序规则不该施加到它上面。
     messages: Vec<Message>,
+    /// 分号插入状态（LEX-07 的跨调用字段 —— 官方 `scanner.nlsemi`）。
+    semi: SemicolonPolicy,
     /// 是否已经读过第一个字符。
     ///
     /// 官方 `scanner.init()` **不**调 `nextch()` —— 第一次推进发生在首次 `next()` 里。
@@ -61,6 +64,7 @@ impl Lexer {
             diags: DiagBag::new(),
             mode: Mode::NONE,
             messages: Vec::new(),
+            semi: SemicolonPolicy::new(),
             started: false,
         }
     }
@@ -115,6 +119,125 @@ impl Lexer {
     /// 是 T-L18/T-L19 渲染层的事。
     pub fn take_messages(&mut self) -> Vec<Message> {
         core::mem::take(&mut self.messages)
+    }
+
+    /// 前进到下一个词元（`M1-design.md` §5.2 的骨架；官方 `scanner.next()` 的逐条翻译）。
+    ///
+    /// # 生命周期（与其它部分的分工）
+    ///
+    /// ```text
+    /// ① take()           取走上一次的分号状态并复位（T-L14）
+    /// ② loop             「重扫」回边 —— 注释、非法字符走这里（官方 `goto redo`）
+    ///     ③ skip_whitespace(nlsemi)   '\n' 只在 !nlsemi 时被吞（LEX-07 第一处机关）
+    ///     ④ 记录词元起点 start
+    ///     ⑤ EOF 判定（nlsemi 为真时补 Semi("EOF")）
+    ///     ⑥ 首字符分派：ident → 数字 → 字符串三型 → 标点（含注释/非法字符）
+    /// ⑦ set_after(&kind) 按类别决定"下一个换行是否译成分号"（T-L14）
+    /// ```
+    ///
+    /// # 三处位置语义（全部由 oracle 钉住，见 `tests/test_next.rs`）
+    ///
+    /// - `Semi("newline")`（换行来源）：位置 = **换行符**（下一轮循环的起点）；
+    /// - `Semi("newline")`（跨行块注释来源）：位置 = **注释起点**（`scan_comment`
+    ///   的返回值语义 —— 官方 `case '*'` 读的 `s.line/s.col` 未被更新）；
+    /// - `Semi("EOF")` 与 `Eof`：同位于 **EOF 处**（不凭空造列号，RF5）。
+    ///
+    /// # 为什么保留 `next` 这个名字（而不实现 `Iterator`）
+    ///
+    /// 官方接口就叫 `scanner.next()`，这是 M1 最核心的一处对应关系。clippy 的
+    /// `should_implement_trait` 会问「为什么不实现 `Iterator`」——**因为本流不满足
+    /// `Iterator` 的终止契约**：
+    ///
+    /// - 流里**没有** `None`：`Eof` 是一个**词元**（实测：流里恰好一个、在最后），
+    ///   而且 `Eof` 之后继续调用仍返回 `Eof`（不 panic、不终止）；
+    /// - 若硬实现 `Iterator`，要么改变流的形状（把 `Eof` 词元吞掉换成 `None`），
+    ///   要么违约（`for` 循环死循环）——两者都比"名字撞车"更糟。
+    ///
+    /// 与 R3 的 `from_str` 裁决**刻意不同**：那里的撞名会导致**运行时**误导
+    /// （`parse()` 静默不可用）；这里的撞名只导致**编译期**错误（Iterator 方法用不了）
+    /// —— 显性失败，不值得拿"官方名"去换。
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Token {
+        // 懒读首字符（官方 `init()` 不碰游标，第一次 `next()` 才推进 —— 见 `started`）
+        self.ensure_started();
+        let nlsemi = self.semi.take();
+
+        let (start, kind) = loop {
+            self.skip_whitespace(nlsemi);
+
+            let start = self.pos();
+            let Some(ch) = self.src.ch() else {
+                // EOF：nlsemi 为真时补分号（官方 `case -1`）
+                let kind = if nlsemi {
+                    TokenKind::Semi(SemiOrigin::Eof)
+                } else {
+                    TokenKind::Eof
+                };
+                break (start, kind);
+            };
+
+            // ① 标识符 / 关键字。入口判定与扫描在 `scan_ident` 内部**一次完成** ——
+            //    若在这里先探一次、函数里再判一次，`x²` 那类输入会报**两条**
+            //    LEX-BAD-IDENT-CHAR（`at_ident_char` 有副作用）。
+            if let Some(kind) = self.scan_ident() {
+                break (start, kind);
+            }
+
+            // ② 其余首字符分派（顺序照官方 `next()` 的 switch）
+            match ch {
+                '\n' => {
+                    // 只有 nlsemi 为真时 `\n` 才活到这儿（否则被 skip_whitespace 吞掉）
+                    self.bump();
+                    break (start, TokenKind::Semi(SemiOrigin::Newline));
+                }
+                '0'..='9' => break (start, self.scan_number(false)),
+                '"' => break (start, self.scan_std_string()),
+                '`' => break (start, self.scan_raw_string()),
+                '\'' => break (start, self.scan_rune()),
+                _ => match self.scan_punct() {
+                    Some(PunctScan::Token(kind)) => break (start, kind),
+                    Some(PunctScan::LeadingDotNumber) => break (start, self.scan_number(true)),
+                    Some(PunctScan::Comment(style)) => {
+                        match self.scan_comment(start, style, nlsemi) {
+                            // 注释处理完 ⇒ 重扫（官方 `goto redo`）
+                            CommentScan::Redo => continue,
+                            // 跨行块注释 + nlsemi ⇒ 等价于换行（位置 = 注释起点）
+                            CommentScan::Semi => {
+                                break (start, TokenKind::Semi(SemiOrigin::Newline));
+                            }
+                        }
+                    }
+                    None => {
+                        // 官方 `default`：报"invalid character"、消耗、重扫。
+                        // （非 ASCII 到不了这里 —— 它们全部被 ① 吸收）
+                        self.report(DiagCode::BadChar, format!("不认识的字符 {ch:?}"));
+                        self.bump();
+                        continue;
+                    }
+                },
+            }
+        };
+
+        self.semi.set_after(&kind);
+        Token { pos: start, kind }
+    }
+
+    /// 官方 `next()` 开头的空白循环（`scanner.go:96-98`）：
+    ///
+    /// ```text
+    /// for s.ch == ' ' || s.ch == '\t' || s.ch == '\n' && !nlsemi || s.ch == '\r'
+    /// ```
+    ///
+    /// `&&` 比 `||` 紧 ⇒ **`'\n'` 只在 `nlsemi` 为假时被吞**（LEX-07 的第一处机关）。
+    /// `\r` 与空格/制表符一样无条件跳过。
+    fn skip_whitespace(&mut self, nlsemi: bool) {
+        while let Some(c) = self.src.ch() {
+            let skip = c == ' ' || c == '\t' || c == '\r' || (c == '\n' && !nlsemi);
+            if !skip {
+                break;
+            }
+            self.bump();
+        }
     }
 
     /// 在当前游标处扫一个**标识符或关键字**。

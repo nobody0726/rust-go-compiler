@@ -1,0 +1,19 @@
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="main"
+  9:10   (        lit=-
+  9:11   )        lit=-
+  9:13   {        lit=-
+  10:2   if       lit=-
+  10:5   name     lit="x"
+  10:6   ;        lit="semicolon"
+  10:8   name     lit="y"
+  10:62  ;        lit="newline"
+  11:2   {        lit=-
+  12:3   name     lit="z"
+  12:31  ;        lit="newline"
+  15:1   EOF      lit=-
+== diags ==

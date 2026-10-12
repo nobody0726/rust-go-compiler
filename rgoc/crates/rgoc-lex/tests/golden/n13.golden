@@ -1,0 +1,7 @@
+== tokens ==
+  1:1    name     lit="a"
+  1:3    *        lit=- op=* prec=5
+  1:5    name     lit="b"
+  1:6    ;        lit="EOF"
+  1:6    EOF      lit=-
+== diags ==

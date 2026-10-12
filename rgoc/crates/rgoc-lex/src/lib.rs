@@ -26,13 +26,15 @@
 //! | [`lexer`] | 词元层：分派 + 各类词元扫描 + 注释（T-L13） |
 //! | [`message`] | 注释/指令的上报：`Mode` / `Message` / `MessageKind`（D-M1-1） |
 //! | [`semicolon`] | 分号插入规则表：`SemicolonPolicy`（LEX-07，T-L14） |
+//! | [`render`] | golden 正文渲染（与 oracle 逐字节一致的**唯一一处**，T-L15） |
 //!
-//! 后续任务将加入 `lexer::next`（分派骨架，T-L15）。
+//! 词法器的对外入口是 [`Lexer::next`]（T-L15 组装完成）。
 
 pub mod diag;
 pub mod lexer;
 pub mod message;
 pub mod pos;
+pub mod render;
 pub mod semicolon;
 pub mod source;
 pub mod token;

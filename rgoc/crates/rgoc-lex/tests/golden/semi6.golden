@@ -1,0 +1,12 @@
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    type     lit=-
+  9:6    name     lit="T1"
+  9:47   ;        lit="newline"
+  11:1   type     lit=-
+  11:6   name     lit="T2"
+  11:63  ;        lit="EOF"
+  11:63  EOF      lit=-
+== diags ==

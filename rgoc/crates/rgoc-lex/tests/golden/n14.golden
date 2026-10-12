@@ -1,0 +1,7 @@
+== tokens ==
+  1:1    name     lit="x"
+  1:3    ;        lit="newline"
+  2:1    name     lit="y"
+  2:2    ;        lit="EOF"
+  2:2    EOF      lit=-
+== diags ==
