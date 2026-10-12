@@ -58,7 +58,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（230 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（231 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）

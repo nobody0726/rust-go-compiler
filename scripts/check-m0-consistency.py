@@ -977,6 +977,30 @@ def main() -> int:
                      if "契约级别：完整" in (REPO_ROOT / contracts[cid]["file"])
                      .read_text(encoding="utf-8").replace("**", "")]
     check("C3–C5 不得自封「契约级别：完整」", not self_complete, f"另有 {self_complete}")
+    # C1 §7 登记的每个测试名必须真实存在（R39 同形：契约宣称的验证载体不存在）。
+    # 解析 §7 表格的「载体」列，收反引号 token（跳过含 "." 的文件名），
+    # 逐个在 rgoc-lex 的测试里找 `fn <name>(` —— 改名/删测试会让契约悄悄撒谎。
+    if "## 7. 本契约的验证方式" in c1_text and "## 8." in c1_text:
+        sec7 = c1_text.split("## 7. 本契约的验证方式", 1)[1].split("## 8.", 1)[0]
+        claimed: set[str] = set()
+        for line in sec7.splitlines():
+            s = line.strip()
+            if not s.startswith("|"):
+                continue
+            cells = [c.strip() for c in s.strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            for tok in re.findall(r"`([^`]+)`", cells[1]):
+                if "." not in tok:  # 跳过 test_pos.rs 之类的文件名
+                    claimed.add(tok)
+        lex_src = "".join(p.read_text(encoding="utf-8")
+                          for p in sorted((REPO_ROOT / "rgoc/crates/rgoc-lex/tests").glob("*.rs")))
+        missing_tests = sorted(n for n in claimed if f"fn {n}(" not in lex_src)
+        check("C1 §7 登记的测试名都真实存在（rgoc-lex）", not missing_tests,
+              f"缺失 {missing_tests}")
+    else:
+        check("C1 §7 登记的测试名都真实存在（rgoc-lex）", False,
+              "§7/§8 节标题不在，无法解析验证表")
 
     # E9：六条必须逐条登记且都有证据（E9 本身就是「六条逐条判定」）
     e9 = manifest["gate"]["E9"]
