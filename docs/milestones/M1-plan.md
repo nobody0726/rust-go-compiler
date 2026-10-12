@@ -1362,28 +1362,28 @@ git commit -m "feat(lex): 错误恢复的负例全覆盖（诊断 + 后续词元
 
 **Interfaces:**
 - Consumes: `T-L15`
-- Produces: `rgoc_lex::MAX_FILE_BYTES: usize`（= 64 MiB）+ `Lexer::new` 的提前检查
+- Produces: `rgoc_lex::MAX_FILE_BYTES: u64`（= 64 MiB；**`u64`** 与 `fs::metadata().len()` 同型）
+  + `Lexer::from_path(path: impl AsRef<Path>, mode: Mode) -> io::Result<Self>` 的提前检查
+  （**不带 `table`** —— 表由 `Lexer` 自持，P2；**检查不在 `new`** —— 它收已入内存的
+  `Vec`，查了也白查）
 
 - [ ] **Step 1: 写失败测试**
 
+实际落地 **7 条**（计划原估 3）：
+
 ```rust
-#[test]
-fn 超过上限报错且只返回_eof() {
-    // 构造一个 > MAX_FILE_BYTES 的输入（用 metadata 路径测，见下）
-    // 断言：恰好一条 LEX-EXCEEDS-FILE-LIMIT，词元流只含 Eof
-}
-
-#[test]
-fn 检查在读入之前发生() {
-    // 断言 Lexer::from_path 先 fs::metadata 再 read
-    // ★ 这条防的是「读完 10 GB 再检查」—— 那时已经 OOM
-}
-
-#[test]
-fn 上限边界值本身可以通过() {
-    // 恰等于 MAX_FILE_BYTES 不报错
-}
+#[test] fn 超过上限报错且只返回_eof()   // 行为：一条诊断 + 只含 Eof；手写 golden 对撞
+#[test] fn 检查在读入之前发生()         // 时机：超限 + chmod 000 的文件（先 read 会得 io 错误）
+#[test] fn 上限值就是_64_mib_本身()     // 绝对值：独立钉常量（边界测试用常量造文件、会随常量走）
+#[test] fn 上限边界值本身可以通过()      // 方向：恰等不超（`>` 而非 `>=`）
+#[test] fn 正常小文件照常读入并解析()    // 正常路径 + 文件名进表
+#[test] fn io_错误如实上浮()            // 错误面：不存在 / 不可读 ⇒ Err（不映射成超限）
+#[test] fn from_path_的_mode_生效()     // 公共接口：driver 要用的 mode 参数真传递
 ```
+
+关键装置：**稀疏文件**（`set_len` 只记 inode 元数据，不占磁盘）；**chmod 000** 把
+「先 metadata 再 read」逼出来（容器内 uid 501 非 root —— root 会无视权限）；
+`t63_exceeds.golden` 是**手写**的（`# source: hand-written`，全仓唯一 `H`）。
 
 - [ ] **Step 2: 跑测试确认失败**
 
@@ -1392,13 +1392,15 @@ Expected: FAIL
 
 - [ ] **Step 3: 实现**
 
-新增 `Lexer::from_path(path, table, mode) -> Self`：**先 `fs::metadata().len()` 检查**，超限直接构造一个
-"已耗尽"的实例（只产出 `Eof` + 一条诊断），**不读文件**。
+实现 `Lexer::from_path(path, mode) -> io::Result<Self>`：**先 `fs::metadata().len()`
+检查**（超限 ⇒ `Ok` + 「空源实例」+ 一条诊断 @**文件起点 1:1**，**不读文件**）；
+否则 `fs::read` 后照常构造。**io 失败如实 `Err`**（错误面两分见 R38）。
+简报原设想的两处订正已折进 Interfaces（不带 `table` / 检查不在 `new`）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_limits`
-Expected: 3 passed
+Expected: 7 passed（实际 7 —— 计划原估 3）
 
 - [ ] **Step 5: 提交**
 
