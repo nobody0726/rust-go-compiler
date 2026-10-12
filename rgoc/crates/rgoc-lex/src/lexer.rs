@@ -554,6 +554,114 @@ impl Lexer {
         true
     }
 
+    /// 在当前游标处扫一个**解释型字符串字面量**（LEX-13 的双引号形式）。
+    ///
+    /// **入口前置条件**：游标在**开引号** `"` 上（官方 `case '"'` **直接**调
+    /// `stdString()`，函数自己 `nextch()` 掉它）。
+    ///
+    /// # 与 [`Lexer::scan_rune`] 的一处**刻意的不一致**（别"顺手统一"）
+    ///
+    /// 官方 `stdString()` 的换行/EOF 分支**没有 `if ok` 守卫**，而 `rune()` **有** ——
+    /// 所以 `"\q` + 换行会报**两条**诊断（`LEX-ESCAPE-UNKNOWN` + `LEX-STRING-NEWLINE`），
+    /// 而 `'\q` + 换行只报一条。这是官方的**实际行为**（实测），照抄。
+    /// **"少一条诊断"比"词元切错"更难发现** —— 词元数会变，诊断数不会。
+    pub fn scan_std_string(&mut self) -> TokenKind {
+        self.ensure_started();
+        let start = self.pos();
+        self.src.start_segment();
+        let mut ok = true;
+        self.bump(); // 吃掉开引号
+
+        loop {
+            match self.src.ch() {
+                Some('"') => {
+                    self.bump();
+                    break;
+                }
+                Some('\\') => {
+                    self.bump();
+                    if !self.escape('"') {
+                        ok = false;
+                    }
+                }
+                Some('\n') => {
+                    // ⚠️ 没有 `if ok` 守卫（与 `scan_rune` 不同 —— 见上）
+                    self.report(DiagCode::StringNewline, "字符串里出现换行".to_string());
+                    ok = false;
+                    break;
+                }
+                None => {
+                    self.report_at(
+                        start,
+                        0,
+                        DiagCode::StringUnterminated,
+                        "字符串未终止".to_string(),
+                    );
+                    ok = false;
+                    break;
+                }
+                Some(_) => self.bump(),
+            }
+        }
+
+        let lit = self.src.segment().to_vec();
+        self.src.stop_segment();
+        TokenKind::Literal {
+            text: lit,
+            lit_kind: LitKind::String,
+            bad: !ok,
+        }
+    }
+
+    /// 在当前游标处扫一个**原始字符串字面量**（LEX-13 的反引号形式）。
+    ///
+    /// **入口前置条件**：游标在**开反引号**上（官方 `next()` 的反引号分支**直接**调
+    /// `rawString()`，函数自己 `nextch()` 掉它）。
+    ///
+    /// # 三条与解释型的差别
+    ///
+    /// 1. **不处理转义** —— `\` 只是普通字符；
+    /// 2. **可跨行** —— 换行不是错误（也**没有**换行诊断）；行号照常推进；
+    /// 3. **`\r` 留在文本里**（F39）—— 官方注释原文：
+    ///    「We leave CRs in the string since they are part of the literal (even though
+    ///    they are not part of the literal value)」。⇒ "丢弃"是**值**层面的事（M3 的
+    ///    unquote），M1 只管文本，一个字节都不动。
+    pub fn scan_raw_string(&mut self) -> TokenKind {
+        self.ensure_started();
+        let start = self.pos();
+        self.src.start_segment();
+        let mut ok = true;
+        self.bump(); // 吃掉开反引号
+
+        loop {
+            match self.src.ch() {
+                Some('`') => {
+                    self.bump();
+                    break;
+                }
+                None => {
+                    self.report_at(
+                        start,
+                        0,
+                        DiagCode::StringUnterminated,
+                        "字符串未终止".to_string(),
+                    );
+                    ok = false;
+                    break;
+                }
+                Some(_) => self.bump(),
+            }
+        }
+
+        let lit = self.src.segment().to_vec();
+        self.src.stop_segment();
+        TokenKind::Literal {
+            text: lit,
+            lit_kind: LitKind::String,
+            bad: !ok,
+        }
+    }
+
     /// 在当前游标处扫一个**运算符或标点**（LEX-04 最长匹配）。
     ///
     /// 返回值有三种去向，见 [`PunctScan`]。当前字符不是标点的起始字符时返回 `None`

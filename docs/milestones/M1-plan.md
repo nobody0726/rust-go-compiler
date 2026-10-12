@@ -35,7 +35,7 @@
 | G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
 | G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须先 `touch` 那个源文件**（或让容器自己写）。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06 的反验里连续复现两次 | 执行期实测（R9） |
 | G14 | **门禁命令用「累积式 + 末条即判据」，且不写显式 `exit $fail`**。两个实测陷阱：① 容器内 `set -e` 生效时**任何显式 `exit N`（含 `exit 0`）都被压成 1**（`bash -lc 'set -e; exit 7'` → 1）⇒ 退出码信息全毁；② 仓库惯用的 `cmd && echo OK` 形态**不中止脚本**（`set -e` 对 AND-OR 列表的非末项不生效），于是**早期失败被后续成功掩盖**（实测 `false && echo OK; true` → 退出码 **0**）。⚠️ 推论：**不能用「末尾命令成功」当判据** | 执行期实测（R12） |
-| G15 | **反验/变异脚本的三条硬要求**：① **判红必须有 ≥1 条 `test … FAILED`** —— `rc != 0` 太弱（**编译失败也是 101**），那不算"断言变红"；② **指纹用块注释** `/* MUTVn */`，别用 `// MUTVn`（行注释会吃掉同一行后面的语法 —— T-L11 实测把 `if … {` 的 `{` 注释掉）；③ "只改注释"守卫继续保留（R17）。 | T-L11 执行期实测（R21） |
+| G15 | **反验/变异脚本的三条硬要求**：① **判红必须有 ≥1 条 `test … FAILED`** —— `rc != 0` 太弱（**编译失败也是 101**），那不算"断言变红"；② **指纹用块注释** `/* MUTVn */`，别用 `// MUTVn`（行注释会吃掉同一行后面的语法 —— T-L11 实测把 `if … {` 的 `{` 注释掉）；③ "只改注释"守卫继续保留（R17）；④ **锚点不唯一时必须显式给出现序号** —— `nth=None`（必须唯一）与 `nth=k`（取第 k 次）**语义要分开**，别让 `nth=1` 兼表两者（T-L12 实测：注入器因此把一道合法变异**误报成注入失败**）。 | T-L11/T-L12 执行期实测（R21/R15） |
 
 **G14 的规范形态**（`fail` 累积 + 末条即判据）：
 
@@ -1016,7 +1016,18 @@ git commit -m "feat(lex): rune 字面量与转义表（含代理区与八进制�
 
 **Interfaces:**
 - Consumes: `T-L11` 的 `escape`
-- Produces: `Lexer::{next_std_string_kind, next_raw_string_kind}`（内部）
+- Produces: `Lexer::{scan_std_string, scan_raw_string}() -> TokenKind`
+
+> **执行期裁决 R22（命名 + 一处计划笔误）**：计划原写 `Lexer::{next_std_string_kind, next_raw_string_kind}`，
+> 落地为 **`scan_std_string()` / `scan_raw_string()`**（同 R14/R16/R18/R20 先例）。
+> **入口约定**：两者都从**开定界符**开始（官方 `case '"'` / 反引号分支**直接**调，
+> 函数自己 `nextch()` 掉它）。
+>
+> ⚠️ **计划正文 Step 3 里有一处凭直觉写错**：原文「原始型：**`\r` 被丢弃**（不进入载荷）」
+> —— oracle 实测与官方注释（`rawString()` 上方）**都是「留在文本里」**：
+> 「We leave CRs in the string since they are part of the literal (even though they are not
+> part of the literal value)」。「丢弃」是**值**层面的事（M3 的 unquote），
+> **M1 只管文本，一个字节都不动**。已按实测订正正文，并注册为 **F39**。
 
 - [ ] **Step 1: 写失败测试（`T-L-37`、`T-L-53`）**
 
@@ -1047,12 +1058,12 @@ Expected: FAIL
 - [ ] **Step 3: 实现**
 
 解释型：遇 `"` 收尾；遇 `\` 走 `escape`；遇 `\n` 或 EOF 报未终止。
-原始型：遇 `` ` `` 收尾；**可跨行**；**`\r` 被丢弃**（不进入载荷）。
+原始型：遇 `` ` `` 收尾；**可跨行**；**一个字节都不改** —— `\r` **留在文本里**（**订正**：原文写「被丢弃」，实测与官方注释都是「leave」 —— 见 **F39**）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
-Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_string`
-Expected: 5 passed
+Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_string`（命令形态按 **G11** 解释）
+Expected: **12 passed**（计划原估 5 条；另含 9 道变异反向验证）
 
 - [ ] **Step 5: 提交**
 
