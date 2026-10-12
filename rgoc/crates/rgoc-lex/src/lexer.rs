@@ -1243,13 +1243,30 @@ impl Lexer {
         PunctScan::Token(TokenKind::Delim(Delim::Dot))
     }
 
+    /// **诊断的唯一入口** —— lexer 侧的全部报错路径都经这里进包。
+    ///
+    /// 为什么要「只有一个」：诊断包是**多来源的汇合处**（字符层的 `advance`/`rewind`
+    /// 返回值、扫描层的 `report`/`report_at`）。若各自直写 `self.diags`，将来加约束
+    /// （条数上限、去重、debug 期校验）时**必然漏掉某一路** —— 而漏掉不会报错，
+    /// 只会让约束"部分生效"（"漏了不会报错"已在本仓三次同形）。
+    ///
+    /// 字符层（`source.rs`）内部另有 3 处对**局部 `Vec<Diag>`** 的写入 —— 那不是
+    /// 漏洞：它们是 `advance`/`rewind` 的返回值，[`Lexer::bump`] 与
+    /// [`Lexer::rewind_to_segment_start`] **全量收编**，结构上必进本函数。
+    ///
+    /// 它同时是反验的锚点：对 `push_diag` 做变异（如按类别丢弃）⇒ **全部报错路径**
+    /// 同时受影响，任何一条绕过它的路径都会在变异下"漏网"而暴露。
+    fn push_diag(&mut self, d: Diag) {
+        self.diags.push(d);
+    }
+
     /// 回退到活动段起点。
     ///
     /// `SourceReader::rewind` 返回诊断（它内部会重读段首字符），这里照 [`Lexer::bump`]
     /// 的做法收进自己的包。
     fn rewind_to_segment_start(&mut self) {
         for d in self.src.rewind() {
-            self.diags.push(d);
+            self.push_diag(d);
         }
     }
 
@@ -1264,13 +1281,13 @@ impl Lexer {
     /// 消费当前字符并前进；把字符层报出的诊断收进自己的包。
     fn bump(&mut self) {
         for d in self.src.advance() {
-            self.diags.push(d);
+            self.push_diag(d);
         }
     }
 
     /// 在**当前字符**的位置报一条诊断（对应官方 `s.error` 报在 `s.pos()`）。
     fn report(&mut self, code: DiagCode, message: String) {
-        self.diags.push(Diag {
+        self.push_diag(Diag {
             pos: self.src.pos(),
             code,
             message,
@@ -1283,7 +1300,7 @@ impl Lexer {
     /// 数字字面量不可能跨行（[`Lexer::digits`] 只吃单字节 ASCII），
     /// 所以行号直接沿用词元起点行。
     fn report_at(&mut self, start: Pos, offset: u32, code: DiagCode, message: String) {
-        self.diags.push(Diag {
+        self.push_diag(Diag {
             pos: Pos {
                 file: start.file,
                 line: start.line,

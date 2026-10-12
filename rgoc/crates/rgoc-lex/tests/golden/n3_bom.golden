@@ -1,0 +1,6 @@
+== tokens ==
+  1:1    name     lit="x\xef\xbb\xbfy"
+  1:6    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:2    LEX-BOM-MIDFILE

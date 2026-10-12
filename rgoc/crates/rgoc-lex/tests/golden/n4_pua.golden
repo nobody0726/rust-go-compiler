@@ -1,0 +1,6 @@
+== tokens ==
+  1:1    name     lit="x\xee\x80\x80y"
+  1:6    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:2    LEX-BAD-IDENT-CHAR

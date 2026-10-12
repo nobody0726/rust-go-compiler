@@ -1,0 +1,2 @@
+package main
+func f() { x := 1ÿ2 }

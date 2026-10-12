@@ -1,0 +1,4 @@
+== tokens ==
+  1:3    EOF      lit=-
+== diags ==
+  1:1    LEX-COMMENT-UNTERMINATED

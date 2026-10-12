@@ -1,0 +1,18 @@
+== tokens ==
+  1:1    package  lit=-
+  1:9    name     lit="main"
+  1:13   ;        lit="newline"
+  3:1    func     lit=-
+  3:6    name     lit="f"
+  3:7    (        lit=-
+  3:8    )        lit=-
+  3:10   {        lit=-
+  4:2    name     lit="x"
+  4:4    :=       lit=-
+  4:7    literal  lit="1\xff2" kind=0 bad=false
+  4:10   ;        lit="newline"
+  5:1    }        lit=-
+  5:2    ;        lit="newline"
+  6:1    EOF      lit=-
+== diags ==
+  4:8    LEX-INVALID-UTF8
