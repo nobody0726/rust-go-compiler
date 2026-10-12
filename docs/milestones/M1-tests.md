@@ -149,7 +149,7 @@
 | `T-L-46` | `x /* c1` ⏎ `c2 */ y` | 跨行块注释在 `nlsemi` 语境下**等价于换行** |
 | `T-L-47` | **语料 `test/syntax/semi1..7.go`** | 七个文件逐词元 diff |
 | `T-L-48` | `test/eof.go` / `eof1.go` | EOF 处的分号补出行为 |
-| `T-L-49` | `SemicolonPolicy::set_after` 规则表 | **逐行断言**（26 个类别 × 置位与否）—— 判据 `S` |
+| `T-L-49` | `SemicolonPolicy::set_after` 规则表 | **逐行断言**（关键字 `ALL` 25 / `Delim::ALL` 10 / `SemiOrigin::ALL` 3 / `OpForm × Operator` 72 组合）—— 判据 `S` |
 
 ### 3.5 切面 ⑤ 错误恢复（`T-L-5x`）—— 判据全 `O`
 
