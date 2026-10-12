@@ -25,13 +25,15 @@
 //! | [`source`] | 字符层：UTF-8 解码 + 位置推进 + 段切片（**不认识词元**） |
 //! | [`lexer`] | 词元层：分派 + 各类词元扫描 + 注释（T-L13） |
 //! | [`message`] | 注释/指令的上报：`Mode` / `Message` / `MessageKind`（D-M1-1） |
+//! | [`semicolon`] | 分号插入规则表：`SemicolonPolicy`（LEX-07，T-L14） |
 //!
-//! 后续任务将加入 `semicolon`（分号状态机）、`lexer::next`（分派骨架）。
+//! 后续任务将加入 `lexer::next`（分派骨架，T-L15）。
 
 pub mod diag;
 pub mod lexer;
 pub mod message;
 pub mod pos;
+pub mod semicolon;
 pub mod source;
 pub mod token;
 pub mod unicode_tables;
@@ -40,5 +42,6 @@ pub use diag::{Diag, DiagBag, DiagCode};
 pub use lexer::{CommentScan, CommentStyle, Lexer, PunctScan};
 pub use message::{Message, MessageKind, Mode};
 pub use pos::{FileId, FileTable, Pos};
+pub use semicolon::SemicolonPolicy;
 pub use source::SourceReader;
 pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};
