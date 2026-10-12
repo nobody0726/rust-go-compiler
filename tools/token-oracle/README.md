@@ -43,7 +43,10 @@ tools/token-oracle/
 │   ├── hello.txt          正向样本（48 字节）
 │   ├── bad_utf8.txt       负向样本（40 字节，含裸 0xFF）
 │   ├── char_corpus.txt    **字符级语料**：一行一个 hex（1177 行）
-│   └── char_golden.txt    **字符级 golden**：3279 行，由 --chars-golden 生成
+│   ├── char_golden.txt    **字符级 golden**：3279 行，由 --chars-golden 生成
+│   └── comment/           **注释行为探针**（p01–p45，T-L13 建立）
+│                          文件名即场景与出处；`rgoc-lex` 的 test_comment.rs
+│                          逐条断言都直引探针名。改这里 = 改测试的期望值依据
 └── gosyntax/
     ├── LICENSE           ┐ BSD-3-Clause 正文（随附，见 §3）
     ├── scanner.go        │

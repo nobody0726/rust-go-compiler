@@ -33,9 +33,9 @@
 | G10 | Rust 侧命名：**中文标识符不得夹大写 ASCII**（会触发 `non_snake_case` 打爆 `-D warnings`） | 本仓 T37 复发过 |
 | G11 | **容器内 cargo 命令的确切形态**：`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo <args>'`。容器的工作目录是 `/work`（仓库根），而 cargo workspace 在 `/work/rgoc`；`-l` 必需（工具链在 `/etc/profile.d/50-rgoc-toolchains.sh` 里加进 PATH）。**本文档正文里的 `cargo` 命令一律按本条解释** | 执行期实测（R1） |。⚠️ **文件路径同理**：宿主 `rgoc/...` ↔ 容器 `/work/rgoc/...`（或 `cd /work/rgoc` 后写`crates/...`）—— 反验/取证脚本里拼错时 `touch`/`grep`/`sha256sum` 会**同时**落空，而 `cargo test` 仍给出"看起来对"的结果（T-L10 实测，见 design §12 R13）
 | G12 | **凡是要做「逐字节比较」的 stdout，必须设 `RGOC_TTY=0`**。`scripts/in-container.sh` 在 stdin 是 tty 时加 `-it`，而伪终端默认 ONLCR 把 `\n` 翻成 `\r\n` —— **终端里肉眼看不出**，但会让 golden 每行带 CR。G11 那类 `cargo test` 的 grep 不受影响（CR 在行尾），**只有产出被冻结的文件时才会咬人** | 执行期实测（R6） |
-| G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须先 `touch` 那个源文件**（或让容器自己写）。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06 的反验里连续复现两次 | 执行期实测（R9） |
+| G13 | **紧密循环里改完文件马上在容器里跑 cargo，必须让 mtime 真正变化**。宿主写文件后**容器可能仍看到缓存的 mtime**（macOS 挂载的属性缓存）⇒ cargo 判定「无需重建」⇒ **跑的是上一版的二进制**。⚠️ 这种陈旧**看不出来**：文件内容对、sha256 对、连变异指纹都对，只有失败清单是上一轮的。实测在 T-L06（R10）与 T-L13（R16）各复现过。⚠️ **2026-10-12 订正**：原文「在容器里 `touch` / **或让容器自己写**」**不够** —— 容器侧 mtime 只有**秒级**精度（VirtioFS，`stat` 实测 `.000000000`），同一秒内的两次写入仍判「未变」。**正确做法：每次写入后显式设定一个「递增的唯一 mtime」**（脚本内 `os.utime` / `touch -d`），并在每道变异后的 cargo 输出里**断言含 `Compiling`**（缺席即作废重跑，见 G15 ⑤）。用法见 design §12 **R16** | 执行期实测（R10 + **R16**） |
 | G14 | **门禁命令用「累积式 + 末条即判据」，且不写显式 `exit $fail`**。两个实测陷阱：① 容器内 `set -e` 生效时**任何显式 `exit N`（含 `exit 0`）都被压成 1**（`bash -lc 'set -e; exit 7'` → 1）⇒ 退出码信息全毁；② 仓库惯用的 `cmd && echo OK` 形态**不中止脚本**（`set -e` 对 AND-OR 列表的非末项不生效），于是**早期失败被后续成功掩盖**（实测 `false && echo OK; true` → 退出码 **0**）。⚠️ 推论：**不能用「末尾命令成功」当判据** | 执行期实测（R12） |
-| G15 | **反验/变异脚本的三条硬要求**：① **判红必须有 ≥1 条 `test … FAILED`** —— `rc != 0` 太弱（**编译失败也是 101**），那不算"断言变红"；② **指纹用块注释** `/* MUTVn */`，别用 `// MUTVn`（行注释会吃掉同一行后面的语法 —— T-L11 实测把 `if … {` 的 `{` 注释掉）；③ "只改注释"守卫继续保留（R17）；④ **锚点不唯一时必须显式给出现序号** —— `nth=None`（必须唯一）与 `nth=k`（取第 k 次）**语义要分开**，别让 `nth=1` 兼表两者（T-L12 实测：注入器因此把一道合法变异**误报成注入失败**）。 | T-L11/T-L12 执行期实测（R21/R15） |
+| G15 | **反验/变异脚本的五条硬要求**：① **判红必须有 ≥1 条 `test … FAILED`** —— `rc != 0` 太弱（**编译失败也是 101**），那不算"断言变红"；② **指纹用块注释** `/* MUTVn */`，别用 `// MUTVn`（行注释会吃掉同一行后面的语法 —— T-L11 实测把 `if … {` 的 `{` 注释掉）；③ "只改注释"守卫继续保留（R17）；④ **锚点不唯一时必须显式给出现序号** —— `nth=None`（必须唯一）与 `nth=k`（取第 k 次）**语义要分开**，别让 `nth=1` 兼表两者（T-L12 实测：注入器因此把一道合法变异**误报成注入失败**）；⑤ **每道变异后的 cargo 输出必须出现 `Compiling`** —— 缺席说明跑的是旧二进制（G13 的秒级 mtime 陷阱），该道**作废重跑**（T-L13 实测：错位时每道都"判红"，失败清单却是上一道的 —— 能骗过"红就行"的判据）。 | T-L11/T-L12/**T-L13** 执行期实测（R21/R15/**R16**） |
 
 **G14 的规范形态**（`fail` 累积 + 末条即判据）：
 
@@ -1083,10 +1083,16 @@ git commit -m "feat(lex): 解释型与原始型字符串字面量"
 
 **Interfaces:**
 - Consumes: `T-L06` `SourceReader`
-- Produces:
-  - `rgoc_lex::Mode`（`Comments` / `Directives` 两个标志位）
-  - `rgoc_lex::Message { pub pos: Pos, pub kind: MessageKind, pub text: String }`，`MessageKind = Comment | Directive`
-  - `Lexer::{take_messages(&mut self) -> Vec<Message>, take_diags(&mut self) -> Vec<Diag>}`
+- Produces（**落地形态 2026-10-12 订正**，见 R24/R26）:
+  - `rgoc_lex::Mode`（**位标志**：`NONE` / `COMMENTS` / `DIRECTIVES`，带 `union`；
+    组合时 comments 优先 —— 官方两处都是 `if mode&comments != 0` 先判）
+  - `rgoc_lex::Message { pub pos: Pos, pub kind: MessageKind, pub text: Vec<u8> }`，
+    `MessageKind = Comment | Directive`。⚠️ `text` 是 **`Vec<u8>`**（简报原文写 `String`
+    **是错的**：p14 实测非法字节留在注释文本里；与 D-M1-12 同形，见 R26）
+  - `Lexer::{scan_comment(start: Pos, style: CommentStyle, nlsemi: bool) -> CommentScan,
+    set_mode, take_messages, take_diags}` 与 `PunctScan::Comment(CommentStyle)`
+    —— `start`（注释起点）与 `nlsemi` 都是「官方字段 → 显式参数」的镜像；
+    行/块的信息由 `scan_punct` 的返回值带出（它已消耗了判别所需的字符，见 R24）
 
 - [ ] **Step 1: 写失败测试（`T-L-45`、`T-L-46`、`T-L-52`、`T-L-70`，含 **RF2**）**
 
@@ -1116,10 +1122,13 @@ fn 跨行块注释在_nlsemi_为假时不产出分号() {
 }
 
 #[test]
-fn 行首之外的_line_不是指令() { }
+fn 行首之外的_line_仍是指令() { }
+// ⚠️ 订正（R25）：标题原写「不是指令」——错。官方 scanner **不做行首检查**，
+//    行中间的 `//line` 照样上报（p22/p23 实测；「行首」是 parser 层规则）。
 
 #[test]
 fn 未终止的块注释报错但不中止() { }
+// 附：未终止的**跨行**块注释 + nlsemi ⇒ 仍产 Semi（p06/p30，F45）
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1130,14 +1139,18 @@ Expected: FAIL
 - [ ] **Step 3: 实现**
 
 行注释：`//` 到行尾，**不消费 `\n`**（`\n` 要留给分号逻辑）。
-块注释：跨行时**只有在 `nlsemi` 为真**才等价于换行。
-`directives` 模式只认后随 `g`/`l` 的注释，并校验 `//line` 必须在行首（`col == 1`）。
+块注释：跨行时**只有在 `nlsemi` 为真**才等价于换行（`Semi` 的位置取**注释起点**，F41）。
+`directives` 模式：只认首字符为 `g`/`l` 的注释，再做逐字符前缀匹配 —— 行注释认 `go:`/`line `、
+块注释**只认** `line `（F44）。
+⚠️ **不做行首检查** —— 简报原文「并校验 `//line` 必须在行首（`col == 1`）」是**跨层混淆**：
+那是 parser `updateBase()` 的规则（F11），scanner 层里行中间的 `//line` 照样上报
+（p08/p22/p23 实测，见 F43 / R25）。
 **M1 只交出文本，不解析内容**（D-M1-1）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_comment`
-Expected: 8 passed
+Expected: 12 passed（简报原估 8 条；实写 12 条，期望值全部经 oracle 探针取证）
 
 - [ ] **Step 5: 提交**
 
