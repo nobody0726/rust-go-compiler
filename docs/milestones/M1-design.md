@@ -893,6 +893,36 @@ pub fn is_letter(c: char) -> bool { c == '_' || lookup(LETTER_RANGES, c) }
 
 > 不标注的后果：将来有人会以为"超限报错"也是 oracle 说的。
 
+**腿乙的 golden 集合（`T-L19` 立）**：`rgoc/tests/smoke/lex/`，清单
+`manifest.txt`（`<kind> <输入路径> <mode>` 三列，**唯一事实来源**），
+门禁脚本 `scripts/check-lex-golden.sh`。实测 **151 条**：
+
+| kind | 构成 | 条数 |
+|---|---|---|
+| corpus | `go_source_code/test/syntax/` 全部 19 个真实 Go 文件 × 3 modes | 57 |
+| fixture | `tools/token-oracle/fixtures/` 全部 91 个探针（默认 mode）+ d01/d02 的 mode 变体 | 93 |
+| hand-sparse | 超限用例（检查时现场造 >64 MiB 稀疏文件，唯一手写期望） | 1 |
+
+**五条守卫**（脚本内置；「漏了不会报错」同族坑的第四次对治）：
+
+| # | 守卫 | 防什么 |
+|---|---|---|
+| A | golden 第 2 行必须是本 kind 登记的来源标记 | 冒充来源 |
+| B | `test/syntax/` 每个 `.go` 必须以 none 登记 | 语料静默缩水 |
+| C | `fixtures/` 每个 `.txt` 必须以 none 登记 | 探针静默缩水 |
+| D | 不许有孤儿 golden（清单外文件） | 删清单行留文件 |
+| E | golden/清单路径不许被 `.gitignore` 排除 | **本地全绿、clone 缺文件** |
+
+> **E 是真踩过的**：`.gitignore` 的 `go_source_code/` 规则**无前导斜杠 ⇒ 匹配任意层级
+> 同名目录**，把镜像的 `corpus/go_source_code/…`（57 个 golden）**静默排除出 git**。
+> 修法：镜像路径去掉该前缀 + `git check-ignore` 逐条钉住。
+
+**录制侧另有格式守卫**：`--record` 时对每条**同时**跑 adapter 与 driver，归一
+（`# source:` 一行）后必须逐字节一致才落盘 —— 否则腿乙就是在比两种格式。
+首轮录制它当场抓住一个**真 bug**：`run_oracle` 漏传 `--mode`（40 条 mode 条目
+的 oracle 侧跑默认 mode、无 messages 节）⇒ 拒绝落盘，而不是录出一批永远对不上
+的 golden。
+
 ### 8.2.1 字符级 golden（腿甲的第二个判据，`T-L07` 立）
 
 词元级 golden 在**词元边界**上取样；而位置是**每个字节**推出来的，
@@ -1130,3 +1160,4 @@ tools/token-oracle/
 | 2026-10-12 | §2.3 追加 **F47–F48**（同位置双诊断的两个实例：`0x\` 的**排序输出与发生时序相反** / `"\`+换行 的同位序不变）；错误恢复 N1–N11 的行为经探路对撞确认**已由 T-L08–L15 全覆盖**（14 探针逐字节一致）——本轮交付为**双向断言固化**（15 条）+ `push_diag` 单入口（R34）；R33 记「验收任务无自然 RED，测试有效性由反验兑现」的裁定 | `T-L16` 执行期（14 个 oracle 探针先取证；15 条测试；12 道变异反向验证——第一轮因 cargo fail-fast 截断观测后修正） |
 | 2026-10-12 | §7.3 补**落地记录**（诊断与 `Eof` 报在**文件起点 1:1**；错误面两分：超限 `Ok` / io 失败 `Err`；`t63_exceeds.golden` 手写登记）；R37 记「**用常量造文件**的自测盲区」—— 引用 `MAX_FILE_BYTES` 造文件的边界测试会**随常量走**（常量被改小时它恒绿），须另设「钉绝对值」断言 | `T-L17` 执行期（7 条测试；8 道变异反向验证——含「超限 + 不可读」文件逼出检查时机） |
 | 2026-10-12 | §8.2 补**第三来源**（`# source: rgoc`：driver 重算、**不落盘**）与**头两行口径**（`# golden: <原样路径>` + `# source: rgoc`；对撞归一 `# source:` 行）；§5.2 的「`--mode` 开启时多一节」落地为 `render::golden_body_with_messages`（**此前 `== messages ==` 无处渲染**，R40 ②）；R39 记「注释宣称的守卫不存在」（`cli.rs` 的「用法可解析」断言从未落地 ⇒ 以解析样例组取代） | `T-L18` 执行期（driver 8 条 + `test_render` 5 条；11 道变异反向验证） |
+| 2026-10-12 | §8.2 补**腿乙 golden 集合**（`rgoc/tests/smoke/lex/`：151 条 = 19 语料 × 3 modes + 91 fixture + 2 mode 变体 + 1 手写）与**五条守卫 A–E**；R41 记两件实测：① **`.gitignore` 无前导斜杠规则匹配任意层级目录** ⇒ 镜像 `go_source_code/` 的 57 个 golden 被**静默排除出 git**（本地全绿、clone 缺文件），修法是去前缀 + `git check-ignore` 守卫；② **门禁自己的录制路径也会出错** —— 格式守卫当场抓住 `run_oracle` 漏传 `--mode`（首轮 40 条不一致、拒绝落盘）⇒ 「判据要反验」对**工具自身**同样成立 | `T-L19` 执行期（151 条 golden 落盘；15 道变异反向验证全红——含 mode 映射交换的真实回归） |

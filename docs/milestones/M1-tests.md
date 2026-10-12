@@ -359,8 +359,15 @@ scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test
 
 ```sh
 scripts/in-container.sh cargo run -p rgoc-driver -- lex <file>   # 产出词元流
-scripts/check-lex-golden.sh                                       # 与 golden 逐行 diff
+scripts/check-lex-golden.sh                                       # 与 golden 逐行 diff（151 条）
+scripts/check-lex-golden.sh --record                              # 用 adapter 重录 golden
 ```
+
+**实测构成（T-L19）**：**151 条** = corpus 19 文件 × 3 modes（57）+ fixture 91 + mode
+变体 2 + 手写超限 1。清单 `rgoc/tests/smoke/lex/manifest.txt` 是唯一事实来源；
+脚本内置**守卫 A–E**（来源标记 / 语料登记 / fixture 登记 / 孤儿 golden /
+`.gitignore` 静默排除）；录制侧另有**格式守卫**（adapter 与 driver 归一后逐字节
+一致才落盘）。设计细节见 `M1-design.md` §8.2。
 
 ### 7.3 四条门禁命令（**判据不变，调用形态有规范**）
 
@@ -407,7 +414,7 @@ if [ $fail -eq 0 ]; then echo "  四条门禁全过"; else echo "  有门禁未�
 | **LEX-01..13** | §2 表中全部 | **13 项** | **每项至少一条 ID**，且全部通过 |
 | **词法 golden** | `T-L-10`…`T-L-65` | ⬜ 冻结时填入 | **100%** 通过 |
 | **负例** | `T-L-50`…`T-L-54` + §4 的 N1–N12 | ⬜ 冻结时填入 | 100%，且**双向断言齐备** |
-| **`SM-M1-LEX-GOLDEN`** | 腿乙全量 diff | 语料文件数 | diff 全空 |
+| **`SM-M1-LEX-GOLDEN`** | 腿乙全量 diff | **151 条**（19 语料 × 3 modes + 91 fixture + 2 mode 变体 + 1 手写） | diff 全空，守卫 A–E 全过 |
 | **`SM-M0-NATIVE-HELLO`** | `T-S3-03`（M0 的） | 1 | **继续通过**；**不得改写** |
 | **GAP-01** | LEX 13 项的四维归属表 | 13 | 已填（**不填完 210 个**） |
 

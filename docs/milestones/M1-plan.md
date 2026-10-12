@@ -1522,10 +1522,23 @@ Expected: 失败 —— golden 尚未生成
    唯一的 `hand-written` 是超限用例。
 5. 加一条守卫：**adapter 输出与 driver 输出的格式必须逐字节一致**（否则腿乙在比两种格式）。
 
+> **2026-10-12 执行期订正**（151 条，实测）：
+> ① 清单即 `rgoc/tests/smoke/lex/manifest.txt`（`<kind> <输入路径> <mode>` 三列），
+>    corpus 19 文件**开满 3 modes**（57）+ fixture 91 + d01/d02 mode 变体 2 + 手写 1；
+> ② 归一化**只有一处**（`# source: rgoc` → 登记标记），`# golden:` 行两边传同一路径
+>    字符串 ⇒ 逐字节相同；录制时 oracle 的行 1 归一为仓库相对路径（§5.2）；
+> ③ 格式守卫在**录制侧**逐条执行（归一后 adapter ≡ driver 才落盘）—— 首轮它当场
+>    抓住 `run_oracle` 漏传 `--mode` 的真 bug（40 条不一致、拒绝落盘）；
+> ④ 另设**守卫 A–E**：来源标记 / 语料登记 / fixture 登记 / 孤儿 golden /
+>    `.gitignore` 静默排除（E 是真踩过的：`go_source_code/` 无前导斜杠规则把镜像的
+>    57 个 golden 静默排除出 git ⇒ 镜像去前缀 + `git check-ignore` 逐条钉住）；
+> ⑤ 宿主脚本经 `--inner` 自重派进容器（`bash <脚本>` 形态退出码如实传播）；
+>    超限条目检查时现场造 64 MiB+1 **稀疏文件**，手写 golden **不重录**。
+
 - [ ] **Step 4: 跑一遍确认通过**
 
 Run: `scripts/check-lex-golden.sh`
-Expected: 全部 `PASS`，exit 0
+Expected: **151/151 条一致**、守卫 A–E 全过、exit 0（录制侧 `--record`：150 落盘 / 1 跳过）
 
 - [ ] **Step 5: 提交**
 
