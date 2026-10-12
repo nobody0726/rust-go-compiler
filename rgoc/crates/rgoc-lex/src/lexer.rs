@@ -1,8 +1,7 @@
 //! 词元层：分派 + 各类词元扫描（`M1-design.md` §5.2）。
 //!
-//! 已落地：`ident`（T-L08）、`punct`（T-L09）、`number`（T-L10）。
-//! 后续加入：`rune` / `string`（T-L11 / T-L12）、注释（T-L13）、
-//! 分号状态机（T-L14）与 `next()` 分派（T-L15）。
+//! 已落地：`ident`（T-L08）、`punct`（T-L09）、`number`（T-L10）、`rune`/`escape`（T-L11）。
+//! 后续加入：`string`（T-L12）、注释（T-L13）、分号状态机（T-L14）与 `next()` 分派（T-L15）。
 //!
 //! # 这一层最容易被"顺手统一"掉的三处
 //!
@@ -373,6 +372,186 @@ impl Lexer {
             }
         }
         digsep
+    }
+
+    /// 在当前游标处扫一个 **rune 字面量**（LEX-12）。
+    ///
+    /// **入口前置条件**：游标在**开引号**上 —— 官方 `next()` 的 `case '\''` **直接**调
+    /// `rune()`（不带 `nextch`），函数自己吃掉它。所以 lit 从开引号起算。
+    ///
+    /// # 字符计数 `n` 的三条判据（官方顺序）
+    ///
+    /// - `n == 0` ⇒ `LEX-RUNE-EMPTY`（`errorf` ⇒ 报在**闭引号**）
+    /// - `n != 1` ⇒ `LEX-RUNE-MULTI`（`errorAtf(0)` ⇒ 报在**开引号**！）
+    /// - **转义算一个字符**（官方 `continue` 会走 `n++` ⇒ `'\n\n'` 是两个字符）
+    ///
+    /// 换行与 EOF 都是 `break` **不消耗**当前字符：换行留给分号层（LEX-07），
+    /// EOF 之后还有"补分号"一步。
+    pub fn scan_rune(&mut self) -> TokenKind {
+        self.ensure_started();
+        let start = self.pos();
+        self.src.start_segment();
+        let mut ok = true;
+        self.bump(); // 吃掉开引号
+
+        let mut n = 0usize;
+        loop {
+            match self.src.ch() {
+                Some('\'') => {
+                    if ok {
+                        if n == 0 {
+                            self.report(
+                                DiagCode::RuneEmpty,
+                                "空的 rune 字面量（或未转义的 '）".to_string(),
+                            );
+                            ok = false;
+                        } else if n != 1 {
+                            self.report_at(
+                                start,
+                                0,
+                                DiagCode::RuneMulti,
+                                "rune 字面量里多于一个字符".to_string(),
+                            );
+                            ok = false;
+                        }
+                    }
+                    self.bump();
+                    break;
+                }
+                Some('\\') => {
+                    self.bump();
+                    if !self.escape('\'') {
+                        ok = false;
+                    }
+                    n += 1; // 转义算**一个**字符
+                }
+                Some('\n') => {
+                    if ok {
+                        self.report(DiagCode::RuneNewline, "rune 字面量里出现换行".to_string());
+                        ok = false;
+                    }
+                    break;
+                }
+                None => {
+                    if ok {
+                        self.report_at(
+                            start,
+                            0,
+                            DiagCode::RuneUnterminated,
+                            "rune 字面量未终止".to_string(),
+                        );
+                        ok = false;
+                    }
+                    break;
+                }
+                Some(_) => {
+                    self.bump();
+                    n += 1;
+                }
+            }
+        }
+
+        let lit = self.src.segment().to_vec();
+        self.src.stop_segment();
+        TokenKind::Literal {
+            text: lit,
+            lit_kind: LitKind::Rune,
+            bad: !ok,
+        }
+    }
+
+    /// 官方 `scanner.escape(quote)` 的逐条翻译：吃掉**一个**（`\` 之后的）转义序列。
+    ///
+    /// **入口前置条件**：游标在 `\` **之后的那个字符**上（官方调用前已经 `nextch()` 掉 `\`）。
+    /// 返回 `false` = 已报错（由调用方把 `ok` 置假）；返回 `true` 也可能是**撞上 EOF** ——
+    /// 那种情况**故意不在这里报错**，由调用方报"未终止"（官方注释
+    /// 「complain in caller about EOF」）。
+    ///
+    /// # 表驱动
+    ///
+    /// | 形式 | `(n, base, max)` | 备注 |
+    /// |---|---|---|
+    /// | `quote` / `a b f n r t v` / `\\` | —— | 直接 `bump` 返回；**`quote` 是白名单的一部分** |
+    /// | `\ooo` | `(3, 8, 255)` | **不先 `bump`**：进循环时当前字符就是第一个八进制数码 |
+    /// | `\x` / `\u` / `\U` | `(2,16,255)` / `(4,16,MAX_RUNE)` / `(8,16,MAX_RUNE)` | 先 `bump` 掉 `x`/`u`/`U` |
+    ///
+    /// # 三条诊断各有各的时机
+    ///
+    /// ① `LEX-ESCAPE-UNKNOWN`：`\` 后面那个字符不在任何一类里；
+    /// ② `LEX-ESCAPE-BAD-DIGIT`：定长循环里遇到非该进制的数码（报在**那个字符**上，
+    ///    缺位时报在闭引号上）；③ `LEX-ESCAPE-OCTAL-OVER` / `LEX-ESCAPE-RANGE`：
+    /// 循环**之后**统一查 —— 八进制先查 `> 255`（它的 `max` 只有 255），再统一查
+    /// `> max || 代理区`。
+    fn escape(&mut self, quote: char) -> bool {
+        let Some(ch) = self.src.ch() else {
+            return true; // EOF：由调用方报"未终止"
+        };
+
+        if ch == quote || matches!(ch, 'a' | 'b' | 'f' | 'n' | 'r' | 't' | 'v' | '\\') {
+            self.bump();
+            return true;
+        }
+
+        let (n, base, max): (u32, u32, u32) = match ch {
+            '0'..='7' => (3, 8, 255),
+            'x' => {
+                self.bump();
+                (2, 16, 255)
+            }
+            'u' => {
+                self.bump();
+                (4, 16, MAX_RUNE)
+            }
+            'U' => {
+                self.bump();
+                (8, 16, MAX_RUNE)
+            }
+            _ => {
+                self.report(
+                    DiagCode::EscapeUnknown,
+                    "反斜杠后面是不认识的转义".to_string(),
+                );
+                return false;
+            }
+        };
+
+        let mut x: u32 = 0;
+        for _ in 0..n {
+            let Some(c) = self.src.ch() else {
+                return true; // EOF：由调用方报"未终止"
+            };
+            let lower = c.to_ascii_lowercase();
+            // 哨兵值 `base` 恰好保证 `d >= base` 成立（官方 `d := base` 的同一手法）
+            let d = if c.is_ascii_digit() {
+                c as u32 - u32::from(b'0')
+            } else if matches!(lower, 'a'..='f') {
+                lower as u32 - u32::from(b'a') + 10
+            } else {
+                base
+            };
+            if d >= base {
+                self.report(
+                    DiagCode::EscapeBadDigit,
+                    format!("{}转义里出现非法字符 {c:?}", base_name(base as u8)),
+                );
+                return false;
+            }
+            x = x * base + d;
+            self.bump();
+        }
+
+        if x > max && base == 8 {
+            self.report(DiagCode::EscapeOctalOver, format!("八进制转义值 {x} > 255"));
+            return false;
+        }
+        if x > max || (0xD800..0xE000).contains(&x) {
+            self.report(
+                DiagCode::EscapeRange,
+                format!("转义不是合法的 Unicode 码点 U+{x:04X}"),
+            );
+            return false;
+        }
+        true
     }
 
     /// 在当前游标处扫一个**运算符或标点**（LEX-04 最长匹配）。
@@ -829,6 +1008,9 @@ enum NumPrefix {
     O,
     B,
 }
+
+/// Unicode 码点上限（官方 `unicode.MaxRune`）。转义的 `max` 用得上。
+const MAX_RUNE: u32 = 0x10FFFF;
 
 /// 诊断消息里的进制名（官方 `baseName`）。消息文本不参与比对，只为人读。
 fn base_name(base: u8) -> &'static str {
