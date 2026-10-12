@@ -27,6 +27,7 @@
 //! 本函数输出**从 `== tokens ==` 开始**的正文。
 
 use crate::diag::Diag;
+use crate::message::Message;
 use crate::token::{Delim, OpForm, Operator, SemiOrigin, Token, TokenKind};
 
 /// 渲染 `== tokens ==` 与 `== diags ==` 两节。
@@ -55,6 +56,42 @@ pub fn golden_body(tokens: &[Token], diags: &[Diag]) -> String {
         ));
     }
 
+    out
+}
+
+/// 渲染**三节**：两节 + 可选的 `== messages ==`（`T-L18` 立）。
+///
+/// - `messages = None` ⇒ 与 [`golden_body`] **逐字节相同**（默认模式，无第三节）；
+/// - `messages = Some` ⇒ 追加第三节 —— 对齐 oracle 的 `scanMode != 0` 分支：
+///   **节总在**，哪怕一条消息都没有（与 oracle 的 `if scanMode != 0` 同构，
+///   不要"顺手"改成"非空才输出"）。
+///
+/// # 排序由本函数负责
+///
+/// oracle 在渲染前按 `(line, col, text)`（**字节序**）排序（`main.go` 的
+/// `sort.SliceStable`）—— 这是**格式的一部分**。调用方拿到的 `take_messages()`
+/// 是**发生顺序**，不要在外面排（两处排序 ⇒ 迟早漂移）。
+/// `sort_by` 是稳定排序：同位置同文本的相对次序保持。
+pub fn golden_body_with_messages(
+    tokens: &[Token],
+    diags: &[Diag],
+    messages: Option<&[Message]>,
+) -> String {
+    let mut out = golden_body(tokens, diags);
+    if let Some(msgs) = messages {
+        let mut sorted: Vec<&Message> = msgs.iter().collect();
+        sorted.sort_by(|a, b| {
+            (a.pos.line, a.pos.col, &a.text).cmp(&(b.pos.line, b.pos.col, &b.text))
+        });
+        out.push_str("== messages ==\n");
+        for m in sorted {
+            out.push_str(&format!(
+                "  {:<7}{}\n",
+                pos(m.pos.line, m.pos.col),
+                quote(&m.text)
+            ));
+        }
+    }
     out
 }
 

@@ -15,7 +15,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rgoc_driver::cli::{CliError, Command, HarnessCommand, parse_args};
+use rgoc_driver::cli::{CliError, Command, HarnessCommand, LexCommand, LexMode, parse_args};
+use rgoc_driver::lex_cmd;
 use rgoc_driver::report::{RunSummary, render_text, summarize, to_json};
 use rgoc_driver::samples::{CORPUS_M0_SAMPLES, LoadedSamples, SampleEntry, index_of};
 use rgoc_harness::ir::{Layer, Mode, Verdict};
@@ -570,4 +571,200 @@ fn run_summary_字段可直接被外部断言() {
     assert!(s.cases.is_empty());
     assert!(s.oracle_error.is_none());
     assert_eq!(s.by_verdict.len(), Verdict::ALL.len());
+}
+
+// ══ 5. lex 子命令（T-L18）═══════════════════════════════════════════════════
+
+/// 小临时文件（`Drop` 清理）。
+struct TempFile {
+    path: PathBuf,
+}
+
+impl TempFile {
+    fn new(tag: &str, content: &[u8]) -> Self {
+        let dir = std::env::temp_dir().join(format!("rgoc-driver-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let path = dir.join("f.go");
+        std::fs::write(&path, content).expect("写临时文件");
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        if let Some(d) = self.path.parent() {
+            let _ = std::fs::remove_dir(d);
+        }
+    }
+}
+
+/// driver 输出的**正文**（第三行起）。
+///
+/// 头两行是来源元数据：`# golden: <原样路径>` 与 `# source: …` —— oracle 写
+/// `oracle`、我们写 `rgoc`。**这是刻意唯一不同的一处**（来源必须如实标注，
+/// `M1-tests.md` §5.2）；腿乙（T-L19）diff 时归一这一行，其余逐字节相比。
+fn body_of(out: &str) -> &str {
+    out.splitn(3, '\n')
+        .nth(2)
+        .unwrap_or_else(|| panic!("输出不足三行：{out:?}"))
+}
+
+#[test]
+fn 解析_lex_子命令() {
+    for (argv, want) in [
+        (
+            vec!["lex", "a.go"],
+            LexCommand {
+                file: PathBuf::from("a.go"),
+                mode: LexMode::None,
+            },
+        ),
+        (
+            vec!["lex", "a.go", "--mode", "comments"],
+            LexCommand {
+                file: PathBuf::from("a.go"),
+                mode: LexMode::Comments,
+            },
+        ),
+        // flag 与文件参数的先后无关
+        (
+            vec!["lex", "--mode", "directives", "a.go"],
+            LexCommand {
+                file: PathBuf::from("a.go"),
+                mode: LexMode::Directives,
+            },
+        ),
+    ] {
+        assert_eq!(parse_args(&argv), Ok(Command::Lex(want)), "argv = {argv:?}");
+    }
+}
+
+#[test]
+fn lex_参数错误逐个报对() {
+    assert!(matches!(parse_args(&["lex"]), Err(CliError::LexNeedsFile)));
+    assert!(matches!(
+        parse_args(&["lex", "--mode", "foo", "a.go"]),
+        Err(CliError::BadMode(m)) if m == "foo"
+    ));
+    assert!(matches!(
+        parse_args(&["lex", "a.go", "b.go"]),
+        Err(CliError::ExtraArg(m)) if m == "b.go"
+    ));
+    assert!(matches!(
+        parse_args(&["lex", "a.go", "--mode"]),
+        Err(CliError::MissingValue("--mode"))
+    ));
+    assert!(matches!(
+        parse_args(&["lex", "a.go", "--nope"]),
+        Err(CliError::UnknownFlag(m)) if m == "--nope"
+    ));
+    // 错误信息要能指出 lex 的正确用法
+    let s = parse_args(&["lex"]).unwrap_err().to_string();
+    assert!(s.contains("lex <file>"), "错误信息应给出 lex 用法：{s}");
+}
+
+#[test]
+fn lex_输出与_oracle_同构_模式探针() {
+    // 输入与探针 fixtures/driver/d01_comments.txt 逐字节相同；期望正文取自
+    // `go run . --mode comments fixtures/driver/d01_comments.txt`（剥头两行）。
+    let f = TempFile::new("d01", b"// c\nx\n");
+    let out = lex_cmd::run_lex(f.path(), LexMode::Comments).expect("跑 lex");
+
+    // 头两行：路径**原样回显**（与 oracle 同口径）；来源**如实**标 rgoc
+    let first = out.lines().next().unwrap_or("");
+    assert_eq!(first, format!("# golden: {}", f.path().display()));
+    assert!(out.contains("# source: rgoc\n"), "来源必须如实标注：{out}");
+
+    let want = concat!(
+        "== tokens ==\n",
+        "  2:1    name     lit=\"x\"\n",
+        "  2:2    ;        lit=\"newline\"\n",
+        "  3:1    EOF      lit=-\n",
+        "== diags ==\n",
+        "== messages ==\n",
+        "  1:1    \"// c\"\n",
+    );
+    assert_eq!(body_of(&out), want);
+}
+
+#[test]
+fn lex_正文与_rgoc_lex_的经_oracle_验收的_golden_一致() {
+    // 链式证据：`n01.golden` 已被 `test_next` 证明与 oracle 输出逐字节一致；
+    // driver 输出（剥头两行）若等于它，「driver 输出与 adapter 可 diff」即成立
+    // —— 不必在 driver 测试里再起一次 go（oracle 只在容器经脚本跑）。
+    let f = TempFile::new("n01", b"x;y\nz");
+    let out = lex_cmd::run_lex(f.path(), LexMode::None).expect("跑 lex");
+    assert_eq!(
+        body_of(&out),
+        include_str!("../../rgoc-lex/tests/golden/n01.golden")
+    );
+    // 默认模式（None）**不得**出现 messages 节
+    assert!(!out.contains("== messages =="), "{out}");
+}
+
+#[test]
+fn lex_带诊断的正文与_golden_一致() {
+    // n07 = `x @ y`（BAD-CHAR）：**诊断路径**也进 driver 验收（其 golden 同样
+    // 已被 test_next 验过）—— 否则「diags 被静默丢弃」在本 crate 无人察觉。
+    let f = TempFile::new("n07", b"x @ y");
+    let out = lex_cmd::run_lex(f.path(), LexMode::None).expect("跑 lex");
+    assert_eq!(
+        body_of(&out),
+        include_str!("../../rgoc-lex/tests/golden/n07.golden")
+    );
+}
+
+#[test]
+fn lex_输出跨进程确定性() {
+    // 「确定性」的真正考验在**跨进程**：Rust 的 HashMap 随机种子每进程不同 ——
+    // 同进程跑两次相等说明不了问题。这里真的起两个进程逐字节比。
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let f = TempFile::new("det", b"// c\nx\n");
+    let run = || {
+        std::process::Command::new(bin)
+            .arg("lex")
+            .arg(f.path())
+            .args(["--mode", "comments"])
+            .output()
+            .expect("起进程")
+    };
+    let a = run();
+    let b = run();
+    assert!(a.status.success(), "lex 应成功：{a:?}");
+    assert_eq!(a.stdout, b.stdout, "两次进程的输出必须逐字节相同");
+    assert!(!a.stdout.is_empty(), "不能是空输出");
+}
+
+#[test]
+fn lex_缺文件参数_非零退出且无_stdout() {
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .arg("lex")
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(2), "CLI 解析错误统一退出码 2");
+    assert!(out.stdout.is_empty(), "解析错误时不应有 stdout");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("lex <file>"), "stderr 给出 lex 用法：{err}");
+}
+
+#[test]
+fn lex_读不到文件时非零退出且指出路径() {
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["lex", "/definitely/not/exist/t-l18.go"])
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("not/exist/t-l18.go"),
+        "stderr 指出问题的文件：{err}"
+    );
 }

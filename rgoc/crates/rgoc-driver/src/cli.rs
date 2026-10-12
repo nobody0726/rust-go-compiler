@@ -2,10 +2,9 @@
 //!
 //! # 为什么不引解析库
 //!
-//! M0 的 CLI 只有 `harness` 一个子命令、三个动作（`list` / `run` / `report`），
-//! 引 clap 要拉 4–5 个 crate 进 workspace，而 M0 阶段 workspace 是**零依赖**的
-//! （`rgoc-harness/Cargo.toml` 的 `[dependencies]` 是空的）。为了让 3 个动作引入
-//! 一棵依赖树不划算，且会让「离线可构建」这个属性破掉。
+//! M1 起 CLI 有 `harness`（`list` / `run` / `report` 三动作）与 `lex`（词法输出，
+//! `T-L18`）两个子命令 —— 仍然不值得引 clap：M0 阶段 workspace 是**零依赖**的
+//! （`rgoc-harness`），为几个动作引入一棵依赖树会破掉「离线可构建」这个属性。
 //!
 //! 若将来 CLI 长到需要子命令级 `--help`、参数补全、配置文件，再换 clap —— 那时
 //! 换掉这一整个模块即可，**解析结果是本模块的出口，不扩散到别处**。
@@ -25,6 +24,31 @@ use std::path::PathBuf;
 pub enum Command {
     /// `harness` 子命令
     Harness(HarnessCommand),
+    /// `lex` 子命令（T-L18）
+    Lex(LexCommand),
+}
+
+/// `lex` 子命令的参数。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LexCommand {
+    /// 要扫的文件（**原样保存用户给的路径** —— 输出的 `# golden:` 行要回显它）
+    pub file: PathBuf,
+    /// 注释/指令上报模式（缺省 = 一律不上报）
+    pub mode: LexMode,
+}
+
+/// `lex` 的上报模式 —— 与 oracle 的 `--mode comments|directives` 同名同值同义。
+///
+/// 有意**不直接**用 `rgoc_lex::Mode`：本模块是「无依赖的纯解析层」
+/// （见模块头「换 clap 时整个换掉」），`字符串 → 语义` 的映射在 `lex_cmd` 层做。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LexMode {
+    /// 缺省：注释与指令都不上报（只出 tokens/diags 两节）
+    None,
+    /// 全部注释（含 `//go:`）都上报
+    Comments,
+    /// 只有 `//go:` 与 `//line` 上报
+    Directives,
 }
 
 /// `harness` 的三个动作。
@@ -68,21 +92,30 @@ pub enum CliError {
     MissingValue(&'static str),
     /// 未知 flag
     UnknownFlag(String),
+    /// `lex` 没给文件参数
+    LexNeedsFile,
+    /// `--mode` 的值不认识（只接受 `comments` / `directives`）
+    BadMode(String),
+    /// `lex` 给了多于一个文件参数（M1 是单文件词法器）
+    ExtraArg(String),
 }
 
 impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // 用法说明是硬编码的常量：它必须与 `parse_args` 实际接受的形态一致，
-        // 所以测试里有一条断言在核对「错误信息里出现的用法真能被解析成功」。
+        // 用法说明是硬编码的常量：它必须与 `parse_args` 实际接受的形态一致。
+        // ⚠️ 「一致性」靠 `tests/test_driver.rs` 的解析样例组人工对齐（改 USAGE
+        // 或改 parse 时在那些样例表里同步）—— 先前注释宣称的「有一条断言在核对」
+        // 实际并不存在（T-L18 订正；见账本 R39）。
         const USAGE: &str = "用法：\n  \
              rgoc-driver harness list [--all]\n  \
              rgoc-driver harness run --all | <T-C-nn>...\n  \
-             rgoc-driver harness report [--out <路径>]";
+             rgoc-driver harness report [--out <路径>]\n  \
+             rgoc-driver lex <file> [--mode comments|directives]";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：M0 只实现了 harness 一个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness 与 lex 两个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -95,14 +128,19 @@ impl fmt::Display for CliError {
             }
             Self::MissingValue(flag) => write!(f, "{flag} 缺值。{USAGE}"),
             Self::UnknownFlag(flag) => write!(f, "未知选项 {flag:?}。{USAGE}"),
+            Self::LexNeedsFile => write!(f, "lex 需要一个文件参数。{USAGE}"),
+            Self::BadMode(m) => write!(
+                f,
+                "--mode 只接受 comments | directives（收到 {m:?}）。{USAGE}"
+            ),
+            Self::ExtraArg(a) => {
+                write!(f, "lex 只接受一个文件参数（多余的：{a:?}）。{USAGE}")
+            }
         }
     }
 }
 
 impl std::error::Error for CliError {}
-
-/// M0 支持的顶层命令（**只有这一个**）。
-const TOP_COMMANDS: [&str; 1] = ["harness"];
 
 /// `harness` 下的子命令。
 const HARNESS_SUBCOMMANDS: [&str; 3] = ["list", "run", "report"];
@@ -112,23 +150,63 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
     let Some(top) = argv.first() else {
         return Err(CliError::NoCommand);
     };
-    if !TOP_COMMANDS.contains(top) {
-        return Err(CliError::UnknownCommand((*top).to_string()));
+    let rest = &argv[1..];
+    match *top {
+        "harness" => Ok(Command::Harness(parse_harness(rest)?)),
+        "lex" => Ok(Command::Lex(parse_lex(rest)?)),
+        other => Err(CliError::UnknownCommand(other.to_string())),
     }
-    let Some(sub) = argv.get(1) else {
+}
+
+fn parse_harness(rest: &[&str]) -> Result<HarnessCommand, CliError> {
+    let Some(sub) = rest.first() else {
         return Err(CliError::MissingSubcommand);
     };
     if !HARNESS_SUBCOMMANDS.contains(sub) {
         return Err(CliError::UnknownSubcommand((*sub).to_string()));
     }
-    let rest = &argv[2..];
+    let rest = &rest[1..];
     match *sub {
-        "list" => Ok(Command::Harness(parse_list(rest)?)),
-        "run" => Ok(Command::Harness(parse_run(rest)?)),
-        "report" => Ok(Command::Harness(parse_report(rest)?)),
+        "list" => parse_list(rest),
+        "run" => parse_run(rest),
+        "report" => parse_report(rest),
         // 上面已用 HARNESS_SUBCOMMANDS 挡住，这里只是让 match 穷尽
         other => Err(CliError::UnknownSubcommand(other.to_string())),
     }
+}
+
+/// `lex <file> [--mode comments|directives]` —— flag 与文件参数的先后无关。
+fn parse_lex(rest: &[&str]) -> Result<LexCommand, CliError> {
+    let mut file: Option<PathBuf> = None;
+    let mut mode = LexMode::None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--mode" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--mode"));
+                };
+                mode = match *v {
+                    "comments" => LexMode::Comments,
+                    "directives" => LexMode::Directives,
+                    other => return Err(CliError::BadMode(other.to_string())),
+                };
+                i += 2;
+            }
+            a if a.starts_with("--") => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                if file.is_some() {
+                    return Err(CliError::ExtraArg(a.to_string()));
+                }
+                file = Some(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
+    let Some(file) = file else {
+        return Err(CliError::LexNeedsFile);
+    };
+    Ok(LexCommand { file, mode })
 }
 
 fn parse_list(rest: &[&str]) -> Result<HarnessCommand, CliError> {

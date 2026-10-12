@@ -37,6 +37,7 @@ name = "rgoc-driver"
 version = "0.0.0"
 dependencies = [
  "rgoc-harness",
+ "rgoc-lex",
  "serde_json",
 ]
 

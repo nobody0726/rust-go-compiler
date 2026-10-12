@@ -1,0 +1,3 @@
+//go:build linux
+//line a.go:1
+x
