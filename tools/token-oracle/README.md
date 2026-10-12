@@ -51,10 +51,13 @@ tools/token-oracle/
 │   │                      `rgoc/crates/rgoc-lex/tests/golden/*.golden` 由这些
 │   │                      探针 + `go_source_code/test/syntax/semi1..7.go` 生成
 │   │                      （`go run . <file> | tail -n +3`）；测试输入与探针逐字节相同
-│   └── recovery/          **错误恢复探针**（n1b/n2–n11/n8b/t54_*，T-L16 建立）
+│   ├── recovery/          **错误恢复探针**（n1b/n2–n11/n8b/t54_*，T-L16 建立）
 │                          对应 test_recovery.rs 的 15 条断言与 golden
 │                          （n1_utf8/n2_nul/…/t54_reversed/t54_same.golden）；
 │                          t54_* 是「同位置双诊断」的排序实例（F47/F48）
+│   └── driver/            **driver 对撞探针**（d01/d02，T-L18 建立）
+│                          `--mode comments|directives` 的三节输出（tokens/diags/messages），
+│                          即 test_driver.rs 与 rgoc-lex 的 test_render.rs 的内联期望来源
 └── gosyntax/
     ├── LICENSE           ┐ BSD-3-Clause 正文（随附，见 §3）
     ├── scanner.go        │

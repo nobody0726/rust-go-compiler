@@ -314,12 +314,19 @@ C <line>:<col>      U+<HEX> w=<n>   ← 读到一个字符；EOF 不进事件流
 **头两行不在 golden 里**：`# golden: <path>` / `# source: oracle` 是 oracle 侧的来源
 信息，Rust 侧输出它与否是 `T-L18`/`T-L19` 的口径（「逐字节 diff」时如何处理）。
 
-### 5.3 两种来源必须标注
+> **口径落地（`T-L18`）**：driver 的 `lex` 输出**带**头两行 ——
+> `# golden: <原样回显命令行给的路径>`（与 oracle 同口径：两边传同一个路径字符串
+> ⇒ 这一行逐字节相同）与 `# source: rgoc`（**来源必须如实标注**；oracle 写 `oracle`）。
+> 腿乙（`T-L19`）diff 时**归一 `# source:` 这一行**（或剥头两行比正文），其余逐字节相同。
+> 渲染走 `render::golden_body_with_messages` —— 仍**只有这一处**渲染实现（R30）。
+
+### 5.3 来源必须标注（golden 两种 + 对撞输出一种）
 
 | 来源 | 覆盖 | 标记 |
 |---|---|---|
 | oracle 生成 | 除 `T-L-63` 外全部 | `# source: oracle` |
 | **手写** | **仅 `T-L-63`**（官方无此行为） | `# source: hand-written` |
+| **driver 重算**（腿乙对撞时现算） | `lex` 子命令输出，**不落盘** | `# source: rgoc`（`T-L18` 定） |
 
 ---
 

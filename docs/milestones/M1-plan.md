@@ -1431,15 +1431,25 @@ git commit -m "feat(lex): 单文件 64 MiB 上限（读入前检查，登记为�
 
 - [ ] **Step 1: 写失败测试**
 
+实际落地 **driver 8 条 + `rgoc-lex` 侧 5 条**（`test_render.rs`，计划原估 3）：
+
 ```rust
-#[test]
-fn lex_子命令输出两节() { /* stdout 含 "== tokens ==" 与 "== diags ==" */ }
+// driver（test_driver.rs 组 5）：
+#[test] fn 解析_lex_子命令()                    // 解析层：flag 与文件参数先后无关
+#[test] fn lex_参数错误逐个报对()               // 缺文件 / BadMode / ExtraArg / MissingValue / UnknownFlag
+#[test] fn lex_输出与_oracle_同构_模式探针()     // d01 探针：头两行 + 三节**内联期望**（oracle 直出）
+#[test] fn lex_正文与_rgoc_lex_的经oracle验收的golden_一致()  // 链式证据：n01.golden
+#[test] fn lex_带诊断的正文与_golden_一致()      // n07.golden（diags 路径进验收）
+#[test] fn lex_输出跨进程确定性()               // ★ 起两个**进程**比（HashMap 种子每进程不同）
+#[test] fn lex_缺文件参数_非零退出且无_stdout()   // 进程级退出码 2 + stderr 含用法
+#[test] fn lex_读不到文件时非零退出且指出路径()   // 进程级 io 错误面
 
-#[test]
-fn lex_子命令的输出是确定性的() { /* 跑两次逐字节相同 */ }
-
-#[test]
-fn lex_子命令缺少文件参数时报错退出() { /* 非 0 退出码 */ }
+// rgoc-lex（test_render.rs）—— 第三节此前**无处渲染**（R40）：
+#[test] fn comments_模式渲染三节_与_oracle_一致()      // d01 的 oracle 输出内联
+#[test] fn directives_模式渲染指令文本()             // d02
+#[test] fn messages_为_none_时与两节渲染逐字节相同()  // None 分支必须恰好退化
+#[test] fn messages_节按_line_col_text_排序_由渲染器负责()  // 乱序输入 → 有序输出
+#[test] fn messages_转义走_quote_规则()              // \r 与非法字节
 ```
 
 - [ ] **Step 2: 跑测试确认失败**
@@ -1449,13 +1459,20 @@ Expected: FAIL
 
 - [ ] **Step 3: 实现**
 
-在现有手写参数解析里加 `lex` 分支（**不引 clap**，沿用既有风格）。
-输出格式**必须与 adapter 逐字节可 diff** —— 这是腿乙能工作的前提。
+1. 在现有手写参数解析里加 `lex` 分支（**不引 clap**，沿用既有风格）：
+   `Command::Lex(LexCommand { file, mode })` + `CliError::{LexNeedsFile, BadMode, ExtraArg}`。
+2. **渲染侧补一节**（R40）：`rgoc-lex::render` 新增 `golden_body_with_messages` ——
+   第三节 `== messages ==` 此前**没有任何渲染实现**（T-L13 只做了收集）；
+   `None` 分支必须与 `golden_body` **逐字节相同**；**排序由渲染器负责**
+   （`(line, col, text)` 字节序 —— 对齐 oracle）。
+3. **头两行口径（R40）**：输出 `# golden: <原样回显路径>` + `# source: rgoc` ——
+   与 oracle 唯一刻意不同就是 `# source:` 的值；腿乙 diff 时归一这一行。
+4. **不偷偷加第二个渲染**：正文一律走 `render::golden_body_with_messages`。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-driver`
-Expected: 26 passed（23 + 3）
+Expected: 31 passed（23 + 8 —— 计划原估 26/23+3；另有 `rgoc-lex` 侧 `test_render` 5 条）
 
 - [ ] **Step 5: 提交**
 
@@ -1475,6 +1492,12 @@ git commit -m "feat(driver): lex 子命令（输出与 oracle adapter 同格式�
 **Interfaces:**
 - Consumes: `T-L18` 的 `lex` 子命令；`T-L04` 的 adapter
 - Produces: 一条命令：生成/校验全部 golden
+
+> **2026-10-12 注记（R40）**：diff 的**归一化口径已定**（`T-L18` 落地）——driver
+> 输出头两行中的 `# source:` 与 oracle 不同（`rgoc` vs `oracle`，**如实标注**），
+> 校验时**归一这一行**（或剥头两行比正文）；`# golden:` 行在「两边传同一个路径
+> 字符串」时逐字节相同。`rgoc-lex` 侧 `test_render.rs` 已把 messages 节的渲染
+> 契约钉住（5 条），腿乙如覆盖 `--mode` 档可复用其期望。
 
 - [ ] **Step 1: 写「测试」—— 脚本本身就是判据**
 
