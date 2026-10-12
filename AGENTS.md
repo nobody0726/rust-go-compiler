@@ -39,7 +39,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── 02-test-inventory.md          ←   规格：如何验证
 │   ├── 03-roadmap.md                 ←   计划：按什么顺序建
 │   ├── 04-development-environment.md ←   环境：在哪建
-│   ├── contracts/                    ←   跨阶段版本化契约（**5 份已产出**：C1 留位 / C2 完整初稿 / C3–C5 spike 级）
+│   ├── contracts/                    ←   跨阶段版本化契约（**5 份已产出**：C1 完整 / C2 完整初稿 / C3–C5 spike 级）
 │   └── milestones/                   ←   阶段文档：<ID>-{design,tests,plan}.md + manifest
 │       ├── M0-design.md              ←     M0 设计（**已确认**）
 │       ├── M0-tests.md               ←     M0 测试先行清单（**已冻结** T29；§5.1 有修订 R1）
@@ -58,7 +58,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（5 个，全部是「以后还用得到」的）
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（228 条断言，退出码即结论）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（230 条断言，退出码即结论）
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   └── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
@@ -92,10 +92,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │           ├── src/report.rs        ←       分子/分母/八类分布 + JSON（分母不过滤变小）
 │           └── tests/test_driver.rs ←       23 条（含「子命令必须报错」「分母纪律」「峰值 RSS」）
 │       ├── rgoc-hir/                ←     **SPIKE-ONLY** 最小 HIR（T40，**M5 整体替换**）
-│       │   ├── src/lib.rs           ←       crate 级 `SPIKE-ONLY` 标注（D-M0-11）+ C1 留位说明
+│       │   ├── src/lib.rs           ←       crate 级 `SPIKE-ONLY` 标注（D-M0-11）+ C1 spike 级副本说明
 │       │   ├── src/hir.rs           ←       `Const`（Big/Bool/Str）+ `Stmt::Print{newline,stream,args}` + `Stream`
 │       │   ├── src/value.rs         ←       `BigInt`（base 2^32 任意精度）+ `Val`；**收敛到 i64 溢出即报错**
-│       │   └── src/diag.rs          ←       `Pos` / `Diag` / `DiagBag`（C1 只留位，**无源码位置跟踪**）
+│       │   └── src/diag.rs          ←       `Pos` / `Diag` / `DiagBag`（C1 的 M0 spike 副本；正式实现在 `rgoc-lex`，C1 已完整）
 │       └── rgoc-spikes/             ←     **SPIKE-ONLY** 三个 spike 的隔离载体（T41，可整块删）
 │           ├── src/fixtures/mod.rs   ←       共享固定 HIR（S1/S2 **必须共用** `sum_expr()` 才能交叉验证）
 │           ├── src/interp.rs         ←       S1 求值器（**判定逻辑在 lib，bin 只做 I/O**）
@@ -139,7 +139,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（路径 / 可粘贴内容 / 验证） | ✅ **全部完成**（T01–T55，2026-10-07） | ≈100 KB |
 | — | [`docs/milestones/M0-benchmarks.md`](./docs/milestones/M0-benchmarks.md) | 实测 | **凭什么是这样** —— 时间/体积/冷启动/挂载布局/可复现性/环境陷阱 + **四则调试环境案例**（§7 平台包 / §8 DWARF / §9 Server / §10 cargo 启动配置）+ §11 期望值复核 + **§12 Phase 3 可复现性** | **已产出** | ≈52 KB |
 | — | [`docs/milestones/M0-report.md`](./docs/milestones/M0-report.md) | **交接** | **给下一个接手的人** —— 三个命题各由哪个测试 ID 证明 / 门禁证据出处 / spike 留下的差距 / 未验证范围 / **接手指南** | ✅ **已产出**（T53） | ≈13 KB |
-| — | [`docs/contracts/`](./docs/contracts/) | 契约 | **五份契约** —— [C1](./docs/contracts/C1-source-map.md) 留位（位置+诊断排序）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI | ✅ **已产出**（T48–T52 / E8） | ≈35 KB |
+| — | [`docs/contracts/`](./docs/contracts/) | 契约 | **五份契约** —— [C1](./docs/contracts/C1-source-map.md) **完整**（位置+诊断排序；M1 落地 `FileId`/`FileTable`/`DiagCode`）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） | ≈35 KB |
 | — | [`docs/milestones/M1-design.md`](./docs/milestones/M1-design.md) | 设计 | **怎么建 M1** —— 决策 D-M1-1~9（五字段）/ **实测事实基线 F1–F20** / 数据模型 / 六切面测试组 / 诊断代号表 / oracle adapter | **已确认**（2026-10-11） | ≈42 KB |
 
 **阅读顺序**：01 → 02 → 03 → 04。
@@ -203,7 +203,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | **M1（词法与位置）** | **设计中**：`docs/milestones/M1-design.md` **已确认**（2026-10-11，D-M1-1~9）；`M1-tests.md` / `M1-plan.md` 待产出。⚠️ **`rgoc-lex` 尚未创建**、`crates/rgoc-lex/` 与 `tools/token-oracle/` 都还不存在 —— **本阶段的全部内容目前仍是设计约定**。开工前读 `M0-report.md` §7（三条必知）与 `M1-design.md` |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
-| 阶段目录 | `docs/contracts/` **5 份契约已产出**（C1 留位 / C2 完整初稿 / C3–C5 spike 级）；`docs/milestones/` 含 M0 四件套 + `M0-report.md` + `M0-manifest.json` |
+| 阶段目录 | `docs/contracts/` **5 份契约已产出**（C1 完整 / C2 完整初稿 / C3–C5 spike 级）；`docs/milestones/` 含 M0 四件套 + `M0-report.md` + `M0-manifest.json` |
 | 事实修正 | 02 **§0.2** 记录了 **9 处**对既有表述的修正（如 `syntax/testdata/` 实为 **31** 个文件；驱动器是 `testdir_test.go` 而非 `test/run.go`）——**以该节为准** |
 
 ---
@@ -381,7 +381,7 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T38 —— **E4 门禁通过：20/20**，5.8 s / 峰值 15 MiB；修了跨行正则的 `\n` 转义（`compare.rs`）
    ✅ T39 —— Phase 2 门禁复核与登记（`phase_plan.phase2` 标 done；新增 5d/5e 两节共 19 条断言，
    把「登记的证据」与**可重放产物**（E4 报告）对撞；7 次变异测试确认断言真能失败）
-   ✅ T40 —— `rgoc-hir`（**SPIKE-ONLY**，M5 替换）：`BigInt` 任意精度 + `Stream` 输出流 + C1 留位
+   ✅ T40 —— `rgoc-hir`（**SPIKE-ONLY**，M5 替换）：`BigInt` 任意精度 + `Stream` 输出流 + C1 留位（当时；T-L20 已升完整，正式实现在 `rgoc-lex`）
    ✅ T41 —— `rgoc-spikes` 骨架（三个 bin 各留 RED 占位，退出码 70）+ **E6「输入写死」的可执行守卫**
    ✅ T42 —— **S1 解释 spike**（`T-S1-01/02/03`）：stderr 精确 `3\n`、stdout 精确空、`1<<100` 拒绝收敛
    ✅ T43 —— **S2 SSA spike**（`T-S2-01/02/03`）：图里真有 `bin` 指令，结果与 S1 **逐字节相同**
@@ -389,7 +389,7 @@ python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
    ✅ T45 —— **E6 门禁通过**：三 spike 各 3 次，输入/结果/环境全部一致（`M0-benchmarks.md` §12）
    ✅ T46 —— **E7 门禁通过**：`SM-M0-NATIVE-HELLO` 登记进 `03` §M1 smoke 清单
    ✅ T47 —— Phase 3 门禁复核与登记（新增 §5f 共 22 条断言；**门禁键改为从 manifest 动态枚举**）
-   ✅ T48 —— C1 契约初稿（**留位**：位置表示与诊断排序已定，但**无源码位置跟踪** —— 那是 M1/M2）
+   ✅ T48 —— C1 契约初稿（当时**留位**：位置表示与诊断排序已定，**无源码位置跟踪** —— M1 后由 T-L20 升为**完整**）
    ✅ T49 —— C2 契约初稿（**完整初稿**，M0 唯一「完整」级契约，消费者是所有阶段）
    ✅ T50/T51/T52 —— C3（HIR）/ C4（SSA）/ C5（ABI）契约初稿（**spike 级**，已验证与待验证分节列开）
    ✅ T53 —— `M0-report.md` 交付报告（面向接手人：三个命题的证明者、门禁证据、差距清单、接手指南）

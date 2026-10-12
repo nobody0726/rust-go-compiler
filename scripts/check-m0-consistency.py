@@ -938,7 +938,7 @@ def main() -> int:
     check("E8 登记了五份契约 C1–C5",
           set(contracts) == {"C1", "C2", "C3", "C4", "C5"},
           f"{sorted(contracts)}")
-    LEVELS = {"C1": "留位", "C2": "完整初稿", "C3": "spike 级",
+    LEVELS = {"C1": "完整", "C2": "完整初稿", "C3": "spike 级",
               "C4": "spike 级", "C5": "spike 级"}
     for cid, want in LEVELS.items():
         c = contracts.get(cid, {})
@@ -955,16 +955,28 @@ def main() -> int:
               "级别标注缺失 ⇒ 会被误读")
         # ④ 每份都要有变更记录（决策的迁移与回归影响有记录 —— E9 第 5 条）
         check(f"{cid} 有变更记录表", "变更记录" in text, "E9 第 5 条要求")
-    # C1 的「留位」必须在**文件头前 20 行** —— 放在末尾等于没标注
-    c1_head = "\n".join((REPO_ROOT / contracts["C1"]["file"]).read_text(
-        encoding="utf-8").splitlines()[:20])
-    check("C1 的「留位」声明在文件头前 20 行内",
-          "留位" in c1_head,
-          "M0-plan T48 的验收要求：不得因文件存在就被误读为已实现位置跟踪")
-    # C2 是唯一「完整」级 —— 别的契约若自称完整会引发误解
-    others_complete = [cid for cid in ("C1", "C3", "C4", "C5")
-                       if "完整初稿" in (REPO_ROOT / contracts[cid]["file"]).read_text(encoding="utf-8")]
-    check("只有 C2 自称「完整初稿」", not others_complete, f"另有 {others_complete}")
+    # C1 的级别声明必须在**文件头前 20 行** —— 放在末尾等于没标注。
+    # （M1 起 C1 是「完整」级：位置跟踪已由 `rgoc-lex` 实现。M0 时代这里查的是
+    #   「留位」在头部 —— 那条断言锚定了**会过期的状态**，`T-L20` 按新阶段
+    #   改写判据；历史事实（M0 为何留位）留在 C1 §8 变更记录首行。）
+    # ⚠️ 匹配前必须剥掉 `**`：级别行写成 `**契约级别**：**完整**`，
+    #    不剥则字面串「契约级别：完整」永远不出现 ⇒ 断言恒红/恒真（标记欺骗）。
+    c1_text = (REPO_ROOT / contracts["C1"]["file"]).read_text(encoding="utf-8")
+    c1_head = "\n".join(c1_text.splitlines()[:20]).replace("**", "")
+    check("C1 头部前 20 行写明「契约级别：完整」",
+          "契约级别：完整" in c1_head,
+          "级别标注必须在头部；放末尾等于没标注")
+    check("C1 头部不再出现「留位」（M1 已实现位置跟踪）",
+          "留位" not in c1_head,
+          "M1 之后自称留位是过期状态；历史见 C1 §8 变更记录")
+    check("C1 记录了 FileId/FileTable 的落地位置（rgoc-lex）",
+          "FileTable" in c1_text and "rgoc-lex" in c1_text,
+          "完整级契约必须说清实现落点，否则读者无法验证")
+    # spike 级契约不得自封「契约级别：完整」（C1 已升完整、C2 是完整初稿，各就其位）
+    self_complete = [cid for cid in ("C3", "C4", "C5")
+                     if "契约级别：完整" in (REPO_ROOT / contracts[cid]["file"])
+                     .read_text(encoding="utf-8").replace("**", "")]
+    check("C3–C5 不得自封「契约级别：完整」", not self_complete, f"另有 {self_complete}")
 
     # E9：六条必须逐条登记且都有证据（E9 本身就是「六条逐条判定」）
     e9 = manifest["gate"]["E9"]

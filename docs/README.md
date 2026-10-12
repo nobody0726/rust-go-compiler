@@ -26,7 +26,7 @@
 | M0 | [`milestones/M0-benchmarks.md`](./milestones/M0-benchmarks.md) | **实测依据** —— 镜像时间/体积、冷启动、编译、`target/` 挂载布局对比、可复现性结论、环境陷阱清单、调试环境四则案例（CodeLLDB 平台包 / DWARF 变量条目 / VS Code Server / cargo 启动配置） | **已产出**（E10 证据） |
 | M0 | [`milestones/M0-manifest.json`](./milestones/M0-manifest.json) | **机器可读事实** —— `environment`（E2）+ `gate`（**E1–E10 十条**）+ `test_ids`（37 条）+ `unsupported`（U1–U14）+ `budget` + `test_contract` + `phase_plan` + `benchmarks` | ✅ **已填实**（十条门禁全部 `pass`） |
 | M0 | [`milestones/M0-report.md`](./milestones/M0-report.md) | **交接文档** —— 三个命题各由哪个测试 ID 证明、门禁证据出处、spike 留下的差距、未验证范围（U1–U14）、**接手指南** | ✅ **已产出**（T53） |
-| M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 留位 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8） |
+| M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 完整 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） |
 | M1 | [`milestones/M1-design.md`](./milestones/M1-design.md) | **怎么建 M1** —— 九个决策 D-M1-1~9（五字段）、**20 条实测事实基线**、六切面测试组、诊断代号表、oracle adapter 组成 | **已确认**（2026-10-11） |
 | M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | ⬜ **待产出** |
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | ⬜ **待产出** |
@@ -94,7 +94,7 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **5 份初稿已产出**（C1 留位 / **C2 完整初稿** / C3–C5 spike 级，T48–T52 / E8） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **5 份已产出**（C1 完整〔M1 升级〕/ **C2 完整初稿** / C3–C5 spike 级，T48–T52 / E8） |
 | `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套全部就位**：`M0-design.md`（已确认）、`M0-tests.md`（**已冻结** T29，§5.1 另有修订 R1）、`M0-plan.md`（**T01–T55 全部完成**）、`M0-benchmarks.md`（§1–§12）、`M0-report.md`（交接文档）、`M0-manifest.json`（**E1–E10 十条** + `test_ids` + `unsupported` + `budget` 已填实）<br>🟡 **M1 三件套开工中**：`M1-design.md`（**已确认** 2026-10-11；`tests` / `plan` 待产出） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：

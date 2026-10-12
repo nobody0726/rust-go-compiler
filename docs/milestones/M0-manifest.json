@@ -335,9 +335,10 @@
       "contracts": {
         "C1": {
           "file": "docs/contracts/C1-source-map.md",
-          "level": "留位",
-          "lines": 210,
-          "must_not_imply": "不得因文件存在就认为「M0 已实现源码位置跟踪」—— lexer/parser 是 M1/M2"
+          "level": "完整",
+          "lines": 264,
+          "must_not_imply": "不得因 C1 完整就认为 SourceMap 的多源位置映射与 offset↔(line,col) 随机访问换算已实现 —— §6 仍是需求级（M2/M4）",
+          "history": "M0 时代为「留位」级（T48：那时没有 lexer，本文件不构成「已实现位置跟踪」的证据）；M1 的 rgoc-lex 落地后由 T-L20 升为完整"
         },
         "C2": {
           "file": "docs/contracts/C2-test-ir.md",
