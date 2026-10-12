@@ -22,6 +22,25 @@ use crate::source::SourceReader;
 use crate::token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};
 use crate::unicode_tables::{is_digit, is_letter};
 
+use std::fs;
+use std::io;
+use std::path::Path;
+
+/// 单文件字节上限：**64 MiB**（`D-M1-4` / `M1-design.md` §7.3）。
+///
+/// 这是**本仓的实现限制**，不是 Go 的语义 —— 官方 scanner 没有任何长度上限
+/// 常量（F4），所以超限行为（`T-L-63`，判据 `H`）没有 oracle 可对，
+/// golden 是**手写**的（`# source: hand-written`，全仓唯一一条 `H`）。
+///
+/// # 为什么「只设一个」
+///
+/// 词元是文件的**连续子串** ⇒ 词元长度不可能超过文件大小 ⇒ 限住文件，
+/// 词元自动有界。这省掉了「单个词元超限后游标往哪走」那套没有标准答案的
+/// 恢复逻辑（少一个上限 = 少一套恢复逻辑 = 少一组测试）。
+///
+/// 取 64 MiB 的依据：语料最大文件 3.77 MB（F14）的 **17 倍**余量。
+pub const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// 词法器。
 ///
 /// 持有五样东西：字符层（[`SourceReader`]）、文件表、诊断包、注释上报（按 mode）、
@@ -67,6 +86,50 @@ impl Lexer {
             semi: SemicolonPolicy::new(),
             started: false,
         }
+    }
+
+    /// 从文件构造：**先 `fs::metadata` 检查大小，再读入**（`T-L17`）。
+    ///
+    /// # 检查为什么必须在读之前（§7.3）
+    ///
+    /// `fs::read` 一个 10 GB 的文件**在那一步就 OOM** ——「读完再检查」等于没检查。
+    /// `metadata` 不读内容、也不看读权限，是唯一正确的探路手段。
+    ///
+    /// # 超限时返回 `Ok`（不是 `Err`）
+    ///
+    /// 超限是**词法层的拒绝**：产出一条 `LEX-EXCEEDS-FILE-LIMIT` 诊断 +
+    /// 只含 `Eof` 的词元流（`T-L-63`，判据 `H`）—— 与「报错但继续」的全局恢复
+    /// 纪律一致（**不 panic、不静默截断**）。诊断位置取**文件起点**（1:1）：
+    /// 超限判定只看大小、不看内容，起点是唯一有意义的坐标。
+    ///
+    /// 而 io 失败（不存在 / 不可读）**如实返回 `Err`** —— 把它映射成超限诊断
+    /// 会让「文件读不到」与「文件太大」不可区分。
+    pub fn from_path(path: impl AsRef<Path>, mode: Mode) -> io::Result<Self> {
+        let path = path.as_ref();
+        let name = path.to_string_lossy();
+
+        let len = fs::metadata(path)?.len();
+        if len > MAX_FILE_BYTES {
+            // 「已耗尽」实例：空源 ⇒ 只产 Eof@1:1（收尾也不补分号：nlsemi 初始为假）。
+            let mut lx = Self::new(Vec::new(), &name);
+            lx.set_mode(mode);
+            let pos = Pos {
+                file: lx.file,
+                line: 1,
+                col: 1,
+            };
+            lx.push_diag(Diag {
+                pos,
+                code: DiagCode::ExceedsFileLimit,
+                message: format!("文件超过单文件上限：{len} 字节 > {MAX_FILE_BYTES} 字节"),
+            });
+            return Ok(lx);
+        }
+
+        // 大小在限内 ⇒ 此刻读入是安全的（最坏驻留 ≈ 64 MiB）。
+        let mut lx = Self::new(fs::read(path)?, &name);
+        lx.set_mode(mode);
+        Ok(lx)
     }
 
     /// 设置注释/指令的上报模式（D-M1-1）。默认 [`Mode::NONE`]（一律不上报）。

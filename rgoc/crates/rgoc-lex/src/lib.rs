@@ -41,7 +41,7 @@ pub mod token;
 pub mod unicode_tables;
 
 pub use diag::{Diag, DiagBag, DiagCode};
-pub use lexer::{CommentScan, CommentStyle, Lexer, PunctScan};
+pub use lexer::{CommentScan, CommentStyle, Lexer, MAX_FILE_BYTES, PunctScan};
 pub use message::{Message, MessageKind, Mode};
 pub use pos::{FileId, FileTable, Pos};
 pub use semicolon::SemicolonPolicy;
