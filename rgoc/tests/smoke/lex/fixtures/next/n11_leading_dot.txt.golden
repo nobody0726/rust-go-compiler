@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/next/n11_leading_dot.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:3    :=       lit=-
+  1:6    literal  lit=".5" kind=1 bad=false
+  1:8    ;        lit="EOF"
+  1:8    EOF      lit=-
+== diags ==

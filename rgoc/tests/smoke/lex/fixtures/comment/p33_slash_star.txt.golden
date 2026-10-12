@@ -1,0 +1,6 @@
+# golden: tools/token-oracle/fixtures/comment/p33_slash_star.txt
+# source: oracle
+== tokens ==
+  1:4    EOF      lit=-
+== diags ==
+  1:1    LEX-COMMENT-UNTERMINATED

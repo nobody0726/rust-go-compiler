@@ -1,0 +1,6 @@
+# golden: /tmp/rgoc-smoke-overlimit.go
+# source: hand-written
+== tokens ==
+  1:1    EOF      lit=-
+== diags ==
+  1:1    LEX-EXCEEDS-FILE-LIMIT

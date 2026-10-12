@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p17_eof_block.txt
+# source: oracle
+== tokens ==
+  1:6    EOF      lit=-
+== diags ==

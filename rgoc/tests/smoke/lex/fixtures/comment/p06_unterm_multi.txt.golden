@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/comment/p06_unterm_multi.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:3    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:3    LEX-COMMENT-UNTERMINATED

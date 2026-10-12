@@ -1,0 +1,7 @@
+# golden: tools/token-oracle/fixtures/comment/p13_stars.txt
+# source: oracle
+== tokens ==
+  1:11   name     lit="x"
+  1:12   ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==

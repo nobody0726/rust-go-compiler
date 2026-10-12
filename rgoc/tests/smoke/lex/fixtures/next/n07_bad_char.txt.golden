@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/next/n07_bad_char.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:5    name     lit="y"
+  1:6    ;        lit="EOF"
+  1:6    EOF      lit=-
+== diags ==
+  1:3    LEX-BAD-CHAR

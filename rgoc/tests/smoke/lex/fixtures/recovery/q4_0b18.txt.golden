@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/q4_0b18.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="0b1.8" kind=1 bad=true
+  1:6    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:4    LEX-BAD-RADIX-POINT

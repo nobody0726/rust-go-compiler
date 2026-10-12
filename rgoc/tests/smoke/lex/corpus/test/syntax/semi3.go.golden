@@ -1,0 +1,23 @@
+# golden: go_source_code/test/syntax/semi3.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="main"
+  9:10   (        lit=-
+  9:11   )        lit=-
+  9:13   {        lit=-
+  10:2   for      lit=-
+  10:6   name     lit="x"
+  10:7   ;        lit="semicolon"
+  10:9   name     lit="y"
+  10:10  ;        lit="semicolon"
+  10:12  name     lit="z"
+  10:66  ;        lit="newline"
+  11:2   {        lit=-
+  12:3   name     lit="z"
+  12:31  ;        lit="newline"
+  15:1   EOF      lit=-
+== diags ==

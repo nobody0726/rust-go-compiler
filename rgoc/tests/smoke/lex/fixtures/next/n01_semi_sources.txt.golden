@@ -1,0 +1,11 @@
+# golden: tools/token-oracle/fixtures/next/n01_semi_sources.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:2    ;        lit="semicolon"
+  1:3    name     lit="y"
+  1:4    ;        lit="newline"
+  2:1    name     lit="z"
+  2:2    ;        lit="EOF"
+  2:2    EOF      lit=-
+== diags ==

@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/n2_nul.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x\x00y"
+  1:4    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:2    LEX-INVALID-NUL

@@ -1,0 +1,41 @@
+# golden: go_source_code/test/syntax/topexpr.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    name     lit="fmt"
+  9:4    .        lit=-
+  9:5    name     lit="Printf"
+  9:11   (        lit=-
+  9:12   literal  lit="\"hello\"" kind=4 bad=false
+  9:19   )        lit=-
+  9:100  ;        lit="newline"
+  11:1   func     lit=-
+  11:6   name     lit="main"
+  11:10  (        lit=-
+  11:11  )        lit=-
+  11:13  {        lit=-
+  12:1   }        lit=-
+  12:2   ;        lit="newline"
+  14:1   name     lit="x"
+  14:2   opop     lit=- op=+ prec=4
+  14:84  ;        lit="newline"
+  16:1   func     lit=-
+  16:6   name     lit="init"
+  16:10  (        lit=-
+  16:11  )        lit=-
+  16:13  {        lit=-
+  17:1   }        lit=-
+  17:2   ;        lit="newline"
+  19:1   name     lit="x"
+  19:2   ,        lit=-
+  19:3   name     lit="y"
+  19:5   :=       lit=-
+  19:8   literal  lit="1" kind=0 bad=false
+  19:9   ,        lit=-
+  19:11  literal  lit="2" kind=0 bad=false
+  19:92  ;        lit="newline"
+  21:1   EOF      lit=-
+== diags ==
+== messages ==

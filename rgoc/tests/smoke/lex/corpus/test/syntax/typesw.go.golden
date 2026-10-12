@@ -1,0 +1,35 @@
+# golden: go_source_code/test/syntax/typesw.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="main"
+  9:10   (        lit=-
+  9:11   )        lit=-
+  9:13   {        lit=-
+  10:2   switch   lit=-
+  10:9   name     lit="main"
+  10:13  (        lit=-
+  10:14  )        lit=-
+  10:16  :=       lit=-
+  10:19  interfacelit=-
+  10:28  {        lit=-
+  10:29  }        lit=-
+  10:30  (        lit=-
+  10:31  name     lit="nil"
+  10:34  )        lit=-
+  10:35  .        lit=-
+  10:36  (        lit=-
+  10:37  type     lit=-
+  10:41  )        lit=-
+  10:43  {        lit=-
+  11:2   default  lit=-
+  11:9   :        lit=-
+  12:2   }        lit=-
+  12:3   ;        lit="newline"
+  13:1   }        lit=-
+  13:2   ;        lit="newline"
+  14:1   EOF      lit=-
+== diags ==

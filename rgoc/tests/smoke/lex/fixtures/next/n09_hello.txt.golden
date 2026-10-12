@@ -1,0 +1,20 @@
+# golden: tools/token-oracle/fixtures/next/n09_hello.txt
+# source: oracle
+== tokens ==
+  1:1    package  lit=-
+  1:9    name     lit="main"
+  1:13   ;        lit="newline"
+  3:1    func     lit=-
+  3:6    name     lit="main"
+  3:10   (        lit=-
+  3:11   )        lit=-
+  3:13   {        lit=-
+  4:2    name     lit="println"
+  4:9    (        lit=-
+  4:10   literal  lit="\"hello\"" kind=4 bad=false
+  4:17   )        lit=-
+  4:18   ;        lit="newline"
+  5:1    }        lit=-
+  5:2    ;        lit="newline"
+  6:1    EOF      lit=-
+== diags ==

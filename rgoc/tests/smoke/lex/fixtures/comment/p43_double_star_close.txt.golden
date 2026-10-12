@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p43_double_star_close.txt
+# source: oracle
+== tokens ==
+  1:7    EOF      lit=-
+== diags ==

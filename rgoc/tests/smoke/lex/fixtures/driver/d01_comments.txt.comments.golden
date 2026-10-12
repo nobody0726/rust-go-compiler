@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/driver/d01_comments.txt
+# source: oracle
+== tokens ==
+  2:1    name     lit="x"
+  2:2    ;        lit="newline"
+  3:1    EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "// c"

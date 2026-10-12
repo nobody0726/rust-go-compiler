@@ -1,0 +1,17 @@
+# golden: go_source_code/test/syntax/import.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    import   lit=-
+  9:8    (        lit=-
+  10:2   literal  lit="\"io\"" kind=4 bad=false
+  10:6   ,        lit=-
+  11:2   literal  lit="\"os\"" kind=4 bad=false
+  11:6   ;        lit="newline"
+  12:1   )        lit=-
+  12:2   ;        lit="newline"
+  15:1   EOF      lit=-
+== diags ==
+== messages ==

@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/q8_str_abc_nl.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="\"abc" kind=4 bad=true
+  1:5    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:5    LEX-STRING-NEWLINE

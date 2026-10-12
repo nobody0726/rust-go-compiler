@@ -1,0 +1,34 @@
+# golden: go_source_code/test/syntax/if.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="x"
+  9:7    (        lit=-
+  9:8    )        lit=-
+  9:10   {        lit=-
+  10:1   }        lit=-
+  10:2   ;        lit="newline"
+  12:1   func     lit=-
+  12:6   name     lit="main"
+  12:10  (        lit=-
+  12:11  )        lit=-
+  12:13  {        lit=-
+  13:2   if       lit=-
+  13:5   {        lit=-
+  14:2   }        lit=-
+  14:3   ;        lit="newline"
+  16:2   if       lit=-
+  16:5   name     lit="x"
+  16:6   (        lit=-
+  16:7   )        lit=-
+  16:8   ;        lit="semicolon"
+  16:10  {        lit=-
+  17:2   }        lit=-
+  17:3   ;        lit="newline"
+  18:1   }        lit=-
+  18:2   ;        lit="newline"
+  19:1   EOF      lit=-
+== diags ==

@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p09_dir_variants.txt
+# source: oracle
+== tokens ==
+  9:1    EOF      lit=-
+== diags ==

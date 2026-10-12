@@ -1,0 +1,184 @@
+# 腿乙 golden 清单 —— SM-M1-LEX-GOLDEN（M1-tests.md §7.2/§8；M1-design.md §8.2）
+#
+# 格式：<kind> <输入路径> <mode>      （三列；'#' 开头与空行跳过）
+#   kind:
+#     corpus      go_source_code/test/syntax/ 下的真实 Go 语料 —— U12「解除真实 Go 源码 lex」的证据
+#     fixture     tools/token-oracle/fixtures/ 下的自有探针
+#     hand-sparse 超限用例：检查时现场造 >64 MiB 稀疏文件（唯一手写期望；官方无此行为，T-L17）
+#   mode: none | comments | directives
+#
+# golden 落点（由脚本派生，勿手改）：
+#     corpus      -> corpus/<输入路径去掉 go_source_code/ 前缀>[.<mode>].golden
+#                    （必须去前缀：.gitignore 的 go_source_code/ 规则无前导斜杠，
+#                     会匹配任意层级同名目录，原样镜像会被静默排除出 git）
+#     fixture     -> fixtures/<fixtures/ 之后的路径>[.<mode>].golden
+#     hand-sparse -> hand/overlimit.golden
+#   （mode 为 none 时不加后缀）
+#
+# 文件头两行（§5.2 冻结格式）：
+#     # golden: <上表的输入路径>
+#     # source: oracle（corpus/fixture，adapter 录制）| hand-written（仅超限用例）
+#
+# 脚本内置守卫（漏登记/孤儿文件/被忽略都会让门禁变红，不许静默缩水）：
+#   A. 每个 golden 第 2 行必须是本 kind 登记的来源标记
+#   B. test/syntax/ 的每个 .go 都必须以 mode none 登记
+#   C. fixtures/ 的每个 .txt（除 char_corpus/char_golden 两个字符级数据文件）都必须以 mode none 登记
+#   D. 不许有孤儿 golden（清单里没有、目录里却存在）
+#   E. golden/清单路径不许被 .gitignore 静默排除（git check-ignore）
+
+# ── corpus：真实 Go 语料 × 3 modes ────────────────────────────────────────
+corpus go_source_code/test/syntax/chan.go none
+corpus go_source_code/test/syntax/chan.go comments
+corpus go_source_code/test/syntax/chan.go directives
+corpus go_source_code/test/syntax/chan1.go none
+corpus go_source_code/test/syntax/chan1.go comments
+corpus go_source_code/test/syntax/chan1.go directives
+corpus go_source_code/test/syntax/composite.go none
+corpus go_source_code/test/syntax/composite.go comments
+corpus go_source_code/test/syntax/composite.go directives
+corpus go_source_code/test/syntax/ddd.go none
+corpus go_source_code/test/syntax/ddd.go comments
+corpus go_source_code/test/syntax/ddd.go directives
+corpus go_source_code/test/syntax/else.go none
+corpus go_source_code/test/syntax/else.go comments
+corpus go_source_code/test/syntax/else.go directives
+corpus go_source_code/test/syntax/if.go none
+corpus go_source_code/test/syntax/if.go comments
+corpus go_source_code/test/syntax/if.go directives
+corpus go_source_code/test/syntax/import.go none
+corpus go_source_code/test/syntax/import.go comments
+corpus go_source_code/test/syntax/import.go directives
+corpus go_source_code/test/syntax/initvar.go none
+corpus go_source_code/test/syntax/initvar.go comments
+corpus go_source_code/test/syntax/initvar.go directives
+corpus go_source_code/test/syntax/semi1.go none
+corpus go_source_code/test/syntax/semi1.go comments
+corpus go_source_code/test/syntax/semi1.go directives
+corpus go_source_code/test/syntax/semi2.go none
+corpus go_source_code/test/syntax/semi2.go comments
+corpus go_source_code/test/syntax/semi2.go directives
+corpus go_source_code/test/syntax/semi3.go none
+corpus go_source_code/test/syntax/semi3.go comments
+corpus go_source_code/test/syntax/semi3.go directives
+corpus go_source_code/test/syntax/semi4.go none
+corpus go_source_code/test/syntax/semi4.go comments
+corpus go_source_code/test/syntax/semi4.go directives
+corpus go_source_code/test/syntax/semi5.go none
+corpus go_source_code/test/syntax/semi5.go comments
+corpus go_source_code/test/syntax/semi5.go directives
+corpus go_source_code/test/syntax/semi6.go none
+corpus go_source_code/test/syntax/semi6.go comments
+corpus go_source_code/test/syntax/semi6.go directives
+corpus go_source_code/test/syntax/semi7.go none
+corpus go_source_code/test/syntax/semi7.go comments
+corpus go_source_code/test/syntax/semi7.go directives
+corpus go_source_code/test/syntax/topexpr.go none
+corpus go_source_code/test/syntax/topexpr.go comments
+corpus go_source_code/test/syntax/topexpr.go directives
+corpus go_source_code/test/syntax/typesw.go none
+corpus go_source_code/test/syntax/typesw.go comments
+corpus go_source_code/test/syntax/typesw.go directives
+corpus go_source_code/test/syntax/vareq.go none
+corpus go_source_code/test/syntax/vareq.go comments
+corpus go_source_code/test/syntax/vareq.go directives
+corpus go_source_code/test/syntax/vareq1.go none
+corpus go_source_code/test/syntax/vareq1.go comments
+corpus go_source_code/test/syntax/vareq1.go directives
+
+# ── fixture：自有探针（默认 mode）────────────────────────────────────────
+fixture tools/token-oracle/fixtures/bad_utf8.txt none
+fixture tools/token-oracle/fixtures/comment/p01_line.txt none
+fixture tools/token-oracle/fixtures/comment/p02_line_eol.txt none
+fixture tools/token-oracle/fixtures/comment/p03_block_multi.txt none
+fixture tools/token-oracle/fixtures/comment/p04_block_single.txt none
+fixture tools/token-oracle/fixtures/comment/p05_unterm.txt none
+fixture tools/token-oracle/fixtures/comment/p06_unterm_multi.txt none
+fixture tools/token-oracle/fixtures/comment/p07_dir_ok.txt none
+fixture tools/token-oracle/fixtures/comment/p08_dir_mid.txt none
+fixture tools/token-oracle/fixtures/comment/p09_dir_variants.txt none
+fixture tools/token-oracle/fixtures/comment/p10_cr.txt none
+fixture tools/token-oracle/fixtures/comment/p11_rf2.txt none
+fixture tools/token-oracle/fixtures/comment/p12_incdec.txt none
+fixture tools/token-oracle/fixtures/comment/p13_stars.txt none
+fixture tools/token-oracle/fixtures/comment/p14_bad_utf8.txt none
+fixture tools/token-oracle/fixtures/comment/p15_multi.txt none
+fixture tools/token-oracle/fixtures/comment/p16_only.txt none
+fixture tools/token-oracle/fixtures/comment/p17_eof_block.txt none
+fixture tools/token-oracle/fixtures/comment/p18_paren.txt none
+fixture tools/token-oracle/fixtures/comment/p19_block_mid.txt none
+fixture tools/token-oracle/fixtures/comment/p20_dir_eof.txt none
+fixture tools/token-oracle/fixtures/comment/p21_block_line_bad.txt none
+fixture tools/token-oracle/fixtures/comment/p22_line_mid_nospace.txt none
+fixture tools/token-oracle/fixtures/comment/p23_block_mid_nospace.txt none
+fixture tools/token-oracle/fixtures/comment/p24_block_multi_nospace.txt none
+fixture tools/token-oracle/fixtures/comment/p25_line_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p26_block_single_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p27_line_empty.txt none
+fixture tools/token-oracle/fixtures/comment/p28_block_multi_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p29_unterm_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p30_unterm_multi_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p31_stars_plain.txt none
+fixture tools/token-oracle/fixtures/comment/p32_empty_block.txt none
+fixture tools/token-oracle/fixtures/comment/p33_slash_star.txt none
+fixture tools/token-oracle/fixtures/comment/p35_dir_line_bare.txt none
+fixture tools/token-oracle/fixtures/comment/p36_dir_line_foo.txt none
+fixture tools/token-oracle/fixtures/comment/p37_dir_linea.txt none
+fixture tools/token-oracle/fixtures/comment/p38_dir_gofx.txt none
+fixture tools/token-oracle/fixtures/comment/p39_dir_go_foo.txt none
+fixture tools/token-oracle/fixtures/comment/p40_dir_go_space.txt none
+fixture tools/token-oracle/fixtures/comment/p41_dir_block_line.txt none
+fixture tools/token-oracle/fixtures/comment/p42_dir_block_space.txt none
+fixture tools/token-oracle/fixtures/comment/p43_double_star_close.txt none
+fixture tools/token-oracle/fixtures/comment/p44_line_cr_eof.txt none
+fixture tools/token-oracle/fixtures/comment/p45_block_go.txt none
+fixture tools/token-oracle/fixtures/driver/d01_comments.txt none
+fixture tools/token-oracle/fixtures/driver/d01_comments.txt comments
+fixture tools/token-oracle/fixtures/driver/d02_directives.txt none
+fixture tools/token-oracle/fixtures/driver/d02_directives.txt directives
+fixture tools/token-oracle/fixtures/hello.txt none
+fixture tools/token-oracle/fixtures/next/n01_semi_sources.txt none
+fixture tools/token-oracle/fixtures/next/n02_rparen.txt none
+fixture tools/token-oracle/fixtures/next/n03_lparen.txt none
+fixture tools/token-oracle/fixtures/next/n04_eof_semi.txt none
+fixture tools/token-oracle/fixtures/next/n05_mid_eof.txt none
+fixture tools/token-oracle/fixtures/next/n06_multi_newline.txt none
+fixture tools/token-oracle/fixtures/next/n07_bad_char.txt none
+fixture tools/token-oracle/fixtures/next/n08_comment_e2e.txt none
+fixture tools/token-oracle/fixtures/next/n09_hello.txt none
+fixture tools/token-oracle/fixtures/next/n10_block_multiline.txt none
+fixture tools/token-oracle/fixtures/next/n11_leading_dot.txt none
+fixture tools/token-oracle/fixtures/next/n12_incdec.txt none
+fixture tools/token-oracle/fixtures/next/n13_star.txt none
+fixture tools/token-oracle/fixtures/next/n14_cr.txt none
+fixture tools/token-oracle/fixtures/next/n15_bad_utf8_ident.txt none
+fixture tools/token-oracle/fixtures/next/n16_rune_raw.txt none
+fixture tools/token-oracle/fixtures/next/n17_dot.txt none
+fixture tools/token-oracle/fixtures/recovery/n10_bad_exp.txt none
+fixture tools/token-oracle/fixtures/recovery/n11_escape_unknown.txt none
+fixture tools/token-oracle/fixtures/recovery/n1a_two_lines.txt none
+fixture tools/token-oracle/fixtures/recovery/n1b_four_lines.txt none
+fixture tools/token-oracle/fixtures/recovery/n2_nul.txt none
+fixture tools/token-oracle/fixtures/recovery/n3_bom.txt none
+fixture tools/token-oracle/fixtures/recovery/n4_pua.txt none
+fixture tools/token-oracle/fixtures/recovery/n5_lit_no_digits.txt none
+fixture tools/token-oracle/fixtures/recovery/n6_bad_sep.txt none
+fixture tools/token-oracle/fixtures/recovery/n7_rune_multi.txt none
+fixture tools/token-oracle/fixtures/recovery/n8_str_unterm.txt none
+fixture tools/token-oracle/fixtures/recovery/n8b_rune_unterm.txt none
+fixture tools/token-oracle/fixtures/recovery/n9_comment_unterm.txt none
+fixture tools/token-oracle/fixtures/recovery/q1_0x_ff.txt none
+fixture tools/token-oracle/fixtures/recovery/q2_0b_ff.txt none
+fixture tools/token-oracle/fixtures/recovery/q3_0x1p8_ff.txt none
+fixture tools/token-oracle/fixtures/recovery/q4_0b18.txt none
+fixture tools/token-oracle/fixtures/recovery/q5_0o85.txt none
+fixture tools/token-oracle/fixtures/recovery/q6_1e_ff.txt none
+fixture tools/token-oracle/fixtures/recovery/q7_0x_iso.txt none
+fixture tools/token-oracle/fixtures/recovery/q8_str_abc_nl.txt none
+fixture tools/token-oracle/fixtures/recovery/q9_num_1_ff.txt none
+fixture tools/token-oracle/fixtures/recovery/r1_str_escape_newline.txt none
+fixture tools/token-oracle/fixtures/recovery/r2_rune_escape_newline.txt none
+fixture tools/token-oracle/fixtures/recovery/t54_reversed.txt none
+fixture tools/token-oracle/fixtures/recovery/t54_same.txt none
+
+# ── hand-sparse：唯一手写期望（超限）────────────────────────────────────
+hand-sparse /tmp/rgoc-smoke-overlimit.go none

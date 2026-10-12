@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p27_line_empty.txt
+# source: oracle
+== tokens ==
+  2:1    EOF      lit=-
+== diags ==

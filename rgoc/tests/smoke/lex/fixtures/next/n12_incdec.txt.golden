@@ -1,0 +1,11 @@
+# golden: tools/token-oracle/fixtures/next/n12_incdec.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="i"
+  1:2    opop     lit=- op=+ prec=4
+  1:4    ;        lit="newline"
+  2:1    name     lit="j"
+  2:2    opop     lit=- op=- prec=4
+  2:4    ;        lit="EOF"
+  2:4    EOF      lit=-
+== diags ==

@@ -1,0 +1,6 @@
+# golden: tools/token-oracle/fixtures/comment/p30_unterm_multi_plain.txt
+# source: oracle
+== tokens ==
+  2:1    EOF      lit=-
+== diags ==
+  1:1    LEX-COMMENT-UNTERMINATED

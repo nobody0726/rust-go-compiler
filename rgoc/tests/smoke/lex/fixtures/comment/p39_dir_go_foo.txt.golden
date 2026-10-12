@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p39_dir_go_foo.txt
+# source: oracle
+== tokens ==
+  2:1    EOF      lit=-
+== diags ==

@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/recovery/q3_0x1p8_ff.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="0x1.8\xff" kind=1 bad=true
+  1:7    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:6    LEX-INVALID-UTF8
+  1:7    LEX-BAD-EXPONENT

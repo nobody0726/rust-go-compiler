@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/next/n06_multi_newline.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:2    ;        lit="newline"
+  4:1    name     lit="y"
+  4:2    ;        lit="newline"
+  5:1    EOF      lit=-
+== diags ==

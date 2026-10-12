@@ -1,0 +1,5 @@
+# golden: tools/token-oracle/fixtures/comment/p45_block_go.txt
+# source: oracle
+== tokens ==
+  2:1    EOF      lit=-
+== diags ==

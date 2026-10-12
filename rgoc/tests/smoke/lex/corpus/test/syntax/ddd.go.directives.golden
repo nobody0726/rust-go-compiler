@@ -1,0 +1,23 @@
+# golden: go_source_code/test/syntax/ddd.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="f"
+  9:7    (        lit=-
+  9:8    )        lit=-
+  9:10   {        lit=-
+  10:2   name     lit="g"
+  10:3   (        lit=-
+  10:4   name     lit="f"
+  10:5   .        lit=-
+  10:6   literal  lit=".3" kind=1 bad=false
+  10:8   )        lit=-
+  10:64  ;        lit="newline"
+  11:1   }        lit=-
+  11:2   ;        lit="newline"
+  12:1   EOF      lit=-
+== diags ==
+== messages ==

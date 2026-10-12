@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/n8_str_unterm.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="\"abc" kind=4 bad=true
+  1:5    ;        lit="EOF"
+  1:5    EOF      lit=-
+== diags ==
+  1:1    LEX-STRING-UNTERMINATED

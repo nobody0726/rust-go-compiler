@@ -1,0 +1,10 @@
+# golden: tools/token-oracle/fixtures/comment/p11_rf2.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="f"
+  1:2    (        lit=-
+  2:5    name     lit="x"
+  2:6    )        lit=-
+  2:7    ;        lit="newline"
+  3:1    EOF      lit=-
+== diags ==

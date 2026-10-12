@@ -1,0 +1,19 @@
+# golden: tools/token-oracle/fixtures/recovery/n1a_two_lines.txt
+# source: oracle
+== tokens ==
+  1:1    package  lit=-
+  1:9    name     lit="main"
+  1:13   ;        lit="newline"
+  2:1    func     lit=-
+  2:6    name     lit="f"
+  2:7    (        lit=-
+  2:8    )        lit=-
+  2:10   {        lit=-
+  2:12   name     lit="x"
+  2:14   :=       lit=-
+  2:17   literal  lit="1\xff2" kind=0 bad=false
+  2:21   }        lit=-
+  2:22   ;        lit="newline"
+  3:1    EOF      lit=-
+== diags ==
+  2:18   LEX-INVALID-UTF8

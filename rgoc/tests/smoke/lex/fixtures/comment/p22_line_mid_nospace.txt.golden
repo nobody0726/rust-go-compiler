@@ -1,0 +1,7 @@
+# golden: tools/token-oracle/fixtures/comment/p22_line_mid_nospace.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:15   ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==

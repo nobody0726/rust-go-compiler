@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/next/n08_comment_e2e.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:6    ;        lit="newline"
+  2:1    name     lit="y"
+  2:2    ;        lit="EOF"
+  2:2    EOF      lit=-
+== diags ==

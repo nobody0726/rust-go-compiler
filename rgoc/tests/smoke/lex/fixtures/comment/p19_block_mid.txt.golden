@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/comment/p19_block_mid.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:20   name     lit="y"
+  1:21   ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==

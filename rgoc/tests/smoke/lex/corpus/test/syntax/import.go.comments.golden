@@ -1,0 +1,22 @@
+# golden: go_source_code/test/syntax/import.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    import   lit=-
+  9:8    (        lit=-
+  10:2   literal  lit="\"io\"" kind=4 bad=false
+  10:6   ,        lit=-
+  11:2   literal  lit="\"os\"" kind=4 bad=false
+  11:6   ;        lit="newline"
+  12:1   )        lit=-
+  12:2   ;        lit="newline"
+  15:1   EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "// errorcheck"
+  3:1    "// Copyright 2010 The Go Authors. All rights reserved."
+  4:1    "// Use of this source code is governed by a BSD-style"
+  5:1    "// license that can be found in the LICENSE file."
+  10:8   "// ERROR \"unexpected comma\""

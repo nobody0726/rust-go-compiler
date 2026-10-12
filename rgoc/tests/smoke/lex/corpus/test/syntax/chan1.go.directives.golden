@@ -1,0 +1,39 @@
+# golden: go_source_code/test/syntax/chan1.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    var      lit=-
+  9:5    name     lit="c"
+  9:7    chan     lit=-
+  9:12   name     lit="int"
+  9:15   ;        lit="newline"
+  10:1   var      lit=-
+  10:5   name     lit="v"
+  10:7   name     lit="int"
+  10:10  ;        lit="newline"
+  12:1   func     lit=-
+  12:6   name     lit="main"
+  12:10  (        lit=-
+  12:11  )        lit=-
+  12:13  {        lit=-
+  13:2   if       lit=-
+  13:5   name     lit="c"
+  13:7   <-       lit=-
+  13:10  name     lit="v"
+  13:12  {        lit=-
+  14:2   }        lit=-
+  14:3   ;        lit="newline"
+  15:1   }        lit=-
+  15:2   ;        lit="newline"
+  17:1   var      lit=-
+  17:5   name     lit="_"
+  17:7   =        lit=-
+  17:9   name     lit="c"
+  17:11  <-       lit=-
+  17:14  name     lit="v"
+  17:69  ;        lit="newline"
+  18:1   EOF      lit=-
+== diags ==
+== messages ==

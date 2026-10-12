@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/next/n17_dot.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:2    .        lit=-
+  1:3    name     lit="y"
+  1:4    ;        lit="EOF"
+  1:4    EOF      lit=-
+== diags ==

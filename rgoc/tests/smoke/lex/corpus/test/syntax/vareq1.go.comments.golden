@@ -1,0 +1,27 @@
+# golden: go_source_code/test/syntax/vareq1.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    var      lit=-
+  9:5    name     lit="x"
+  9:7    map      lit=-
+  9:10   [        lit=-
+  9:11   name     lit="string"
+  9:17   ]        lit=-
+  9:18   name     lit="string"
+  9:24   {        lit=-
+  9:25   literal  lit="\"a\"" kind=4 bad=false
+  9:28   :        lit=-
+  9:29   literal  lit="\"b\"" kind=4 bad=false
+  9:32   }        lit=-
+  9:171  ;        lit="newline"
+  11:1   EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "// errorcheck"
+  3:1    "// Copyright 2010 The Go Authors. All rights reserved."
+  4:1    "// Use of this source code is governed by a BSD-style"
+  5:1    "// license that can be found in the LICENSE file."
+  9:35   "// ERROR \"unexpected { at end of statement|unexpected { after top level declaration|expected ';' or newline after top level declaration\""

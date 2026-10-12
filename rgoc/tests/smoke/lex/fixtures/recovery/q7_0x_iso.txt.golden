@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/recovery/q7_0x_iso.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="0x\xff" kind=0 bad=true
+  1:4    ;        lit="EOF"
+  1:4    EOF      lit=-
+== diags ==
+  1:3    LEX-INVALID-UTF8
+  1:4    LEX-LIT-NO-DIGITS

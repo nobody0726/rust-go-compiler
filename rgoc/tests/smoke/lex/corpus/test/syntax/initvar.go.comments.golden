@@ -1,0 +1,58 @@
+# golden: go_source_code/test/syntax/initvar.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    func     lit=-
+  9:6    name     lit="main"
+  9:10   (        lit=-
+  9:11   )        lit=-
+  9:13   {        lit=-
+  10:2   if       lit=-
+  10:5   var      lit=-
+  10:9   name     lit="x"
+  10:11  =        lit=-
+  10:13  literal  lit="0" kind=0 bad=false
+  10:14  ;        lit="semicolon"
+  10:16  name     lit="x"
+  10:18  op       lit=- op=< prec=3
+  10:20  literal  lit="10" kind=0 bad=false
+  10:23  {        lit=-
+  10:24  }        lit=-
+  10:85  ;        lit="newline"
+  12:2   switch   lit=-
+  12:9   var      lit=-
+  12:13  name     lit="x"
+  12:15  =        lit=-
+  12:17  literal  lit="0" kind=0 bad=false
+  12:18  ;        lit="semicolon"
+  12:20  name     lit="x"
+  12:22  {        lit=-
+  12:23  }        lit=-
+  12:89  ;        lit="newline"
+  14:2   for      lit=-
+  14:6   var      lit=-
+  14:10  name     lit="x"
+  14:12  =        lit=-
+  14:14  literal  lit="0" kind=0 bad=false
+  14:15  ;        lit="semicolon"
+  14:17  name     lit="x"
+  14:19  op       lit=- op=< prec=3
+  14:21  literal  lit="10" kind=0 bad=false
+  14:23  ;        lit="semicolon"
+  14:25  {        lit=-
+  14:26  }        lit=-
+  14:86  ;        lit="newline"
+  15:1   }        lit=-
+  15:2   ;        lit="newline"
+  16:1   EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "// errorcheck"
+  3:1    "// Copyright 2010 The Go Authors. All rights reserved."
+  4:1    "// Use of this source code is governed by a BSD-style"
+  5:1    "// license that can be found in the LICENSE file."
+  10:29  "// ERROR \"var declaration not allowed in if initializer\""
+  12:29  "// ERROR \"var declaration not allowed in switch initializer\""
+  14:29  "// ERROR \"var declaration not allowed in for initializer\""

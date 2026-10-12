@@ -1,0 +1,6 @@
+# golden: tools/token-oracle/fixtures/comment/p14_bad_utf8.txt
+# source: oracle
+== tokens ==
+  2:1    EOF      lit=-
+== diags ==
+  1:5    LEX-INVALID-UTF8

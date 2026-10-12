@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/n7_rune_multi.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="'ab'" kind=3 bad=true
+  1:5    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:1    LEX-RUNE-MULTI

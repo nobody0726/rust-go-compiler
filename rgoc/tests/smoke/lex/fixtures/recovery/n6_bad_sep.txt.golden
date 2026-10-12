@@ -1,0 +1,8 @@
+# golden: tools/token-oracle/fixtures/recovery/n6_bad_sep.txt
+# source: oracle
+== tokens ==
+  1:1    literal  lit="1__2" kind=0 bad=true
+  1:5    ;        lit="newline"
+  2:1    EOF      lit=-
+== diags ==
+  1:3    LEX-BAD-SEP

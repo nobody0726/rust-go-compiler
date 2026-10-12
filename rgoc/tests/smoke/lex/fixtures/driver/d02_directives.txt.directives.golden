@@ -1,0 +1,10 @@
+# golden: tools/token-oracle/fixtures/driver/d02_directives.txt
+# source: oracle
+== tokens ==
+  3:1    name     lit="x"
+  3:2    ;        lit="newline"
+  4:1    EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "//go:build linux"
+  2:1    "//line a.go:1"

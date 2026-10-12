@@ -1,0 +1,25 @@
+# golden: go_source_code/test/syntax/composite.go
+# source: oracle
+== tokens ==
+  7:1    package  lit=-
+  7:9    name     lit="main"
+  7:13   ;        lit="newline"
+  9:1    var      lit=-
+  9:5    name     lit="a"
+  9:7    =        lit=-
+  9:9    [        lit=-
+  9:10   ]        lit=-
+  9:11   name     lit="int"
+  9:14   {        lit=-
+  10:2   literal  lit="3" kind=0 bad=false
+  10:98  ;        lit="newline"
+  11:1   }        lit=-
+  11:2   ;        lit="newline"
+  12:1   EOF      lit=-
+== diags ==
+== messages ==
+  1:1    "// errorcheck"
+  3:1    "// Copyright 2012 The Go Authors. All rights reserved."
+  4:1    "// Use of this source code is governed by a BSD-style"
+  5:1    "// license that can be found in the LICENSE file."
+  10:4   "// ERROR \"need trailing comma before newline in composite literal|possibly missing comma or }\""

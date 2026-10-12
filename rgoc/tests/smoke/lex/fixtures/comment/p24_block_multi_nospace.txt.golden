@@ -1,0 +1,9 @@
+# golden: tools/token-oracle/fixtures/comment/p24_block_multi_nospace.txt
+# source: oracle
+== tokens ==
+  1:1    name     lit="x"
+  1:2    ;        lit="newline"
+  2:6    name     lit="y"
+  2:7    ;        lit="newline"
+  3:1    EOF      lit=-
+== diags ==
