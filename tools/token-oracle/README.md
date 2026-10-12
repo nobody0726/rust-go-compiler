@@ -47,10 +47,14 @@ tools/token-oracle/
 │   ├── comment/           **注释行为探针**（p01–p45，T-L13 建立）
 │   │                      文件名即场景与出处；`rgoc-lex` 的 test_comment.rs
 │   │                      逐条断言都直引探针名。改这里 = 改测试的期望值依据
-│   └── next/              **端到端探针**（n01–n17，T-L15 建立）
-│                          `rgoc/crates/rgoc-lex/tests/golden/*.golden` 由这些
-│                          探针 + `go_source_code/test/syntax/semi1..7.go` 生成
-│                          （`go run . <file> | tail -n +3`）；测试输入与探针逐字节相同
+│   ├── next/              **端到端探针**（n01–n17，T-L15 建立）
+│   │                      `rgoc/crates/rgoc-lex/tests/golden/*.golden` 由这些
+│   │                      探针 + `go_source_code/test/syntax/semi1..7.go` 生成
+│   │                      （`go run . <file> | tail -n +3`）；测试输入与探针逐字节相同
+│   └── recovery/          **错误恢复探针**（n1b/n2–n11/n8b/t54_*，T-L16 建立）
+│                          对应 test_recovery.rs 的 15 条断言与 golden
+│                          （n1_utf8/n2_nul/…/t54_reversed/t54_same.golden）；
+│                          t54_* 是「同位置双诊断」的排序实例（F47/F48）
 └── gosyntax/
     ├── LICENSE           ┐ BSD-3-Clause 正文（随附，见 §3）
     ├── scanner.go        │

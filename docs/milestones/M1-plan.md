@@ -1299,30 +1299,51 @@ git commit -m "feat(lex): Lexer::next 分派骨架与分号插入（含 EOF 补�
 
 - [ ] **Step 1: 写失败测试**
 
-`M1-tests.md` §4 的 **N1–N11** 逐个，**每条都断言两件事**：
+`M1-tests.md` §4 的 **N1–N11** 逐个，**每条都断言两件事**（实现期口径）：
 
 ```rust
 #[test]
 fn n1_非法_utf8_诊断与后续词元() {
-    let r = lex(b"package main\nfunc f() { x := 1\xff2 }\n");
-    assert_diag(&r, 4, 8, DiagCode::InvalidUtf8);      // ① 诊断
-    assert_tokens_eq_golden(&r, "n1.tokens");           // ② 后续词元与 oracle 相等
+    // N1 的完整输入是【四行版】（@4:8 出自它；两行版给 @2:18）—— 探针 n1b_four_lines.txt
+    let src = b"package main\n\nfunc f() {\n\tx := 1\xff2\n}\n";
+    let (toks, diags) = lex_all(src);
+    assert_eq!(codes(&diags), [DiagCode::InvalidUtf8]); // ① 诊断（位置 + 代号）
+    assert_eq!(locs(&diags), [(4, 8)]);
+    assert_golden!(src, "n1_utf8");                     // ② 后续词元与 oracle 逐字节相等
+    // ③ 反常点直白钉住：lit 含非法字节但 bad 仍 false（F31）
+    assert_eq!(literal_at(&toks, 4, 7), (&b"1\xff2"[..], LitKind::Int, false));
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+装置（`lex_all` / `golden` / `assert_golden!`）与 `test_next.rs` 相同；14 个 golden
+（`tests/golden/n*.golden` / `t54_*.golden`）由 `tools/token-oracle` 直出，探针在
+`fixtures/recovery/`。
+
+- [ ] **Step 2: 跑测试——实际【零红】（诚实记录）**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
-Expected: FAIL
 
-- [ ] **Step 3: 实现**
+实际: **15 passed**。先经探路对撞（临时 example + oracle 全量 diff）：14 个探针
+**全部逐字节一致**——「报错但继续」的路径已被 `T-L08`–`T-L15` 逐任务实现，
+本任务**没有可先红的新行为**，它是**验收任务**：交付 = ① 双向断言固化；
+② `push_diag` 单入口（Step 3）。**测试有效性由反验 12 道变异兑现**（见 R33 裁定：
+不为凑 RED 而写不存在的行为）。
 
-补齐各处的"报错但继续"路径。**诊断入口只有一个**（`push_diag`），保证不会漏进 `DiagBag`。
+- [ ] **Step 3: 实现（落地口径）**
+
+① **行为侧零改动**（对撞已一致）；② `push_diag` 单入口重构：lexer 侧 4 处直写
+（`bump` / `rewind_to_segment_start` / `report` / `report_at`）收敛为 1 处。
+**范围裁定（R34）**：`source.rs` 的 3 处写入是**局部 `Vec<Diag>`**（经 `advance`/`rewind`
+返回值全量收编 ⇒ 结构上必过 `push_diag`），不在重构范围；`rewind` 的收编是
+**防御性路径**（段首必是 `.`，正常输入下无诊断可收——反验无法为其造自然红的变异，
+记录在案）。
+③ 反验跑 `cargo test` 必须加 **`--no-fail-fast`**：cargo 默认一个 target 失败后
+**不再运行后续 target** ⇒ 期望的失败者会被**观测截断**（第一轮 11/12 未达标即此因）。
 
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
-Expected: 11 passed
+Expected: 15 passed（实际 15 —— 计划原估 11；多出的是 N8b 与 T-L-54 的三条）
 
 - [ ] **Step 5: 提交**
 
