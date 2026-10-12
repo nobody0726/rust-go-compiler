@@ -13,7 +13,9 @@
 //! 才发现**的：`..` 后面紧跟换行时，官方会把**行号多加一次**（见
 //! `两点后紧跟换行_官方会多加一次行号`）。
 
-use rgoc_lex::{Delim, FileId, Lexer, OpForm, Operator, Pos, PunctScan, SemiOrigin, TokenKind};
+use rgoc_lex::{
+    CommentStyle, Delim, FileId, Lexer, OpForm, Operator, Pos, PunctScan, SemiOrigin, TokenKind,
+};
 
 fn p(line: u32, col: u32) -> Pos {
     Pos {
@@ -347,13 +349,20 @@ fn 斜杠分出除法_复合赋值_注释三条路() {
     assert_eq!(tok(b"/="), assign(Operator::Div));
 
     // `//` 与 `/*` ⇒ 注释：官方把**两个字符都吃掉**再调 lineComment/fullComment，
-    // 所以交接后游标在注释体的第一个字符上。（注释本体由 T-L13 处理）
+    // 所以交接后游标在注释体的第一个字符上；行/块的信息由返回值带出
+    // （`scan_punct` 已消耗掉判别所需的字符）。注释本体由 T-L13 的 `scan_comment` 处理。
     let mut lx = Lexer::new(b"//x".to_vec(), "t.go");
-    assert_eq!(lx.scan_punct(), Some(PunctScan::Comment));
+    assert_eq!(
+        lx.scan_punct(),
+        Some(PunctScan::Comment(CommentStyle::Line))
+    );
     assert_eq!(lx.peek(), Some('x'), "`//` 两个字符都已被消耗");
 
     let mut lx = Lexer::new(b"/*x*/".to_vec(), "t.go");
-    assert_eq!(lx.scan_punct(), Some(PunctScan::Comment));
+    assert_eq!(
+        lx.scan_punct(),
+        Some(PunctScan::Comment(CommentStyle::Block))
+    );
     assert_eq!(lx.peek(), Some('x'), "`/*` 两个字符都已被消耗");
 }
 

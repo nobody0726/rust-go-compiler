@@ -1,7 +1,8 @@
 //! 词元层：分派 + 各类词元扫描（`M1-design.md` §5.2）。
 //!
-//! 已落地：`ident`（T-L08）、`punct`（T-L09）、`number`（T-L10）、`rune`/`escape`（T-L11）。
-//! 后续加入：`string`（T-L12）、注释（T-L13）、分号状态机（T-L14）与 `next()` 分派（T-L15）。
+//! 已落地：`ident`（T-L08）、`punct`（T-L09）、`number`（T-L10）、`rune`/`escape`（T-L11）、
+//! `string`（T-L12）、注释与两种 mode 的上报通道（T-L13）。
+//! 后续加入：分号状态机（T-L14）与 `next()` 分派（T-L15）。
 //!
 //! # 这一层最容易被"顺手统一"掉的三处
 //!
@@ -14,6 +15,7 @@
 //!    不是"切成两个词元"（F29）。
 
 use crate::diag::{Diag, DiagBag, DiagCode};
+use crate::message::{Message, MessageKind, Mode};
 use crate::pos::{FileId, FileTable, Pos};
 use crate::source::SourceReader;
 use crate::token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, TokenKind};
@@ -21,7 +23,7 @@ use crate::unicode_tables::{is_digit, is_letter};
 
 /// 词法器。
 ///
-/// 持有三样东西：字符层（[`SourceReader`]）、文件表、诊断包。
+/// 持有四样东西：字符层（[`SourceReader`]）、文件表、诊断包、注释上报（按 mode）。
 /// **不持有**分号状态（那是 `T-L14` 的 `SemicolonPolicy`）。
 #[derive(Debug)]
 pub struct Lexer {
@@ -31,6 +33,13 @@ pub struct Lexer {
     table: FileTable,
     file: FileId,
     diags: DiagBag,
+    /// 注释/指令的上报模式（默认 [`Mode::NONE`]）。官方在 `init()` 时设定、
+    /// 之后不变；这里后设 —— 不改 [`Lexer::new`] 的既有签名（`T-L15` 组装
+    /// `next()` 时再定最终构造形态）。
+    mode: Mode,
+    /// 上报的注释与指令。**与 `diags` 独立**（D-M1-8）—— 注释不是诊断，
+    /// `C1` §4 的排序规则不该施加到它上面。
+    messages: Vec<Message>,
     /// 是否已经读过第一个字符。
     ///
     /// 官方 `scanner.init()` **不**调 `nextch()` —— 第一次推进发生在首次 `next()` 里。
@@ -50,8 +59,15 @@ impl Lexer {
             table,
             file,
             diags: DiagBag::new(),
+            mode: Mode::NONE,
+            messages: Vec::new(),
             started: false,
         }
+    }
+
+    /// 设置注释/指令的上报模式（D-M1-1）。默认 [`Mode::NONE`]（一律不上报）。
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.mode = mode;
     }
 
     /// 文件表 —— 用来把 `Pos.file` 还原成文件名（`Pos` 自己不存名字）。
@@ -90,6 +106,15 @@ impl Lexer {
     /// 回调 + 可变借用会和 `&mut self` 打架。
     pub fn take_diags(&mut self) -> DiagBag {
         core::mem::take(&mut self.diags)
+    }
+
+    /// 取走上报的注释/指令，**按扫描顺序**（取走之后本对象里就是空的）。
+    ///
+    /// 与 [`Lexer::take_diags`] 同一手法（收集 + take）。不排序：
+    /// 扫描顺序本身就是确定的，而渲染时的排序（`line → col → text`）
+    /// 是 T-L18/T-L19 渲染层的事。
+    pub fn take_messages(&mut self) -> Vec<Message> {
+        core::mem::take(&mut self.messages)
     }
 
     /// 在当前游标处扫一个**标识符或关键字**。
@@ -746,13 +771,22 @@ impl Lexer {
                 }
             }
             '/' => {
+                // 注释的**段**从第一个 `/` 起算（官方在 redo 循环开头已 `s.start()`，
+                // token 起点就是 `/`）。所以在消耗任何字符**之前**先开段；
+                // 若不是注释（除法家族），立刻放弃这个段。
+                // ⚠️ 注释分支**故意不关段** —— 文本由 `scan_comment` 取走（跨调用契约）。
+                self.src.start_segment();
                 self.bump();
                 if matches!(self.src.ch(), Some('/' | '*')) {
-                    // `//` / `/*`：官方把**两个字符都吃掉**再调 lineComment/fullComment。
-                    // 注释本体归 T-L13；这里只做交接（与官方调用点状态一致）。
+                    let style = if self.src.ch() == Some('/') {
+                        CommentStyle::Line
+                    } else {
+                        CommentStyle::Block
+                    };
                     self.bump();
-                    PunctScan::Comment
+                    PunctScan::Comment(style)
                 } else {
+                    self.src.stop_segment();
                     self.assign_op(Operator::Div)
                 }
             }
@@ -846,6 +880,181 @@ impl Lexer {
             }
             other => unreachable!("is_punct_start 已排除 {other:?}"),
         })
+    }
+
+    /// 扫一个注释；返回它对「下一个词元」的影响（见 [`CommentScan`]）。
+    ///
+    /// **入口前置条件**：由 [`Lexer::scan_punct`] 的 [`PunctScan::Comment`] 交接而来 —
+    /// 开头两字符（`//` 或 `/*`）已消耗、游标在注释体第一个字符上（EOF 也算），
+    /// 且从第一个 `/` 起算的活动**段**已经打开（段由本函数负责关闭）。
+    ///
+    /// 两处「官方字段 → 显式参数」的镜像（与 `nlsemi` 同一手法，`M1-design.md`
+    /// 「照抄语义、不照抄实现」）：
+    ///
+    /// - `start` = 官方的 `s.line/s.col`（token 起点，redo 循环开头记录）。
+    ///   注释上报与未终止诊断都报这个位置，跨行块注释的 `Semi` 也用它。
+    ///   注意**不能**在本函数里用 `self.pos()` 推——注释体里若有被跳过的
+    ///   违规字节（`//\0`），游标位置与「起点 + 常量」不再等价。
+    /// - `nlsemi` = 官方的 `s.nlsemi`（`SemicolonPolicy::take()` 的值，T-L14）。
+    ///
+    /// 本函数把官方两处逻辑收进一个入口：
+    ///
+    /// 1. `lineComment()` / `fullComment()`（`scanner.go:740/790`）—— 扫描与上报；
+    /// 2. `case '*'` 里 fullComment 返回**之后**的产分号判定（`scanner.go:240-246`）——
+    ///    它比较 `s.pos().line > s.line`，所以 `Semi` 的位置就是**注释起点**。
+    ///    判定在**所有分支之后**执行（与闭合成功与否无关，p30/p06）。
+    pub fn scan_comment(&mut self, start: Pos, style: CommentStyle, nlsemi: bool) -> CommentScan {
+        let r = match style {
+            CommentStyle::Line => {
+                self.scan_line_comment(start);
+                // 行注释永远不给分号（它本身停在 `\n` 之前，由分号层处理那个换行）
+                CommentScan::Redo
+            }
+            CommentStyle::Block => self.scan_block_comment(start, nlsemi),
+        };
+        self.src.stop_segment();
+        r
+    }
+
+    /// 行注释体（官方 `lineComment()`，`scanner.go:740` 逐条翻译）。
+    ///
+    /// **不消费 `\n`**（官方 `skipLine()` 的注释原文：「don't consume '\n' - needed
+    /// for nlsemi logic」）；`\r` 是普通字符、**留在文本里**（p44，官方
+    /// TestComments 的 `"// want this one\r"` 同款）。
+    ///
+    /// 三条去向（顺序照官方）：
+    ///
+    /// 1. `comments` 模式：全部上报（连 `//go:` 也当普通注释）；
+    /// 2. 无 `directives` 位，或首字符不是 `g`/`l`：静默跳过
+    ///    （⚠️ `NONE` 走的就是这条 —— 官方 `s.mode&directives == 0` 短路）；
+    /// 3. `directives` 模式：逐字符匹配 `go:` / `line ` 前缀，**成不成功都跳过**，
+    ///    只有成功才上报。
+    ///
+    /// 官方匹配失败路径里的 `s.stop()`（放弃段）在这里的等价物是「不取段」——
+    /// 段由 [`Lexer::scan_comment`] 统一关闭。
+    fn scan_line_comment(&mut self, start: Pos) {
+        if self.mode.contains(Mode::COMMENTS) {
+            self.skip_line();
+            self.push_message(start, MessageKind::Comment);
+            return;
+        }
+
+        // 官方：`if s.mode&directives == 0 || (s.ch != 'g' && s.ch != 'l')`
+        let ch = self.src.ch();
+        if !self.mode.contains(Mode::DIRECTIVES) || !matches!(ch, Some('g' | 'l')) {
+            self.skip_line();
+            return;
+        }
+
+        // 逐字符匹配前缀 —— 注意 `line ` **带尾随空格**（官方 prefix 常量原样），
+        // 所以 `//line`、`//linea` 都不算指令，而 `//line foo` 算。
+        let prefix: &str = if ch == Some('l') { "line " } else { "go:" };
+        for m in prefix.chars() {
+            if self.src.ch() != Some(m) {
+                self.skip_line();
+                return;
+            }
+            self.bump();
+        }
+        self.skip_line();
+        self.push_message(start, MessageKind::Directive);
+    }
+
+    /// 块注释体（官方 `fullComment()` 与 `case '*'` 收尾判定，`scanner.go:790/240`）。
+    ///
+    /// 三条路径（顺序照官方）：
+    ///
+    /// 1. `comments` 模式：尝试闭合；**闭合成功才上报**（未终止只报诊断，p29）；
+    /// 2. `directives` 模式且首字符是 `l`：先匹配 `"line "` 前缀、**再**闭合，
+    ///    两者都成功才上报 —— 注意块注释**不认** `go:`（官方 fullComment 只匹配
+    ///    "line "，`/*go:build*/` 永远不上报）；
+    /// 3. 其余（`NONE`、首字符不是 `l`、前缀不匹配）：静默跳过。
+    ///
+    /// 最后统一做「跨行 + `nlsemi` ⇒ `Semi`」判定 —— 与闭合与否**无关**
+    /// （p06/p30：未终止的跨行块注释照样产 `Semi`）。
+    fn scan_block_comment(&mut self, start: Pos, nlsemi: bool) -> CommentScan {
+        if self.mode.contains(Mode::COMMENTS) {
+            if self.skip_comment(start) {
+                self.push_message(start, MessageKind::Comment);
+            }
+        } else if self.mode.contains(Mode::DIRECTIVES) && self.src.ch() == Some('l') {
+            let mut matched = true;
+            for m in "line ".chars() {
+                if self.src.ch() != Some(m) {
+                    matched = false;
+                    break;
+                }
+                self.bump();
+            }
+            let closed = self.skip_comment(start);
+            if matched && closed {
+                self.push_message(start, MessageKind::Directive);
+            }
+        } else {
+            // 返回值（闭合与否）在这条路径上没有用途：不上报任何东西
+            self.skip_comment(start);
+        }
+
+        // 官方：`if line, _ := s.pos(); line > s.line && nlsemi`
+        // —— `s.line` 是注释起点行、`s.pos()` 是注释**之后**当前字符的行。
+        if self.src.pos().line > start.line && nlsemi {
+            CommentScan::Semi
+        } else {
+            CommentScan::Redo
+        }
+    }
+
+    /// 官方 `skipLine()`（`scanner.go:733`）：跳到行尾，**不消费 `\n`**。
+    ///
+    /// 那句 `\n` 要留给分号逻辑（`\n` 只有在 `nlsemi` 置位时才译成 `;`）——
+    /// 「吃掉它再补回去」是做不到的（位置已过）。
+    fn skip_line(&mut self) {
+        while let Some(c) = self.src.ch() {
+            if c == '\n' {
+                break;
+            }
+            self.bump();
+        }
+    }
+
+    /// 官方 `skipComment()`（`scanner.go:775`）：扫到 `*/` 之后（含）。
+    ///
+    /// 撞 EOF 时报 `LEX-COMMENT-UNTERMINATED`（报在**注释起点** —— 官方
+    /// `errorAtf(0, …)` 用的是 token 起点）并返回 `false`。
+    ///
+    /// 「报错但不上报文本」的守卫在调用方（[`Lexer::scan_block_comment`]）——
+    /// 官方也是这么分工的：`if s.skipComment() { s.comment(…) }`。
+    fn skip_comment(&mut self, start: Pos) -> bool {
+        while self.src.ch().is_some() {
+            while self.src.ch() == Some('*') {
+                self.bump();
+                if self.src.ch() == Some('/') {
+                    self.bump();
+                    return true;
+                }
+            }
+            self.bump();
+        }
+        self.report_at(
+            start,
+            0,
+            DiagCode::CommentUnterminated,
+            "块注释未终止".to_string(),
+        );
+        false
+    }
+
+    /// 把当前活动段（从注释起点到游标之前的全部字节）收成一条上报。
+    ///
+    /// 段是 [`Lexer::scan_punct`] 的 `case '/'` 开的（见那里的跨调用契约）——
+    /// 行注释停在 `\n` / EOF 之前，块注释停在 `*/` 之后，所以段的右端天然
+    /// 就是「不含结尾换行、含全部定界符」的官方文本语义。
+    fn push_message(&mut self, start: Pos, kind: MessageKind) {
+        self.messages.push(Message {
+            pos: start,
+            kind,
+            text: self.src.segment().to_vec(),
+        });
     }
 
     /// 单字符分隔符。
@@ -1100,8 +1309,35 @@ pub enum PunctScan {
     ///
     /// **两个字符都已被消耗**，游标在注释体的第一个字符上（EOF 时是 `None`）——
     /// 与官方调 `lineComment()` / `fullComment()` 时的状态一致。
-    /// 注释本体由 T-L13 处理。
-    Comment,
+    ///
+    /// 同时：一个从第一个 `/` 起算的活动**段**已经打开，等
+    /// [`Lexer::scan_comment`] 取走文本（它是段的所有者，负责关闭）。
+    Comment(CommentStyle),
+}
+
+/// 注释的种类（`//` 与 `/* */`）。
+///
+/// 官方不用类型表达 —— `case '/'` 里两个就地 `if` 分流。这里显式成类型并**随
+/// [`PunctScan::Comment`] 带出来**，是因为 Rust 侧的 `scan_punct` 在交接时
+/// 已经消耗了这两个字符：调用方（`scan_comment`）无从再从游标判别种类。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommentStyle {
+    /// `//` —— 到行尾（**不消费换行**）
+    Line,
+    /// `/* */` —— 可跨行
+    Block,
+}
+
+/// [`Lexer::scan_comment`] 的结果 —— 注释对「下一个词元」的影响。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CommentScan {
+    /// 注释已处理完，调用方**重扫**（官方 `goto redo`）：
+    /// 下一个词元从注释之后开始。
+    Redo,
+    /// **跨行块注释 + `nlsemi`**：调用方应当产出 `Semi(Newline)`，
+    /// 位置取**注释起点**（官方 `case '*'` 里 `s.line/s.col` 是 token 起点、
+    /// 全程未被更新）。
+    Semi,
 }
 
 /// 数字字面量的进制前缀（官方 `number()` 里那个 `prefix rune`）。

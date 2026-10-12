@@ -1,0 +1,8 @@
+//line
+//line foo
+//linea foo
+//gofx
+//go:foo
+// go:
+/*line a.go:1 */
+/* line */
