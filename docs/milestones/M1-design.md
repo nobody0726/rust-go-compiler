@@ -1,8 +1,8 @@
 # M1 设计文档：词法与位置
 
-> **阶段 ID**：`M1`　|　**状态**：**初稿（待评审）**　|　**日期**：2026-10-11
+> **阶段 ID**：`M1`　|　**状态**：**已确认**　|　**日期**：2026-10-11
 > **文档索引**：[`../README.md`](../README.md)　|　**上游**：[`../03-roadmap.md`](../03-roadmap.md) §M1、[`../01-feature-set.md`](../01-feature-set.md) §1.1（LEX-01..13）、[`../contracts/C1-source-map.md`](../contracts/C1-source-map.md)、[`M0-report.md`](./M0-report.md) §7
-> **下游**：`M1-tests.md`（测试先行清单，待产出）→ `M1-plan.md`（任务级计划，待产出）→ 执行
+> **下游**：`M1-tests.md`（测试先行清单，**已冻结**）→ `M1-plan.md`（任务级计划，**已完成**）→ `M1-manifest.json`（**已填实**）
 >
 > **本文档的性质**：Superpowers 流程中「头脑风暴」阶段的产出 —— **只冻结设计决策与边界，不写任务粒度、不写实现代码**。任务级拆分是 `writing-plans` 的职责。
 >

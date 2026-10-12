@@ -1,6 +1,8 @@
 # M1 词法与位置 · 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **状态**：**已完成**（T-L01–T-L21，2026-10-12）　|　**测试清单**：`M1-tests.md`（已冻结）　|　**机器可读事实**：`M1-manifest.json`（已填实）
+>
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 实现 `rgoc-lex` —— 把 Go 源文件的字节流切成带位置的词元流，并产出诊断流；覆盖 LEX-01..13。
 

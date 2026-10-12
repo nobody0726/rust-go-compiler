@@ -1,0 +1,752 @@
+{
+  "stage": "M1",
+  "generated_at": "2026-10-12T05:19:10Z",
+  "environment_source": "docs/milestones/M0-manifest.json",
+  "environment_note": "M1 shares the M0 environment baseline (E1/E2). See M0-manifest.json environment for toolchain/container digest.",
+  "gate": {
+    "L1": {
+      "name": "LEX-01..13 各至少一条直接测试",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "cargo test -p rgoc-lex (193 passed)",
+      "evidence": "M1-tests.md §2 coverage mapping; rgoc-lex tests cover all 13 LEX IDs; test_char_golden.rs 1146/1177 byte-level match + 31 registered deviations",
+      "coverage": {
+        "LEX-01": [
+          "T-L-13",
+          "T-L-14",
+          "T-L-15",
+          "T-L-16"
+        ],
+        "LEX-02": [
+          "T-L-11",
+          "T-L-12",
+          "T-L-19",
+          "T-L-24",
+          "T-L-25"
+        ],
+        "LEX-03": [
+          "T-L-45",
+          "T-L-46",
+          "T-L-52",
+          "T-L-70"
+        ],
+        "LEX-04": [
+          "T-L-20",
+          "T-L-21",
+          "T-L-22",
+          "T-L-23",
+          "T-L-24",
+          "T-L-25",
+          "T-L-26",
+          "T-L-27",
+          "T-L-28",
+          "T-L-29"
+        ],
+        "LEX-05": [
+          "T-L-22",
+          "T-L-30"
+        ],
+        "LEX-06": [
+          "T-L-28",
+          "T-L-31"
+        ],
+        "LEX-07": [
+          "T-L-40",
+          "T-L-41",
+          "T-L-42",
+          "T-L-43",
+          "T-L-44",
+          "T-L-45",
+          "T-L-46",
+          "T-L-47",
+          "T-L-48"
+        ],
+        "LEX-08": [
+          "T-L-20",
+          "T-L-21",
+          "T-L-23",
+          "T-L-24"
+        ],
+        "LEX-09": [
+          "T-L-33",
+          "T-L-38"
+        ],
+        "LEX-10": [
+          "T-L-34",
+          "T-L-38"
+        ],
+        "LEX-11": [
+          "T-L-35"
+        ],
+        "LEX-12": [
+          "T-L-36",
+          "T-L-53"
+        ],
+        "LEX-13": [
+          "T-L-37",
+          "T-L-53"
+        ]
+      }
+    },
+    "L2": {
+      "name": "词法 golden 全绿（腿乙）",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "scripts/check-lex-golden.sh",
+      "evidence": "151/151 golden files match; corpus 57 (19 files × 3 modes), fixtures 93, hand-written 1; guards A-E pass",
+      "golden_dir": "rgoc/tests/smoke/lex",
+      "manifest": "rgoc/tests/smoke/lex/manifest.txt"
+    },
+    "L3": {
+      "name": "负例全绿且双向断言",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "rgoc-lex/tests/test_recovery.rs / test_limits.rs",
+      "evidence": "N1-N12 each asserts both diagnostics and subsequent tokens; N12 (T-L-63) uses hand-written golden for 64 MiB limit",
+      "negative_cases": [
+        "N1",
+        "N2",
+        "N3",
+        "N4",
+        "N5",
+        "N6",
+        "N7",
+        "N8",
+        "N8b",
+        "N9",
+        "N10",
+        "N11",
+        "N12"
+      ]
+    },
+    "L4": {
+      "name": "SM-M0-NATIVE-HELLO 回归通过",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "cargo test -p rgoc-spikes",
+      "evidence": "rgoc-spikes 83 passed; s3_native e2e asserts stdout=hello\\n, stderr empty, exit=0; input remains fixed HIR/SSA, not lexer-derived"
+    },
+    "L5": {
+      "name": "四条 cargo 命令全过",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "container gate run",
+      "evidence": "cargo fmt --check / cargo check --workspace --all-targets / cargo clippy --workspace --all-targets -- -D warnings / cargo test --workspace; workspace 461 passed, 0 failed",
+      "workspace_tests_passed": 461,
+      "workspace_tests_failed": 0
+    },
+    "L6": {
+      "name": "C1 契约由留位升为完整",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "T-L20",
+      "evidence": "docs/contracts/C1-source-map.md header level=完整; FileId/FileTable/DiagCode landed in rgoc-lex; check-m0-consistency.py [5g] asserts pass"
+    },
+    "L7": {
+      "name": "GAP-01 LEX-01..13 四维归属已定",
+      "status": "pass",
+      "confirmed_at": "2026-10-12",
+      "confirmed_by": "docs/milestones/GAP-01.md",
+      "evidence": "13 LEX IDs mapped to Frontend dimension; not filling all 210 IDs as required by M0-report.md §7.2"
+    }
+  },
+  "test_ids": [
+    {
+      "id": "T-L-63",
+      "layer": "rgoc-lex",
+      "name": "**超长输入**",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_limits.rs"
+    },
+    {
+      "id": "T-L-13",
+      "layer": "rgoc-lex",
+      "name": "BOM 在**文件首**",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-14",
+      "layer": "rgoc-lex",
+      "name": "BOM 在**文件中**",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-15",
+      "layer": "rgoc-lex",
+      "name": "NUL `x\\0y`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-16",
+      "layer": "rgoc-lex",
+      "name": "非法 UTF-8 `1\\xff2`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-11",
+      "layer": "rgoc-lex",
+      "name": "**中文标识符** `\\t变量 := 1`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-12",
+      "layer": "rgoc-lex",
+      "name": "**emoji**（4 字节 UTF-8）",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-19",
+      "layer": "rgoc-lex",
+      "name": "私有区字符 `x\\ue000`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-24",
+      "layer": "rgoc-lex",
+      "name": "`a۰۱۸` / `foo६४` / `bar９８７６` / `ŝ` / `日本語` / `ab中cd`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-25",
+      "layer": "rgoc-lex",
+      "name": "`_x` / `_`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-45",
+      "layer": "rgoc-lex",
+      "name": "`x // c` ⏎ `y`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-46",
+      "layer": "rgoc-lex",
+      "name": "`x /* c1` ⏎ `c2 */ y`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-52",
+      "layer": "rgoc-lex",
+      "name": "`/*` 未终止",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_recovery.rs"
+    },
+    {
+      "id": "T-L-70",
+      "layer": "rgoc-lex",
+      "name": "注释上报通道（三种 mode）",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_comment.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-20",
+      "layer": "rgoc-lex",
+      "name": "`str1` / `str1x` / `str_`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-29",
+      "layer": "rgoc-lex",
+      "name": "`for(` `if{` `return(`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-22",
+      "layer": "rgoc-lex",
+      "name": "`for` vs `forx`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-30",
+      "layer": "rgoc-lex",
+      "name": "**25 个关键字逐个**",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_token.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-28",
+      "layer": "rgoc-lex",
+      "name": "`>>=` `<<=` `&^=` `!=` `<-` `++`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_punct.rs"
+    },
+    {
+      "id": "T-L-31",
+      "layer": "rgoc-lex",
+      "name": "**48 条运算符与标点逐个**",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_token.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-40",
+      "layer": "rgoc-lex",
+      "name": "`;` 显式 / 换行 / EOF 三处",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-47",
+      "layer": "rgoc-lex",
+      "name": "**语料 `test/syntax/semi1..7.go`**",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-21",
+      "layer": "rgoc-lex",
+      "name": "`str x` / `str+x` / `a-b`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-23",
+      "layer": "rgoc-lex",
+      "name": "`1str`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-33",
+      "layer": "rgoc-lex",
+      "name": "`0b101` `0o17` `0x1f` `0123` `0` `1_000`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_number.rs"
+    },
+    {
+      "id": "T-L-38",
+      "layer": "rgoc-lex",
+      "name": "`0x` / `1__2` / `0b__1000` / `'ab'` / `\"unterm`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_number.rs / test_rune.rs / test_string.rs"
+    },
+    {
+      "id": "T-L-34",
+      "layer": "rgoc-lex",
+      "name": "`1e9` `1.5E-3` `0x1p-2` `0x.8p1`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_number.rs"
+    },
+    {
+      "id": "T-L-35",
+      "layer": "rgoc-lex",
+      "name": "O",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_number.rs"
+    },
+    {
+      "id": "T-L-36",
+      "layer": "rgoc-lex",
+      "name": "`'\\n'` `'\\\\'` `'\\x41'` `'\\u00e9'` `'\\U0001F600'` `'\\101'`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_rune.rs"
+    },
+    {
+      "id": "T-L-53",
+      "layer": "rgoc-lex",
+      "name": "`\"abc` / `'a` 未终止",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_recovery.rs"
+    },
+    {
+      "id": "T-L-37",
+      "layer": "rgoc-lex",
+      "name": "`\"a\\tb\"` 与 `` `a\\tb` ``",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_string.rs"
+    },
+    {
+      "id": "T-L-10",
+      "layer": "rgoc-lex",
+      "name": "纯 ASCII 单行 `x := 1`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-17",
+      "layer": "rgoc-lex",
+      "name": "CRLF `x\\r\\ny`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-18",
+      "layer": "rgoc-lex",
+      "name": "多行 + 空行",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_source.rs / test_char_golden.rs"
+    },
+    {
+      "id": "T-L-26",
+      "layer": "rgoc-lex",
+      "name": "`..x` / `..中` / `a..b`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_ident.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-27",
+      "layer": "rgoc-lex",
+      "name": "`.` vs `..` vs `...` / `x.y`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_punct.rs"
+    },
+    {
+      "id": "T-L-32",
+      "layer": "rgoc-lex",
+      "name": "`1` / `1.5` / `1.5e3i` / `'x'` / `\"s\"`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_number.rs"
+    },
+    {
+      "id": "T-L-39",
+      "layer": "rgoc-lex",
+      "name": "对 `Op`/`Delim`/`Keyword` 断言",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_token.rs / test_punct.rs"
+    },
+    {
+      "id": "T-L-49",
+      "layer": "rgoc-lex",
+      "name": "`SemicolonPolicy::set_after` 规则表",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_semicolon.rs"
+    },
+    {
+      "id": "T-L-41",
+      "layer": "rgoc-lex",
+      "name": "`)` `]` `}` 后换行",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-42",
+      "layer": "rgoc-lex",
+      "name": "`(` `[` `{` `,` `:` `.` `...` 后换行",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-43",
+      "layer": "rgoc-lex",
+      "name": "`i++` / `i--` 后换行",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-44",
+      "layer": "rgoc-lex",
+      "name": "`break` `continue` `fallthrough` `return` 后换行",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-48",
+      "layer": "rgoc-lex",
+      "name": "`test/eof.go` / `eof1.go`",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_semicolon.rs"
+    },
+    {
+      "id": "T-L-50",
+      "layer": "rgoc-lex",
+      "name": "全部负例的诊断",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_recovery.rs"
+    },
+    {
+      "id": "T-L-51",
+      "layer": "rgoc-lex",
+      "name": "全部负例的**后续词元**",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_recovery.rs"
+    },
+    {
+      "id": "T-L-54",
+      "layer": "rgoc-lex",
+      "name": "同位置多条诊断",
+      "verdict": "pass",
+      "gate": "L3",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_recovery.rs"
+    },
+    {
+      "id": "T-L-60",
+      "layer": "rgoc-lex",
+      "name": "位置单调",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-61",
+      "layer": "rgoc-lex",
+      "name": "拼接等价",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-62",
+      "layer": "rgoc-lex",
+      "name": "三次一致",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-64",
+      "layer": "rgoc-lex",
+      "name": "`Eof` 唯一性",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-65",
+      "layer": "rgoc-lex",
+      "name": "词元总数",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_next.rs / test_render.rs"
+    },
+    {
+      "id": "T-L-71",
+      "layer": "rgoc-lex",
+      "name": "`comments` 位优先于 `directives` 位",
+      "verdict": "pass",
+      "gate": "L1",
+      "evidence": "rgoc/crates/rgoc-lex/tests/test_comment.rs / test_render.rs"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U12-lex",
+      "item": "真实 Go 源码的 lex 已由 M1 实现；parse 仍留 M2",
+      "label": "partially-resolved",
+      "why": "M1 已完成 rgoc-lex；真实 Go 源码 lex 半解除；M2 开始 parse",
+      "planned_phase": "M2 for parse",
+      "sample_count": 0,
+      "count_note": "U12 的 lex 一半在 M1 解除，parse 一半仍列不支持"
+    },
+    {
+      "id": "U11",
+      "item": "src/internal/types/testdata/",
+      "label": "expected-unsupported",
+      "why": "types2 内部测试，属 M4",
+      "planned_phase": "M4",
+      "sample_count": 0
+    },
+    {
+      "id": "U8",
+      "item": "test/fixedbugs/ 全目录",
+      "label": "expected-unsupported",
+      "why": "M0-M1 不重写完整 runner，子目录用例不纳入 smoke",
+      "planned_phase": "后续",
+      "sample_count": 0
+    }
+  ],
+  "budget": {
+    "wall_time": {
+      "workspace_s": 84,
+      "rgoc_lex_s": 0.01,
+      "rgoc_spikes_s": 0.14,
+      "golden_s": 30,
+      "overall_s": 900,
+      "source": "measured from container gate run (target/gate-logs/m1-gates.log)",
+      "note": "T-L21 final container run: cargo fmt/check/clippy/test + rgoc-lex + rgoc-spikes + golden took 84 s; rgoc-lex unit tests are sub-second; golden check ≤30 s; overall ≤15 min"
+    },
+    "rss": {
+      "per_case_mib": 512,
+      "measured_peak_mib": 64,
+      "source": "cargo test --workspace peak observed < 64 MiB (no per-process instrumentation in M1)"
+    },
+    "counts": {
+      "m1_test_ids": 53,
+      "rgoc_lex_tests": 193,
+      "rgoc_spikes_tests": 83,
+      "golden_files": 151
+    }
+  },
+  "phase_plan": {
+    "source": "docs/milestones/M1-plan.md",
+    "m1": {
+      "tasks": "T-L01-T-L21",
+      "status": "done",
+      "gates": [
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "L6",
+        "L7"
+      ],
+      "scope": "rgoc-lex crate + rgoc-driver lex subcommand + golden smoke gate + C1 upgrade",
+      "done": [
+        "T-L01 创建 rgoc-lex crate 与 Pos/FileId/FileTable",
+        "T-L02 Diag/DiagBag/DiagCode",
+        "T-L03 TokenKind 及配套枚举",
+        "T-L04 vendor tools/token-oracle 与 adapter",
+        "T-L05 生成 unicode_tables.rs",
+        "T-L06 SourceReader 解码与位置推进",
+        "T-L07 字符层边界输入（LEX-01/02）",
+        "T-L08 ident 标识符与关键字",
+        "T-L09 运算符最长匹配与 .. 回退",
+        "T-L10 number 数字字面量全家族",
+        "T-L11 escape 与 rune",
+        "T-L12 std_string 与 raw_string",
+        "T-L13 注释处理与两种 mode",
+        "T-L14 SemicolonPolicy 状态机",
+        "T-L15 Lexer::next 分派骨架",
+        "T-L16 错误恢复与诊断排序",
+        "T-L17 资源上限（64 MiB，读入前检查）",
+        "T-L18 rgoc-driver lex 子命令",
+        "T-L19 腿乙 golden 与门禁脚本",
+        "T-L20 C1 契约升级（留位 → 完整）",
+        "T-L21 阶段收口（manifest/GAP-01/U12/文档同步/八条门禁）"
+      ],
+      "crates": [
+        "crates/rgoc-lex",
+        "crates/rgoc-driver"
+      ],
+      "gate_commands": [
+        "cargo fmt --check",
+        "cargo check --workspace --all-targets",
+        "cargo clippy --workspace --all-targets -- -D warnings",
+        "cargo test --workspace",
+        "cargo test -p rgoc-lex",
+        "scripts/check-lex-golden.sh",
+        "cargo test -p rgoc-spikes",
+        "python3 scripts/check-m0-consistency.py",
+        "python3 scripts/check-m1-consistency.py"
+      ],
+      "gate_result": {
+        "tests_passed": 461,
+        "tests_failed": 0,
+        "rgoc_lex_tests": 193,
+        "golden_passed": 151,
+        "golden_total": 151,
+        "verified_at": "2026-10-12"
+      }
+    }
+  },
+  "decisions": {
+    "source": "docs/milestones/M1-design.md §2",
+    "D-M1-1": "注释与指令支持范围：默认跳过 / comments / directives 两种 mode",
+    "D-M1-2": "词法 golden 两条腿：crate 内细粒度 + driver 门禁 golden",
+    "D-M1-3": "oracle adapter 基准：编译器版 gc/syntax 五文件",
+    "D-M1-4": "资源上限策略：单文件 64 MiB 硬上限",
+    "D-M1-5": "Pos 文件标识：FileId(u32) + FileTable",
+    "D-M1-6": "Unicode 表来源：由 oracle 生成区间表",
+    "D-M1-7": "内部结构：SourceReader / SemicolonPolicy / Lexer 三层",
+    "D-M1-8": "注释与诊断独立收集器 + take",
+    "D-M1-9": "诊断判据：位置 + DiagCode，不复刻消息文本",
+    "D-M1-10": "运算符词元建模：Op 增加 form 字段",
+    "D-M1-11": "诊断代号表：枚举全部报错点 + 跨语言对撞",
+    "D-M1-12": "词元载荷载体：Vec<u8> 而非 String"
+  },
+  "test_contract": {
+    "source": "docs/milestones/M1-tests.md",
+    "status": "frozen",
+    "frozen_at": "2026-10-12",
+    "frozen_by_task": "T-L21",
+    "frozen_items": {
+      "F1": "LEX-01..13 逐项测试 ID 不得有项无测试",
+      "F2": "分母 = 53 个 T-L 测试 ID（不含探索性用例）",
+      "F3": "负例清单 N1-N12 双向断言",
+      "F4": "unsupported 清单（U12-lex 部分解除 / U11 / U8 等继承项）",
+      "F5": "64 MiB 单文件上限与容器内时间预算",
+      "F6": "oracle 口径：adapter/golden 格式/两种来源"
+    },
+    "baseline_denominator": 53
+  },
+  "open_gaps": {
+    "note": "M1 完成 LEX-01..13，但以下缺口如实登记",
+    "items": [
+      {
+        "id": "GAP-01",
+        "item": "逐 ID 适用维度清单仅完成 LEX-01..13；其余 197 个功能 ID 待 M2 起推进",
+        "status": "LEX 13 项已归属 Frontend；其余未做",
+        "actual_scale": "210 个功能 ID 中 13 个已判定；197 个待后续阶段",
+        "owner": "M2 起逐步推进",
+        "doc": "docs/milestones/GAP-01.md"
+      },
+      {
+        "id": "GAP-02",
+        "item": "正则子集覆盖不足（继承自 M0）",
+        "status": "未解决且已登记",
+        "owner": "M4 / M5 前决定"
+      },
+      {
+        "id": "GAP-03",
+        "item": "TestCase 无位置字段（继承自 M0）",
+        "status": "未做",
+        "owner": "M4（诊断）/ M2（行号保真）"
+      },
+      {
+        "id": "GAP-04",
+        "item": "CI 未实施（继承自 M0）",
+        "status": "按计划未做",
+        "owner": "按需"
+      }
+    ]
+  }
+}

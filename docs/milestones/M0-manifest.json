@@ -901,11 +901,11 @@
     {
       "id": "U12",
       "item": "真实 Go 源码的 lex/parse",
-      "label": "expected-unsupported",
-      "why": "M0 三 spike 用固定 HIR",
-      "planned_phase": "M1/M2",
+      "label": "partially-resolved",
+      "why": "M0 三 spike 用固定 HIR；M1 已完成 rgoc-lex，真实 Go 源码 lex 已解除 unsupported",
+      "planned_phase": "M1（lex 已解除）/ M2（parse 仍待实现）",
       "sample_count": 0,
-      "count_note": "目录级/参数级排除，无独立文件计数（M0 不扫子目录）"
+      "count_note": "M1  golden 脚本已直接消费 go_source_code/test/syntax/ 语料（见 M1-manifest.json gate.L2）"
     },
     {
       "id": "U13",

@@ -28,8 +28,9 @@
 | M0 | [`milestones/M0-report.md`](./milestones/M0-report.md) | **交接文档** —— 三个命题各由哪个测试 ID 证明、门禁证据出处、spike 留下的差距、未验证范围（U1–U14）、**接手指南** | ✅ **已产出**（T53） |
 | M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 完整 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） |
 | M1 | [`milestones/M1-design.md`](./milestones/M1-design.md) | **怎么建 M1** —— 九个决策 D-M1-1~9（五字段）、**20 条实测事实基线**、六切面测试组、诊断代号表、oracle adapter 组成 | **已确认**（2026-10-11） |
-| M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | ⬜ **待产出** |
-| M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | ⬜ **待产出** |
+| M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | **已冻结**（T-L21，2026-10-12） |
+| M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |
+| M1 | [`milestones/M1-manifest.json`](./milestones/M1-manifest.json) | **机器可读事实** —— gate L1–L7 / 56 个测试 ID / unsupported / budget / GAP-01 | **已填实**（T-L21） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
