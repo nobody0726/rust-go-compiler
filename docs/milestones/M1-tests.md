@@ -276,6 +276,23 @@ C <line>:<col>      U+<HEX> w=<n>   ← 读到一个字符；EOF 不进事件流
 （判据是谓词而不是写死的 hex 列表 —— 本仓三次踩过「写死的键列表变成盲区」）。
 详见 `M1-design.md` §5.1 / §8.2.1 / §12 R11。
 
+### 5.2.2 词元级 golden（`T-L15` 立）—— 端到端的主力判据
+
+`next()` 接线完成后，判据升级为「**整条词元流 + 诊断流**渲染后与 oracle **逐字节**相同」。
+渲染即 `rgoc-lex::render::golden_body` —— 与 adapter 逐字节可 diff 的**唯一一处**实现
+（裁决 R30：原计划散在 `T-L18`，因切面判据与腿乙都需要而提前到 `T-L15`）。
+
+| 项 | 值 |
+|---|---|
+| 语料 | `fixtures/next/n01..n17`（端到端探针）＋ `fixtures/hello.txt`（48 字节）＋ 官方语料 `test/syntax/semi1..7.go` |
+| golden | `rgoc/crates/rgoc-lex/tests/golden/*.golden`（**24 个**）＝ oracle 输出**去掉头两行** |
+| 生成 | `cd tools/token-oracle && go run . <file> \| tail -n +3 > <out>`（`RGOC_TTY=0`） |
+| 比对 | `rgoc-lex/tests/test_next.rs`（`include_str!` 编译期嵌入 golden；`include_bytes!` 嵌入语料） |
+| 实测结果 | **24/24 逐字节一致**（`T-L15` 时点） |
+
+**头两行不在 golden 里**：`# golden: <path>` / `# source: oracle` 是 oracle 侧的来源
+信息，Rust 侧输出它与否是 `T-L18`/`T-L19` 的口径（「逐字节 diff」时如何处理）。
+
 ### 5.3 两种来源必须标注
 
 | 来源 | 覆盖 | 标记 |

@@ -1219,11 +1219,15 @@ git commit -m "feat(lex): SemicolonPolicy 状态机（LEX-07 独立可测）"
 
 **Files:**
 - Modify: `rgoc/crates/rgoc-lex/src/lexer.rs`
+- Create: `rgoc/crates/rgoc-lex/src/render.rs`（**R30**：渲染器提前落地 —— 唯一一处）
 - Create: `rgoc/crates/rgoc-lex/tests/test_next.rs`
+- Create: `rgoc/crates/rgoc-lex/tests/golden/`（24 个，oracle 直出）
 
 **Interfaces:**
 - Consumes: `T-L08`…`T-L14` 全部
-- Produces: `rgoc_lex::Lexer::{new(src, file, table, mode), next(&mut self) -> Token}`
+- Produces: `rgoc_lex::Lexer::next(&mut self) -> Token`；**另**（R30）`rgoc_lex::render::golden_body`
+  ⚠️ 简报原写的 `new(src, file, table, mode)` **未采用**：保持 `new(src, name)` + `set_mode`
+  （table 外传是 M2 多文件之事，见 R24；`next` 的命名裁决见 **R31**）
 
 - [ ] **Step 1: 写失败测试（`T-L-10`、`T-L-40`…`T-L-48`、**RF4**、**RF5**）**
 
@@ -1254,6 +1258,11 @@ fn 词元中间遇到_eof_的收尾顺序() {
 fn 语料_semi1_至_semi7_逐词元与_oracle 相等() { }
 ```
 
+> **实写 15 条**（2026-10-12）：简报 6 条为基线；另补 9 条形态覆盖
+> （n10..n17 探针：跨行块注释的 Semi 位置 / `.5` 交接 / `opop` 与 `*` 的渲染 /
+> `\r` 跳过 / `\x` 转义 / rune-raw 分派 / Dot）—— 补它们是**为反向验证补盲区**
+> （没有它们，好几道变异「红不了」）。
+
 - [ ] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_next`
@@ -1267,7 +1276,7 @@ Expected: FAIL
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_next`
-Expected: 6 passed
+Expected: 15 passed（简报原估 6 条；24 个 golden 逐字节 diff 全过）
 
 - [ ] **Step 5: 提交**
 
@@ -1392,6 +1401,10 @@ git commit -m "feat(lex): 单文件 64 MiB 上限（读入前检查，登记为�
 **Interfaces:**
 - Consumes: `T-L15`/`T-L17` 的 `Lexer`；`T-L13` 的 `take_messages`
 - Produces: `rgoc-driver lex <file> [--mode comments|directives]`，输出 `M1-tests.md` §5.2 的格式
+
+> **2026-10-12 注记（R30）**：golden 正文渲染已在 `rgoc-lex::render::golden_body` 落地
+> （T-L15 建立；24 个 golden 的比对即用它）。本任务只需 **I/O + 头两行**
+> （`# golden:` / `# source:` 的口径）+ 复用该渲染 —— **不要再写第二份渲染**。
 
 - [ ] **Step 1: 写失败测试**
 
