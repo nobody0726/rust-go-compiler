@@ -35,10 +35,12 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 ├── corpus-manifest.sha256            ← 语料锁定清单（15,618 条，见 §3.1）
 ├── docs/                             ← 文档体系（详见 §2）
 │   ├── README.md                     ←   文档索引
+│   ├── 00-architecture-and-roadmap-guide.md ← 全景：人类阅读版架构与通俗路线图指南
 │   ├── 01-feature-set.md             ←   规格：要建什么
 │   ├── 02-test-inventory.md          ←   规格：如何验证
 │   ├── 03-roadmap.md                 ←   计划：按什么顺序建
 │   ├── 04-development-environment.md ←   环境：在哪建
+│   ├── 05-m0-architecture-and-workflow.md ← 架构：M0各阶段作用与crates时序图
 │   ├── contracts/                    ←   跨阶段版本化契约（**5 份已产出**：C1 完整 / C2 完整初稿 / C3–C5 spike 级）
 │   └── milestones/                   ←   阶段文档：<ID>-{design,tests,plan}.md + manifest
 │       ├── M0-design.md              ←     M0 设计（**已确认**）
@@ -133,10 +135,12 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | # | 文档 | 层级 | 回答什么问题 | 状态 | 规模 |
 |---|---|---|---|---|---|
 | — | [`docs/README.md`](./docs/README.md) | 索引 | 文档地图是什么 | 已建立 | ≈13 KB |
+| 00 | [`docs/00-architecture-and-roadmap-guide.md`](./docs/00-architecture-and-roadmap-guide.md) | 全景 | **人类阅读指南** —— 架构全景、编译流水线、通俗路线图与可行性审视 | 已建立 | ≈18 KB |
 | 01 | [`docs/01-feature-set.md`](./docs/01-feature-set.md) | 规格 | **要建什么** —— 功能全集 / RTM | 已建立 | ≈45 KB |
 | 02 | [`docs/02-test-inventory.md`](./docs/02-test-inventory.md) | 规格 | **如何验证** —— 功能点 → 官方测试用例 | 已建立（9 处修正） | ≈60 KB |
 | 03 | [`docs/03-roadmap.md`](./docs/03-roadmap.md) | 计划 | **按什么顺序建** —— M0–M12 迭代计划 | 已修订（v2） | ≈51 KB |
 | 04 | [`docs/04-development-environment.md`](./docs/04-development-environment.md) | 环境 | **在哪建** —— Docker 容器方案 | **已落地**（Phase 0 实测通过） | ≈13 KB |
+| 05 | [`docs/05-m0-architecture-and-workflow.md`](./docs/05-m0-architecture-and-workflow.md) | 架构 | **怎么运作** —— M0 各阶段作用与 crates UML 时序图 | 已建立 | ≈10 KB |
 | — | [`docs/milestones/M0-design.md`](./docs/milestones/M0-design.md) | 设计 | **怎么建 M0** —— 决策 D-M0-1~15 / 环境基线 / Phase 0–4 / 门禁 E1–E10 | **已确认** | ≈32 KB |
 | — | [`docs/milestones/M0-tests.md`](./docs/milestones/M0-tests.md) | 测试 | **怎么验 M0** —— T-H/T-C/T-S 测试 ID、20 样本、unsupported（U1–U14）、超时预算、**M0 分母 279** | **已冻结**（2026-10-02，T29） | ≈32 KB |
 | — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（路径 / 可粘贴内容 / 验证） | ✅ **全部完成**（T01–T55，2026-10-07） | ≈100 KB |
@@ -145,7 +149,9 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | — | [`docs/contracts/`](./docs/contracts/) | 契约 | **五份契约** —— [C1](./docs/contracts/C1-source-map.md) **完整**（位置+诊断排序；M1 落地 `FileId`/`FileTable`/`DiagCode`）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） | ≈35 KB |
 | — | [`docs/milestones/M1-design.md`](./docs/milestones/M1-design.md) | 设计 | **怎么建 M1** —— 决策 D-M1-1~12（五字段）/ **实测事实基线 F1–F48** / 数据模型 / 六切面测试组 / 诊断代号表 / oracle adapter | **已确认**（2026-10-11） | ≈42 KB |
 
-**阅读顺序**：01 → 02 → 03 → 04。
+**阅读顺序**：
+* **人类协作者首读**：优先阅读 [`docs/00-architecture-and-roadmap-guide.md`](./docs/00-architecture-and-roadmap-guide.md) 建立系统直觉与架构全景，再按需查阅各专项目录。
+* **工程执行规范**：严格按 01 → 02 → 03 → 04 → 05 规格展开。
 
 **阶段文档**（`docs/milestones/`）——每阶段开工前须产出 **三件套**（`03` §6.2）：
 

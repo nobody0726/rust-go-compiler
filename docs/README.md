@@ -9,12 +9,16 @@
 
 | 序号 | 文档 | 层级 | 角色（一句话） | 状态 |
 |---|---|---|---|---|
+| 00 | [`00-architecture-and-roadmap-guide.md`](./00-architecture-and-roadmap-guide.md) | 全景层 | **人类阅读指南** —— 架构全景、编译流水线、通俗路线图与可行性审视 | 已建立 |
 | 01 | [`01-feature-set.md`](./01-feature-set.md) | 规格层 | **要建什么** —— Go 编译器功能全集 / RTM，246 个可追踪功能点 | 已建立 |
 | 02 | [`02-test-inventory.md`](./02-test-inventory.md) | 规格层 | **如何验证** —— 功能点 → 官方测试用例映射 | 已建立 |
 | 03 | [`03-roadmap.md`](./03-roadmap.md) | 计划层 | **按什么顺序建** —— M0–M12 迭代计划（v2） | 已修订 |
 | 04 | [`04-development-environment.md`](./04-development-environment.md) | 环境层 | **在哪建** —— Docker 容器开发环境方案 | 方案稿 |
+| 05 | [`05-m0-architecture-and-workflow.md`](./05-m0-architecture-and-workflow.md) | 架构层 | **怎么运作** —— M0 各阶段作用与 crates UML 时序图 | 已建立 |
 
-**阅读顺序**：01 → 02 → 03 → 04。先看「要建什么」，再看「怎么验证」，然后看「分几步建」，最后看「在什么环境里建」。
+**推荐阅读顺序**：
+* **人类工程师首读**：优先阅读 **00** 建立系统直觉与通俗路线认知，再按需翻阅 01–05。
+* **工程执行规范**：严格按 01（要建什么）→ 02（怎么验证）→ 03（分几步建）→ 04（在什么环境里建）→ 05（M0 架构与协作）。
 
 **阶段文档**（`docs/milestones/`，每阶段开工前产出，见 §5）：
 
@@ -57,6 +61,13 @@
 
 ## 3. 各文档要点
 
+### 00 `00-architecture-and-roadmap-guide.md` —— 全景层（人类阅读版）
+- 专门为人类开发者编写的通俗化导读：剥离给 AI 设立的防御性黑话与形式化外壳。
+- 梳理双轨编译流水线（解释执行轨 + 机器码生成轨）与各 crates 模块职责。
+- 包含 M0 判卷机 UML 时序调用全景。
+- 用大白话拆解 M0–M12 全流程目标。
+- 给出对 `03-roadmap.md` 可行性的深度审视、潜在风险诊断与务实降维策略（引入 Cranelift、GC 两阶段落地等）。
+
 ### 01 `01-feature-set.md` —— 规格层
 - 方法论：**Closure Coverage**（Spec 语义原子 × AST 节点对账 × Runtime 抽象内核，三维交叉验证）。
 - 结构：§0 追踪体系（ID 编码规则、覆盖率标准、**§0.4 引用路径约定**）、§1 Spec 语义原子、§2 AST 对账、§3 Runtime 五内核、§4 PIPE 流水线、§5 语言版本矩阵、§6 验收清单。
@@ -76,6 +87,12 @@
 ### 04 `04-development-environment.md` —— 环境层
 - 统一在 **Docker 管理的 arm64 Linux 容器**内完成开发、测试与首发 native 验证；不维护 macOS 第二套首发环境。
 - §9 列出需在 M0 拍板的 7 项待决事项；§7 为风险与切断条件表。
+
+### 05 `05-m0-architecture-and-workflow.md` —— 架构层
+- 阐明 M0 核心使命：为何不能直接写编译器（测试判卷无基准、环境与调试深坑、底层架构盲区）。
+- 详述 M0 Phase 0~4 五个阶段的递进作用、演进图谱与门禁闭环。
+- 给出 `rgoc/crates`（`rgoc-driver` 与 `rgoc-harness`）在 `harness run --all` 下的完整 UML 时序图。
+- 提炼关键设计与工程红线：R1b 顺序契约、Fast Path 避免 unsafe、两层失败严格区分、统一分母纪律、Spike 隔离与随时可删原则。
 
 ---
 
