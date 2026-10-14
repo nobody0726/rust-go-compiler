@@ -147,3 +147,24 @@
   指令集共 **16 个**，未知指令直接 `t.Fatalf`；`errorcheck` 裸写也会被自动加 `-d=ssa/check/on`
   （故其期望不能当纯语言语义验收）
 - 只读官方语料，不改 `go_source_code/`
+
+## M2（AST/parser）—— 状态与两条硬纪律
+
+- **M1 已完成**；M2 走 **native（inline）executing-plans**，ledger 在
+  `.superpowers/sdd/M2-plan/progress.md`（**所有 Ruling 都在那里**，改代码前先读它）。
+  三件套 `docs/milestones/M2-{design,tests,plan}.md`（tests 尚未冻结）。
+- **已完成**：`T-AP01`（`rgoc-ast` 类型簇）、`T-AP04`（中立 dump）、`T-AP05`（`rgoc-parse` 骨架）、
+  `T-AP06`（错误恢复 + 恢复点 ①）、**`PA-1`**（AST 字段按官方 `nodes.go` 对齐）、
+  `T-AP07`（`stmtOrNil` 骨架 + `stmtList` + `blockStmt`）。**下一个是 `T-AP08`**（声明族）。
+- **纪律①（PA-1 换来的）：凡是「按官方结构建模」的任务，验收必须含一步「对照官方源码逐字段 diff」。**
+  T-AP01 当时"能编译 + 15 条断言全绿"就标 complete 了，但那些断言**全是构造字面量**，
+  **没有一条能发现"字段少了"** ⇒ 后来发现 **16 处偏离官方 `nodes.go`**（含 `DeclStmt` 单数 vs
+  `DeclList` 列表、`ConstDecl` 单名 vs `NameList`、`StructType` 丢结构体标签、
+  四条声明丢 `Pragma`）。**「能编译」对数据模型不构成正确性证据。**
+- **纪律②：写完断言必须反向验证它真能失败**（本仓已踩 5 次「恒真断言」）。
+  T-AP07 又踩一次：`stmt_list` 的终止词元 `_EOF/_Case/_Default` 在**行为上不可观测**
+  （`stmtOrNil` 对它们本就返回 `None`）⇒ 那条断言永远绿。修法是**把不可观测的东西提成数据**
+  （`const STMT_LIST_END`）再断言集合本身。**变异必须保持可编译**，否则测的是"能不能编译"。
+- **不能用 `None` 冒充"还没实现"**：官方 `None` 有确切语义（"认不出来"）；骨架的未实现臂用 `todo!`。
+- **Rust 拥有权模型的硬边界**：官方的反向指针（`BranchStmt.Target` 指回祖先）在 `Box` 树里
+  **不可表达** ⇒ 刻意不建模，债已登记给 M4/M5（`progress.md` 的 PA-1 残留表）。
