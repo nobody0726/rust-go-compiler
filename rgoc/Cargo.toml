@@ -17,10 +17,12 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/rgoc-ast",
     "crates/rgoc-driver",
     "crates/rgoc-harness",
     "crates/rgoc-hir",
     "crates/rgoc-lex",
+    "crates/rgoc-parse",
     "crates/rgoc-spikes",
     "xtask",
 ]

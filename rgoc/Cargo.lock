@@ -33,6 +33,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rgoc-ast"
+version = "0.0.0"
+dependencies = [
+ "rgoc-lex",
+]
+
+[[package]]
 name = "rgoc-driver"
 version = "0.0.0"
 dependencies = [
@@ -52,6 +59,14 @@ version = "0.0.0"
 [[package]]
 name = "rgoc-lex"
 version = "0.0.0"
+
+[[package]]
+name = "rgoc-parse"
+version = "0.0.0"
+dependencies = [
+ "rgoc-ast",
+ "rgoc-lex",
+]
 
 [[package]]
 name = "rgoc-spikes"
