@@ -24,8 +24,11 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 }
 
 #[test]
-fn 代号表恰好二十三个且无重复() {
-    assert_eq!(DiagCode::ALL.len(), 23);
+fn 代号表恰为冻结总数且无重复() {
+    // 26 = 23 个 M1 词法（`LEX-`）+ 3 个 M2 语法**工作集**（`SYN-`）。
+    // `SYN-` 的完整条目归 T-AP16（从官方 `syntaxError` 调用点枚举后冻结），
+    // 届时这个数字会变 —— 变它就得同时改 `tools/ast-oracle` 的镜像表。
+    assert_eq!(DiagCode::ALL.len(), 26);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
@@ -69,15 +72,39 @@ fn 同位置的诊断按_code_排序_保证输出唯一() {
     assert_eq!(ca, [DiagCode::BadChar, DiagCode::LitNoDigits]);
 }
 
+/// 每个代号的前缀必须落在**阶段性前缀白名单**内。
+///
+/// 前缀 = 「哪个子系统产出它」的标签，也决定它由**哪个 oracle adapter** 镜像：
+///
+/// | 前缀 | 产出者 | 镜像表 |
+/// |---|---|---|
+/// | `LEX-` | `rgoc-lex` | `tools/token-oracle/diagmap.go` |
+/// | `SYN-` | `rgoc-parse` | `tools/ast-oracle/diagmap.go`（T-AP16 建立） |
+///
+/// 后半段的反向断言比前半段更关键：只查「前缀合法」的话，一个前缀写错的新代号会
+/// 静默落进「没人管」的区 —— 那正是 `AGENTS.md` 记的「漏了不会报错」形状。
+/// 但白名单本身也不能恒真：留了个没人用的前缀，说明它对应的那一半镜像表**不存在**。
 #[test]
-fn diag_code_的_as_str_前缀均为_lex_() {
+fn diag_code_的_as_str_前缀落在阶段白名单内() {
+    const PHASES: [&str; 2] = ["LEX-", "SYN-"];
+
     for c in DiagCode::ALL {
         let s = c.as_str();
-        assert!(s.starts_with("LEX-"), "前缀必须是 LEX-：{s}");
+        assert!(
+            PHASES.iter().any(|p| s.starts_with(p)),
+            "前缀必须属于 {PHASES:?} 之一：{s}"
+        );
         assert_eq!(
             s,
             s.to_uppercase(),
             "代号必须全大写（可排序、无大小写混排陷阱）：{s}"
+        );
+    }
+
+    for p in PHASES {
+        assert!(
+            DiagCode::ALL.iter().any(|c| c.as_str().starts_with(p)),
+            "白名单里的前缀 {p} 没有任何代号在用 —— 它对应的镜像表是空的"
         );
     }
 }
@@ -108,7 +135,23 @@ fn diag_bag_的_len_与_is_empty_跟随_push() {
     assert_eq!(bag.len(), 1);
 }
 
-/// 跨语言对撞：Rust 的码表必须与 Go 侧 `allCodes` **逐字一致**。
+/// 跨语言对撞：Rust 的 **`LEX-` 子表**必须与 Go 侧 `allCodes` **逐字一致**。
+///
+/// # 为什么只对撞 `LEX-` 子表
+///
+/// `tools/token-oracle/diagmap.go` 是**词法** oracle 的映射表，它的自检 ② 要求
+/// 「码表里每个代号都至少有一条**官方 `scanner.go` / `source.go` 消息**能产出它」。
+/// `SYN-` 代号由 parser 产出，在那张表里**永远不可能被产出** —— 硬塞进去只会给
+/// 自检 ② 多添一串需要豁免的死条目，并且让一个词法专用的文件背上语法概念。
+///
+/// 所以两侧各自镜像**自己能产出的那部分**：
+///
+/// | 前缀 | 镜像表 | 建立于 |
+/// |---|---|---|
+/// | `LEX-` | `tools/token-oracle/diagmap.go` | M1 |
+/// | `SYN-` | `tools/ast-oracle/diagmap.go` | T-AP16 / T-AP18 |
+///
+/// 本断言只覆盖左半边；`SYN-` 的半边随 `tools/ast-oracle` 落地时补上。
 ///
 /// # 为什么要跨语言去读一个 Go 文件
 ///
@@ -159,11 +202,22 @@ fn diag_code_的码表与_go_侧映射表逐字一致() {
     );
     go_codes.sort_unstable();
 
-    let mut rs_codes: Vec<&str> = DiagCode::ALL.iter().map(|c| c.as_str()).collect();
+    // 只取 `LEX-` 子表（见本测试文档注释）。前缀写错会得到**空表**，
+    // 而空表会让下面那条 `assert_eq!` 以一种难读的方式失败 ——
+    // 所以先立刻断言非空，把「过滤掉了一切」和「两侧真的不一致」分开报。
+    let mut rs_codes: Vec<&str> = DiagCode::ALL
+        .iter()
+        .map(|c| c.as_str())
+        .filter(|s| s.starts_with("LEX-"))
+        .collect();
+    assert!(
+        !rs_codes.is_empty(),
+        "按 `LEX-` 前缀过滤后得到 0 条 —— 前缀写错了（不是数据坏了）"
+    );
     rs_codes.sort_unstable();
 
     assert_eq!(
         rs_codes, go_codes,
-        "Rust 的 DiagCode 与 Go 侧 allCodes 不一致 —— 两侧必须同步（见 `M1-design.md` §7.2 的 D-M1-11）"
+        "Rust 的 `LEX-` 子表与 Go 侧 allCodes 不一致 —— 两侧必须同步（见 `M1-design.md` §7.2 的 D-M1-11）"
     );
 }

@@ -27,10 +27,16 @@
 //! 「写死的键列表会变成盲区」同形。
 //!
 //! 现在是**枚举** `scanner.go` / `source.go` 里全部 `errorf`/`errorAtf`/`error` 调用点
-//! （26 处 ⇒ 去重 25 条消息模板）得到 22 个官方代号，再加 1 个本仓自己的限制，共 **23**。
+//! （26 处 ⇒ 去重 25 条消息模板）得到 22 个官方代号，再加 1 个本仓自己的限制，共 **23**（M1 冻结）。
+//! M2 增补 3 个 `SYN-` 前缀语法代号（见 [`DiagCode`] 末尾），**当前共 26**。
 //!
-//! 两侧（Go 的 `tools/token-oracle/diagmap.go` 与这里）必须逐字一致 ——
-//! 由 `diag_code_的码表与_go_侧映射表逐字一致` 跨语言对撞，而不是靠人记得同步。
+//! 两侧（Go 的 `tools/token-oracle/diagmap.go` 与这里）必须同步 ——
+//! 由 `lex_代号表与_go_侧映射表逐字一致` 跨语言对撞，而不是靠人记得同步。
+//!
+//! ⚠️ 但那只对撞 **`LEX-` 子表**：token oracle 的映射表是词法专用的，`SYN-` 代号在那张表里
+//! 永远不可能被产出（它的自检 ② 要求每个代号都有官方消息能产出）。`SYN-` 的半边由
+//! `tools/ast-oracle` 的镜像表覆盖（T-AP16）。前缀与镜像表的对应关系见
+//! `diag_code_的_as_str_前缀落在阶段白名单内`。
 
 use crate::pos::Pos;
 
@@ -90,6 +96,14 @@ pub enum DiagCode {
     StringNewline,
     /// 字符串未终止
     StringUnterminated,
+
+    // ── M2 语法分析（`SYN-` 前缀）──
+    /// 期望 `;`
+    SynExpectedSemicolon,
+    /// `//line` 指令格式非法
+    SynInvalidLineDirective,
+    /// 意外的词元
+    SynUnexpectedToken,
 }
 
 impl DiagCode {
@@ -97,7 +111,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 23] = [
+    pub const ALL: [DiagCode; 26] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -121,6 +135,9 @@ impl DiagCode {
         DiagCode::RuneUnterminated,
         DiagCode::StringNewline,
         DiagCode::StringUnterminated,
+        DiagCode::SynExpectedSemicolon,
+        DiagCode::SynInvalidLineDirective,
+        DiagCode::SynUnexpectedToken,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -149,6 +166,9 @@ impl DiagCode {
             DiagCode::RuneUnterminated => "LEX-RUNE-UNTERMINATED",
             DiagCode::StringNewline => "LEX-STRING-NEWLINE",
             DiagCode::StringUnterminated => "LEX-STRING-UNTERMINATED",
+            DiagCode::SynExpectedSemicolon => "SYN-EXPECTED-SEMICOLON",
+            DiagCode::SynInvalidLineDirective => "SYN-INVALID-LINE-DIRECTIVE",
+            DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
         }
     }
 }

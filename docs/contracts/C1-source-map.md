@@ -7,7 +7,8 @@
 > **M1（`rgoc-lex`）落地后这一半已实现**：
 >
 > - `Pos { file: FileId, line, col }` + `FileTable` —— `rgoc-lex/src/pos.rs`
-> - `DiagCode`（23 个代号的枚举）—— `rgoc-lex/src/diag.rs`
+> - `DiagCode`（代号的枚举）—— `rgoc-lex/src/diag.rs`。**当前 26 个**：
+>   23 个 `LEX-`（M1，官方 scanner 可产出）+ 3 个 `SYN-`（M2 的语法**工作集**，完整条目归 `T-AP16`）
 >
 > **仍未实现**（§6）：SourceMap 的**多源位置映射**（宏展开/内联的一节点多位置）与
 > offset ↔ `(line, col)` 的**随机访问换算** —— 归 M2/M4。
@@ -129,8 +130,19 @@ pub struct Diag {
    那几条消息出现时行为未定义。现在是枚举 `scanner.go` / `source.go` 全部
    `errorf` 调用点（26 处 ⇒ 去重 25 条模板）得到 **22 个官方代号**，
    再加 1 个本仓自己的限制（`LEX-EXCEEDS-FILE-LIMIT`，§7.3 的 64 MiB 上限），
-   共 **23**。Go 侧 `tools/token-oracle/diagmap.go` 与 Rust 侧 `DiagCode`
-   的对应关系由**跨语言对撞测试**钉住，不靠人记得同步。
+   共 **23 个 `LEX-` 代号**。Go 侧 `tools/token-oracle/diagmap.go` 与 Rust 侧
+   `DiagCode` 的对应关系由**跨语言对撞测试**钉住，不靠人记得同步。
+
+3. **（M2 增补）前缀是「阶段」分区的，跨语言对撞只覆盖能对上的那一段**。
+   M2 的 parser 需要自己的语法诊断，代号加 `SYN-` 前缀（同上，声明顺序
+   == `as_str()` 字典序）。但 `tools/token-oracle` 的自检要求**每个代号都能被
+   官方 `scanner.go` / `source.go` 的消息产出** —— `SYN-` 代号在词法表里
+   永远不可能被产出，塞进去只会多一串要豁免的死条目。因此：
+   - `tools/token-oracle/diagmap.go` 只镜像 `LEX-` 段，跨语言对撞断言
+     **限定在 `LEX-` 子表**（两边都先过滤、再比对）；
+   - `SYN-` 段由 `tools/ast-oracle` 的镜像表覆盖（`T-AP16` 冻结全集）。
+   「阶段白名单」本身有断言钉住（两个前缀都必须**至少有一个代号在用**），
+   否则留一个空前缀就是一条恒真的豁免。
 
 **`message` 不参与任何比对**：`03` §3.4 规定诊断先对齐**拒绝/接受、位置和
 预定义类别**，文本另列指标；golden 只存 `行:列 + DiagCode`（D-M1-9）。
@@ -246,10 +258,10 @@ M1/M2 需要回答的三个问题（本契约的输入）：
 | 换行让行号加一且列归零 | `test_source.rs` `换行让行号加一且列归零` |
 | 排序 文件→行→列→code | `test_diag.rs` `diag_bag_into_sorted_按_文件_行_列_code` |
 | 同位置诊断按 `code` 排序，**保证输出唯一** | `test_diag.rs` `同位置的诊断按_code_排序_保证输出唯一` |
-| 代号表恰好 23 个且无重复 | `test_diag.rs` `代号表恰好二十三个且无重复` |
-| `as_str()` 前缀均为 `LEX-` | `test_diag.rs` `diag_code_的_as_str_前缀均为_lex_` |
+| 代号表恰为冻结总数且无重复 | `test_diag.rs` `代号表恰为冻结总数且无重复` |
+| `as_str()` 前缀落在**阶段白名单**内，且每个前缀都**有人在用** | `test_diag.rs` `diag_code_的_as_str_前缀落在阶段白名单内` |
 | 声明顺序 == `as_str()` 字典序 | `test_diag.rs` `diag_code_的声明顺序与_as_str_字典序一致` |
-| 码表与 Go 侧映射表**逐字一致**（跨语言） | `test_diag.rs` `diag_code_的码表与_go_侧映射表逐字一致` |
+| 码表与 Go 侧映射表逐字一致（跨语言，**限定 `LEX-` 子表**） | `test_diag.rs` `diag_code_的码表与_go_侧映射表逐字一致` |
 
 > 这些测试随 `rgoc-lex` 一起入库。M5 替换 `rgoc-hir` 时，M0 时代那份
 > spike 级副本随之退场（§4.3 的注记）。
@@ -262,3 +274,4 @@ M1/M2 需要回答的三个问题（本契约的输入）：
 |---|---|---|
 | 2026-10-07 | **初稿创建**（T48）。从 `rgoc-hir/src/diag.rs` 反推位置表示与排序规则；显式标注**留位**（那时没有 lexer，本文件不构成「已实现位置跟踪」的证据） | Phase 3 的 `rgoc-hir`（T40）+ 门禁 E6/E7 |
 | 2026-10-12 | **由留位升为完整**（T-L20）。`Pos.file`：`String` → `FileId`；新增 `FileTable`（§2.0）与 `DiagCode`（`code`：`String` → 枚举，§3.1 两条新规则）；§6 第 2 问登记为**部分落地**；验证落点由 `rgoc-hir` 迁到 `rgoc-lex`（§7）。**排序规则不变** | M1 的 `rgoc-lex`（T-L01/T-L02 + 全部切面测试）；`M1-design.md` §10.1 预定的变更范围 |
+| 2026-10-14 | **`DiagCode` 按阶段分区**（M2 / `T-AP06`）。新增 3 个 `SYN-` 前缀的语法代号（工作集）⇒ 23 → **26**；§3.1 新增第 3 条；跨语言对撞由「全表逐字一致」**收窄为 `LEX-` 子表**（`tools/token-oracle` 只镜像词法段），`SYN-` 段归 `tools/ast-oracle`（`T-AP16`）；§7 两行断言随测试改名同步。**排序规则不变** | M2 的 parser 需要自己的语法诊断；`M2-design.md` `D-M2-2`/`D-M2-4` |

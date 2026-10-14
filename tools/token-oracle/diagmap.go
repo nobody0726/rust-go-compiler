@@ -70,10 +70,15 @@ var diagMappings = []struct {
 	{"invalid character %#U", hasPrefix("invalid character"), "LEX-BAD-CHAR"},
 }
 
-// 全部 DiagCode（与 `rgoc-lex/src/diag.rs` 的变体**一一对应**，共 23 个）。
+// 全部**词法** DiagCode（与 `rgoc-lex/src/diag.rs` 里 `LEX-` 前缀的变体**一一对应**，共 23 个）。
 //
 // 顺序即 `diag.rs` 里的声明顺序 == `as_str()` 的字典序（那条不变量由 Rust 侧断言钉住；
 // 这里抄一遍是为了让 Go 侧也能自查"有没有多余的/漏掉的代号"）。
+//
+// ⚠️ `diag.rs` 里还有 M2 新增的 `SYN-` 前缀**语法**代号（由 parser 产出），**不在本表里**：
+// 下面的自检 ② 要求每个代号都能被官方 `scanner.go` / `source.go` 消息产出，而 `SYN-`
+// 代号在这张词法表里永远不可能被产出 —— 塞进来只会多一串要豁免的死条目。它们由
+// `tools/ast-oracle` 的镜像表覆盖（T-AP16）。Rust 侧的对撞断言已相应限定为 `LEX-` 子表。
 var allCodes = []string{
 	"LEX-BAD-CHAR",
 	"LEX-BAD-DIGIT",
