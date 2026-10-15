@@ -1,0 +1,3 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue46558.go:10:13: syntax error: unexpected {, expected :
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue46558.go:14:1: syntax error: non-declaration statement outside function body
+exit status 1

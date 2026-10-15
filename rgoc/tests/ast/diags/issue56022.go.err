@@ -1,0 +1,5 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue56022.go:7:53: syntax error: unexpected {, expected name or (
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue56022.go:8:51: syntax error: unexpected {, expected name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue56022.go:9:52: syntax error: unexpected (, expected name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue56022.go:10:52: syntax error: unexpected (, expected name
+exit status 1

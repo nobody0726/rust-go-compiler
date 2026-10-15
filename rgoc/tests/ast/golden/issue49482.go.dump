@@ -1,0 +1,294 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [18 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X: Name "T"
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X: Name "T"
+              Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X: Name "T"
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X: Name "T"
+              Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type: Name "T"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "P"
+          Type: Name "T"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X:
+                StructType
+                  Fields: [0 entries]
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            Operation
+              Op: *
+              X:
+                StructType
+                  Fields: [0 entries]
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            SliceType
+              Elem: Name "int"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            CallExpr
+              Fun: Name "P"
+              Args: [1 entries]
+                Name "T"
+              HasDots: false
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            CallExpr
+              Fun: Name "P"
+              Args: [1 entries]
+                ParenExpr
+                  X: Name "T"
+              HasDots: false
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: *
+              X: Name "P"
+              Y:
+                Operation
+                  Op: *
+                  X: Name "T"
+                  Y: null
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: *
+              X: Name "P"
+              Y: Name "T"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            CallExpr
+              Fun: Name "P"
+              Args: [1 entries]
+                Operation
+                  Op: *
+                  X: Name "T"
+                  Y: null
+              HasDots: false
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            CallExpr
+              Fun: Name "P"
+              Args: [1 entries]
+                Operation
+                  Op: *
+                  X:
+                    Operation
+                      Op: *
+                      X: Name "T"
+                      Y: null
+                  Y: null
+              HasDots: false
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: -
+              X:
+                Operation
+                  Op: *
+                  X: Name "P"
+                  Y: Name "T"
+              Y: Name "T"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: -
+              X:
+                Operation
+                  Op: *
+                  X: Name "P"
+                  Y: Name "T"
+              Y: Name "T"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len: BasicLit(int) "10"
+          Elem:
+            StructType
+              Fields: [0 entries]

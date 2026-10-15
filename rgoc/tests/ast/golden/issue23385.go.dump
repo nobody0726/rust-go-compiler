@@ -1,0 +1,48 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [2 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            IfStmt
+              Init: -
+              Cond: -
+              Then:
+                BlockStmt
+                  Stmts: [0 entries]
+              Else: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "a"
+              Type: Name "string"
+              Tag: -
+            Field
+              Name: Name "b"
+              Type: Name "string"
+              Tag: -
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            IfStmt
+              Init: -
+              Cond: -
+              Then:
+                BlockStmt
+                  Stmts: [0 entries]
+              Else: -

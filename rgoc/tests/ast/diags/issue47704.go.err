@@ -1,0 +1,4 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue47704.go:8:8: syntax error: unexpected ], expected operand
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue47704.go:10:40: syntax error: unexpected name a, expected comma, : or ]
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue47704.go:15:46: syntax error: unexpected newline, expected comma, : or ]
+exit status 1

@@ -1,0 +1,13 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:7:49: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:8:56: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:16:95: syntax error: missing parameter type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:16:52: interface method must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:20:47: syntax error: empty type parameter list
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:21:49: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:22:56: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:24:37: syntax error: unexpected literal 0, expected ]
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:53:69: syntax error: missing type parameter name or invalid array length
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:54:53: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:55:45: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/tparams.go:56:45: syntax error: missing type parameter name
+exit status 1

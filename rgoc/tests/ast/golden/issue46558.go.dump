@@ -1,0 +1,38 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [1 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "F"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "s"
+              Type: Name "string"
+              Tag: -
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            SwitchStmt
+              Init: -
+              Tag:
+                IndexExpr
+                  X: Name "s"
+                  Index: BasicLit(int) "0"
+              Cases: [3 entries]
+                CaseClause
+                  Cases: BasicLit(rune) "'a'"
+                  Body: [0 entries]
+                CaseClause
+                  Cases:
+                    IndexExpr
+                      X: Name "s"
+                      Index: BasicLit(int) "2"
+                  Body: [0 entries]
+                CaseClause
+                  Cases: BasicLit(rune) "'b'"
+                  Body: [0 entries]

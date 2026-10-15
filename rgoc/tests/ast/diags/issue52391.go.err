@@ -1,0 +1,5 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue52391.go:15:28: syntax error: unexpected ~, expected type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue52391.go:16:33: syntax error: unexpected |, expected )
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue52391.go:16:70: syntax error: unexpected name string in interface type; possibly missing semicolon or newline or }
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue52391.go:16:103: syntax error: unexpected ) after top level declaration
+exit status 1

@@ -1,0 +1,6 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue31092.go:11:35: syntax error: unexpected :=, expected =
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue31092.go:12:34: syntax error: unexpected :=, expected =
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue31092.go:13:33: syntax error: unexpected :=, expected =
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue31092.go:15:39: syntax error: unexpected :=, expected =
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue31092.go:16:37: syntax error: unexpected :=, expected =
+exit status 1

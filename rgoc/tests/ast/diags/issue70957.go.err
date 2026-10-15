@@ -1,0 +1,3 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue70957.go:7:79: syntax error: unexpected semicolon, expected name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue70957.go:9:17: syntax error: unexpected }, expected name
+exit status 1

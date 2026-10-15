@@ -1,0 +1,217 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [11 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: BadExpr
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: BadExpr
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: BadExpr
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: Name "D"
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [4 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "D"
+          Type: BadExpr
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [4 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "C"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type: Name "int"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [4 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "D"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type: Name "int"
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: BadExpr
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]

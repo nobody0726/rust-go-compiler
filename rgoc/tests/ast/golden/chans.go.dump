@@ -1,0 +1,345 @@
+File
+  PkgName: Name "chans"
+  GoVersion: -
+  Decls: [8 entries]
+    ImportDecl
+      Name: -
+      Path: BasicLit(string) "\"runtime\""
+    FuncDecl
+      Recv: -
+      Name: Name "Ranger"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [2 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "Sender"
+                      Index: Name "T"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "Receiver"
+                      Index: Name "T"
+                  Y: null
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [6 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "c"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "make"
+                  Args: [1 entries]
+                    ChanType
+                      Dir: -
+                      Elem: Name "T"
+                  HasDots: false
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "d"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "make"
+                  Args: [1 entries]
+                    ChanType
+                      Dir: -
+                      Elem: Name "bool"
+                  HasDots: false
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "s"
+              Rhs: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    CompositeLit
+                      Type:
+                        IndexExpr
+                          X: Name "Sender"
+                          Index: Name "T"
+                      Elems: [2 entries]
+                        KeyValueExpr
+                          Key: Name "values"
+                          Value: Name "c"
+                        KeyValueExpr
+                          Key: Name "done"
+                          Value: Name "d"
+                  Y: null
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "r"
+              Rhs: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    CompositeLit
+                      Type:
+                        IndexExpr
+                          X: Name "Receiver"
+                          Index: Name "T"
+                      Elems: [2 entries]
+                        KeyValueExpr
+                          Key: Name "values"
+                          Value: Name "c"
+                        KeyValueExpr
+                          Key: Name "done"
+                          Value: Name "d"
+                  Y: null
+            ExprStmt
+              X:
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "runtime"
+                      Sel: Name "SetFinalizer"
+                  Args: [2 entries]
+                    Name "r"
+                    SelectorExpr
+                      X: Name "r"
+                      Sel: Name "finalize"
+                  HasDots: false
+            ReturnStmt
+              Results: [2 entries]
+                Name "s"
+                Name "r"
+    TypeDecl
+      Name: Name "Sender"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [2 entries]
+            Field
+              Name: Name "values"
+              Type:
+                ChanType
+                  Dir: send
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: Name "done"
+              Type:
+                ChanType
+                  Dir: recv
+                  Elem: Name "bool"
+              Tag: -
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "s"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Sender"
+                  Index: Name "T"
+              Y: null
+          Tag: -
+      Name: Name "Send"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "v"
+              Type: Name "T"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            SelectStmt
+              Clauses: [2 entries]
+                CommClause
+                  Comm:
+                    SendStmt
+                      Chan:
+                        SelectorExpr
+                          X: Name "s"
+                          Sel: Name "values"
+                      Value: Name "v"
+                  Body: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        Name "true"
+                CommClause
+                  Comm:
+                    ExprStmt
+                      X:
+                        Operation
+                          Op: <-
+                          X:
+                            SelectorExpr
+                              X: Name "s"
+                              Sel: Name "done"
+                          Y: null
+                  Body: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        Name "false"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "s"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Sender"
+                  Index: Name "T"
+              Y: null
+          Tag: -
+      Name: Name "Close"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ExprStmt
+              X:
+                CallExpr
+                  Fun: Name "close"
+                  Args: [1 entries]
+                    SelectorExpr
+                      X: Name "s"
+                      Sel: Name "values"
+                  HasDots: false
+    TypeDecl
+      Name: Name "Receiver"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [2 entries]
+            Field
+              Name: Name "values"
+              Type:
+                ChanType
+                  Dir: recv
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: Name "done"
+              Type:
+                ChanType
+                  Dir: send
+                  Elem: Name "bool"
+              Tag: -
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "r"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Receiver"
+                  Index: Name "T"
+              Y: null
+          Tag: -
+      Name: Name "Next"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [2 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [2 entries]
+                Name "v"
+                Name "ok"
+              Rhs: [1 entries]
+                Operation
+                  Op: <-
+                  X:
+                    SelectorExpr
+                      X: Name "r"
+                      Sel: Name "values"
+                  Y: null
+            ReturnStmt
+              Results: [2 entries]
+                Name "v"
+                Name "ok"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "r"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Receiver"
+                  Index: Name "T"
+              Y: null
+          Tag: -
+      Name: Name "finalize"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ExprStmt
+              X:
+                CallExpr
+                  Fun: Name "close"
+                  Args: [1 entries]
+                    SelectorExpr
+                      X: Name "r"
+                      Sel: Name "done"
+                  HasDots: false

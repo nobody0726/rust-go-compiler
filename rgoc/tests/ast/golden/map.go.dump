@@ -1,0 +1,895 @@
+File
+  PkgName: Name "orderedmap"
+  GoVersion: -
+  Decls: [11 entries]
+    ImportDecl
+      Name: -
+      Path: BasicLit(string) "\"chans\""
+    TypeDecl
+      Name: Name "Map"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "K"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "V"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [2 entries]
+            Field
+              Name: Name "root"
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "node"
+                      Index:
+                        Name "K"
+                        Name "V"
+                  Y: null
+              Tag: -
+            Field
+              Name: Name "compare"
+              Type:
+                FuncType
+                  Params: [2 entries]
+                    Field
+                      Name: -
+                      Type: Name "K"
+                      Tag: -
+                    Field
+                      Name: -
+                      Type: Name "K"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "int"
+                      Tag: -
+              Tag: -
+    TypeDecl
+      Name: Name "node"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "K"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "V"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [4 entries]
+            Field
+              Name: Name "key"
+              Type: Name "K"
+              Tag: -
+            Field
+              Name: Name "val"
+              Type: Name "V"
+              Tag: -
+            Field
+              Name: Name "left"
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "node"
+                      Index:
+                        Name "K"
+                        Name "V"
+                  Y: null
+              Tag: -
+            Field
+              Name: Name "right"
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "node"
+                      Index:
+                        Name "K"
+                        Name "V"
+                  Y: null
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "New"
+      TParams: [2 entries]
+        Field
+          Name: Name "K"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "V"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "compare"
+              Type:
+                FuncType
+                  Params: [2 entries]
+                    Field
+                      Name: -
+                      Type: Name "K"
+                      Tag: -
+                    Field
+                      Name: -
+                      Type: Name "K"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "int"
+                      Tag: -
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "Map"
+                      Index:
+                        Name "K"
+                        Name "V"
+                  Y: null
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ReturnStmt
+              Results: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    CompositeLit
+                      Type:
+                        IndexExpr
+                          X: Name "Map"
+                          Index:
+                            Name "K"
+                            Name "V"
+                      Elems: [1 entries]
+                        KeyValueExpr
+                          Key: Name "compare"
+                          Value: Name "compare"
+                  Y: null
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "m"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Map"
+                  Index:
+                    Name "K"
+                    Name "V"
+              Y: null
+          Tag: -
+      Name: Name "find"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "key"
+              Type: Name "K"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    Operation
+                      Op: *
+                      X:
+                        IndexExpr
+                          X: Name "node"
+                          Index:
+                            Name "K"
+                            Name "V"
+                      Y: null
+                  Y: null
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "pn"
+              Rhs: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    SelectorExpr
+                      X: Name "m"
+                      Sel: Name "root"
+                  Y: null
+            ForStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: !=
+                  X:
+                    Operation
+                      Op: *
+                      X: Name "pn"
+                      Y: null
+                  Y: Name "nil"
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    SwitchStmt
+                      Init:
+                        AssignStmt
+                          Op: :=
+                          Lhs: [1 entries]
+                            Name "cmp"
+                          Rhs: [1 entries]
+                            CallExpr
+                              Fun:
+                                SelectorExpr
+                                  X: Name "m"
+                                  Sel: Name "compare"
+                              Args: [2 entries]
+                                Name "key"
+                                SelectorExpr
+                                  X:
+                                    ParenExpr
+                                      X:
+                                        Operation
+                                          Op: *
+                                          X: Name "pn"
+                                          Y: null
+                                  Sel: Name "key"
+                              HasDots: false
+                      Tag: -
+                      Cases: [3 entries]
+                        CaseClause
+                          Cases:
+                            Operation
+                              Op: <
+                              X: Name "cmp"
+                              Y: BasicLit(int) "0"
+                          Body: [1 entries]
+                            AssignStmt
+                              Op: =
+                              Lhs: [1 entries]
+                                Name "pn"
+                              Rhs: [1 entries]
+                                Operation
+                                  Op: &
+                                  X:
+                                    SelectorExpr
+                                      X:
+                                        ParenExpr
+                                          X:
+                                            Operation
+                                              Op: *
+                                              X: Name "pn"
+                                              Y: null
+                                      Sel: Name "left"
+                                  Y: null
+                        CaseClause
+                          Cases:
+                            Operation
+                              Op: >
+                              X: Name "cmp"
+                              Y: BasicLit(int) "0"
+                          Body: [1 entries]
+                            AssignStmt
+                              Op: =
+                              Lhs: [1 entries]
+                                Name "pn"
+                              Rhs: [1 entries]
+                                Operation
+                                  Op: &
+                                  X:
+                                    SelectorExpr
+                                      X:
+                                        ParenExpr
+                                          X:
+                                            Operation
+                                              Op: *
+                                              X: Name "pn"
+                                              Y: null
+                                      Sel: Name "right"
+                                  Y: null
+                        CaseClause
+                          Cases: -
+                          Body: [1 entries]
+                            ReturnStmt
+                              Results: [1 entries]
+                                Name "pn"
+            ReturnStmt
+              Results: [1 entries]
+                Name "pn"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "m"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Map"
+                  Index:
+                    Name "K"
+                    Name "V"
+              Y: null
+          Tag: -
+      Name: Name "Insert"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "key"
+              Type: Name "K"
+              Tag: -
+            Field
+              Name: Name "val"
+              Type: Name "V"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [4 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "pn"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "m"
+                      Sel: Name "find"
+                  Args: [1 entries]
+                    Name "key"
+                  HasDots: false
+            IfStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: !=
+                  X:
+                    Operation
+                      Op: *
+                      X: Name "pn"
+                      Y: null
+                  Y: Name "nil"
+              Then:
+                BlockStmt
+                  Stmts: [2 entries]
+                    AssignStmt
+                      Op: =
+                      Lhs: [1 entries]
+                        SelectorExpr
+                          X:
+                            ParenExpr
+                              X:
+                                Operation
+                                  Op: *
+                                  X: Name "pn"
+                                  Y: null
+                          Sel: Name "val"
+                      Rhs: [1 entries]
+                        Name "val"
+                    ReturnStmt
+                      Results: [1 entries]
+                        Name "false"
+              Else: -
+            AssignStmt
+              Op: =
+              Lhs: [1 entries]
+                Operation
+                  Op: *
+                  X: Name "pn"
+                  Y: null
+              Rhs: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    CompositeLit
+                      Type:
+                        IndexExpr
+                          X: Name "node"
+                          Index:
+                            Name "K"
+                            Name "V"
+                      Elems: [2 entries]
+                        KeyValueExpr
+                          Key: Name "key"
+                          Value: Name "key"
+                        KeyValueExpr
+                          Key: Name "val"
+                          Value: Name "val"
+                  Y: null
+            ReturnStmt
+              Results: [1 entries]
+                Name "true"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "m"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Map"
+                  Index:
+                    Name "K"
+                    Name "V"
+              Y: null
+          Tag: -
+      Name: Name "Find"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "key"
+              Type: Name "K"
+              Tag: -
+          Results: [2 entries]
+            Field
+              Name: -
+              Type: Name "V"
+              Tag: -
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "pn"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "m"
+                      Sel: Name "find"
+                  Args: [1 entries]
+                    Name "key"
+                  HasDots: false
+            IfStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: ==
+                  X:
+                    Operation
+                      Op: *
+                      X: Name "pn"
+                      Y: null
+                  Y: Name "nil"
+              Then:
+                BlockStmt
+                  Stmts: [2 entries]
+                    DeclStmt
+                      Decls: [1 entries]
+                        VarDecl
+                          Names: [1 entries]
+                            Name "zero"
+                          Type: Name "V"
+                          Values: [0 entries]
+                    ReturnStmt
+                      Results: [2 entries]
+                        Name "zero"
+                        Name "false"
+              Else: -
+            ReturnStmt
+              Results: [2 entries]
+                SelectorExpr
+                  X:
+                    ParenExpr
+                      X:
+                        Operation
+                          Op: *
+                          X: Name "pn"
+                          Y: null
+                  Sel: Name "val"
+                Name "true"
+    TypeDecl
+      Name: Name "keyValue"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "K"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "V"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [2 entries]
+            Field
+              Name: Name "key"
+              Type: Name "K"
+              Tag: -
+            Field
+              Name: Name "val"
+              Type: Name "V"
+              Tag: -
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "m"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Map"
+                  Index:
+                    Name "K"
+                    Name "V"
+              Y: null
+          Tag: -
+      Name: Name "InOrder"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X: Name "Iterator"
+                      Index:
+                        Name "K"
+                        Name "V"
+                  Y: null
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [5 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [2 entries]
+                Name "sender"
+                Name "receiver"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    IndexExpr
+                      X:
+                        SelectorExpr
+                          X: Name "chans"
+                          Sel: Name "Ranger"
+                      Index:
+                        IndexExpr
+                          X: Name "keyValue"
+                          Index:
+                            Name "K"
+                            Name "V"
+                  Args: [0 entries]
+                  HasDots: false
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "f"
+                  Type:
+                    FuncType
+                      Params: [1 entries]
+                        Field
+                          Name: -
+                          Type:
+                            Operation
+                              Op: *
+                              X:
+                                IndexExpr
+                                  X: Name "node"
+                                  Index:
+                                    Name "K"
+                                    Name "V"
+                              Y: null
+                          Tag: -
+                      Results: [1 entries]
+                        Field
+                          Name: -
+                          Type: Name "bool"
+                          Tag: -
+                  Values: [0 entries]
+            AssignStmt
+              Op: =
+              Lhs: [1 entries]
+                Name "f"
+              Rhs: [1 entries]
+                FuncLit
+                  Type:
+                    FuncType
+                      Params: [1 entries]
+                        Field
+                          Name: Name "n"
+                          Type:
+                            Operation
+                              Op: *
+                              X:
+                                IndexExpr
+                                  X: Name "node"
+                                  Index:
+                                    Name "K"
+                                    Name "V"
+                              Y: null
+                          Tag: -
+                      Results: [1 entries]
+                        Field
+                          Name: -
+                          Type: Name "bool"
+                          Tag: -
+                  Body:
+                    BlockStmt
+                      Stmts: [2 entries]
+                        IfStmt
+                          Init: -
+                          Cond:
+                            Operation
+                              Op: ==
+                              X: Name "n"
+                              Y: Name "nil"
+                          Then:
+                            BlockStmt
+                              Stmts: [1 entries]
+                                ReturnStmt
+                                  Results: [1 entries]
+                                    Name "true"
+                          Else: -
+                        ReturnStmt
+                          Results: [1 entries]
+                            Operation
+                              Op: &&
+                              X:
+                                Operation
+                                  Op: &&
+                                  X:
+                                    CallExpr
+                                      Fun: Name "f"
+                                      Args: [1 entries]
+                                        SelectorExpr
+                                          X: Name "n"
+                                          Sel: Name "left"
+                                      HasDots: false
+                                  Y:
+                                    CallExpr
+                                      Fun:
+                                        SelectorExpr
+                                          X: Name "sender"
+                                          Sel: Name "Send"
+                                      Args: [1 entries]
+                                        CompositeLit
+                                          Type:
+                                            IndexExpr
+                                              X: Name "keyValue"
+                                              Index:
+                                                Name "K"
+                                                Name "V"
+                                          Elems: [2 entries]
+                                            SelectorExpr
+                                              X: Name "n"
+                                              Sel: Name "key"
+                                            SelectorExpr
+                                              X: Name "n"
+                                              Sel: Name "val"
+                                      HasDots: false
+                              Y:
+                                CallExpr
+                                  Fun: Name "f"
+                                  Args: [1 entries]
+                                    SelectorExpr
+                                      X: Name "n"
+                                      Sel: Name "right"
+                                  HasDots: false
+            CallStmt
+              Tok: go
+              Call:
+                CallExpr
+                  Fun:
+                    FuncLit
+                      Type:
+                        FuncType
+                          Params: [0 entries]
+                          Results: [0 entries]
+                      Body:
+                        BlockStmt
+                          Stmts: [2 entries]
+                            ExprStmt
+                              X:
+                                CallExpr
+                                  Fun: Name "f"
+                                  Args: [1 entries]
+                                    SelectorExpr
+                                      X: Name "m"
+                                      Sel: Name "root"
+                                  HasDots: false
+                            ExprStmt
+                              X:
+                                CallExpr
+                                  Fun:
+                                    SelectorExpr
+                                      X: Name "sender"
+                                      Sel: Name "Close"
+                                  Args: [0 entries]
+                                  HasDots: false
+                  Args: [0 entries]
+                  HasDots: false
+            ReturnStmt
+              Results: [1 entries]
+                Operation
+                  Op: &
+                  X:
+                    CompositeLit
+                      Type:
+                        IndexExpr
+                          X: Name "Iterator"
+                          Index:
+                            Name "K"
+                            Name "V"
+                      Elems: [1 entries]
+                        Name "receiver"
+                  Y: null
+    TypeDecl
+      Name: Name "Iterator"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "K"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "V"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [1 entries]
+            Field
+              Name: Name "r"
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    IndexExpr
+                      X:
+                        SelectorExpr
+                          X: Name "chans"
+                          Sel: Name "Receiver"
+                      Index:
+                        IndexExpr
+                          X: Name "keyValue"
+                          Index:
+                            Name "K"
+                            Name "V"
+                  Y: null
+              Tag: -
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "it"
+          Type:
+            Operation
+              Op: *
+              X:
+                IndexExpr
+                  X: Name "Iterator"
+                  Index:
+                    Name "K"
+                    Name "V"
+              Y: null
+          Tag: -
+      Name: Name "Next"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [3 entries]
+            Field
+              Name: -
+              Type: Name "K"
+              Tag: -
+            Field
+              Name: -
+              Type: Name "V"
+              Tag: -
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [2 entries]
+                Name "keyval"
+                Name "ok"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X:
+                        SelectorExpr
+                          X: Name "it"
+                          Sel: Name "r"
+                      Sel: Name "Next"
+                  Args: [0 entries]
+                  HasDots: false
+            IfStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: !
+                  X: Name "ok"
+                  Y: null
+              Then:
+                BlockStmt
+                  Stmts: [3 entries]
+                    DeclStmt
+                      Decls: [1 entries]
+                        VarDecl
+                          Names: [1 entries]
+                            Name "zerok"
+                          Type: Name "K"
+                          Values: [0 entries]
+                    DeclStmt
+                      Decls: [1 entries]
+                        VarDecl
+                          Names: [1 entries]
+                            Name "zerov"
+                          Type: Name "V"
+                          Values: [0 entries]
+                    ReturnStmt
+                      Results: [3 entries]
+                        Name "zerok"
+                        Name "zerov"
+                        Name "false"
+              Else: -
+            ReturnStmt
+              Results: [3 entries]
+                SelectorExpr
+                  X: Name "keyval"
+                  Sel: Name "key"
+                SelectorExpr
+                  X: Name "keyval"
+                  Sel: Name "val"
+                Name "true"

@@ -1,0 +1,73 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [5 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: -
+              Type: Name "m"
+              Tag: -
+    ConstDecl
+      Names: [1 entries]
+        Name "x"
+      Type: Name "int"
+      Values: [1 entries]
+        BasicLit(int) "10"
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        CompositeLit
+          Type:
+            SliceType
+              Elem: Name "int"
+          Elems: [3 entries]
+            BasicLit(int) "1"
+            BasicLit(int) "2"
+            BasicLit(int) "3"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        StructType
+          Fields: [1 entries]
+            Field
+              Name: Name "x"
+              Type: Name "y"
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "a"
+              Type: Name "c"
+              Tag: -
+            Field
+              Name: Name "b"
+              Type: Name "c"
+              Tag: -
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ExprStmt
+              X:
+                CallExpr
+                  Fun: Name "f"
+                  Args: [3 entries]
+                    Name "a"
+                    Name "b"
+                    Name "c"
+                  HasDots: false

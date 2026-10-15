@@ -1,0 +1,10 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:52:53: syntax error: missing type parameter name or invalid array length
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:82:54: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:83:55: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:84:56: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:85:57: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:87:58: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:88:59: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:89:58: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/typeset.go:90:59: syntax error: missing type parameter name
+exit status 1

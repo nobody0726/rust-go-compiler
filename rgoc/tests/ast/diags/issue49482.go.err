@@ -1,0 +1,3 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue49482.go:29:47: syntax error: unexpected comma; expected ]
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue49482.go:30:44: syntax error: unexpected comma; expected ]
+exit status 1

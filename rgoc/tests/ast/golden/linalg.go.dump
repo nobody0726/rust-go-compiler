@@ -1,0 +1,679 @@
+File
+  PkgName: Name "linalg"
+  GoVersion: -
+  Decls: [13 entries]
+    ImportDecl
+      Name: -
+      Path: BasicLit(string) "\"math\""
+    TypeDecl
+      Name: Name "Numeric"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: |
+                      X:
+                        Operation
+                          Op: |
+                          X:
+                            Operation
+                              Op: |
+                              X:
+                                Operation
+                                  Op: |
+                                  X:
+                                    Operation
+                                      Op: |
+                                      X:
+                                        Operation
+                                          Op: |
+                                          X:
+                                            Operation
+                                              Op: |
+                                              X:
+                                                Operation
+                                                  Op: |
+                                                  X:
+                                                    Operation
+                                                      Op: |
+                                                      X:
+                                                        Operation
+                                                          Op: |
+                                                          X:
+                                                            Operation
+                                                              Op: |
+                                                              X:
+                                                                Operation
+                                                                  Op: |
+                                                                  X:
+                                                                    Operation
+                                                                      Op: |
+                                                                      X:
+                                                                        Operation
+                                                                          Op: ~
+                                                                          X: Name "int"
+                                                                          Y: null
+                                                                      Y:
+                                                                        Operation
+                                                                          Op: ~
+                                                                          X: Name "int8"
+                                                                          Y: null
+                                                                  Y:
+                                                                    Operation
+                                                                      Op: ~
+                                                                      X: Name "int16"
+                                                                      Y: null
+                                                              Y:
+                                                                Operation
+                                                                  Op: ~
+                                                                  X: Name "int32"
+                                                                  Y: null
+                                                          Y:
+                                                            Operation
+                                                              Op: ~
+                                                              X: Name "int64"
+                                                              Y: null
+                                                      Y: Name "uint"
+                                                  Y:
+                                                    Operation
+                                                      Op: ~
+                                                      X: Name "uint8"
+                                                      Y: null
+                                              Y:
+                                                Operation
+                                                  Op: ~
+                                                  X: Name "uint16"
+                                                  Y: null
+                                          Y:
+                                            Operation
+                                              Op: ~
+                                              X: Name "uint32"
+                                              Y: null
+                                      Y:
+                                        Operation
+                                          Op: ~
+                                          X: Name "uint64"
+                                          Y: null
+                                  Y:
+                                    Operation
+                                      Op: ~
+                                      X: Name "uintptr"
+                                      Y: null
+                              Y: Name "float32"
+                          Y:
+                            Operation
+                              Op: ~
+                              X: Name "float64"
+                              Y: null
+                      Y: Name "complex64"
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "complex128"
+                      Y: null
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "DotProduct"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "Numeric"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "s1"
+              Type:
+                SliceType
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: Name "s2"
+              Type:
+                SliceType
+                  Elem: Name "T"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [4 entries]
+            IfStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: !=
+                  X:
+                    CallExpr
+                      Fun: Name "len"
+                      Args: [1 entries]
+                        Name "s1"
+                      HasDots: false
+                  Y:
+                    CallExpr
+                      Fun: Name "len"
+                      Args: [1 entries]
+                        Name "s2"
+                      HasDots: false
+              Then:
+                BlockStmt
+                  Stmts: [1 entries]
+                    ExprStmt
+                      X:
+                        CallExpr
+                          Fun: Name "panic"
+                          Args: [1 entries]
+                            BasicLit(string) "\"DotProduct: slices of unequal length\""
+                          HasDots: false
+              Else: -
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "r"
+                  Type: Name "T"
+                  Values: [0 entries]
+            ForStmt
+              Init:
+                RangeClause
+                  Define: true
+                  Lhs: [1 entries]
+                    Name "i"
+                  X: Name "s1"
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    AssignStmt
+                      Op: +=
+                      Lhs: [1 entries]
+                        Name "r"
+                      Rhs: [1 entries]
+                        Operation
+                          Op: *
+                          X:
+                            IndexExpr
+                              X: Name "s1"
+                              Index: Name "i"
+                          Y:
+                            IndexExpr
+                              X: Name "s2"
+                              Index: Name "i"
+            ReturnStmt
+              Results: [1 entries]
+                Name "r"
+    TypeDecl
+      Name: Name "NumericAbs"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "any"
+          Tag: -
+      Type:
+        InterfaceType
+          Methods: [2 entries]
+            Field
+              Name: -
+              Type: Name "Numeric"
+              Tag: -
+            Field
+              Name: Name "Abs"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "T"
+                      Tag: -
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "AbsDifference"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type:
+            IndexExpr
+              X: Name "NumericAbs"
+              Index: Name "T"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "a"
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: Name "b"
+              Type: Name "T"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "d"
+              Rhs: [1 entries]
+                Operation
+                  Op: -
+                  X: Name "a"
+                  Y: Name "b"
+            ReturnStmt
+              Results: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "d"
+                      Sel: Name "Abs"
+                  Args: [0 entries]
+                  HasDots: false
+    TypeDecl
+      Name: Name "OrderedNumeric"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: |
+                      X:
+                        Operation
+                          Op: |
+                          X:
+                            Operation
+                              Op: |
+                              X:
+                                Operation
+                                  Op: |
+                                  X:
+                                    Operation
+                                      Op: |
+                                      X:
+                                        Operation
+                                          Op: |
+                                          X:
+                                            Operation
+                                              Op: |
+                                              X:
+                                                Operation
+                                                  Op: |
+                                                  X:
+                                                    Operation
+                                                      Op: |
+                                                      X:
+                                                        Operation
+                                                          Op: |
+                                                          X:
+                                                            Operation
+                                                              Op: |
+                                                              X:
+                                                                Operation
+                                                                  Op: ~
+                                                                  X: Name "int"
+                                                                  Y: null
+                                                              Y:
+                                                                Operation
+                                                                  Op: ~
+                                                                  X: Name "int8"
+                                                                  Y: null
+                                                          Y:
+                                                            Operation
+                                                              Op: ~
+                                                              X: Name "int16"
+                                                              Y: null
+                                                      Y:
+                                                        Operation
+                                                          Op: ~
+                                                          X: Name "int32"
+                                                          Y: null
+                                                  Y:
+                                                    Operation
+                                                      Op: ~
+                                                      X: Name "int64"
+                                                      Y: null
+                                              Y: Name "uint"
+                                          Y:
+                                            Operation
+                                              Op: ~
+                                              X: Name "uint8"
+                                              Y: null
+                                      Y:
+                                        Operation
+                                          Op: ~
+                                          X: Name "uint16"
+                                          Y: null
+                                  Y:
+                                    Operation
+                                      Op: ~
+                                      X: Name "uint32"
+                                      Y: null
+                              Y:
+                                Operation
+                                  Op: ~
+                                  X: Name "uint64"
+                                  Y: null
+                          Y:
+                            Operation
+                              Op: ~
+                              X: Name "uintptr"
+                              Y: null
+                      Y: Name "float32"
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "float64"
+                      Y: null
+              Tag: -
+    TypeDecl
+      Name: Name "Complex"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X: Name "complex64"
+                      Y: null
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "complex128"
+                      Y: null
+              Tag: -
+    TypeDecl
+      Name: Name "OrderedAbs"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "OrderedNumeric"
+          Tag: -
+      Type: Name "T"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "a"
+          Type:
+            IndexExpr
+              X: Name "OrderedAbs"
+              Index: Name "T"
+          Tag: -
+      Name: Name "Abs"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "OrderedAbs"
+                  Index: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            IfStmt
+              Init: -
+              Cond:
+                Operation
+                  Op: <
+                  X: Name "a"
+                  Y: BasicLit(int) "0"
+              Then:
+                BlockStmt
+                  Stmts: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        Operation
+                          Op: -
+                          X: Name "a"
+                          Y: null
+              Else: -
+            ReturnStmt
+              Results: [1 entries]
+                Name "a"
+    TypeDecl
+      Name: Name "ComplexAbs"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "Complex"
+          Tag: -
+      Type: Name "T"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "a"
+          Type:
+            IndexExpr
+              X: Name "ComplexAbs"
+              Index: Name "T"
+          Tag: -
+      Name: Name "Abs"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "ComplexAbs"
+                  Index: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [4 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "r"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "float64"
+                  Args: [1 entries]
+                    CallExpr
+                      Fun: Name "real"
+                      Args: [1 entries]
+                        Name "a"
+                      HasDots: false
+                  HasDots: false
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "i"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "float64"
+                  Args: [1 entries]
+                    CallExpr
+                      Fun: Name "imag"
+                      Args: [1 entries]
+                        Name "a"
+                      HasDots: false
+                  HasDots: false
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "d"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "math"
+                      Sel: Name "Sqrt"
+                  Args: [1 entries]
+                    Operation
+                      Op: +
+                      X:
+                        Operation
+                          Op: *
+                          X: Name "r"
+                          Y: Name "r"
+                      Y:
+                        Operation
+                          Op: *
+                          X: Name "i"
+                          Y: Name "i"
+                  HasDots: false
+            ReturnStmt
+              Results: [1 entries]
+                CallExpr
+                  Fun:
+                    IndexExpr
+                      X: Name "ComplexAbs"
+                      Index: Name "T"
+                  Args: [1 entries]
+                    CallExpr
+                      Fun: Name "complex"
+                      Args: [2 entries]
+                        Name "d"
+                        BasicLit(int) "0"
+                      HasDots: false
+                  HasDots: false
+    FuncDecl
+      Recv: -
+      Name: Name "OrderedAbsDifference"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "OrderedNumeric"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "a"
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: Name "b"
+              Type: Name "T"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ReturnStmt
+              Results: [1 entries]
+                CallExpr
+                  Fun: Name "T"
+                  Args: [1 entries]
+                    CallExpr
+                      Fun: Name "AbsDifference"
+                      Args: [2 entries]
+                        CallExpr
+                          Fun:
+                            IndexExpr
+                              X: Name "OrderedAbs"
+                              Index: Name "T"
+                          Args: [1 entries]
+                            Name "a"
+                          HasDots: false
+                        CallExpr
+                          Fun:
+                            IndexExpr
+                              X: Name "OrderedAbs"
+                              Index: Name "T"
+                          Args: [1 entries]
+                            Name "b"
+                          HasDots: false
+                      HasDots: false
+                  HasDots: false
+    FuncDecl
+      Recv: -
+      Name: Name "ComplexAbsDifference"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "Complex"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "a"
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: Name "b"
+              Type: Name "T"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ReturnStmt
+              Results: [1 entries]
+                CallExpr
+                  Fun: Name "T"
+                  Args: [1 entries]
+                    CallExpr
+                      Fun: Name "AbsDifference"
+                      Args: [2 entries]
+                        CallExpr
+                          Fun:
+                            IndexExpr
+                              X: Name "ComplexAbs"
+                              Index: Name "T"
+                          Args: [1 entries]
+                            Name "a"
+                          HasDots: false
+                        CallExpr
+                          Fun:
+                            IndexExpr
+                              X: Name "ComplexAbs"
+                              Index: Name "T"
+                          Args: [1 entries]
+                            Name "b"
+                          HasDots: false
+                      HasDots: false
+                  HasDots: false

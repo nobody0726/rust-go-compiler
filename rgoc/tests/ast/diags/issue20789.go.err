@@ -1,0 +1,2 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue20789.go:9:51: syntax error: unexpected name u, expected (
+exit status 1

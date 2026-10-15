@@ -1,0 +1,103 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [4 entries]
+    TypeDecl
+      Name: Name "T"
+      Alias: false
+      TParams: [0 entries]
+      Type: BadExpr
+    TypeDecl
+      Name: Name "Map"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        MapType
+          Key: Name "int"
+          Value: BadExpr
+    FuncDecl
+      Recv: -
+      Name: Name "g"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "m"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "make"
+                  Args: [1 entries]
+                    MapType
+                      Key: Name "string"
+                      Value: BadExpr
+                  HasDots: false
+            ForStmt
+              Init: -
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [2 entries]
+                    AssignStmt
+                      Op: :=
+                      Lhs: [1 entries]
+                        Name "x"
+                      Rhs: [1 entries]
+                        BasicLit(int) "1"
+                    ExprStmt
+                      X:
+                        CallExpr
+                          Fun: Name "print"
+                          Args: [1 entries]
+                            Name "x"
+                          HasDots: false
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "m"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "make"
+                  Args: [1 entries]
+                    MapType
+                      Key: Name "string"
+                      Value: BadExpr
+                  HasDots: false
+            ForStmt
+              Init: -
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [2 entries]
+                    AssignStmt
+                      Op: :=
+                      Lhs: [1 entries]
+                        Name "x"
+                      Rhs: [1 entries]
+                        BasicLit(int) "1"
+                    ExprStmt
+                      X:
+                        CallExpr
+                          Fun: Name "print"
+                          Args: [1 entries]
+                            Name "x"
+                          HasDots: false

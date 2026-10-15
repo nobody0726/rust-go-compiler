@@ -1,0 +1,543 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [29 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "a"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "b"
+          Type: BadExpr
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "a"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "b"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "c"
+          Type: BadExpr
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        StructType
+          Fields: [3 entries]
+            Field
+              Name: Name "t"
+              Type:
+                ArrayType
+                  Len: Name "n"
+                  Elem: Name "byte"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "t"
+                  Index: Name "a"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "t"
+                  Index:
+                    Name "a"
+                    Name "b"
+              Tag: -
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [3 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "t"
+                  Index: Name "a"
+              Tag: -
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "t"
+                  Index:
+                    Name "a"
+                    Name "b"
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [2 entries]
+        Field
+          Name: Name "a"
+          Type: BadExpr
+          Tag: -
+        Field
+          Name: Name "b"
+          Type: BadExpr
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [3 entries]
+        Field
+          Name: Name "a"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "b"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "c"
+          Type: BadExpr
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type: Name "b"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: *
+              X:
+                SliceType
+                  Elem: Name "int"
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: *
+              X: Name "t"
+              Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y:
+                SliceType
+                  Elem: Name "int"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y:
+                StructType
+                  Fields: [0 entries]
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "b"
+          Type: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X: Name "a"
+                  Y: Name "t"
+              Y: Name "t"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: *
+                  X:
+                    SliceType
+                      Elem: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            SliceType
+              Elem: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "a"
+          Type:
+            Operation
+              Op: |
+              X:
+                SliceType
+                  Elem: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len: Name "t"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            SliceType
+              Elem: Name "t"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            ArrayType
+              Len: Name "t"
+              Elem: Name "t"
+          Elem:
+            StructType
+              Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "t"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+        Field
+          Name: Name "t"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: Name "t"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]

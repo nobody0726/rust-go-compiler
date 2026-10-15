@@ -1,0 +1,37 @@
+File
+  PkgName: Name "e"
+  GoVersion: -
+  Decls: [1 entries]
+    FuncDecl
+      Recv:
+        Field
+          Name: -
+          Type:
+            ArrayType
+              Len:
+                ChanType
+                  Dir: recv
+                  Elem:
+                    ArrayType
+                      Len:
+                        FuncLit
+                          Type:
+                            FuncType
+                              Params: [0 entries]
+                              Results: [0 entries]
+                          Body:
+                            BlockStmt
+                              Stmts: [1 entries]
+                                CallStmt
+                                  Tok: go
+                                  Call: BadExpr
+                      Elem: BadExpr
+              Elem: BadExpr
+          Tag: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -

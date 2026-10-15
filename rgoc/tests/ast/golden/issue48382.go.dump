@@ -1,0 +1,70 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [6 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun:
+            ParenExpr
+              X:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+          Args: [1 entries]
+            Name "nil"
+          HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        FuncLit
+          Type:
+            FuncType
+              Params: [0 entries]
+              Results: [0 entries]
+          Body:
+            BlockStmt
+              Stmts: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -

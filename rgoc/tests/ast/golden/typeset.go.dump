@@ -1,0 +1,1209 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [58 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            SelectorExpr
+              X: Name "t"
+              Sel: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SelectorExpr
+                  X: Name "t"
+                  Sel: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    SelectorExpr
+                      X: Name "t"
+                      Sel: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            StructType
+              Fields: [0 entries]
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X:
+                StructType
+                  Fields: [0 entries]
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                StructType
+                  Fields: [0 entries]
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                StructType
+                  Fields: [0 entries]
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                StructType
+                  Fields: [0 entries]
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                StructType
+                  Fields: [0 entries]
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            SliceType
+              Elem: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            ArrayType
+              Len: BasicLit(int) "1"
+              Elem: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X:
+                SliceType
+                  Elem: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X:
+                ArrayType
+                  Len: BasicLit(int) "1"
+                  Elem: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "t"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            IndexExpr
+              X: Name "t"
+              Index: BasicLit(int) "0"
+          Tag: -
+      Type: Name "t"
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            SliceType
+              Elem: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            ArrayType
+              Len: BasicLit(int) "1"
+              Elem: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SliceType
+                  Elem: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                ArrayType
+                  Len: BasicLit(int) "1"
+                  Elem: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                SliceType
+                  Elem: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                SliceType
+                  Elem: Name "t"
+              Y:
+                SliceType
+                  Elem: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                ArrayType
+                  Len: BasicLit(int) "1"
+                  Elem: Name "t"
+              Y:
+                ArrayType
+                  Len: BasicLit(int) "1"
+                  Elem: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                IndexExpr
+                  X: Name "t"
+                  Index: Name "t"
+              Y:
+                IndexExpr
+                  X: Name "t"
+                  Index: Name "t"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len: Name "t"
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: |
+              X: Name "t"
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        ArrayType
+          Len:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+          Elem: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "t"
+          Type: BadExpr
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Tag: -
+        Field
+          Name: Name "t"
+          Type: BadExpr
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: ~
+              X: Name "t"
+              Y: null
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X: Name "t"
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+        Field
+          Name: Name "_"
+          Type:
+            Operation
+              Op: |
+              X:
+                Operation
+                  Op: ~
+                  X: Name "t"
+                  Y: null
+              Y: Name "t"
+          Tag: -
+      Type: Name "t"

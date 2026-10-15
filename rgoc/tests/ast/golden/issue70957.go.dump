@@ -1,0 +1,32 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [2 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            BranchStmt
+              Tok: goto
+              Label: Name "_"
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            BranchStmt
+              Tok: goto
+              Label: Name "_"

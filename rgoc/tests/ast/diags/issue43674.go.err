@@ -1,0 +1,6 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43674.go:7:50: syntax error: ... is missing type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43674.go:8:50: syntax error: ... is missing type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43674.go:10:55: syntax error: ... is missing type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43674.go:11:55: syntax error: ... is missing type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43674.go:13:52: syntax error: ... is missing type
+exit status 1

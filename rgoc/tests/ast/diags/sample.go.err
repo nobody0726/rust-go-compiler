@@ -1,0 +1,4 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/sample.go:25:44: syntax error: unexpected comma after top level declaration
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/sample.go:29:72: syntax error: unexpected literal 0 in type declaration
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/sample.go:33:9: method has no receiver
+exit status 1

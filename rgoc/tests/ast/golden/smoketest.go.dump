@@ -1,0 +1,822 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [32 entries]
+    TypeDecl
+      Name: Name "B"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type: Name "B"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            IndexExpr
+              X: Name "B"
+              Index: Name "P"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: Name "B"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: Name "B"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type:
+            IndexExpr
+              X: Name "B"
+              Index:
+                Name "A"
+                Name "B"
+                Name "C"
+          Tag: -
+        Field
+          Name: Name "B"
+          Type:
+            IndexExpr
+              X: Name "B"
+              Index:
+                Name "A"
+                Name "B"
+                Name "C"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type:
+            IndexExpr
+              X: Name "B"
+              Index:
+                Name "A"
+                Name "B"
+                Name "C"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [6 entries]
+        Field
+          Name: Name "A1"
+          Type: Name "B1"
+          Tag: -
+        Field
+          Name: Name "A2"
+          Type: Name "B1"
+          Tag: -
+        Field
+          Name: Name "A3"
+          Type: Name "B2"
+          Tag: -
+        Field
+          Name: Name "A4"
+          Type: Name "B3"
+          Tag: -
+        Field
+          Name: Name "A5"
+          Type: Name "B3"
+          Tag: -
+        Field
+          Name: Name "A6"
+          Type: Name "B3"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "A"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [2 entries]
+        Field
+          Name: Name "A"
+          Type:
+            InterfaceType
+              Methods: [1 entries]
+                Field
+                  Name: Name "m"
+                  Type:
+                    FuncType
+                      Params: [0 entries]
+                      Results: [0 entries]
+                  Tag: -
+          Tag: -
+        Field
+          Name: Name "B"
+          Type:
+            InterfaceType
+              Methods: [1 entries]
+                Field
+                  Name: Name "m"
+                  Type:
+                    FuncType
+                      Params: [0 entries]
+                      Results: [0 entries]
+                  Tag: -
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [3 entries]
+        Field
+          Name: Name "A"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "B"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "C"
+          Type: Name "any"
+          Tag: -
+      Type:
+        StructType
+          Fields: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            InterfaceType
+              Methods: [0 entries]
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type: Name "B"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [1 entries]
+        Field
+          Name: Name "P"
+          Type:
+            IndexExpr
+              X: Name "B"
+              Index: Name "P"
+          Tag: -
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        IndexExpr
+          X: Name "T"
+          Index: Name "int"
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        CompositeLit
+          Type:
+            IndexExpr
+              X: Name "T"
+              Index: Name "int"
+          Elems: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        StructType
+          Fields: [1 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "int"
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [2 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: ~
+                  X: Name "int"
+                  Y: null
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [3 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: |
+                      X:
+                        Operation
+                          Op: ~
+                          X: Name "int"
+                          Y: null
+                      Y:
+                        Operation
+                          Op: ~
+                          X: Name "float"
+                          Y: null
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "string"
+                      Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: ~
+                  X: Name "complex128"
+                  Y: null
+              Tag: -
+            Field
+              Name: Name "underlying"
+              Type:
+                FuncType
+                  Params: [1 entries]
+                    Field
+                      Name: Name "underlying"
+                      Type: Name "underlying"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "underlying"
+                      Tag: -
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [2 entries]
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "int"
+              Tag: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "P"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index:
+                    Name "P1"
+                    Name "P2"
+              Tag: -
+          Results: [0 entries]
+      Body: -
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "a"
+              Type:
+                ArrayType
+                  Len: Name "N"
+                  Elem: Name "T"
+              Tag: -
+          Results: [0 entries]
+      Body: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        StructType
+          Fields: [3 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "P"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index:
+                    Name "P1"
+                    Name "P2"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "f"
+                  Index: Name "N"
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [4 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "P"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index:
+                    Name "P1"
+                    Name "P2"
+              Tag: -
+    TypeDecl
+      Name: Name "List"
+      Alias: false
+      TParams: [1 entries]
+        Field
+          Name: Name "E"
+          Type: Name "any"
+          Tag: -
+      Type:
+        SliceType
+          Elem: Name "E"
+    FuncDecl
+      Recv:
+        Field
+          Name: Name "l"
+          Type:
+            IndexExpr
+              X: Name "List"
+              Index: Name "E"
+          Tag: -
+      Name: Name "Map"
+      TParams: [1 entries]
+        Field
+          Name: Name "F"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "E"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "F"
+                      Tag: -
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: Name "r"
+              Type:
+                IndexExpr
+                  X: Name "List"
+                  Index: Name "F"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            ForStmt
+              Init:
+                RangeClause
+                  Define: true
+                  Lhs: [2 entries]
+                    Name "_"
+                    Name "x"
+                  X: Name "l"
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    AssignStmt
+                      Op: =
+                      Lhs: [1 entries]
+                        Name "r"
+                      Rhs: [1 entries]
+                        CallExpr
+                          Fun: Name "append"
+                          Args: [2 entries]
+                            Name "r"
+                            CallExpr
+                              Fun: Name "m"
+                              Args: [1 entries]
+                                Name "x"
+                              HasDots: false
+                          HasDots: false
+            ReturnStmt
+              Results: [0 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "l"
+              Rhs: [1 entries]
+                CompositeLit
+                  Type:
+                    IndexExpr
+                      X: Name "List"
+                      Index: Name "string"
+                  Elems: [3 entries]
+                    BasicLit(string) "\"foo\""
+                    BasicLit(string) "\"foobar\""
+                    BasicLit(string) "\"42\""
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "r"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "l"
+                      Sel: Name "Map"
+                  Args: [1 entries]
+                    FuncLit
+                      Type:
+                        FuncType
+                          Params: [1 entries]
+                            Field
+                              Name: Name "s"
+                              Type: Name "string"
+                              Tag: -
+                          Results: [1 entries]
+                            Field
+                              Name: -
+                              Type: Name "int"
+                              Tag: -
+                      Body:
+                        BlockStmt
+                          Stmts: [1 entries]
+                            ReturnStmt
+                              Results: [1 entries]
+                                CallExpr
+                                  Fun: Name "len"
+                                  Args: [1 entries]
+                                    Name "s"
+                                  HasDots: false
+                  HasDots: false
+            AssignStmt
+              Op: =
+              Lhs: [1 entries]
+                Name "_"
+              Rhs: [1 entries]
+                Name "r"
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [2 entries]
+        Field
+          Name: Name "E"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "F"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "l"
+              Type:
+                IndexExpr
+                  X: Name "List"
+                  Index: Name "E"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "List"
+                  Index: Name "F"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "f"
+                  Type:
+                    FuncType
+                      Params: [2 entries]
+                        Field
+                          Name: -
+                          Type:
+                            IndexExpr
+                              X: Name "List"
+                              Index: Name "E"
+                          Tag: -
+                        Field
+                          Name: -
+                          Type:
+                            FuncType
+                              Params: [1 entries]
+                                Field
+                                  Name: -
+                                  Type: Name "E"
+                                  Tag: -
+                              Results: [1 entries]
+                                Field
+                                  Name: -
+                                  Type: Name "F"
+                                  Tag: -
+                          Tag: -
+                      Results: [1 entries]
+                        Field
+                          Name: -
+                          Type:
+                            IndexExpr
+                              X: Name "List"
+                              Index: Name "F"
+                          Tag: -
+                  Values: [1 entries]
+                    SelectorExpr
+                      X:
+                        IndexExpr
+                          X: Name "List"
+                          Index: Name "E"
+                      Sel: Name "Map"
+            ReturnStmt
+              Results: [1 entries]
+                CallExpr
+                  Fun: Name "f"
+                  Args: [2 entries]
+                    Name "l"
+                    FuncLit
+                      Type:
+                        FuncType
+                          Params: [1 entries]
+                            Field
+                              Name: -
+                              Type: Name "E"
+                              Tag: -
+                          Results: [1 entries]
+                            Field
+                              Name: -
+                              Type: Name "F"
+                              Tag: -
+                      Body:
+                        BlockStmt
+                          Stmts: [2 entries]
+                            DeclStmt
+                              Decls: [1 entries]
+                                VarDecl
+                                  Names: [1 entries]
+                                    Name "f"
+                                  Type: Name "F"
+                                  Values: [0 entries]
+                            ReturnStmt
+                              Results: [1 entries]
+                                Name "f"
+                  HasDots: false
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: -
+              Type: Name "P"
+              Tag: -
+          Results: [0 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [1 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "P"
+                      Tag: -
+                  Results: [0 entries]
+              Tag: -
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        FuncLit
+          Type:
+            FuncType
+              Params: [1 entries]
+                Field
+                  Name: -
+                  Type: Name "P"
+                  Tag: -
+              Results: [0 entries]
+          Body:
+            BlockStmt
+              Stmts: [0 entries]

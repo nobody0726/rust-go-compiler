@@ -1,0 +1,5 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/smoketest.go:70:42: empty type argument list
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/smoketest.go:98:68: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/smoketest.go:100:62: interface method must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/smoketest.go:103:69: syntax error: function type must have no type parameters
+exit status 1

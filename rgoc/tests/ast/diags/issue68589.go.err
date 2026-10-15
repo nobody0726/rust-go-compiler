@@ -1,0 +1,2 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue68589.go:7:44: syntax error: unexpected keyword type, expected type
+exit status 1

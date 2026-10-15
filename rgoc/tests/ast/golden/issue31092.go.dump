@@ -1,0 +1,33 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [5 entries]
+    ConstDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        BasicLit(int) "0"
+    TypeDecl
+      Name: Name "_"
+      Alias: true
+      TParams: [0 entries]
+      Type: Name "int"
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: -
+      Values: [1 entries]
+        BasicLit(int) "0"
+    ConstDecl
+      Names: [1 entries]
+        Name "_"
+      Type: Name "int"
+      Values: [1 entries]
+        BasicLit(int) "0"
+    VarDecl
+      Names: [1 entries]
+        Name "_"
+      Type: Name "int"
+      Values: [1 entries]
+        BasicLit(int) "0"

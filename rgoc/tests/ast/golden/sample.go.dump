@@ -1,0 +1,21 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [3 entries]
+    ImportDecl
+      Name: -
+      Path: BasicLit(string) "\"math\""
+    TypeDecl
+      Name: Name "x"
+      Alias: true
+      TParams: [0 entries]
+      Type: BadExpr
+    FuncDecl
+      Recv: -
+      Name: Name "foo"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body: -

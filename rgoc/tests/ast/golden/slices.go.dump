@@ -1,0 +1,501 @@
+File
+  PkgName: Name "slices"
+  GoVersion: -
+  Decls: [14 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "Map"
+      TParams: [2 entries]
+        Field
+          Name: Name "T1"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "T2"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "s"
+              Type:
+                SliceType
+                  Elem: Name "T1"
+              Tag: -
+            Field
+              Name: Name "f"
+              Type:
+                FuncType
+                  Params: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "T1"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "T2"
+                      Tag: -
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                SliceType
+                  Elem: Name "T2"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "r"
+              Rhs: [1 entries]
+                CallExpr
+                  Fun: Name "make"
+                  Args: [2 entries]
+                    SliceType
+                      Elem: Name "T2"
+                    CallExpr
+                      Fun: Name "len"
+                      Args: [1 entries]
+                        Name "s"
+                      HasDots: false
+                  HasDots: false
+            ForStmt
+              Init:
+                RangeClause
+                  Define: true
+                  Lhs: [2 entries]
+                    Name "i"
+                    Name "v"
+                  X: Name "s"
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    AssignStmt
+                      Op: =
+                      Lhs: [1 entries]
+                        IndexExpr
+                          X: Name "r"
+                          Index: Name "i"
+                      Rhs: [1 entries]
+                        CallExpr
+                          Fun: Name "f"
+                          Args: [1 entries]
+                            Name "v"
+                          HasDots: false
+            ReturnStmt
+              Results: [1 entries]
+                Name "r"
+    FuncDecl
+      Recv: -
+      Name: Name "Reduce"
+      TParams: [2 entries]
+        Field
+          Name: Name "T1"
+          Type: Name "any"
+          Tag: -
+        Field
+          Name: Name "T2"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [3 entries]
+            Field
+              Name: Name "s"
+              Type:
+                SliceType
+                  Elem: Name "T1"
+              Tag: -
+            Field
+              Name: Name "initializer"
+              Type: Name "T2"
+              Tag: -
+            Field
+              Name: Name "f"
+              Type:
+                FuncType
+                  Params: [2 entries]
+                    Field
+                      Name: -
+                      Type: Name "T2"
+                      Tag: -
+                    Field
+                      Name: -
+                      Type: Name "T1"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "T2"
+                      Tag: -
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "T2"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            AssignStmt
+              Op: :=
+              Lhs: [1 entries]
+                Name "r"
+              Rhs: [1 entries]
+                Name "initializer"
+            ForStmt
+              Init:
+                RangeClause
+                  Define: true
+                  Lhs: [2 entries]
+                    Name "_"
+                    Name "v"
+                  X: Name "s"
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    AssignStmt
+                      Op: =
+                      Lhs: [1 entries]
+                        Name "r"
+                      Rhs: [1 entries]
+                        CallExpr
+                          Fun: Name "f"
+                          Args: [2 entries]
+                            Name "r"
+                            Name "v"
+                          HasDots: false
+            ReturnStmt
+              Results: [1 entries]
+                Name "r"
+    FuncDecl
+      Recv: -
+      Name: Name "Filter"
+      TParams: [1 entries]
+        Field
+          Name: Name "T"
+          Type: Name "any"
+          Tag: -
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "s"
+              Type:
+                SliceType
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: Name "f"
+              Type:
+                FuncType
+                  Params: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "T"
+                      Tag: -
+                  Results: [1 entries]
+                    Field
+                      Name: -
+                      Type: Name "bool"
+                      Tag: -
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type:
+                SliceType
+                  Elem: Name "T"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [3 entries]
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "r"
+                  Type:
+                    SliceType
+                      Elem: Name "T"
+                  Values: [0 entries]
+            ForStmt
+              Init:
+                RangeClause
+                  Define: true
+                  Lhs: [2 entries]
+                    Name "_"
+                    Name "v"
+                  X: Name "s"
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    IfStmt
+                      Init: -
+                      Cond:
+                        CallExpr
+                          Fun: Name "f"
+                          Args: [1 entries]
+                            Name "v"
+                          HasDots: false
+                      Then:
+                        BlockStmt
+                          Stmts: [1 entries]
+                            AssignStmt
+                              Op: =
+                              Lhs: [1 entries]
+                                Name "r"
+                              Rhs: [1 entries]
+                                CallExpr
+                                  Fun: Name "append"
+                                  Args: [2 entries]
+                                    Name "r"
+                                    Name "v"
+                                  HasDots: false
+                      Else: -
+            ReturnStmt
+              Results: [1 entries]
+                Name "r"
+    FuncDecl
+      Recv: -
+      Name: Name "limiter"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "x"
+              Type: Name "int"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "byte"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            SwitchStmt
+              Init: -
+              Tag: -
+              Cases: [3 entries]
+                CaseClause
+                  Cases:
+                    Operation
+                      Op: <
+                      X: Name "x"
+                      Y: BasicLit(int) "0"
+                  Body: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        BasicLit(int) "0"
+                CaseClause
+                  Cases: -
+                  Body: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        CallExpr
+                          Fun: Name "byte"
+                          Args: [1 entries]
+                            Name "x"
+                          HasDots: false
+                CaseClause
+                  Cases:
+                    Operation
+                      Op: >
+                      X: Name "x"
+                      Y: BasicLit(int) "255"
+                  Body: [1 entries]
+                    ReturnStmt
+                      Results: [1 entries]
+                        BasicLit(int) "255"
+    VarDecl
+      Names: [1 entries]
+        Name "input"
+      Type: -
+      Values: [1 entries]
+        CompositeLit
+          Type:
+            SliceType
+              Elem: Name "int"
+          Elems: [7 entries]
+            Operation
+              Op: -
+              X: BasicLit(int) "4"
+              Y: null
+            BasicLit(int) "68954"
+            BasicLit(int) "7"
+            BasicLit(int) "44"
+            BasicLit(int) "0"
+            Operation
+              Op: -
+              X: BasicLit(int) "555"
+              Y: null
+            BasicLit(int) "6945"
+    VarDecl
+      Names: [1 entries]
+        Name "limited1"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun:
+            IndexExpr
+              X: Name "Map"
+              Index:
+                Name "int"
+                Name "byte"
+          Args: [2 entries]
+            Name "input"
+            Name "limiter"
+          HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "limited2"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun: Name "Map"
+          Args: [2 entries]
+            Name "input"
+            Name "limiter"
+          HasDots: false
+    FuncDecl
+      Recv: -
+      Name: Name "reducer"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [2 entries]
+            Field
+              Name: Name "x"
+              Type: Name "float64"
+              Tag: -
+            Field
+              Name: Name "y"
+              Type: Name "int"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "float64"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ReturnStmt
+              Results: [1 entries]
+                Operation
+                  Op: +
+                  X: Name "x"
+                  Y:
+                    CallExpr
+                      Fun: Name "float64"
+                      Args: [1 entries]
+                        Name "y"
+                      HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "reduced1"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun:
+            IndexExpr
+              X: Name "Reduce"
+              Index:
+                Name "int"
+                Name "float64"
+          Args: [3 entries]
+            Name "input"
+            BasicLit(int) "0"
+            Name "reducer"
+          HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "reduced2"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun: Name "Reduce"
+          Args: [3 entries]
+            Name "input"
+            BasicLit(imag) "1i"
+            Name "reducer"
+          HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "reduced3"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun: Name "Reduce"
+          Args: [3 entries]
+            Name "input"
+            BasicLit(int) "1"
+            Name "reducer"
+          HasDots: false
+    FuncDecl
+      Recv: -
+      Name: Name "filter"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [1 entries]
+            Field
+              Name: Name "x"
+              Type: Name "int"
+              Tag: -
+          Results: [1 entries]
+            Field
+              Name: -
+              Type: Name "bool"
+              Tag: -
+      Body:
+        BlockStmt
+          Stmts: [1 entries]
+            ReturnStmt
+              Results: [1 entries]
+                Operation
+                  Op: !=
+                  X:
+                    Operation
+                      Op: &
+                      X: Name "x"
+                      Y: BasicLit(int) "1"
+                  Y: BasicLit(int) "0"
+    VarDecl
+      Names: [1 entries]
+        Name "filtered1"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun:
+            IndexExpr
+              X: Name "Filter"
+              Index: Name "int"
+          Args: [2 entries]
+            Name "input"
+            Name "filter"
+          HasDots: false
+    VarDecl
+      Names: [1 entries]
+        Name "filtered2"
+      Type: -
+      Values: [1 entries]
+        CallExpr
+          Fun: Name "Filter"
+          Args: [2 entries]
+            Name "input"
+            Name "filter"
+          HasDots: false

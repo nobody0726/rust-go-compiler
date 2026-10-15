@@ -1,0 +1,5 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue23434.go:11:38: syntax error: unexpected newline in type declaration
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue23434.go:13:49: syntax error: unexpected newline, expected type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue23434.go:18:49: syntax error: unexpected !, expected type
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue23434.go:26:50: syntax error: unexpected ), expected type
+exit status 1

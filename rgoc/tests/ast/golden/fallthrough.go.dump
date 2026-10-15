@@ -1,0 +1,124 @@
+File
+  PkgName: Name "fallthroughs"
+  GoVersion: -
+  Decls: [1 entries]
+    FuncDecl
+      Recv: -
+      Name: Name "_"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [7 entries]
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "x"
+                  Type: Name "int"
+                  Values: [0 entries]
+            SwitchStmt
+              Init: -
+              Tag: Name "x"
+              Cases: [7 entries]
+                CaseClause
+                  Cases: BasicLit(int) "0"
+                  Body: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+                CaseClause
+                  Cases: BasicLit(int) "1"
+                  Body: [2 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+                    BlockStmt
+                      Stmts: [0 entries]
+                CaseClause
+                  Cases: BasicLit(int) "2"
+                  Body: [1 entries]
+                    BlockStmt
+                      Stmts: [1 entries]
+                        BranchStmt
+                          Tok: fallthrough
+                          Label: -
+                CaseClause
+                  Cases: BasicLit(int) "3"
+                  Body: [1 entries]
+                    ForStmt
+                      Init: -
+                      Cond: -
+                      Post: -
+                      Body:
+                        BlockStmt
+                          Stmts: [1 entries]
+                            BranchStmt
+                              Tok: fallthrough
+                              Label: -
+                CaseClause
+                  Cases: BasicLit(int) "4"
+                  Body: [3 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+                    EmptyStmt
+                    EmptyStmt
+                CaseClause
+                  Cases: BasicLit(int) "5"
+                  Body: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+                CaseClause
+                  Cases: -
+                  Body: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+            BranchStmt
+              Tok: fallthrough
+              Label: -
+            IfStmt
+              Init: -
+              Cond: Name "true"
+              Then:
+                BlockStmt
+                  Stmts: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+              Else: -
+            ForStmt
+              Init: -
+              Cond: -
+              Post: -
+              Body:
+                BlockStmt
+                  Stmts: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -
+            DeclStmt
+              Decls: [1 entries]
+                VarDecl
+                  Names: [1 entries]
+                    Name "t"
+                  Type: Name "any"
+                  Values: [0 entries]
+            SwitchStmt
+              Init: -
+              Tag:
+                TypeSwitchGuard
+                  Lhs: -
+                  X: Name "t"
+              Cases: [1 entries]
+                CaseClause
+                  Cases: Name "int"
+                  Body: [1 entries]
+                    BranchStmt
+                      Tok: fallthrough
+                      Label: -

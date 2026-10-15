@@ -1,0 +1,9 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:7:68: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:7:108: syntax error: empty type parameter list
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:8:68: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:8:108: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:9:68: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:11:70: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:12:69: syntax error: function type must have no type parameters
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue48382.go:15:69: interface method must have no type parameters
+exit status 1

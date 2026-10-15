@@ -1,0 +1,551 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [6 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [2 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type: Name "E"
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [5 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: ~
+                  X: Name "int"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "string"
+                      Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X: Name "int"
+                      Y: null
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "string"
+                      Y: null
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [5 entries]
+            Field
+              Name: Name "m"
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: ~
+                  X: Name "int"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    IndexExpr
+                      X: Name "T"
+                      Index:
+                        Name "int"
+                        Name "string"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y:
+                    Operation
+                      Op: ~
+                      X:
+                        IndexExpr
+                          X: Name "T"
+                          Index:
+                            Name "string"
+                            StructType
+                              Fields: [0 entries]
+                      Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X: Name "int"
+                      Y: null
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "string"
+                      Y: null
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [12 entries]
+            Field
+              Name: -
+              Type: Name "int"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                SliceType
+                  Elem: Name "byte"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                ArrayType
+                  Len: BasicLit(int) "10"
+                  Elem: Name "int"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                StructType
+                  Fields: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X: Name "int"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                FuncType
+                  Params: [0 entries]
+                  Results: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                InterfaceType
+                  Methods: [0 entries]
+              Tag: -
+            Field
+              Name: -
+              Type:
+                MapType
+                  Key: Name "string"
+                  Value: Name "int"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                ChanType
+                  Dir: -
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                ChanType
+                  Dir: send
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                ChanType
+                  Dir: recv
+                  Elem: Name "T"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                IndexExpr
+                  X: Name "T"
+                  Index: Name "int"
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [12 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    SliceType
+                      Elem: Name "byte"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    ArrayType
+                      Len: BasicLit(int) "10"
+                      Elem: Name "int"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    StructType
+                      Fields: [0 entries]
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: *
+                      X: Name "int"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    FuncType
+                      Params: [0 entries]
+                      Results: [0 entries]
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    InterfaceType
+                      Methods: [0 entries]
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    MapType
+                      Key: Name "string"
+                      Value: Name "int"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    ChanType
+                      Dir: -
+                      Elem: Name "T"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    ChanType
+                      Dir: send
+                      Elem: Name "T"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    ChanType
+                      Dir: recv
+                      Elem: Name "T"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    IndexExpr
+                      X: Name "T"
+                      Index: Name "int"
+                  Y: Name "string"
+              Tag: -
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [12 entries]
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X: Name "int"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        SliceType
+                          Elem: Name "byte"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        ArrayType
+                          Len: BasicLit(int) "10"
+                          Elem: Name "int"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        StructType
+                          Fields: [0 entries]
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        Operation
+                          Op: *
+                          X: Name "int"
+                          Y: null
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        FuncType
+                          Params: [0 entries]
+                          Results: [0 entries]
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        InterfaceType
+                          Methods: [0 entries]
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        MapType
+                          Key: Name "string"
+                          Value: Name "int"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        ChanType
+                          Dir: -
+                          Elem: Name "T"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        ChanType
+                          Dir: send
+                          Elem: Name "T"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        ChanType
+                          Dir: recv
+                          Elem: Name "T"
+                      Y: null
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X:
+                    Operation
+                      Op: ~
+                      X:
+                        IndexExpr
+                          X: Name "T"
+                          Index: Name "int"
+                      Y: null
+                  Y: Name "string"
+              Tag: -

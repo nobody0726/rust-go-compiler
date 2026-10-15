@@ -1,0 +1,3 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue70974.go:12:43: invalid break label M
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue70974.go:15:43: invalid break label L
+exit status 1

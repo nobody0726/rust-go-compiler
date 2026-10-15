@@ -1,0 +1,2 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue63835.go:7:72: syntax error: unexpected [, expected name
+exit status 1

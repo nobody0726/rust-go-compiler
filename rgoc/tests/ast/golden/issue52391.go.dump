@@ -1,0 +1,73 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [1 entries]
+    TypeDecl
+      Name: Name "_"
+      Alias: false
+      TParams: [0 entries]
+      Type:
+        InterfaceType
+          Methods: [9 entries]
+            Field
+              Name: -
+              Type: Name "int"
+              Tag: -
+            Field
+              Name: -
+              Type: Name "int"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X: Name "int"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: *
+                  X:
+                    SliceType
+                      Elem: Name "byte"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: ~
+                  X: Name "int"
+                  Y: null
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y: Name "string"
+              Tag: -
+            Field
+              Name: -
+              Type:
+                Operation
+                  Op: |
+                  X: Name "int"
+                  Y:
+                    Operation
+                      Op: ~
+                      X: Name "string"
+                      Y: null
+              Tag: -
+            Field
+              Name: -
+              Type: BadExpr
+              Tag: -
+            Field
+              Name: -
+              Type: Name "int"
+              Tag: -

@@ -1,0 +1,12 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:9:52: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:10:54: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:11:55: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:12:54: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:13:56: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:14:56: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:15:56: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:16:56: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:17:74: syntax error: missing type parameter name
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:22:49: syntax error: missing type constraint
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue43527.go:23:51: syntax error: missing type parameter name
+exit status 1

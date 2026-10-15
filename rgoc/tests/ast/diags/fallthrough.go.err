@@ -1,0 +1,9 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:14:3: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:20:4: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:25:4: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:37:3: cannot fallthrough final case in switch
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:40:2: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:43:3: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:47:3: fallthrough statement out of place
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/fallthrough.go:53:3: cannot fallthrough in type switch
+exit status 1

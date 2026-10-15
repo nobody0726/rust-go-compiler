@@ -1,0 +1,30 @@
+File
+  PkgName: Name "p"
+  GoVersion: -
+  Decls: [2 entries]
+    ImportDecl
+      Name: -
+      Path: BasicLit(string) "\"fmt\""
+    FuncDecl
+      Recv: -
+      Name: Name "f"
+      TParams: [0 entries]
+      Type:
+        FuncType
+          Params: [0 entries]
+          Results: [0 entries]
+      Body:
+        BlockStmt
+          Stmts: [2 entries]
+            ExprStmt
+              X: Name "int"
+            ExprStmt
+              X:
+                CallExpr
+                  Fun:
+                    SelectorExpr
+                      X: Name "fmt"
+                      Sel: Name "Println"
+                  Args: [1 entries]
+                    Name "status"
+                  HasDots: false

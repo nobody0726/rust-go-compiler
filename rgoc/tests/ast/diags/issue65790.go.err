@@ -1,0 +1,2 @@
+/work/go_source_code/src/cmd/compile/internal/syntax/testdata/issue65790.go:12:6: syntax error: unexpected name status at end of statement
+exit status 1
