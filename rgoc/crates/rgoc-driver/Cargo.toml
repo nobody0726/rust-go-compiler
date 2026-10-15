@@ -9,6 +9,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+rgoc-ast = { path = "../rgoc-ast" }
 rgoc-harness = { path = "../rgoc-harness" }
 rgoc-lex = { path = "../rgoc-lex" }
+rgoc-parse = { path = "../rgoc-parse" }
 serde_json = "1"

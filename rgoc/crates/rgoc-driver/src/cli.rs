@@ -3,8 +3,9 @@
 //! # 为什么不引解析库
 //!
 //! M1 起 CLI 有 `harness`（`list` / `run` / `report` 三动作）与 `lex`（词法输出，
-//! `T-L18`）两个子命令 —— 仍然不值得引 clap：M0 阶段 workspace 是**零依赖**的
-//! （`rgoc-harness`），为几个动作引入一棵依赖树会破掉「离线可构建」这个属性。
+//! `T-L18`）两个子命令，M2 又加了 `ast`（AST dump，`T-AP19`）—— 仍然不值得引
+//! clap：M0 阶段 workspace 是**零依赖**的（`rgoc-harness`），为几个动作引入
+//! 一棵依赖树会破掉「离线可构建」这个属性。
 //!
 //! 若将来 CLI 长到需要子命令级 `--help`、参数补全、配置文件，再换 clap —— 那时
 //! 换掉这一整个模块即可，**解析结果是本模块的出口，不扩散到别处**。
@@ -26,6 +27,15 @@ pub enum Command {
     Harness(HarnessCommand),
     /// `lex` 子命令（T-L18）
     Lex(LexCommand),
+    /// `ast` 子命令（T-AP19）
+    Ast(AstCommand),
+}
+
+/// `ast` 子命令的参数（T-AP19）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AstCommand {
+    /// 要 dump 的文件（**原样保存用户给的路径** —— 输出的 `# golden:` 行要回显它）
+    pub file: PathBuf,
 }
 
 /// `lex` 子命令的参数。
@@ -98,6 +108,8 @@ pub enum CliError {
     BadMode(String),
     /// `lex` 给了多于一个文件参数（M1 是单文件词法器）
     ExtraArg(String),
+    /// `ast` 没给文件参数（T-AP19）
+    AstNeedsFile,
 }
 
 impl fmt::Display for CliError {
@@ -110,12 +122,13 @@ impl fmt::Display for CliError {
              rgoc-driver harness list [--all]\n  \
              rgoc-driver harness run --all | <T-C-nn>...\n  \
              rgoc-driver harness report [--out <路径>]\n  \
-             rgoc-driver lex <file> [--mode comments|directives]";
+             rgoc-driver lex <file> [--mode comments|directives]\n  \
+             rgoc-driver ast <file>";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness 与 lex 两个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex 与 ast 三个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -136,6 +149,7 @@ impl fmt::Display for CliError {
             Self::ExtraArg(a) => {
                 write!(f, "lex 只接受一个文件参数（多余的：{a:?}）。{USAGE}")
             }
+            Self::AstNeedsFile => write!(f, "ast 需要一个文件参数。{USAGE}"),
         }
     }
 }
@@ -154,8 +168,29 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
     match *top {
         "harness" => Ok(Command::Harness(parse_harness(rest)?)),
         "lex" => Ok(Command::Lex(parse_lex(rest)?)),
+        "ast" => Ok(Command::Ast(parse_ast(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
+}
+
+/// `ast <file>` —— 与 `lex` 同形：文件参数一个、无 flag（T-AP19）。
+fn parse_ast(rest: &[&str]) -> Result<AstCommand, CliError> {
+    let mut file: Option<PathBuf> = None;
+    for a in rest {
+        if let Some(flag) = a.strip_prefix("--") {
+            // `--help` 也走这里：报错文本里带 USAGE，等价于「列出用法」。
+            // 与 T37 的纪律一致：不为单一 flag 开特例通道。
+            return Err(CliError::UnknownFlag(format!("--{flag}")));
+        }
+        if file.is_some() {
+            return Err(CliError::ExtraArg(a.to_string()));
+        }
+        file = Some(PathBuf::from(a));
+    }
+    let Some(file) = file else {
+        return Err(CliError::AstNeedsFile);
+    };
+    Ok(AstCommand { file })
 }
 
 fn parse_harness(rest: &[&str]) -> Result<HarnessCommand, CliError> {

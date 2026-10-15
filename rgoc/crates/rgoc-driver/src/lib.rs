@@ -9,19 +9,21 @@
 //! 这条边界很重要：driver 一旦自己开始判语义，E4 门禁就变成「driver 说过了」，
 //! 而不是「harness 判过了」，两层混在一起再也分不开。
 //!
-//! # 形状（M1）
+//! # 形状（M2）
 //!
-//! 顶层有两个子命令：
+//! 顶层有三个子命令：
 //!
 //! ```text
 //! rgoc-driver harness list   [--all]              列出样本
 //! rgoc-driver harness run    --all | <T-C-nn>...  跑样本
 //! rgoc-driver harness report [--out <路径>]       跑完出报告
 //! rgoc-driver lex <file> [--mode comments|directives]   词法输出（T-L18）
+//! rgoc-driver ast <file>                          AST dump（T-AP19）
 //! ```
 //!
 //! **不预留**未实现的子命令（见 [`cli`] 模块头的说明）。
 
+pub mod ast_cmd;
 pub mod cli;
 pub mod lex_cmd;
 pub mod report;
@@ -133,6 +135,11 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
         Command::Harness(h) => run_harness(h),
         Command::Lex(l) => {
             let text = lex_cmd::run_lex(&l.file, l.mode)?;
+            print!("{text}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Ast(a) => {
+            let text = ast_cmd::run_ast(&a.file)?;
             print!("{text}");
             Ok(ExitCode::SUCCESS)
         }
