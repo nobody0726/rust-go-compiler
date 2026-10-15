@@ -19,6 +19,7 @@ use rgoc_lex::{
 
 fn p(line: u32, col: u32) -> Pos {
     Pos {
+        base: None, // 无 `//line` 基准
         file: FileId::from_index(0),
         line,
         col,

@@ -11,3 +11,8 @@ workspace = true
 [dependencies]
 rgoc-ast = { path = "../rgoc-ast" }
 rgoc-lex = { path = "../rgoc-lex" }
+
+[dev-dependencies]
+# T-A-95 的 `// ERROR rx` 是 Go regexp（RE2）语法；Rust regex 语义同族
+# （无锚点子串匹配）。先例：rgoc-driver 的 serde_json。
+regex = "1"

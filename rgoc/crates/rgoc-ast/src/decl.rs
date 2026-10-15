@@ -23,6 +23,22 @@ pub struct AstFile {
 }
 
 /// 顶层声明（`AST-04..08`）。
+///
+/// # 为什么对 `clippy::large_enum_variant` 用 `#[allow]`
+///
+/// 五个变体对应官方的**五个同名 struct**（`PA-1` 的建模对齐），大小差异
+/// （实测 `FuncDecl` 408 字节 vs `TypeDecl` 200）是**建模的直接后果**，
+/// 不是可以随手修掉的实现瑕疵。
+///
+/// 要消掉它只能 `Box` 某个字段（最小改动是 `type_: Box<Expr>`，省 64 字节），
+/// 代价有两个，都与本仓的取舍相悖：
+///
+/// 1. **每个访问点多一层间接** —— `Decl::Func(f)` 后 `f.type_` 还得再解一次包；
+/// 2. **偏离官方结构形状** —— 与 PA-1 建立的「按官方 `nodes.go` 逐字段对齐」冲突，
+///    而那份对齐正是 `T-AP19` oracle 对撞能逐行 diff 的前提。
+///
+/// 内存代价本身可忽略：最大的形态是一个文件几十条声明 × 408 字节。
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Decl {
     Import(ImportDecl),
@@ -42,7 +58,12 @@ pub struct ImportDecl {
     /// 别名（`. "pkg"` 的 `.` 也记在此，值分别为 `"."` / `"_"`）；无别名 → `None`。
     pub name: Option<Name>,
     /// 路径字面量（**只验合法字符串语法，不加载包**）。
-    pub path: BasicLit,
+    ///
+    /// `None` 是官方 `nil means no path`（`nodes.go:68`）—— 触发条件是**合法源码**
+    /// `import x`：官方拿到 `Path == nil` 后报一条 `missing import path`，但
+    /// **照常返回这个 `ImportDecl`**（`parser.go:571-575`），所以 nil 的节点真会走到 dump。
+    /// 换成不可空的 `BasicLit` 就只能编个哨兵字面量顶上，对撞必然分叉。
+    pub path: Option<BasicLit>,
     pub pos: Pos,
 }
 

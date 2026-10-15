@@ -29,6 +29,7 @@ fn format_pos_形如_文件_行_列() {
     let mut t = FileTable::new();
     let f = t.intern("test/helloworld.go");
     let p = Pos {
+        base: None, // 无 `//line` 基准
         file: f,
         line: 3,
         col: 7,
@@ -45,21 +46,25 @@ fn pos_的_ord_顺序是_文件_行_列() {
 
     let mut v = [
         Pos {
+            base: None, // 无 `//line` 基准
             file: b,
             line: 1,
             col: 1,
         },
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 2,
             col: 1,
         },
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 1,
             col: 9,
         },
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 1,
             col: 2,
@@ -71,6 +76,7 @@ fn pos_的_ord_顺序是_文件_行_列() {
     assert_eq!(
         v[0],
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 1,
             col: 2
@@ -79,6 +85,7 @@ fn pos_的_ord_顺序是_文件_行_列() {
     assert_eq!(
         v[1],
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 1,
             col: 9
@@ -87,6 +94,7 @@ fn pos_的_ord_顺序是_文件_行_列() {
     assert_eq!(
         v[2],
         Pos {
+            base: None, // 无 `//line` 基准
             file: a,
             line: 2,
             col: 1
@@ -95,6 +103,7 @@ fn pos_的_ord_顺序是_文件_行_列() {
     assert_eq!(
         v[3],
         Pos {
+            base: None, // 无 `//line` 基准
             file: b,
             line: 1,
             col: 1

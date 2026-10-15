@@ -175,6 +175,7 @@ fn rewind_回到段起点并重读段首字符() {
     assert_eq!(
         r.pos(),
         Pos {
+            base: None, // 无 `//line` 基准
             file: FileId::from_index(0),
             line: 1,
             col: 1
@@ -184,6 +185,7 @@ fn rewind_回到段起点并重读段首字符() {
     assert_eq!(
         r.pos(),
         Pos {
+            base: None, // 无 `//line` 基准
             file: FileId::from_index(0),
             line: 1,
             col: 2
@@ -197,6 +199,7 @@ fn rewind_回到段起点并重读段首字符() {
     assert_eq!(
         r.pos(),
         Pos {
+            base: None, // 无 `//line` 基准
             file: FileId::from_index(0),
             line: 1,
             col: 1
@@ -211,6 +214,7 @@ fn rewind_回到段起点并重读段首字符() {
     assert_eq!(
         r.pos(),
         Pos {
+            base: None, // 无 `//line` 基准
             file: FileId::from_index(0),
             line: 1,
             col: 2

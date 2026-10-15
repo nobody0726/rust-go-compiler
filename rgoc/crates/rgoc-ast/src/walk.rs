@@ -16,7 +16,7 @@ pub fn count_nodes(f: &AstFile) -> usize {
 
 fn count_decl(d: &Decl) -> usize {
     match d {
-        Decl::Import(x) => 1 + count_name_opt(&x.name) + 1,
+        Decl::Import(x) => 1 + count_name_opt(&x.name) + usize::from(x.path.is_some()),
         Decl::Const(x) => {
             1 + x.names.len()
                 + x.type_.as_ref().map_or(0, count_expr)
@@ -66,11 +66,11 @@ fn count_stmt(s: &Stmt) -> usize {
                 + x.rhs.iter().map(count_expr).sum::<usize>()
         }
         Stmt::Branch(x) => 1 + count_name_opt(&x.label),
-        Stmt::Call(x) => 1 + count_call(&x.call),
+        Stmt::Call(x) => 1 + count_expr(&x.call),
         Stmt::Return(x) => 1 + x.results.iter().map(count_expr).sum::<usize>(),
         Stmt::If(x) => {
             1 + x.init.as_ref().map_or(0, count_simple)
-                + count_expr(&x.cond)
+                + x.cond.as_ref().map_or(0, count_expr)
                 + count_block(&x.then)
                 + x.els.as_ref().map_or(0, |e| count_stmt(e))
         }

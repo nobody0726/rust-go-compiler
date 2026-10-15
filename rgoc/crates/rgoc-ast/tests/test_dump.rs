@@ -5,6 +5,7 @@ use rgoc_lex::pos::{FileId, Pos};
 
 fn pos(line: u32, col: u32) -> Pos {
     Pos {
+        base: None, // 无 `//line` 基准
         file: FileId::from_index(0),
         line,
         col,
@@ -209,4 +210,42 @@ fn t_a_90_dump_decl_stmt_list() {
 fn rf6_func_type_has_no_tparams() {
     let s = dump_expr(&empty_func_type());
     assert!(!s.contains("TParams"), "FuncType 不该有 TParams，got:\n{s}");
+}
+
+/// `import` 的**无路径**要用 `-` 占位（C6 规则 3），与「有路径」在 dump 里区分得开。
+///
+/// ⚠️ 重点在**反向**那一句：若把 `path == None` 也渲染成某个字面量（哨兵值），
+/// dump 里就**看不出**「缺路径」这件事 —— 官方那边是 `nil`，对撞会以一个
+/// 难读的方式失败（行数对不上，而看不出是哪一格的问题）。
+#[test]
+fn t_a_90_dump_import_no_path() {
+    let d = |path: Option<BasicLit>| {
+        Decl::Import(ImportDecl {
+            group: None,
+            pragma: Pragma::default(),
+            name: None,
+            path,
+            pos: pos(1, 1),
+        })
+    };
+    let lit = BasicLit {
+        value: "\"math\"".to_string(),
+        kind: LitKind::String,
+        bad: false,
+        pos: pos(1, 1),
+    };
+
+    let s = dump(&file_with(vec![d(Some(lit))]));
+    assert!(
+        s.contains("Path: BasicLit(string)"),
+        "有路径要把字面量 dump 出来，got:\n{s}"
+    );
+    assert!(!s.contains("Path: -"), "有路径时不该出现占位符，got:\n{s}");
+
+    let s2 = dump(&file_with(vec![d(None)]));
+    assert!(s2.contains("Path: -"), "缺路径要用 `-` 占位，got:\n{s2}");
+    assert!(
+        !s2.contains("Path: BasicLit"),
+        "缺路径时**不能**编一个字面量顶上，got:\n{s2}"
+    );
 }

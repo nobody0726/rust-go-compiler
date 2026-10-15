@@ -18,7 +18,12 @@ use rgoc_lex::{Token, TokenKind};
 fn at(line: u32, col: u32) -> Pos {
     let mut t = FileTable::new();
     let f: FileId = t.intern("t.go");
-    Pos { file: f, line, col }
+    Pos {
+        base: None, // 无 `//line` 基准
+        file: f,
+        line,
+        col,
+    }
 }
 
 // ── 关键字（LEX-05）──────────────────────────────────────────────────

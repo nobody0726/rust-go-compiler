@@ -312,6 +312,48 @@ impl Operator {
             | Operator::Shr => 5,
         }
     }
+
+    /// 官方 `Operator.String()`（`operator_string.go`，`T-AP16` 补）。
+    ///
+    /// # 为什么这三个也在这里，尽管官方**没有**它们
+    ///
+    /// 官方的 `Operator` 只有 21 个变体（`=` `:=` `<-` 是**独立的 token**，
+    /// 官方不设 `op` 值），而我们把三者并进了同一枚举（见枚举文档的「已知缺口」）。
+    /// 消息复刻（`T-A-66`）要用 `op.String()` 拼 `unexpected X`，那三个位置
+    /// 同样要一个拼写 —— 所以**在这里补齐**，而不是让 `rgoc-parse` 另写一张表。
+    ///
+    /// ⚠️ 这张表**逐字**来自官方 `operator_string.go` 的 `_Operator_name`：
+    /// `":!<-~||&&==!=<<=>>=+-|^*/%&&^<<>>"` —— 手抄这张表极易出错（`&&` 出现两次、
+    /// `&` 的二进制与一元写法不同），所以下面的单测**逐条**断言。
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Operator::Not => "!",
+            Operator::Tilde => "~",
+            Operator::Assign => "=",
+            Operator::Define => ":=",
+            Operator::Arrow => "<-",
+            Operator::OrOr => "||",
+            Operator::AndAnd => "&&",
+            Operator::Eql => "==",
+            Operator::Neq => "!=",
+            Operator::Lss => "<",
+            Operator::Leq => "<=",
+            Operator::Gtr => ">",
+            Operator::Geq => ">=",
+            Operator::Add => "+",
+            Operator::Sub => "-",
+            Operator::Or => "|",
+            Operator::Xor => "^",
+            Operator::Mul => "*",
+            Operator::Div => "/",
+            Operator::Rem => "%",
+            Operator::And => "&",
+            Operator::AndNot => "&^",
+            Operator::Shl => "<<",
+            Operator::Shr => ">>",
+        }
+    }
 }
 
 impl OpForm {

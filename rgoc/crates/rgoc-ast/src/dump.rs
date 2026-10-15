@@ -92,7 +92,7 @@ impl Dumper {
                 self.line("ImportDecl");
                 self.indent += 1;
                 self.line(&format!("Name: {}", opt_name_str(&x.name)));
-                self.line(&format!("Path: {}", lit_str(&x.path)));
+                self.line(&format!("Path: {}", opt_lit_str(&x.path)));
                 self.indent -= 1;
             }
             Decl::Const(x) => {
@@ -224,7 +224,7 @@ impl Dumper {
                 self.line("CallStmt");
                 self.indent += 1;
                 self.line(&format!("Tok: {}", call_tok_str(x.tok)));
-                self.expr_field("Call", &Expr::Call(x.call.clone()));
+                self.expr_field("Call", &x.call);
                 self.indent -= 1;
             }
             Stmt::Return(x) => {
@@ -237,7 +237,7 @@ impl Dumper {
                 self.line("IfStmt");
                 self.indent += 1;
                 self.opt_simple("Init", &x.init);
-                self.expr_field("Cond", &x.cond);
+                self.opt_expr_field("Cond", &x.cond);
                 self.line("Then:");
                 self.indent += 1;
                 self.block(&x.then);
@@ -521,6 +521,17 @@ fn lit_str(l: &BasicLit) -> String {
     format!("BasicLit({k}) {:?}", l.value)
 }
 
+/// 可选字面量：缺席用 `-`（规则 3）。与 [`opt_name_str`] 同形。
+///
+/// ⚠️ **不能用哨兵字面量顶替** —— 那会让「缺路径」在 dump 里消失，
+/// 而官方那边是 `nil`（`nodes.go:68`）。
+fn opt_lit_str(l: &Option<BasicLit>) -> String {
+    match l {
+        Some(x) => lit_str(x),
+        None => "-".to_string(),
+    }
+}
+
 fn op_str(op: Op) -> &'static str {
     match op {
         Op::Add => "+",
@@ -544,6 +555,7 @@ fn op_str(op: Op) -> &'static str {
         Op::Gtr => ">",
         Op::Geq => ">=",
         Op::Arrow => "<-",
+        Op::Tilde => "~",
     }
 }
 

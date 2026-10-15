@@ -114,6 +114,7 @@ impl Lexer {
             let mut lx = Self::new(Vec::new(), &name);
             lx.set_mode(mode);
             let pos = Pos {
+                base: None, // 词法层不挂 `//line` 基准（见 `source.rs::pos`）
                 file: lx.file,
                 line: 1,
                 col: 1,
@@ -1365,6 +1366,9 @@ impl Lexer {
     fn report_at(&mut self, start: Pos, offset: u32, code: DiagCode, message: String) {
         self.push_diag(Diag {
             pos: Pos {
+                // 诊断由词法层产 ⇒ 不挂基准（官方 `scanner` 的 `errorAtf` 走
+                // `NoPos`/`p.pos()`，基准由 parser 侧补；见 `source.rs::pos`）。
+                base: None,
                 file: start.file,
                 line: start.line,
                 col: start.col + offset,

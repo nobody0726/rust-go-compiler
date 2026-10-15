@@ -17,6 +17,18 @@ pub enum LitKind {
 }
 
 /// 一元/二元运算符（`AST-21` `Operation` 的 `op` 字段）。
+///
+/// # 变体集**逐项对齐**官方 `tokens.go:108-149` 的 `Operator`
+///
+/// | 官方 | 这里 | 备注 |
+/// |---|---|---|
+/// | `Not` `Recv` `Tilde` | `Not` `Arrow` `Tilde` | `Recv` 改名为 `Arrow`（更贴近源码写法 `<-`） |
+/// | `OrOr` `AndAnd` | `LOr` `LAnd` | 同上 |
+/// | `Div` | `Quo` | 同上（`Quo` 是官方 `nodes.go` 里 `Operation` 的写法） |
+/// | 其余 17 个 | 同名 | — |
+///
+/// ⚠️ **官方的 `Def`（`:=` 里的 `:`）刻意不收**：它只可能出现在赋值语境，
+/// 而赋值用的 `AssignOp`（[`AssignOp::Define`]）是**另一个**枚举。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Op {
     Add,
@@ -39,8 +51,14 @@ pub enum Op {
     Leq,
     Gtr,
     Geq,
-    /// 通道运算符 `<-`
+    /// 通道运算符 `<-`（官方 `Recv`）
     Arrow,
+    /// 类型约束里的 `~T`（官方 `Tilde`）。
+    ///
+    /// 它**不在**任何优先级里（官方 `prec` 为 0），唯一产地是官方
+    /// `embeddedTerm()`（`parser.go:1884-1891`）—— 即 `interface` 的类型约束。
+    /// 补它是**回源逐项 diff** 官方 `Operator` 时发现漏项的结果（`T-AP10`）。
+    Tilde,
 }
 
 /// 赋值/自增自减运算符（`AST-39` `AssignStmt` 的 `op` 字段）。
@@ -150,9 +168,48 @@ pub struct Field {
     pub pos: Pos,
 }
 
-/// 分组声明括号（`AST-02`）。只记括号位置；分组声明**共享 iota 上下文**。
-#[derive(Clone, PartialEq, Eq, Debug)]
+impl Field {
+    /// 节点起点位置（官方 `Field.Pos() Pos`）。
+    ///
+    /// 官方是 `if f.Name != nil { return f.Name.Pos() } ; return f.Type.Pos()`。
+    /// 唯一用到的地方是 `methodDecl` 造 `ListExpr` 时取 `list[0].Pos()`
+    /// （`parser.go:1836`）—— 那一支里 `list[0]` 恰好没有名字（`Name == nil`），
+    /// 所以写成 `f.type_.pos()` 也**碰巧**对。**照抄官方**是为了将来那一支改了
+    /// 名字传递之后不会静默错位（错了只会让某个 `pos` 差几列，dump 里看不出来）。
+    pub fn pos(&self) -> Pos {
+        match &self.name {
+            Some(n) => n.pos,
+            None => self.type_.pos(),
+        }
+    }
+}
+
+/// 分组声明括号（`AST-02`）。
+///
+/// # 官方是**零字段的身份标识**，我们必须造一个「值身份」
+///
+/// `nodes.go:138-141`：
+///
+/// ```go
+/// // All declarations belonging to the same group point to the same Group node.
+/// type Group struct {
+///     _ int // not empty so we are guaranteed different Group instances
+/// }
+/// ```
+///
+/// 也就是说官方**不存位置**，`Group` 存在的唯一目的是让「是不是同一组」可以用
+/// **指针相等**判定。Rust 没有指针身份（`Box` 树里同一格不会有多个所有者），
+/// 所以用 `open`（`(` 的位置）当**值身份**：
+/// **同一文件里 `(` 的位置唯一** ⇒ 「`group` 相等」⟺「同组」，与官方的指针相等同义。
+///
+/// # 为什么不留 `close`
+///
+/// 官方不存它。而更实际的理由是**实现形状**：官方 `appendGroup` 里的 `g` 是个
+/// 可变对象，组内每条声明都指向它，所以「读完 `)` 再补上」是自然的；
+/// 我们的 `Group` 是**值**，回调里构造它时 `)` 还没读到 —— 留着 `close` 会逼出
+/// 「先收集、再回填」的两遍写法，凭空多一处能与官方分叉的地方。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Group {
+    /// 分组括号里 **`(` 的位置** —— 同时充当这一组的身份。
     pub open: Pos,
-    pub close: Pos,
 }

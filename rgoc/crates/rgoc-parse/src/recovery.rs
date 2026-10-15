@@ -13,9 +13,134 @@ use std::sync::OnceLock;
 
 use rgoc_lex::diag::{Diag, DiagCode};
 use rgoc_lex::pos::Pos;
-use rgoc_lex::token::{Delim, Keyword, OpForm, Operator, TokenKind};
+use rgoc_lex::token::{Delim, Keyword, OpForm, Operator, SemiOrigin, TokenKind};
 
-use crate::parser::{ErrMode, Parser};
+use crate::parser::{ErrMode, Parser, lit_text};
+
+/// 官方 `tokstring`（`parser.go:304-316`）—— 把一个**类别**词元拼成人话。
+///
+/// 官方只有三个特例，其余一律 `tok.String()`：
+///
+/// ```text
+/// _Comma            → "comma"
+/// _Semi             → "semicolon or newline"
+/// break..var(关键字)  → "keyword " + tok.String()
+/// ```
+///
+/// # 为什么签名收 [`Follow`] 而不是 [`TokenKind`]
+///
+/// 官方的 `tokstring(tok token)` 收的是**类别**，而调用点全是 `p.want(tok)` /
+/// `p.syntaxError("expected " + tokstring(follow))` —— `tok` 在那里就是一个
+/// followset 成员。我们的对应物是 [`Follow`]（本文件的 `Follow` 文档解释了
+/// 「为什么不能直接用 `TokenKind`」）。
+///
+/// # 为什么返回 [`String`] 而不是 `&'static str`
+///
+/// 关键字那一支要**拼接**（`"keyword " + k.as_str()`）⇒ 静态字符串做不到。
+/// 另两个特例与默认分支本来都是 `&'static str`，统一成 `String` 免得调用方
+/// 按分支处理（两处调用点，都是拼进消息，不差这点分配）。
+///
+/// # 三个特例各自的理由
+///
+/// - `comma` 而不是 `,` —— 消息要读成 `expected comma`，不是 `expected ,`。
+/// - `semicolon or newline` 而不是 `;` —— 官方的 `;` 有**三种来源**
+///   （显式 `;` / 换行自动补 / 文件尾补），只说 `;` 会误导。
+/// - `keyword ` 前缀 —— 避免与标识符混淆：`expected chan` 读起来像「期望叫
+///   `chan` 的变量」，加上 `keyword` 才说得清是关键字。
+///
+/// ⚠️ 这三条**每一个都容易被「按直觉」写错**（写成 `","` / `";"` / `"chan"`），
+/// 而写错时语法完全正常 —— 症状只是消息里几个字符不同，要到 `T-AP18` 对撞
+/// 才暴露。`tests/test_diag.rs` 为每条准备了**端到端**用例 + 一条反向用例。
+pub(crate) fn tokstring(f: &Follow) -> String {
+    match f {
+        Follow::Kind(TokenKind::Delim(Delim::Comma)) => "comma".to_string(),
+        Follow::Kind(TokenKind::Semi(_)) | Follow::Semi => "semicolon or newline".to_string(),
+        Follow::Kind(TokenKind::Keyword(k)) => {
+            // 官方 `:312-313`：
+            // ```text
+            // if _Break <= tok && tok <= _Var { return "keyword " + s }
+            // ```
+            // 判据是**区间的上下界**（25 个关键字的连续编号），而我们把关键字
+            // 建成**独立变体** ⇒ 「落在区间内」这件事落在**类型**上：
+            // 能走进这个臂，就已经是关键字了。
+            //
+            // ⚠️ 与官方**结构不同但语义等价**：官方的 `tokenCount` 上界在
+            // Rust 侧不可表达，也不需要 —— 加一个非关键字的 `TokenKind`
+            // 会走不到这个臂，而不是被 `keyword ` 前缀错标。
+            format!("keyword {}", k.as_str())
+        }
+        Follow::Name => "name".to_string(),
+        Follow::Plain(op) => op.as_str().to_string(),
+        Follow::Operator => "op".to_string(),
+        Follow::Kind(k) => token_kind_str(k).to_string(),
+    }
+}
+
+/// 官方 `token.String()`（`token_string.go`）在我们数据模型上的直译。
+///
+/// 只在 [`Follow::Kind`] 装**非关键字、非 `,`、非 `;`** 时才会走到这里
+/// （`tokstring` 的三个特例已在前面接住）。所以本函数只需覆盖
+/// 分隔符与 `EOF` —— 官方表里其余 41 项分别对应 `_Name`（走 `Follow::Name`）、
+/// 运算符（走 [`Operator::as_str`]）、`_Literal`（无 `Follow` 类别）。
+fn token_kind_str(k: &TokenKind) -> &'static str {
+    match k {
+        TokenKind::Delim(d) => match d {
+            Delim::LParen => "(",
+            Delim::RParen => ")",
+            Delim::LBrack => "[",
+            Delim::RBrack => "]",
+            Delim::LBrace => "{",
+            Delim::RBrace => "}",
+            Delim::Colon => ":",
+            Delim::Dot => ".",
+            Delim::Ellipsis => "...",
+            // `tokstring` 的 `comma` 特例已在外层接住；这里到不了的 `Comma`
+            // 仍给出官方 `token.String()` 的值，避免「漏一个变体」变成编译错误。
+            Delim::Comma => ",",
+        },
+        TokenKind::Eof => "EOF",
+        // 下面三个在 `tokstring` 里不会走到（`Keyword` 被外层接住、
+        // `Semi` 被第一个特例接住、`Ident`/`Literal` 没有 `Follow` 类别）。
+        // 仍按官方 `token.String()` 给出值，让本函数**穷尽** `TokenKind` ——
+        // 加变体时编译器会指到这里，而不是让「漏了一个」悄悄变成别处的行为。
+        TokenKind::Keyword(_) => "keyword",
+        TokenKind::Semi(_) => ";",
+        TokenKind::Ident(_) => "name",
+        TokenKind::Literal { .. } => "literal",
+        TokenKind::Op { form, op, .. } => match form {
+            OpForm::Plain => op.as_str(),
+            OpForm::Assign => concat_op(*op),
+            OpForm::IncDec => op.as_str(),
+        },
+    }
+}
+
+/// 官方 `_AssignOp` 的拼法：`op.String() + "="`（`parser.go:287`）。
+///
+/// `"+="` 这类复合赋值**没有对应的 `Operator` 变体**（我们的 `Operator` 是
+/// **语义**侧，`+=` 的语义仍是 `Add`）⇒ 这里把后缀补回去。
+///
+/// ⚠️ 不能把它做成 `Operator` 的方法：`op` 是语义（`Add`），
+/// `+=` 的「哪部分」信息在 `OpForm` 里，不在 `op` 里。
+fn concat_op(op: Operator) -> &'static str {
+    match op {
+        Operator::Add => "+=",
+        Operator::Sub => "-=",
+        Operator::Mul => "*=",
+        Operator::Div => "/=",
+        Operator::Rem => "%=",
+        Operator::And => "&=",
+        Operator::AndNot => "&^=",
+        Operator::Or => "|=",
+        Operator::Xor => "^=",
+        Operator::Shl => "<<=",
+        Operator::Shr => ">>=",
+        // `op` 必须是**复合赋值的 11 个左操作数**之一（词法层保证）。
+        // 兜底给出官方 `_AssignOp` 的类别名 `op=` 而不是 `unreachable!()`：
+        // 一条诊断路径 panic 会把「消息写错」升级成「解析崩了」。
+        _ => "op=",
+    }
+}
 
 /// `stopset`：能**起头一个语句**的关键字（`F3`，官方 `parser.go:326-339`）。
 ///
@@ -55,12 +180,16 @@ pub const STOPSET: [Keyword; 14] = [
 /// `Op{form,op,prec}`），所以**没有任何一个 `TokenKind` 值能表示"任意标识符"** ——
 /// 按值比较只能表达"具体词元"，表达不了"词元类别"。
 ///
-/// # 为什么只有三个类别变体
+/// # 类别变体为什么是**四个**（`T-AP10` 加了 `Plain`）
 ///
 /// 回源枚举 `parser.go` 里**全部 26 处** `p.advance(...)` 调用，出现在 followlist 里的
 /// 类别词元**恰好三个**：`_Name`（`:2310` / `:2485`）、`_Semi`（`:212`…`:2808` 共十处）、
 /// `_Operator`（`:1897`）。其余全是关键字与分隔符（无载荷，用 [`Follow::Kind`] 即可）。
 /// **官方 `_Literal` 从未出现在任何 followlist 里**，所以不加 —— 按证据加，不按对称感加。
+///
+/// 第四个 [`Follow::Plain`] **不是从 `advance` 里来的**，而是从「`got(_Assign)`」这类
+/// **单点比较**来的（`gotAssign`，`parser.go:218`）：它要按 `(form, op)` 比，
+/// 不能用 `Kind`（后者被迫多填一个由词法层决定的 `prec`）。判据见该变体的文档。
 ///
 /// # 为什么住在 `rgoc-parse` 而不是 `rgoc-lex`
 ///
@@ -79,6 +208,18 @@ pub(crate) enum Follow {
     Name,
     /// 官方 `_Semi`：**任意来源**的分号（显式 / 换行自动补 / 文件尾补）。
     Semi,
+    /// 官方 `_Assign`(`=`) / `_Define`(`:=`) / `_Arrow`(`<-`) / `_Star`(`*`) ——
+    /// 「书写形式是 [`OpForm::Plain`]、语义是某个 [`Operator`]」的那一类。
+    ///
+    /// # 为什么不能写成 `Follow::Kind(TokenKind::Op { form: Plain, op, prec })`
+    ///
+    /// 因为它要多填一个 **`prec`**，而 `Follow::Kind` 是**按值**比较 ⇒ 填错就永远不中，
+    /// 且**不会报错**（症状是「语句层面认不出 `=`」这种很晚才暴露的错）。
+    /// 而 `prec` 是**词法层**的知识（`Operator::prec()`），在 parser 里重写一遍就是
+    /// 第二份真相。这里按 `(form, op)` 匹配，把 `prec` 从判据里**去掉**。
+    ///
+    /// 这四个恰好就是官方 `tokens.go` 里**不叫 `_Operator` 的四个运算符类 token**。
+    Plain(Operator),
     /// 官方 `_Operator`。
     ///
     /// ⚠️ **比 [`TokenKind::Op`] 更窄**：官方把 `_Star`(`*`) / `_Assign`(`=`) /
@@ -86,7 +227,8 @@ pub(crate) enum Follow {
     /// 都算**独立** token，而 Rust 侧它们全都共用 `TokenKind::Op`。
     /// 按官方的折叠边界，`_Operator` 只含 `form == Plain` 且
     /// `op ∉ {Assign, Define, Arrow, Mul}` 的那些。
-    #[allow(dead_code)] // 唯一消费者是官方的 `embeddedTerm()`（`parser.go:1897`），归 `T-AP12`
+    ///
+    /// 消费者是 [`EMBEDDED_TERM_FOLLOW`]（`T-AP12` 起）。
     Operator,
 }
 
@@ -101,6 +243,14 @@ impl Follow {
             Follow::Kind(want) => k == want,
             Follow::Name => matches!(k, TokenKind::Ident(_)),
             Follow::Semi => matches!(k, TokenKind::Semi(_)),
+            Follow::Plain(want) => matches!(
+                k,
+                TokenKind::Op {
+                    form: OpForm::Plain,
+                    op,
+                    ..
+                } if op == want
+            ),
             Follow::Operator => matches!(
                 k,
                 TokenKind::Op { form: OpForm::Plain, op, .. }
@@ -111,14 +261,64 @@ impl Follow {
             ),
         }
     }
+
+    /// 把**具体**词元包成「描述它的类别成员」（`T-AP16`，[`tokstring`] 的调用方用）。
+    ///
+    /// # 为什么需要它
+    ///
+    /// [`tokstring`] 收的是**类别**（官方 `tokstring(tok token)`），
+    /// 而 [`Parser::tok_desc`] 要描述的是**当前那个具体词元**。
+    /// 官方的 `token` 本身就是「类别 + 一个 `op`/`lit` 载荷」的扁平结构，
+    /// 所以 `tokstring(p.tok)` 能直接传；我们是 `TokenKind` 枚举，载荷挂在变体上 ⇒
+    /// 需要一次「具体 → 类别」的投影。
+    ///
+    /// # 投影规则（与官方 `token.String()` 的表逐条对齐）
+    ///
+    /// | 当前词元 | 投影成 |
+    /// |---|---|
+    /// | `Ident(_)` | [`Follow::Name`] |
+    /// | `Semi(_)` | [`Follow::Semi`] |
+    /// | `Literal{..}` | `Kind(Literal{..})` —— 官方 `_Literal` 没有 `Follow` 类别，
+    ///   但 [`tok_desc`] 的六档里它有自己的分支，**不会**走到 `tokstring` |
+    /// | `Keyword(k)` / `Delim(_)` / `Eof` | `Kind(克隆出来的同一类别)` |
+    /// | `Op{form: Plain, op}` | [`Follow::Plain(op)]` |
+    /// | `Op{form: Assign, op}` | `Kind(Op{..})` —— 官方 `_AssignOp` **不是**
+    ///   `Follow` 类别（`Follow::Operator` 明确排除它），同理 `IncDec` |
+    fn from_kind(k: &TokenKind) -> Self {
+        match k {
+            TokenKind::Ident(_) => Follow::Name,
+            TokenKind::Semi(_) => Follow::Semi,
+            other => Follow::Kind(other.clone()),
+        }
+    }
 }
 
 /// 便捷常量：分号（写 followlist 时少一层 `Follow::Semi` 的噪声）。
 pub(crate) const SEMI: Follow = Follow::Semi;
+/// 便捷常量：`(`。分组声明 / 参数表 / 调用实参都用它。
+pub(crate) const LPAREN: Follow = Follow::Kind(TokenKind::Delim(Delim::LParen));
+/// 便捷常量：`)`。
+pub(crate) const RPAREN: Follow = Follow::Kind(TokenKind::Delim(Delim::RParen));
+/// 便捷常量：`,`
+pub(crate) const COMMA: Follow = Follow::Kind(TokenKind::Delim(Delim::Comma));
+/// 便捷常量：`package`。
+pub(crate) const PACKAGE: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Package));
+/// 便捷常量：`type`。唯一用途是区分 `x.(T)`（类型断言）与 `x.(type)`（类型 switch 守卫）。
+pub(crate) const TYPE: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Type));
 /// 便捷常量：`{`。
 pub(crate) const LBRACE: Follow = Follow::Kind(TokenKind::Delim(Delim::LBrace));
 /// 便捷常量：`}`。
 pub(crate) const RBRACE: Follow = Follow::Kind(TokenKind::Delim(Delim::RBrace));
+/// 便捷常量：`]`。
+pub(crate) const RBRACK: Follow = Follow::Kind(TokenKind::Delim(Delim::RBrack));
+/// 便捷常量：`:`（`:=` 是 [`Operator::Define`]，两者必须可区分）。
+pub(crate) const COLON: Follow = Follow::Kind(TokenKind::Delim(Delim::Colon));
+/// 便捷常量：`.`。
+pub(crate) const DOT: Follow = Follow::Kind(TokenKind::Delim(Delim::Dot));
+/// 便捷常量：`=`（官方 `_Assign`）。
+pub(crate) const ASSIGN: Follow = Follow::Plain(Operator::Assign);
+/// 便捷常量：`:=`（官方 `_Define`）。
+pub(crate) const DEFINE: Follow = Follow::Plain(Operator::Define);
 
 /// 恢复点 ①（**顶层声明之间**）—— 官方
 /// `advance(_Import, _Const, _Type, _Var, _Func)`（`parser.go:469` / `479`）。
@@ -141,6 +341,104 @@ pub(crate) const STMT_LIST_FOLLOW: &[Follow] = &[
 
 /// `blockStmt` 缺 `{` 时的同步点 —— 官方 `advance(_Name, _Rbrace)`（`parser.go:2310`）。
 pub(crate) const BLOCK_STMT_FOLLOW: &[Follow] = &[Follow::Name, RBRACE];
+
+/// **三个闭括号**这个集合 —— 官方在**两处**写了同一份字面量：
+/// `list` 缺分隔符（`:518`）与 `operand` 遇不认识的开头（`:1076`）。
+///
+/// 三个闭括号共享一个集合是有原因的：收哪种括号的**判定在调用点**，而错误路径
+/// 不必（也无法）知道 —— 撞上任意一个都该停下。
+///
+/// # 为什么只留一份常量
+///
+/// 两处内容逐字相同。写两个同内容的常量 ⇒ 将来只改一处就会分叉，而分叉**不报错**
+/// （只让恢复位置与 oracle 不一致，要到对撞才发现）。名字按**内容**取，不按用途取。
+pub(crate) const CLOSE_RECOVER_FOLLOW: &[Follow] = &[RPAREN, RBRACK, RBRACE];
+
+/// `advance(_Semi, _Rparen)` —— 官方 `:573`（`import` 缺路径）/ `:1147`（`.` 后不是名字）。
+///
+/// 同 [`CLOSE_RECOVER_FOLLOW`]：两处同内容，只留一份。
+pub(crate) const SEMI_OR_RPAREN_FOLLOW: &[Follow] = &[SEMI, RPAREN];
+
+/// 切片缺 `:` —— 官方 `advance(_Comma, _Colon, _Rbrack)`（`parser.go:1179`）。
+pub(crate) const SLICE_RECOVER_FOLLOW: &[Follow] = &[COMMA, COLON, RBRACK];
+
+/// `qualifiedName` 缺名字 —— 官方 `advance(_Dot, _Semi, _Rbrace)`（`parser.go:2808`）。
+pub(crate) const QUALIFIED_NAME_FOLLOW: &[Follow] = &[DOT, SEMI, RBRACE];
+
+/// `type_` 缺类型 —— 官方
+/// `advance(_Comma, _Colon, _Semi, _Rparen, _Rbrack, _Rbrace)`（`parser.go:1331`）。
+pub(crate) const TYPE_RECOVER_FOLLOW: &[Follow] = &[COMMA, COLON, SEMI, RPAREN, RBRACK, RBRACE];
+
+// ── 类型族（`T-AP12`）────────────────────────────────────────────────────
+
+/// 便捷常量：`[`。类型族的 `want(_Lbrack)` / `got(_Lbrack)` 用。
+pub(crate) const LBRACK: Follow = Follow::Kind(TokenKind::Delim(Delim::LBrack));
+/// 便捷常量：`...`（官方 `_DotDotDot`）。`[...]T` 与参数表里的 `...T` 用。
+pub(crate) const ELLIPSIS: Follow = Follow::Kind(TokenKind::Delim(Delim::Ellipsis));
+/// 便捷常量：`<-`（官方 `_Arrow`）。`chan<- T` 的方向判定用。
+pub(crate) const ARROW: Follow = Follow::Plain(Operator::Arrow);
+/// 便捷常量：`chan`。
+pub(crate) const CHAN: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Chan));
+/// 便捷常量：`struct`。
+pub(crate) const STRUCT: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Struct));
+/// 便捷常量：`interface`。
+pub(crate) const INTERFACE: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Interface));
+
+/// `embeddedTerm` 缺项 —— 官方
+/// `advance(_Operator, _Semi, _Rparen, _Rbrack, _Rbrace)`（`parser.go:1897`）。
+///
+/// ⚠️ 这是 [`Follow::Operator`] 的**唯一**消费者：`_Operator` 在这里当同步点用，
+/// 因为类型约束的下一项（`|` 后面那一项）**也可能是 `~` 开头的**。
+pub(crate) const EMBEDDED_TERM_FOLLOW: &[Follow] =
+    &[Follow::Operator, SEMI, RPAREN, RBRACK, RBRACE];
+
+// ── 控制流（`T-AP13`）────────────────────────────────────────────────────
+
+/// 便捷常量：`case`。`caseClause`/`commClause` 的分派与 `switchStmt`/`selectStmt`
+/// 的恢复点都用它。
+pub(crate) const CASE: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Case));
+/// 便捷常量：`default`。
+pub(crate) const DEFAULT: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Default));
+/// 便捷常量：`if`。`header` 的 `want` 与 `ifStmt` 的 `else if` 都用它。
+pub(crate) const IF: Follow = Follow::Kind(TokenKind::Keyword(Keyword::If));
+/// 便捷常量：`for`。`header` 的 `want(_For)` 用。
+pub(crate) const FOR: Follow = Follow::Kind(TokenKind::Keyword(Keyword::For));
+/// 便捷常量：`switch`。`header` 的 `want(_Switch)` 用。
+pub(crate) const SWITCH: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Switch));
+/// 便捷常量：`select`。`selectStmt` 的 `want(_Select)` 用。
+pub(crate) const SELECT: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Select));
+/// 便捷常量：`else`。`ifStmt` 的 `got(_Else)` 用。
+pub(crate) const ELSE: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Else));
+/// 便捷常量：`var`。`header` 里「语句头部不许 var 声明」那条的 `got(_Var)` 用。
+pub(crate) const VAR: Follow = Follow::Kind(TokenKind::Keyword(Keyword::Var));
+
+/// `simpleStmt` 的 `default` 臂 —— 官方 `advance(_Semi, _Rbrace)`（`parser.go:2235`）。
+///
+/// 触发点是「`x, y` 这样的表达式列表后面跟了既不是 `=`/`:=` 也不是结束词元的东西」
+/// （`expected := or = or comma`）。
+pub(crate) const SEMI_OR_RBRACE_FOLLOW: &[Follow] = &[SEMI, RBRACE];
+
+/// `header` 里 `want(_Lbrace)` 失败后 —— 官方 `advance(_Lbrace, _Rbrace)`（`parser.go:2394`）。
+///
+/// ⚠️ 与 [`BLOCK_STMT_FOLLOW`] **不同**（那是 `advance(_Name, _Rbrace)`）：
+/// 这里只收 `{`/`}`，因为语句头部后面**必须**紧跟块，多收一个 `_Name` 会让
+/// `if x y { }` 这类输入多吃一个词元、恢复位置与 oracle 分叉。
+pub(crate) const LBRACE_OR_RBRACE_FOLLOW: &[Follow] = &[LBRACE, RBRACE];
+
+/// `switchStmt` / `selectStmt` 缺 `{` —— 官方
+/// `advance(_Case, _Default, _Rbrace)`（`parser.go:2504` / `:2526`）。
+///
+/// 同 [`CLOSE_RECOVER_FOLLOW`]：两处同内容，只留一份。
+pub(crate) const CASE_DEFAULT_RBRACE_FOLLOW: &[Follow] = &[CASE, DEFAULT, RBRACE];
+
+/// `caseClause` / `commClause` 认不出子句起始 —— 官方
+/// `advance(_Colon, _Case, _Default, _Rbrace)`（`parser.go:2555` / `:2593`）。
+///
+/// ⚠️ 集合里有 `_Colon`：`default` 写歪成别的词时，先冲到 `:` 能让后面的
+/// **裸写**（`c.Colon = p.pos()` 取的是当前位置）仍然落在冒号上。少了它会静默错位。
+///
+/// 同 [`CLOSE_RECOVER_FOLLOW`]：两处同内容，只留一份。
+pub(crate) const COLON_CASE_DEFAULT_RBRACE_FOLLOW: &[Follow] = &[COLON, CASE, DEFAULT, RBRACE];
 
 /// `StopOnFirst` 档用来**跳转**的负载。
 ///
@@ -248,11 +546,44 @@ impl Parser {
         }
     }
 
-    /// 报告一个**语法**错误（`F5`，官方 `syntaxErrorAt`）。
+    /// 报告一个**分支检查**诊断（`T-AP16`，官方 `branches.go:64-66` 的 `ls.errf`）。
     ///
-    /// 目前只落两件事：**EOF 抑制连环错** + `syntax error: ` 前缀。
-    /// 消息体的完整复刻（`unexpected X, expected Y` 形态、`tokstring`）是 `T-AP16` 的活 ——
-    /// 本任务不越界做它，否则消息复刻会散落在两个任务里。
+    /// 官方 `checkBranches` 的 `errh` 就是 `p.errh` —— 也就是说这些诊断
+    /// **不走** `syntaxErrorAt`（既没有 `syntax error: ` 前缀，也**不受** EOF 抑制），
+    /// 它们是**纯消息**。
+    ///
+    /// ⚠️ 这与官方**完全一致**：标点、EOF 抑制、`<tok>` 拼接**一样都没有**。
+    /// 一条 `label X not defined` 在任何位置都是这条消息。
+    pub(crate) fn report_branch(&mut self, pos: Pos, code: DiagCode, message: String) {
+        self.error_at(pos, code, message);
+    }
+
+    /// 报告一个**语法**错误（`F5` + `T-AP16`，官方 `syntaxErrorAt`，`parser.go:252-297`）。
+    ///
+    /// # 三支判据（`:262-273`）——**不是**「一律加前缀」
+    ///
+    /// ```text
+    /// msg == ""                           → 什么都不加（但仍拼 <tok>）
+    /// HasPrefix(msg, "in "/"at "/"after ") → msg = " "  + msg
+    /// HasPrefix(msg, "expected ")         → msg = ", " + msg
+    /// 其余                                → 直接 "syntax error: " + msg，**不拼 <tok>**
+    /// ```
+    ///
+    /// 最后一条（`default` 支，`p.errorAt(pos, "syntax error: "+msg)` 后 `return`）
+    /// 是**唯一**不引用当前词元的出口 —— 例：官方 `parser.go:465` 的
+    /// `unexpected semicolon or newline before {`。
+    ///
+    /// ⚠️ **判据是消息的**前缀，不是「错误种类」** —— 这就是为什么
+    /// `expected type`（走第二类）会变成 `unexpected <tok>, expected type`，
+    /// 而 `in type declaration`（走第一类）只变成 `unexpected <tok> in type declaration`。
+    /// 写成一个「按 `DiagCode` 决定形态」的函数，症状是**某些消息多了逗号、
+    /// 某些少了**，逐条断言才照得出。
+    ///
+    /// # EOF 抑制（`F5`，`:257-259`）在前
+    ///
+    /// 官方那是整个函数的**第一**行、早于三支判据 ⇒ `p.tok == _EOF && p.first != nil`
+    /// 时**任何** `syntaxError` 都不报。写反了（放在三支之后）会让 `default` 支
+    /// 绕过抑制，EOF 处多喷一串诊断。
     pub(crate) fn syntax_error_at(&mut self, pos: Pos, code: DiagCode, msg: &str) {
         // F5：已经在 EOF 且**已经有错**时不再报 —— 否则文件尾会喷一串无意义诊断。
         // 注意判据是「EOF **且已出错**」两个条件的**合取**：只判 EOF 会把
@@ -260,7 +591,74 @@ impl Parser {
         if self.at(&TokenKind::Eof) && self.first.is_some() {
             return;
         }
-        self.error_at(pos, code, format!("syntax error: {msg}"));
+        if msg.is_empty() {
+            // `:263-264`：什么都不加 —— 但**照样**拼 `<tok>`（落到下面的公共尾部）。
+        } else if msg.starts_with("in ") || msg.starts_with("at ") || msg.starts_with("after ") {
+            // `:265-266`：前置**一个空格**（不是 `", "`）。
+            let tok = self.tok_desc();
+            self.error_at(pos, code, format!("syntax error: unexpected {tok} {msg}"));
+            return;
+        } else if msg.starts_with("expected ") {
+            // `:267-268`：前置 `", "`。
+            let tok = self.tok_desc();
+            self.error_at(pos, code, format!("syntax error: unexpected {tok}, {msg}"));
+            return;
+        } else {
+            // `:269-273`：普通错误 —— **不关心当前词元**，直接报。
+            self.error_at(pos, code, format!("syntax error: {msg}"));
+            return;
+        }
+        // `msg == ""` 才会到这里（其余三支都 return 了）。
+        let tok = self.tok_desc();
+        self.error_at(pos, code, format!("syntax error: unexpected {tok}"));
+    }
+
+    /// 当前词元在 `unexpected X` 里的 `X`（官方 `parser.go:275-293`）。
+    ///
+    /// 官方六档：
+    ///
+    /// ```text
+    /// _Name      → "name "    + p.lit
+    /// _Semi      → p.lit                    ← "newline" / "semicolon" / "EOF"
+    /// _Literal   → "literal " + p.lit
+    /// _Operator  → p.op.String()
+    /// _AssignOp  → p.op.String() + "="
+    /// _IncOp     → p.op.String()             ← 注意：不加 "="
+    /// 其余        → tokstring(p.tok)
+    /// ```
+    ///
+    /// ⚠️ `_Semi` 用的是 **`p.lit`** 而不是 `tokstring`：官方 `scanner.go:121/154/113`
+    /// 分别把它设成 `"newline"` / `"semicolon"` / `"EOF"`。这三个字符串**都不是** `";"`
+    /// ⇒ 一个「统一用 `;`」的实现**不会被** `tokstring` 那几条用例照出来
+    /// （那些走的是 `tokstring` 分支，不是本分支）。
+    fn tok_desc(&self) -> String {
+        match &self.tok.kind {
+            TokenKind::Ident(b) => format!("name {}", lit_text(b)),
+            TokenKind::Semi(origin) => semi_lit(*origin).to_string(),
+            TokenKind::Literal { text, .. } => format!("literal {}", lit_text(text)),
+            TokenKind::Op { form, op, .. } => match form {
+                OpForm::Assign => concat_op(*op).to_string(),
+                // `_Operator` 与 `_IncOp` **都是**裸 `op.String()`
+                // （`:285` / `:289`）—— 这两条只差 `_AssignOp` 加的那个 `"="`。
+                OpForm::Plain | OpForm::IncDec => op.as_str().to_string(),
+            },
+            // 其余走 `tokstring`：`Follow` 的 `matches` 是「类别」判定，
+            // 这里需要一个能装当前词元的 `Follow`。分隔符/关键字/EOF 直接造。
+            k => tokstring(&Follow::from_kind(k)),
+        }
+    }
+}
+
+/// 官方 `scanner.go` 给 `_Semi` 定的三个 `lit` 值。
+///
+/// ⚠️ **官方对显式 `;` 说的是 `"semicolon"` 而不是 `";"`** —— `p.lit` 是
+/// 「这个词元的字面/类别描述」，标点自己写自己会读成 `unexpected ;`，
+/// 而官方要的是 `unexpected semicolon`。
+fn semi_lit(origin: SemiOrigin) -> &'static str {
+    match origin {
+        SemiOrigin::Explicit => "semicolon",
+        SemiOrigin::Newline => "newline",
+        SemiOrigin::Eof => "EOF",
     }
 }
 

@@ -9,6 +9,7 @@ use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, Pos};
 /// 这里用 `from_index` 是为了不引入文件表）。
 fn p(file: u32, line: u32, col: u32) -> Pos {
     Pos {
+        base: None, // 无 `//line` 基准
         file: FileId::from_index(file),
         line,
         col,
@@ -25,10 +26,15 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 
 #[test]
 fn 代号表恰为冻结总数且无重复() {
-    // 26 = 23 个 M1 词法（`LEX-`）+ 3 个 M2 语法**工作集**（`SYN-`）。
-    // `SYN-` 的完整条目归 T-AP16（从官方 `syntaxError` 调用点枚举后冻结），
-    // 届时这个数字会变 —— 变它就得同时改 `tools/ast-oracle` 的镜像表。
-    assert_eq!(DiagCode::ALL.len(), 26);
+    // 35 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）。
+    //
+    // `SYN-` 段的 12 个 = `T-AP06`/`T-AP15` 落的 3 个（`SynExpectedSemicolon` /
+    // `SynInvalidLineDirective` / `SynUnexpectedToken`）+ `T-AP16` 从官方
+    // `branches.go` 的 12 处 `errf` 枚举后收敛成的 8 个 + `T-AP20` 的
+    // `SynNestingTooDeep`（H 判据，官方无此行为）。
+    //
+    // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
+    assert_eq!(DiagCode::ALL.len(), 35);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

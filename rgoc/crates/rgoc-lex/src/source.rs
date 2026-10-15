@@ -98,6 +98,12 @@ impl SourceReader {
     #[must_use]
     pub fn pos(&self) -> Pos {
         Pos {
+            // ⚠️ 词法层**永远** `base: None`：官方 `scanner` 也不管 `//line`
+            // （它只在 `directives` 模式下把整条指令当消息上报），
+            // 基准由 **parser** 的 `updateBase` 挂上去。词法层挂了就等于
+            // 把「指令在哪一行生效」的知识复制一份到词法层 —— 而那条知识
+            // 本来就只有 parser 有（它要按**扫描顺序**逐条改）。
+            base: None,
             file: self.file,
             // 内部 0 起 → 对外 1 起（官方的 linebase / colbase）
             line: self.line + 1,

@@ -43,7 +43,7 @@ pub mod unicode_tables;
 pub use diag::{Diag, DiagBag, DiagCode};
 pub use lexer::{CommentScan, CommentStyle, Lexer, MAX_FILE_BYTES, PunctScan};
 pub use message::{Message, MessageKind, Mode};
-pub use pos::{FileId, FileTable, Pos};
+pub use pos::{BaseId, FileId, FileTable, Pos, PosBase, PosBases};
 pub use semicolon::SemicolonPolicy;
 pub use source::SourceReader;
 pub use token::{Delim, Keyword, LitKind, OpForm, Operator, SemiOrigin, Token, TokenKind};

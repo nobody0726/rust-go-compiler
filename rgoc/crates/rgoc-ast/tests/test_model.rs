@@ -8,6 +8,7 @@ use rgoc_lex::pos::{FileId, Pos};
 
 fn pos(line: u32, col: u32) -> Pos {
     Pos {
+        base: None, // 无 `//line` 基准
         file: FileId::from_index(0),
         line,
         col,
@@ -96,10 +97,7 @@ fn t_a_05_comment_kind_values() {
 
 #[test]
 fn t_a_05_group_and_comment() {
-    let g = Group {
-        open: pos(1, 1),
-        close: pos(1, 9),
-    };
+    let g = Group { open: pos(1, 1) };
     assert_eq!(g.open.line, 1);
 
     let c = Comment {
@@ -119,6 +117,25 @@ fn t_a_05_group_and_comment() {
 fn t_a_05_pragma_default_empty() {
     let p = Pragma::default();
     assert!(p.directives.is_empty());
+}
+
+/// `Group` 的**身份语义**（官方 `nodes.go:138-141`）。
+///
+/// 官方 `Group` 是**零字段**的：它存在的唯一目的是让「是不是同一组」可以用
+/// **指针相等**判定（注释原话："All declarations belonging to the same group
+/// point to the same Group node"）。Rust 没指针身份，我们用 `open` 当值身份。
+///
+/// ⚠️ 断言的重点是**反向**那半边：两个不同的组**必须不相等**。
+/// 若 `Group` 退化成零字段（或 `PartialEq` 恒真），「同组」判别就失效 ——
+/// 而**前向半边照样绿**（同组当然相等）。所以只写 `assert_eq!(a, b)` 是不够的。
+#[test]
+fn t_a_05_group_identity_is_value_based() {
+    let a = Group { open: pos(1, 1) };
+    let b = Group { open: pos(1, 1) };
+    let c = Group { open: pos(5, 1) };
+
+    assert_eq!(a, b, "同一个 `(` ⇒ 同一组");
+    assert_ne!(a, c, "不同的 `(` ⇒ 不同组");
 }
 
 #[test]
@@ -149,7 +166,7 @@ fn t_a_01_decl_variants() {
         group: None,
         pragma: Pragma::default(),
         name: None,
-        path: lit("\"math\""),
+        path: Some(lit("\"math\"")),
         pos: pos(1, 1),
     });
     let konst = Decl::Const(ConstDecl {
@@ -237,7 +254,7 @@ fn t_a_01_decl_pragmas_exist() {
         group: None,
         pragma: p.clone(),
         name: None,
-        path: lit,
+        path: Some(lit),
         pos: pos(1, 1),
     };
     let konst = ConstDecl {
@@ -356,7 +373,7 @@ fn t_a_03_stmt_variants() {
     });
     let _if = Stmt::If(IfStmt {
         init: None,
-        cond: Expr::Name(n("x")),
+        cond: Some(Expr::Name(n("x"))),
         then: b(),
         els: None,
         pos: pos(1, 1),
@@ -485,4 +502,110 @@ fn t_a_06_walk_is_defined() {
         go_version: None,
     };
     assert_eq!(count_nodes(&f), 2); // File + PkgName（无 decls）
+}
+
+/// 官方 `ImportDecl.Path` 是 `*BasicLit`，注释明说 `nil means no path`（`nodes.go:68`）。
+///
+/// # 触发条件是一段**语法上照常产出节点**的源码
+///
+/// `import x`（缺路径）：官方 `importDecl` 里 `d.Path = p.oliteral()` 拿到 nil，
+/// 报一条 `missing import path`，然后**照常返回这个 `ImportDecl`**（`parser.go:571-575`）。
+/// 也就是说 `Path == nil` 的节点**真的会被送到 dump**。
+///
+/// 我们的模型若用不可空的 `BasicLit`，这一格就只能**编一个假字面量**顶上 ——
+/// 那是「用哨兵值冒充缺失」：节点数、dump 行数都会与官方分叉，
+/// 而分叉点在**错误路径**上，正常语料测不到。
+#[test]
+fn t_a_01_import_path_can_be_none() {
+    let no_path = ImportDecl {
+        group: None,
+        pragma: Pragma::default(),
+        name: None,
+        path: None,
+        pos: pos(1, 1),
+    };
+    assert!(no_path.path.is_none(), "`import x` 的 Path 是 nil");
+
+    let with_path = ImportDecl {
+        group: None,
+        pragma: Pragma::default(),
+        name: None,
+        path: Some(BasicLit {
+            value: "\"math\"".to_string(),
+            kind: LitKind::String,
+            bad: false,
+            pos: pos(2, 1),
+        }),
+        pos: pos(2, 1),
+    };
+    assert_eq!(
+        with_path.path.as_ref().unwrap().value,
+        "\"math\"",
+        "有路径时存原文（含引号）"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `Expr::start_pos` —— 官方 `positions.go` 的 StartPos（Expr 子集）。
+// 判据来源：positions.go:10-111；官方 parser.go 唯一使用点 `:2077`。
+// 对撞实证：`missing type parameter name` 的 errPos 用 pos() 会右偏一列。
+
+#[test]
+fn start_pos_修正到子节点的那些变体() {
+    // IndexExpr `t[t]`：存储位在 `[`，起点在 `t`（tparams.go 对撞的案发现场）。
+    let index = Expr::Index(IndexExpr {
+        x: Box::new(Expr::Name(n("t"))),
+        index: Box::new(Expr::Name(n("t"))),
+        pos: pos(1, 2),
+    });
+    assert_eq!(index.pos(), pos(1, 2), "存储位 = 官方 Pos()（[ 的位置）");
+    assert_eq!(
+        index.start_pos(),
+        pos(1, 1),
+        "起点修正到 X（positions.go:45）"
+    );
+
+    // CallExpr `f(x)`：存储位在 `(`，起点在 `f`。
+    let call = Expr::Call(CallExpr {
+        fun: Box::new(Expr::Name(n("f"))),
+        args: vec![],
+        has_dots: false,
+        pos: pos(2, 3),
+    });
+    assert_eq!(
+        call.start_pos(),
+        pos(1, 1),
+        "起点修正到 Fun（positions.go:62）"
+    );
+
+    // 二元 Operation：起点在 X；一元回到自己的存储位。
+    let binary = Expr::Binary(Operation {
+        op: Op::Add,
+        x: Box::new(Expr::Name(n("a"))),
+        y: Some(Box::new(Expr::Name(n("b")))),
+        pos: pos(3, 3),
+    });
+    assert_eq!(binary.start_pos(), pos(1, 1));
+    let unary = Expr::Unary(Operation {
+        op: Op::Not,
+        x: Box::new(Expr::Name(n("a"))),
+        y: None,
+        pos: pos(4, 4),
+    });
+    assert_eq!(
+        unary.start_pos(),
+        pos(4, 4),
+        "一元不修正（positions.go:56-61）"
+    );
+}
+
+#[test]
+fn start_pos_无条件回退到存储位的变体() {
+    let lit = Expr::BasicLit(BasicLit {
+        value: "1".to_string(),
+        kind: LitKind::Int,
+        bad: false,
+        pos: pos(1, 1),
+    });
+    assert_eq!(lit.start_pos(), lit.pos(), "Name/BasicLit/Bad 不修正");
 }

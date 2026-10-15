@@ -233,3 +233,91 @@ pub struct ChanType {
     pub elem: Box<Expr>,
     pub pos: Pos,
 }
+
+impl Expr {
+    /// 节点起点位置（官方每个节点都有 `Pos() Pos` 方法）。
+    ///
+    /// # 为什么现在才加
+    ///
+    /// M2 的大部分代码**不需要**它 —— dump 不输出位置（`M2-tests.md` §5.2 规则 4）。
+    /// 但官方有两处**把位置当数据用**：
+    ///
+    /// ```text
+    /// exprList  → l.pos = x.Pos()   // parser.go:2840
+    /// typeList  → l.pos = x.Pos()   // parser.go:2877
+    /// ```
+    ///
+    /// ⚠️ 那是**首元素自己的** `Pos()`，**不是**「解析它之前那个词元的位置」。
+    /// 两者在 `a.b, c` 上**不同**：首元素是 `SelectorExpr`，它的 `Pos()` 是 **`.`**
+    /// 而不是 `a`。拿「进元素前的 `tok.pos`」近似会在选择器/索引/切片上静默错位。
+    ///
+    /// 只在造 `ListExpr` 时用到，所以这里不加 `Decl`/`Stmt` 的同名方法 ——
+    /// **按需加，不按对称感加**（用到时缺了会编译不过，不会漏）。
+    pub fn pos(&self) -> Pos {
+        match self {
+            Expr::Bad(x) => x.pos,
+            Expr::Name(x) => x.pos,
+            Expr::BasicLit(x) => x.pos,
+            Expr::CompositeLit(x) => x.pos,
+            Expr::KeyValue(x) => x.pos,
+            Expr::FuncLit(x) => x.pos,
+            Expr::Paren(x) => x.pos,
+            Expr::Selector(x) => x.pos,
+            Expr::Index(x) => x.pos,
+            Expr::Slice(x) => x.pos,
+            Expr::TypeAssert(x) => x.pos,
+            Expr::TypeSwitchGuard(x) => x.pos,
+            Expr::Unary(x) | Expr::Binary(x) => x.pos,
+            Expr::Call(x) => x.pos,
+            Expr::List(x) => x.pos,
+            Expr::ArrayType(x) => x.pos,
+            Expr::SliceType(x) => x.pos,
+            Expr::DotsType(x) => x.pos,
+            Expr::StructType(x) => x.pos,
+            Expr::InterfaceType(x) => x.pos,
+            Expr::FuncType(x) => x.pos,
+            Expr::MapType(x) => x.pos,
+            Expr::ChanType(x) => x.pos,
+        }
+    }
+
+    /// 官方 `positions.go` 的 **`StartPos`**（Expr 子集）：某些节点的「起点」
+    /// 不是自己的存储位，而是**修正到子节点**（`CompositeLit`→Type、
+    /// `KeyValue`→Key、`Selector`/`Index`/`Assert`→X、`TypeSwitchGuard`→Lhs/X、
+    /// 二元 `Operation`→X、`CallExpr`→Fun、`ListExpr`→首元素）。
+    ///
+    /// # 为什么 `pos()` 之外还要有它
+    ///
+    /// 存储位（[`Self::pos`]）与官方 `Pos()` 同义；`StartPos` 是官方**另一套**
+    /// 判据，两者在 `x[i]` / `a.b` / `f(x)` 上不同（存储位在 `[`/`.`/`(`，
+    /// 起点在 `x`/`a`/`f`）。官方 `parser.go` **只有一处**用 `StartPos`
+    /// （`paramList` 的 `errPos = StartPos(typ)`，`:2077`）—— `tparams.go` 的
+    /// 对撞实测：用 `pos()` 报 `missing type parameter name` 会**右偏一列**。
+    /// 与 `pos()` 同纪律：**按需加，不按对称感加**，别拿它到处替换 `pos()`。
+    pub fn start_pos(&self) -> Pos {
+        let mut cur = self;
+        loop {
+            match cur {
+                Expr::CompositeLit(x) => match x.type_.as_deref() {
+                    Some(t) => cur = t,
+                    None => return x.pos,
+                },
+                Expr::KeyValue(x) => cur = &x.key,
+                Expr::Selector(x) => cur = &x.x,
+                Expr::Index(x) => cur = &x.x,
+                Expr::TypeAssert(x) => cur = &x.x,
+                Expr::TypeSwitchGuard(x) => match &x.lhs {
+                    Some(n) => return n.pos,
+                    None => cur = &x.x,
+                },
+                Expr::Binary(x) => cur = &x.x,
+                Expr::Call(x) => cur = &x.fun,
+                Expr::List(x) => match x.elems.first() {
+                    Some(e) => cur = e,
+                    None => return x.pos,
+                },
+                _ => return cur.pos(),
+            }
+        }
+    }
+}

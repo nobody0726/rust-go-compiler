@@ -40,6 +40,7 @@ fn lex_all(src: &[u8], mode: Mode) -> (Vec<Token>, Vec<rgoc_lex::Diag>, Vec<Mess
 
 fn p(file: u32, line: u32, col: u32) -> Pos {
     Pos {
+        base: None, // 无 `//line` 基准
         file: FileId::from_index(file),
         line,
         col,

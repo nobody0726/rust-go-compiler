@@ -98,10 +98,53 @@ pub enum DiagCode {
     StringUnterminated,
 
     // ── M2 语法分析（`SYN-` 前缀）──
+    //
+    // ⚠️ **声明顺序必须与 `as_str()` 的字典序一致** —— `Ord` 是**声明顺序**，
+    // 而 `C1` §4.2 / golden 按**字符串**排。两者不一致时「同位置多条诊断按
+    // code 排」在 Rust 侧与 golden 侧会给出不同顺序，而那种不一致**只在两条
+    // 诊断碰巧同位置时暴露**（极难定位）。
+    // `diag_code_的声明顺序与_as_str_字典序一致` 那条单测是它的守卫 ——
+    // 加变体时若忘了按字典序插进去，它立刻红。
+    //
+    // 本段 11 个变体 = 早先的 3 个（`SynExpectedSemicolon` /
+    // `SynInvalidLineDirective` / `SynUnexpectedToken`，`T-AP06`/`T-AP15` 落的）
+    // + `T-AP16` 新增的 8 个（官方 `branches.go` 的 12 处 `errf` 收敛成的 8 类）。
+    /// `break` 不在循环 / `switch` / `select` 里，或标签指向的不是这三者
+    ///
+    /// 官方 `branches.go:218`（`break is not in a loop, switch, or select`）与
+    /// `:261`（`invalid break label %s`）。
+    SynBranchBreak,
+    /// `continue` 不在循环里，或标签指向的不是 `for`
+    ///
+    /// 官方 `branches.go:224` 与 `:274`（`invalid continue label %s`）。
+    SynBranchContinue,
+    /// `fallthrough` 位置不对（在 `switch` 之外 / 类型 `switch` 里 / 最后一个 `case`）
+    ///
+    /// 官方 `branches.go:227` / `:230` / `:235` —— **三条消息共用一个代号**：
+    /// 它们是**同一个检查**（`fallthrough` 是否合法）的三种失败文案，
+    /// 走**同一次** `errf`（`msg` 是变量）。
+    SynBranchFallthrough,
     /// 期望 `;`
     SynExpectedSemicolon,
+    /// `goto` 跳进了块内部（官方 `branches.go:32`）
+    SynGotoIntoBlock,
+    /// `goto` **跳过**了变量声明（官方 `branches.go:194`）
+    SynGotoJumpsOverDecl,
     /// `//line` 指令格式非法
     SynInvalidLineDirective,
+    /// 标签在同一块里**重复**定义（官方 `branches.go:78`）
+    SynLabelDuplicate,
+    /// `goto`/`break`/`continue` 的标签**未定义**
+    /// （官方 `branches.go:34` / `264` / `277`）
+    SynLabelUndefined,
+    /// 标签定义后**从未使用**（官方 `branches.go:42`，spec 要求）
+    SynLabelUnused,
+    /// 递归嵌套超过本仓上限（**`H` 判据：官方无此行为**，`T-A-96`）
+    ///
+    /// 官方编译器靠 Go 运行时的可增长栈；我们落在固定的宿主栈上，
+    /// 必须自设上限防栈溢出。上限 1000（`parser.rs` 的 `MAX_NEST_DEPTH`），
+    /// 每文件只报一次。
+    SynNestingTooDeep,
     /// 意外的词元
     SynUnexpectedToken,
 }
@@ -111,7 +154,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 26] = [
+    pub const ALL: [DiagCode; 35] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -135,8 +178,17 @@ impl DiagCode {
         DiagCode::RuneUnterminated,
         DiagCode::StringNewline,
         DiagCode::StringUnterminated,
+        DiagCode::SynBranchBreak,
+        DiagCode::SynBranchContinue,
+        DiagCode::SynBranchFallthrough,
         DiagCode::SynExpectedSemicolon,
+        DiagCode::SynGotoIntoBlock,
+        DiagCode::SynGotoJumpsOverDecl,
         DiagCode::SynInvalidLineDirective,
+        DiagCode::SynLabelDuplicate,
+        DiagCode::SynLabelUndefined,
+        DiagCode::SynLabelUnused,
+        DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
     ];
 
@@ -166,8 +218,17 @@ impl DiagCode {
             DiagCode::RuneUnterminated => "LEX-RUNE-UNTERMINATED",
             DiagCode::StringNewline => "LEX-STRING-NEWLINE",
             DiagCode::StringUnterminated => "LEX-STRING-UNTERMINATED",
+            DiagCode::SynBranchBreak => "SYN-BRANCH-BREAK",
+            DiagCode::SynBranchContinue => "SYN-BRANCH-CONTINUE",
+            DiagCode::SynBranchFallthrough => "SYN-BRANCH-FALLTHROUGH",
             DiagCode::SynExpectedSemicolon => "SYN-EXPECTED-SEMICOLON",
+            DiagCode::SynGotoIntoBlock => "SYN-GOTO-INTO-BLOCK",
+            DiagCode::SynGotoJumpsOverDecl => "SYN-GOTO-JUMPS-OVER-DECL",
             DiagCode::SynInvalidLineDirective => "SYN-INVALID-LINE-DIRECTIVE",
+            DiagCode::SynLabelDuplicate => "SYN-LABEL-DUPLICATE",
+            DiagCode::SynLabelUndefined => "SYN-LABEL-UNDEFINED",
+            DiagCode::SynLabelUnused => "SYN-LABEL-UNUSED",
+            DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
         }
     }
