@@ -17,12 +17,14 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0 全部完成**（T01–T55 ✅，**E1–E10 十条门禁全过**）→ **M1 全部完成**（T-L01–T-L21 ✅，**L1–L7 七条门禁全过**）→ **M2 设计中** |
+| 当前阶段 | **M0 全部完成**（T01–T55 ✅，**E1–E10 十条门禁全过**）→ **M1 全部完成**（T-L01–T-L21 ✅，**L1–L7 七条门禁全过**）→ **M2 全部完成**（T-AP01–T-AP21 ✅，**A1–A8 八条门禁全过**，2026-10-15） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：**M0 全部完成（E1–E10），M1 全部完成（L1–L7）**。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下新增正式 crate **`rgoc-lex`**（词法与位置）+ `rgoc-driver` lex 子命令，`rgoc-hir` / `rgoc-spikes` 仍 SPIKE-ONLY；**workspace 461 条测试全绿**、M0 自检 **231 条断言**全过；**M1-manifest.json** 已填实（七条门禁 / 56 个测试 ID / GAP-01 / U12 lex 半解除）。
 
-**M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。下一阶段 **M2（AST 与 parser）** 待开工。
+**M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
+
+**M2（AST 与 parser）已收尾**（2026-10-15）：`rgoc-ast` / `rgoc-parse` 两 crate 落地（全产生式 + 错误恢复 + 消息复刻 + checkBranches），`tools/ast-oracle`（vendor 官方 syntax + 中立 dump），`rgoc-driver ast` 子命令；**oracle 对撞 31/31 逐字节全绿**、**双向 ERROR 匹配全过**、**标准库 6670 文件零错误**、递归深度上限 1000（H）；`C1` 增 §2.3、`C6-ast-dump.md` 新建冻结、`GAP-01` 填 AST/PIPE 53 项、`M2-manifest.json` 已填实（A1–A8 / 67 个测试 ID / open_gaps）。workspace **976 条测试全绿**。遗留缺口（`-lang` 版本门控、`//go:` 未知指令裁决、消息逐字对撞等）见 manifest `open_gaps`。下一阶段 **M3（符号与类型检查入口）** 待开工。
 
 ---
 
@@ -146,7 +148,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | — | [`docs/milestones/M0-plan.md`](./docs/milestones/M0-plan.md) | 计划 | **怎么干 M0** —— **Phase 0–4 的 T01–T55**（路径 / 可粘贴内容 / 验证） | ✅ **全部完成**（T01–T55，2026-10-07） | ≈100 KB |
 | — | [`docs/milestones/M0-benchmarks.md`](./docs/milestones/M0-benchmarks.md) | 实测 | **凭什么是这样** —— 时间/体积/冷启动/挂载布局/可复现性/环境陷阱 + **四则调试环境案例**（§7 平台包 / §8 DWARF / §9 Server / §10 cargo 启动配置）+ §11 期望值复核 + **§12 Phase 3 可复现性** | **已产出** | ≈52 KB |
 | — | [`docs/milestones/M0-report.md`](./docs/milestones/M0-report.md) | **交接** | **给下一个接手的人** —— 三个命题各由哪个测试 ID 证明 / 门禁证据出处 / spike 留下的差距 / 未验证范围 / **接手指南** | ✅ **已产出**（T53） | ≈13 KB |
-| — | [`docs/contracts/`](./docs/contracts/) | 契约 | **五份契约** —— [C1](./docs/contracts/C1-source-map.md) **完整**（位置+诊断排序；M1 落地 `FileId`/`FileTable`/`DiagCode`）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） | ≈35 KB |
+| — | [`docs/contracts/`](./docs/contracts/) | 契约 | **六份契约** —— [C1](./docs/contracts/C1-source-map.md) **完整**（位置+诊断排序；M1 落地 `FileId`/`FileTable`/`DiagCode`；M2 增 §2.3 parser 侧位置语义）/ [C2](./docs/contracts/C2-test-ir.md) **完整初稿**（Test IR）/ [C3](./docs/contracts/C3-hir.md) HIR / [C4](./docs/contracts/C4-ssa.md) SSA / [C5](./docs/contracts/C5-abi.md) ABI / [C6](./docs/contracts/C6-ast-dump.md) **已冻结**（AST 中立 dump，M2/T-AP21） | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整、T-AP21 增 §2.3；C6 于 T-AP21 新建） | ≈35 KB |
 | — | [`docs/milestones/M1-design.md`](./docs/milestones/M1-design.md) | 设计 | **怎么建 M1** —— 决策 D-M1-1~12（五字段）/ **实测事实基线 F1–F48** / 数据模型 / 六切面测试组 / 诊断代号表 / oracle adapter | **已确认**（2026-10-11） | ≈42 KB |
 
 **阅读顺序**：
@@ -210,6 +212,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
 | M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）。**Phase 3 已完成（T40–T47，2026-10-07）**：两个 SPIKE-ONLY crate 落地、三个 spike 跑通、**E6/E7 通过**；**Phase 4 已完成（T48–T55）**：五份契约 + `M0-report.md` + manifest 完整化 + **E9 六条退出检查**。**M0 五个 Phase 全部完成，E1–E10 十条门禁全过。** |
 | **M1（词法与位置）** | **已完成**（T-L01–T-L21，2026-10-12）：`rgoc-lex` crate 已落地（193 条测试）、`rgoc-driver lex` 子命令已产出、**151 条 golden 全绿**、负例双向断言全过、`C1` 由留位升为完整、`GAP-01` 填了 LEX-01..13 四维归属、`U12` 的 lex 半已解除。七条门禁 L1–L7 全部 `pass`。下一阶段 **M2（AST 与 parser）** 待开工 |
+| **M2（AST 与 parser）** | **已完成**（T-AP01–T-AP21 + PA-1，2026-10-15）：`rgoc-ast`/`rgoc-parse` 全产生式落地（**976 条 workspace 测试全绿**）、`tools/ast-oracle` 对撞 **31/31 逐字节全绿**、双向 ERROR 匹配全过、**标准库 6670 文件零错误**、深度上限 1000、`rgoc-driver ast` 子命令；`C1` §2.3、`C6` 新建冻结、`GAP-01` +53 项。八条门禁 A1–A8 全部 `pass`。下一阶段 **M3** 待开工 |
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐 |
 | 阶段目录 | `docs/contracts/` **5 份契约已产出**（C1 完整 / C2 完整初稿 / C3–C5 spike 级）；`docs/milestones/` 含 M0 四件套 + `M0-report.md` + `M0-manifest.json` |

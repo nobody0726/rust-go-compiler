@@ -1,0 +1,585 @@
+{
+  "stage": "M2",
+  "generated_at": "2026-10-15T07:00:00Z",
+  "scope": "AST 数据模型 + 完整 parser（错误恢复 / 消息复刻 / checkBranches）+ ast-oracle 对撞 + rgoc ast 子命令 + 标准库冒烟与深度上限",
+  "crates": [
+    "rgoc/crates/rgoc-ast",
+    "rgoc/crates/rgoc-parse",
+    "rgoc/crates/rgoc-driver（ast 子命令）",
+    "tools/ast-oracle（vendor 官方 syntax + dump.go）",
+    "rgoc/tests/ast（31 副本 + 31 golden + 31 诊断参照）"
+  ],
+  "gate": {
+    "A1": {
+      "name": "AST-01..49 各至少一条直接测试",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "coverage 表（本文件）49/49；全仓 976 条测试 0 失败"
+    },
+    "A2": {
+      "name": "testdata 31 全绿（正例零错 + 负例 // ERROR 双向匹配）",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "scripts/check-ast-testdata.sh 全绿；t_errcheck_* 双向（声明的都报出 + 报出的都声明）"
+    },
+    "A3": {
+      "name": "节点 Pos 规则全绿（@ 标记）",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "T-A-10..14 全过；StartPos/Pos 两套判据的分歧由 errcheck 位置匹配抓出并修复（T-AP18）"
+    },
+    "A4": {
+      "name": "oracle 对撞全绿（dump 逐行 diff 为空）",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "scripts/check-ast-golden.sh 全绿；t_collide_* 31/31 首跑即逐字节一致"
+    },
+    "A5": {
+      "name": "标准库冒烟零意外错误",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "scripts/check-ast-stdlib.sh 全绿；6670 文件（walkDirs 口径）首轮零错误，unsupported 白名单为空"
+    },
+    "A6": {
+      "name": "四条 cargo 命令全过",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "fmt --check / check / clippy -D warnings / test --workspace 全过；976 passed 0 failed"
+    },
+    "A7": {
+      "name": "C1 延续 + C6 新增",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "C1-source-map.md 新增 §2.3（parser 侧位置语义）+ 变更记录；docs/contracts/C6-ast-dump.md 创建并冻结"
+    },
+    "A8": {
+      "name": "GAP-01 的 AST/PIPE 四维归属已定",
+      "status": "pass",
+      "confirmed_at": "2026-10-15",
+      "evidence": "docs/milestones/GAP-01.md 新增 AST-01..49（49 项）+ PIPE-03/04/05/25（4 项）= 53 项"
+    }
+  },
+  "coverage": {
+    "note": "A1 的证据：AST-01..49 每项至少一条直接测试 + oracle 对撞覆盖全部节点形状",
+    "ast_items_total": 49,
+    "ast_items_covered": 49,
+    "partial_notes": [
+      "AST-40 BranchStmt.Target 刻意不建模（回指针，设计裁定，M3 消费）",
+      "AST-41 CallStmt.DeferAt（官方 1.27 实验字段）未建模，M2 ledger 残留表登记"
+    ]
+  },
+  "test_ids": [
+    {
+      "id": "T-A-00",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-01",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-02",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-03",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-04",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-05",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-06",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-10",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（节点 Pos 规则 @ 用例，门禁 A3）+ C1 §2.3"
+    },
+    {
+      "id": "T-A-11",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（节点 Pos 规则 @ 用例，门禁 A3）+ C1 §2.3"
+    },
+    {
+      "id": "T-A-12",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（节点 Pos 规则 @ 用例，门禁 A3）+ C1 §2.3"
+    },
+    {
+      "id": "T-A-13",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（节点 Pos 规则 @ 用例，门禁 A3）+ C1 §2.3"
+    },
+    {
+      "id": "T-A-14",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（节点 Pos 规则 @ 用例，门禁 A3）+ C1 §2.3"
+    },
+    {
+      "id": "T-A-20",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-21",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-22",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-23",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-24",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-25",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-26",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-30",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-31",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-32",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-33",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-34",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-35",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-36",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-37",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-38",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-40",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-41",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-42",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-43",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-44",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-45",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-50",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-51",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-52",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-53",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-54",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-55",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-56",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-57",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-58",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-59",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-61",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-62",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-63",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-64",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-65",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-66",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_recovery*.rs / test_diag.rs（错误恢复双断言）"
+    },
+    {
+      "id": "T-A-70",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（//go:build / //line 指令与基准链，T-AP15）"
+    },
+    {
+      "id": "T-A-71",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（//go:build / //line 指令与基准链，T-AP15）"
+    },
+    {
+      "id": "T-A-72",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（//go:build / //line 指令与基准链，T-AP15）"
+    },
+    {
+      "id": "T-A-73",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests（//go:build / //line 指令与基准链，T-AP15）"
+    },
+    {
+      "id": "T-A-80",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_branches.rs（42 条）+ test_diag.rs"
+    },
+    {
+      "id": "T-A-81",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_branches.rs（42 条）+ test_diag.rs"
+    },
+    {
+      "id": "T-A-82",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_branches.rs（42 条）+ test_diag.rs"
+    },
+    {
+      "id": "T-A-90",
+      "verdict": "pass",
+      "gate": "A4",
+      "evidence": "rgoc-ast / rgoc-parse 各 tests/*.rs（M2-tests §2/§3 逐项映射；对撞与负例另有专项）"
+    },
+    {
+      "id": "T-A-91",
+      "verdict": "pass",
+      "gate": "A4",
+      "evidence": "tools/ast-oracle 容器内编译运行验证（fixture + fmt/print.go 9490 行确定性 sha256）"
+    },
+    {
+      "id": "T-A-92",
+      "verdict": "pass",
+      "gate": "A4",
+      "evidence": "rgoc-parse/tests/test_oracle.rs t_collide_*（31/31 逐字节全绿）"
+    },
+    {
+      "id": "T-A-93",
+      "verdict": "pass",
+      "gate": "A4",
+      "evidence": "rgoc-parse/tests/test_oracle.rs t_collide_*（31/31 逐字节全绿）"
+    },
+    {
+      "id": "T-A-94",
+      "verdict": "pass",
+      "gate": "A5",
+      "evidence": "rgoc-parse/tests/test_smoke.rs t_a_94（6670 文件零意外错误；scripts/check-ast-stdlib.sh）"
+    },
+    {
+      "id": "T-A-95",
+      "verdict": "pass",
+      "gate": "A1",
+      "evidence": "rgoc-parse/tests/test_oracle.rs t_errcheck_*（官方 error_test.go 直译，双向匹配全绿）"
+    },
+    {
+      "id": "T-A-96",
+      "verdict": "pass",
+      "gate": "A5",
+      "evidence": "rgoc-parse/tests/test_smoke.rs t_a_96（1200 层三种形状恰好 1 条 SYN-NESTING-TOO-DEEP 且不 panic；4 变异反向验证）"
+    },
+    {
+      "id": "T-A-97",
+      "verdict": "deferred",
+      "gate": "A1",
+      "evidence": "未实现：parse_file 无 -lang 注入入口（D-M2-6 残留；open_gaps 登记，归 M3+）"
+    },
+    {
+      "id": "T-A-98",
+      "verdict": "pass",
+      "gate": "A5",
+      "evidence": "rgoc-parse/tests/test_smoke.rs t_a_98（合法+错误输入各 3 次逐字节同）"
+    },
+    {
+      "id": "T-A-99",
+      "verdict": "pass",
+      "gate": "A5",
+      "evidence": "rgoc-parse/tests/test_smoke.rs t_a_99（File.eof = 末行+1:col 1）"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U12",
+      "item": "真实 Go 源码的 parse",
+      "label": "resolved",
+      "why": "M2 解除：parser 完整 + 标准库 6670 文件零错误（T-A-94）",
+      "planned_phase": "M2（已解除）"
+    },
+    {
+      "id": "U11",
+      "item": "src/internal/types/testdata/",
+      "label": "expected-unsupported",
+      "why": "属 types2 内部测试",
+      "planned_phase": "M4"
+    },
+    {
+      "id": "U8",
+      "item": "test/fixedbugs/ 全目录",
+      "label": "expected-unsupported",
+      "why": "M2 只对 syntax/testdata 的 31 文件做对撞与双向匹配；fixedbugs 归属后续阶段的 testdir 对接",
+      "planned_phase": "后续"
+    },
+    {
+      "id": "U1-U7,U9,U10,U13,U14",
+      "item": "见 M0-tests.md §6（原样承继）",
+      "label": "expected-unsupported",
+      "why": "M2 不引入新的 unsupported 项（M2-tests §6）",
+      "planned_phase": "见 M0-manifest"
+    }
+  ],
+  "budget": {
+    "per_file_bytes_max": "64 MiB（沿用 M1 D-M1-4）",
+    "recursion_depth_max": 1000,
+    "recursion_depth_note": "H 判据（官方无此行为）：MAX_NEST_DEPTH=1000，每文件报一次 SYN-NESTING-TOO-DEEP；改它 = 行为变更须同时改 T-A-96",
+    "unit_tests_wall_s_max": 120,
+    "gate_leg2_wall_s_max": 600,
+    "per_file_s_max": 10,
+    "measured": {
+      "full_workspace_tests_s_note": "含 T-A-94 全量冒烟 9.4s；全仓 976 条一次跑完",
+      "stdlib_smoke_files": 6670,
+      "stdlib_smoke_wall_s": 9.4
+    }
+  },
+  "open_gaps": {
+    "note": "M2 完成的定义 = 四维推进，不以「246 项全勾选」为退出条件。以下缺口如实登记。",
+    "items": [
+      {
+        "id": "D-M2-2 偏离",
+        "item": "syntaxErrorAt 只实现 default 支（按消息前缀分三支，我们只透传 default）",
+        "status": "已登记偏离：只有 default 支的消息能逐字断言；in/at/after 前缀支未实现",
+        "owner": "对撞未触发（31 文件 + 6670 冒烟全过）；暴露时回填"
+      },
+      {
+        "id": "T-A-97（版本门控）",
+        "item": "-lang 注入入口缺失，无法按版本拒绝特性（泛型 / range over func）",
+        "status": "deferred —— M2 只落读取侧（//go:build → goVersion）",
+        "owner": "M3+（需 parse_file 接口变更）"
+      },
+      {
+        "id": "//go: 未知指令",
+        "item": "未知 //go: 指令的接受策略待用户裁决：拒绝（报诊断）vs 忽略（不挂载）",
+        "status": "当前按忽略实现（M2-tests §9 待办 2 的临时口径），阻塞 T-A-73 最终冻结",
+        "owner": "用户裁决后回填"
+      },
+      {
+        "id": "非法 UTF-8 字面量 dump 分叉",
+        "item": "Rust from_utf8_lossy → U+FFFD；Go 保留原始字节 ⇒ 极端输入两侧 dump 分叉",
+        "status": "已知缺口（C6 §2.4）；31 对撞文件 + 6670 冒烟均未触发",
+        "owner": "C6 演进 / 暴露时回填"
+      },
+      {
+        "id": "Pos.Ord 按绝对坐标",
+        "item": "官方 ErrorList.Less 用 rel 坐标；我们按绝对（C1 §4 排序键不变）",
+        "status": "已知偏离：仅「同文件多基准且行号回退」时不同序；M2 全部用例未触发",
+        "owner": "出现需要 rel 排序的用例时改（改 DiagBag::into_sorted 签名，契约变更）"
+      },
+      {
+        "id": "消息逐字对撞",
+        "item": "T-A-95 只验 regex 子串匹配；rgoc 消息 vs oracle 消息的逐行 diff 无测试钉住",
+        "status": "诊断参照已生成（rgoc/tests/ast/diags/*.err）可供回填",
+        "owner": "按需 / M3"
+      }
+    ]
+  },
+  "phase_summary": {
+    "tasks": "T-AP01..T-AP21（PA-1 建模复核 + 20 个执行任务）",
+    "status": "done",
+    "completed": [
+      "PA-1（数据模型对照官方逐字段复核，2026-10-14）",
+      "T-AP01..06（AST 类型 + file 骨架 + 词元/恢复机制 + dump + 指令, 2026-10-14）",
+      "T-AP07..14（表达式/类型/语句/声明全产生式 + xnest/header, 2026-10-14）",
+      "T-AP15（//line 基准链进 Pos, 2026-10-15）",
+      "T-AP16（消息复刻 / tokstring / checkBranches / DiagCode 冻结 26→34, 2026-10-15）",
+      "T-AP17（ast-oracle：vendor syntax 16 文件 + dump.go, 2026-10-15）",
+      "T-AP18（对撞回路：31 文件 collide + 双向 ERROR, 2026-10-15）",
+      "T-AP19（rgoc ast 子命令, 2026-10-15）",
+      "T-AP20（标准库冒烟 6670 + 深度上限 1000, 2026-10-15）",
+      "T-AP21（本收口：C1 延续 / C6 / GAP-01 / manifest / 文档同步, 2026-10-15）"
+    ],
+    "workspace_tests": {
+      "passed": 976,
+      "failed": 0
+    },
+    "gate_commands": "cargo fmt --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --no-fail-fast",
+    "gate_scripts": [
+      "scripts/check-ast-golden.sh",
+      "scripts/check-ast-testdata.sh",
+      "scripts/check-ast-stdlib.sh"
+    ]
+  }
+}

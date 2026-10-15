@@ -1,6 +1,6 @@
 # M2 AST 与 parser · 实施计划
 
-> **状态**：**待执行**　|　**测试清单**：`M2-tests.md`（待冻结）　|　**机器可读事实**：`M2-manifest.json`（待产出）
+> **状态**：**已完成**（T-AP01..21 全落地，2026-10-15）　|　**测试清单**：`M2-tests.md`（已冻结验收）　|　**机器可读事实**：[`M2-manifest.json`](./M2-manifest.json)
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -343,11 +343,11 @@
 - Consumes: `go_source_code/src/cmd/compile/internal/syntax/`（vendor）
 - Produces: ast-oracle 二进制，输入 `.go` 文件输出中立 dump
 
-- [ ] **Step 1: 写 README** —— 记来源（`go1.27.1`）、版本、校验值、再生成步骤（同 M1 的 `tools/token-oracle/README.md` 模式）。
-- [ ] **Step 2: vendor `gosyntax/`** —— 原样复制官方 `syntax/` 全部 `.go`（**零改动**，`M2-design.md` §9）。加 `export.go`（同包 shim，转发未导出标识符——M1 的坑同形）。
-- [ ] **Step 3: 实现 `main.go` + `dump.go`** —— `main.go`：读源码 → `Parse(base, src, errh, pragh, CheckBranches)` → 遍历 AST。`dump.go`：**手写遍历器**输出中立格式（不用 `Fdump`，`F14`）。格式与 `rgoc-ast::dump` **逐字节一致**。
-- [ ] **Step 4: 编译运行验证** —— `scripts/in-container.sh bash -lc 'cd /work/tools/ast-oracle && go run . /work/go_source_code/src/fmt/print.go'` —— 断言输出含 `File`/`PkgName` 等行（`T-A-91`）。
-- [ ] **Step 5: Commit** —— `feat(tools): ast-oracle adapter (vendor syntax + neutral dump)`
+- [x] **Step 1: 写 README** —— 记来源（`go1.27.1`）、版本、校验值、再生成步骤（同 M1 的 `tools/token-oracle/README.md` 模式）。
+- [x] **Step 2: vendor `gosyntax/`** —— 原样复制官方 `syntax/` **16 个非测试** `.go`（**零改动**，`M2-design.md` §9；`*_test.go`/`testdata` 不 vendor，理由见 README §2.2）。⚠️ **未加 `export.go`**：ast-oracle 走的全是导出面（`ParseFile`/全部节点类型/`LitKind`/`Operator`），实测 `go build` 不需要任何转发 —— 与 M1 scanner「全部未导出」不同形，不预留空 shim（README §2.1 + ledger）。
+- [x] **Step 3: 实现 `main.go` + `dump.go`** —— `main.go`：读源码 → `ParseFile(errh, nil, CheckBranches)` → 遍历 AST。`dump.go`：**手写遍历器**输出中立格式（不用 `Fdump`，`F14`）。格式与 `rgoc-ast::dump` **逐字节一致**（`rustDebugQuote` 模拟 Rust `{:?}`，不用 `%q`）。
+- [x] **Step 4: 编译运行验证** —— 容器内 `go run . /work/go_source_code/src/fmt/print.go`：exit 0、dump 9490 行、`File`/`PkgName`/`Decls: [77 entries]` 起头、3 次 sha256 一致（`T-A-91`）；另验探针文件全节点形状 + 错误路径（exit 1 + stderr 诊断 + dump 照常）+ `CheckBranches`（`goto L jumps over declaration`）。
+- [ ] **Step 5: Commit** —— `feat(tools): ast-oracle adapter (vendor syntax + neutral dump)`（等用户开口）
 
 ### Task T-AP18: 对撞回路（testdata 31 + 规范化规则 + 双向匹配）
 
@@ -359,11 +359,11 @@
 - Consumes: T-AP04（rgoc dumper）+ T-AP17（oracle dumper）
 - Produces: 对撞报告
 
-- [ ] **Step 1: 写失败测试** —— 对 `testdata/smoketest.go` 跑 rgoc parser + oracle，双方 dump 逐行 diff，断言**为空**（`T-A-92`）。**RF5 钑点**：含 ListExpr 的用例规范化后一致。
-- [ ] **Step 2: 跑确认失败**（parser 还不完整，预期大量 diff）
-- [ ] **Step 3: 实现 `check-ast-golden.sh`** —— 对 testdata 31 文件：① oracle 生成 golden dump；② rgoc 重算；③ `diff` 逐行。**`check-ast-testdata.sh`**：对 25 个 `// ERROR` 文件双向匹配（`T-A-95`）：正向（声明都报）+ 反向（报出的都声明），位置校验按 `F12`（行注释=行号，块注释=行+列），消息按 `F11`（子串）。
-- [ ] **Step 4: 扩到 testdata 31 全量** —— 逐文件修 diff，直到全空。规范化规则（§5.3）在此步完善。
-- [ ] **Step 5: Commit** —— `feat(parse): oracle collision harness (testdata 31 + bidirectional ERROR match)`
+- [x] **Step 1: 写失败测试** —— `test_oracle.rs` 62 条（collide 31 + errcheck 31，官方 `error_test.go` 直译：F11 子串 / F12 行注释=行号、块注释=下一词元行+列）。**RF5 钉点**：ListExpr 扁平化经 `exprListFrom` 两侧同规则。
+- [x] **Step 2: 跑确认失败** —— RED 实测 **4/62 红**（tparams/typeset 的 errcheck 列差一列 + 2 文件 bad-pattern）；**collide 31/31 首跑即全绿**（899 条前置测试的收敛度）。修 ① `Expr::start_pos`（官方 `StartPos` 语义，`parser.go:2077` 唯一使用点）② `go_rx_to_rust`（Go 裸 `{` 是字面量 / Rust regex 报错）。修后 62/62 绿。
+- [x] **Step 3: 实现 `check-ast-golden.sh`** —— ①语料副本逐字节守卫 ②golden 齐性守卫（无孤儿/非空/首行 File）③cargo 对撞。**`check-ast-testdata.sh`**：覆盖面守卫（ERROR 文件数 25 / 两组测试各 31）+ 双向匹配（T-A-95）。
+- [x] **Step 4: 扩到 testdata 31 全量** —— 31 文件 collide 全绿 + 25 文件 errcheck 双向全绿；**反向验证 4 变异全命中**（M1 start_pos→pos → tparams/typeset 红；M2 dump 行改名 → 11 collide 红；M3 行注释回退失效 → 6 errcheck 红；M4 裸花括号不转义 → issue46558/56022 红）。四条门禁全过（**963 条**，899+62+2）；M0（231）/M1 一致性自检全过。
+- [ ] **Step 5: Commit** —— `feat(parse): oracle collision harness (testdata 31 + bidirectional ERROR match)`（等用户开口）
 
 ---
 
@@ -380,10 +380,10 @@
 - Consumes: T-AP05（`parse_file`）+ T-AP04（`dump`）
 - Produces: `rgoc ast <file>` 命令（输出中立 dump 到 stdout）
 
-- [ ] **Step 1: 写失败测试** —— `rgoc-driver -- ast <fixture>` 输出含 `File`/`PkgName` 行；`-- ast --help` 列出用法。对齐 `rgoc lex` 模式（`cli.rs` 手写解析，不引 clap）。
-- [ ] **Step 2: 跑确认失败**
-- [ ] **Step 3: 实现 `ast_cmd.rs`** —— 读文件 → `parse_file` → `dump` → stdout。加 `# source: rgoc` 头（对齐 `M1-tests.md` §5.3 的来源标注）。`cli.rs`：`Command::Ast(PathBuf)`，手写解析。
-- [ ] **Step 4: 跑确认通过**
+- [x] **Step 1: 写失败测试** —— `rgoc-driver -- ast <fixture>` 输出含 `File`/`PkgName` 行；`-- ast --help` 列出用法。对齐 `rgoc lex` 模式（`cli.rs` 手写解析，不引 clap）。
+- [x] **Step 2: 跑确认失败**
+- [x] **Step 3: 实现 `ast_cmd.rs`** —— 读文件 → `parse_file` → `dump` → stdout。加 `# source: rgoc` 头（对齐 `M1-tests.md` §5.3 的来源标注）。`cli.rs`：`Command::Ast(PathBuf)`，手写解析。
+- [x] **Step 4: 跑确认通过**
 - [ ] **Step 5: Commit** —— `feat(driver): rgoc ast subcommand`
 
 ### Task T-AP20: 标准库冒烟 + 递归深度上限
@@ -396,10 +396,10 @@
 - Consumes: T-AP18（parser 已完整）
 - Produces: 冒烟报告 + 深度保护
 
-- [ ] **Step 1: 写失败测试** —— ① **`T-A-94`**：解析 `go_source_code/src` 全部 `.go`，断言**零意外错误**（允许已知 unsupported 项）。② **`T-A-96`**（**H**）：构造 >1000 层嵌套表达式，断言报 `SYN-NESTING-TOO-DEEP` 且**不 panic**。③ `T-A-98`：同输入 3 次结果一致。④ `T-A-99`：Eof 唯一。
-- [ ] **Step 2: 跑确认失败**
-- [ ] **Step 3: 实现** —— `parser.rs`：加 `depth: usize` 计数器，`expr`/`stmt_or_nil`/`type_` 入口 +1、出口 -1，超 1000 报诊断返回。`check-ast-stdlib.sh`：遍历 `go_source_code/src/**/*.go`，每文件 `rgoc-driver -- ast`，收集非零退出码（**只记意外错误**，unsupported 项排除）。
-- [ ] **Step 4: 跑确认通过**（标准库冒烟可能需要多轮修 bug）
+- [x] **Step 1: 写失败测试** —— ① **`T-A-94`**：解析 `go_source_code/src` 全部 `.go`，断言**零意外错误**（允许已知 unsupported 项）。② **`T-A-96`**（**H**）：构造 >1000 层嵌套表达式，断言报 `SYN-NESTING-TOO-DEEP` 且**不 panic**。③ `T-A-98`：同输入 3 次结果一致。④ `T-A-99`：Eof 唯一。
+- [x] **Step 2: 跑确认失败**
+- [x] **Step 3: 实现** —— `parser.rs`：加 `depth: usize` 计数器，`expr`/`stmt_or_nil`/`type_` 入口 +1、出口 -1，超 1000 报诊断返回。`check-ast-stdlib.sh`：遍历 `go_source_code/src/**/*.go`，每文件 `rgoc-driver -- ast`，收集非零退出码（**只记意外错误**，unsupported 项排除）。
+- [x] **Step 4: 跑确认通过**（标准库冒烟可能需要多轮修 bug）
 - [ ] **Step 5: Commit** —— `feat(parse): stdlib smoke + recursion depth limit + consistency`
 
 ### Task T-AP21: 阶段收口（C1 延续 + C6 新增 + GAP-01 + manifest + 文档同步）
@@ -407,12 +407,12 @@
 **Files:**
 - Modify: `docs/contracts/C1-source-map.md`（补 parser 侧位置语义）、Create: `docs/contracts/C6-ast-dump.md`、Modify: `docs/milestones/GAP-01.md`、Create: `docs/milestones/M2-manifest.json`、Modify: `AGENTS.md`、`docs/README.md`、`docs/milestones/M2-design.md`（状态→已确认）、`M2-tests.md`（状态→已冻结）、`M2-plan.md`（状态→已完成）
 
-- [ ] **Step 1: C1 延续** —— 在 `C1-source-map.md` 补"parser 侧位置语义"一节（`//line` 重映射、节点 Pos 规则）+ 变更记录。
-- [ ] **Step 2: C6 新增** —— 写 `C6-ast-dump.md`：中立 dump 格式（§5.2 五规则）+ 规范化规则（§5.3）+ 变更记录。`level: confirmed`。
-- [ ] **Step 3: GAP-01 续** —— 填 AST-01..49 + PIPE-03/04/05/25 的四维归属表（53 项）。
-- [ ] **Step 4: manifest** —— 写 `M2-manifest.json`：`gate`（A1-A8）+ `test_ids`（67 个）+ `unsupported` + `budget` + `open_gaps`（含 `D-M2-2` 偏离登记 + `//go:` 未知指令待裁决）。
-- [ ] **Step 5: 门禁复核** —— 四条 cargo 命令 + `check-ast-golden.sh` + `check-ast-testdata.sh` + `check-ast-stdlib.sh` 全过。同步 `AGENTS.md` / `docs/README.md` 索引。
-- [ ] **Step 6: Commit** —— `chore(m2): 阶段收口 —— C1/C6/GAP-01/manifest/文档同步`
+- [x] **Step 1: C1 延续** —— 在 `C1-source-map.md` 补"parser 侧位置语义"一节（`//line` 重映射、节点 Pos 规则）+ 变更记录。
+- [x] **Step 2: C6 新增** —— 写 `C6-ast-dump.md`：中立 dump 格式（§5.2 五规则）+ 规范化规则（§5.3）+ 变更记录。`level: confirmed`。
+- [x] **Step 3: GAP-01 续** —— 填 AST-01..49 + PIPE-03/04/05/25 的四维归属表（53 项）。
+- [x] **Step 4: manifest** —— 写 `M2-manifest.json`：`gate`（A1-A8）+ `test_ids`（67 个）+ `unsupported` + `budget` + `open_gaps`（含 `D-M2-2` 偏离登记 + `//go:` 未知指令待裁决）。
+- [x] **Step 5: 门禁复核** —— 四条 cargo 命令 + `check-ast-golden.sh` + `check-ast-testdata.sh` + `check-ast-stdlib.sh` 全过。同步 `AGENTS.md` / `docs/README.md` 索引。
+- [x] **Step 6: Commit** —— `chore(m2): 阶段收口 —— C1/C6/GAP-01/manifest/文档同步`
 
 ---
 

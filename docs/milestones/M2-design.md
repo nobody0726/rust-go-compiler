@@ -1,6 +1,6 @@
 # M2 设计文档：AST 与 parser
 
-> **阶段 ID**：`M2`　|　**状态**：**待确认**　|　**日期**：2026-10-14
+> **阶段 ID**：`M2`　|　**状态**：**已确认**（2026-10-15 收口）　|　**日期**：2026-10-14
 > **文档索引**：[`../README.md`](../README.md)　|　**上游**：[`../03-roadmap.md`](../03-roadmap.md) §M2、[`../01-feature-set.md`](../01-feature-set.md)（`AST-01..49` / `PIPE-03/04/05/25`）、[`M1-design.md`](./M1-design.md) §13.3、[`M0-report.md`](./M0-report.md) §7
 > **下游**：`M2-tests.md`（测试先行清单）→ `M2-plan.md`（任务级计划）→ `M2-manifest.json`（机器可读事实）
 >

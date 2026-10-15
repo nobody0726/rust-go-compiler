@@ -7,11 +7,14 @@
 > **M1（`rgoc-lex`）落地后这一半已实现**：
 >
 > - `Pos { file: FileId, line, col }` + `FileTable` —— `rgoc-lex/src/pos.rs`
-> - `DiagCode`（代号的枚举）—— `rgoc-lex/src/diag.rs`。**当前 26 个**：
->   23 个 `LEX-`（M1，官方 scanner 可产出）+ 3 个 `SYN-`（M2 的语法**工作集**，完整条目归 `T-AP16`）
+> - `DiagCode`（代号的枚举）—— `rgoc-lex/src/diag.rs`。**当前 35 个**：
+>   23 个 `LEX-`（M1，官方 scanner 可产出）+ 12 个 `SYN-`（M2 语法，全集已由 `T-AP16` 冻结、`T-AP20` 增 1 个 H 判据）
+>
+> **M2（`rgoc-parse`）的 parser 侧位置语义已落地**（见 §2.3，`T-AP15`/`T-AP18`）：
+> `//line` 重映射、节点 `Pos` 的两套判据（`Pos()` / `StartPos`）、`File.eof`。
 >
 > **仍未实现**（§6）：SourceMap 的**多源位置映射**（宏展开/内联的一节点多位置）与
-> offset ↔ `(line, col)` 的**随机访问换算** —— 归 M2/M4。
+> offset ↔ `(line, col)` 的**随机访问换算** —— 归 M4。
 > 不得因本契约完整就认为那两件事也完成了。
 
 **状态**：**完整**（M1 / `T-L20` 升级）　|　**契约级别**：**完整**　|　**实现落点**：`rgoc-lex`（`pos.rs` / `diag.rs`）　|　**消费者**：M1（lexer）、M2（parser）、M4（诊断）、M5（HIR）
@@ -92,6 +95,53 @@ Pos  →  {file}:{line}:{col}          例：test/helloworld.go:3:7
 
 这条格式**必须**与 Go oracle 的 `文件:行号` 前缀兼容（R3/R4 的匹配前提），
 且 `col` 为可选（oracle 只输出到行号）。
+
+### 2.3 parser 侧位置语义（M2 / `T-AP15` + `T-AP18` 落地）
+
+M2 的 parser 在 §2 的三元组之上**增补**了三条语义。它们是官方行为的直译，
+验证载体是 `T-A-95`（errcheck 的位置匹配）与 oracle 对撞。
+
+#### 2.3.1 `//line` 重映射：基准链进 `Pos`
+
+官方 `Pos = MakePos(base, line, col)` —— 基准是 `Pos` 的**一部分**。我们同构：
+
+```rust
+pub struct Pos {
+    pub file: FileId,
+    pub line: u32,
+    pub col: u32,
+    pub base: Option<BaseId>,   // `//line` 基准链节点（NonZeroU32 空位优化，4 字节）
+}
+```
+
+- `base == None` ⇒ 无指令，`rel_line`/`rel_col` **退回绝对**行列（M1 行为逐条不变）。
+- 基准链存 `PosBases`（官方指针链 → **表 + 下标**，`Pos` 保持 `Copy`/`Ord`/`Hash`）。
+- **file base 的 `line`/`col` 必须是 `1`/`1`**（官方 `linebase`/`colbase`）；
+  写成 0 会让全仓 `rel_*` 变 0。
+- `Parser::next()` 的顺序是「取词元 → 处理指令消息 → 按当前 base 重算 pos」
+  —— 反了会让 `//line` 后第一个词元用旧基准。
+- ⚠️ **`Pos` 的 `Ord` 仍按绝对坐标**（§4 的排序键不变）：官方 `ErrorList.Less`
+  用 rel 坐标，两者只在「同文件多基准且行号回退」时不同序 —— 已在 ledger
+  登记为已知偏离，等待有用例需要时再改（M2 对撞 31 文件无一触发）。
+
+#### 2.3.2 节点位置：`Pos()`（存储位）与 `StartPos`（修正位）是两套判据
+
+| 判据 | 语义 | 例 |
+|---|---|---|
+| `Expr::pos()` | **存储位** = 官方 `Pos()`，节点构造时钉进的那个位置 | `x[i]` → `[`；`f(x)` → `(`；`a.b` → `a` |
+| `Expr::start_pos()` | **修正位** = 官方 `StartPos`（`positions.go:10-111`），**按需**回溯到子节点 | `Index/Selector/Assert→X`；`Call→Fun`；二元 `Operation→X`；`CompositeLit→Type` |
+
+- dump **不含位置**（C6），所以对撞抓不到位置分歧 —— 位置语义由
+  errcheck 的位置匹配（`T-A-95`）与 @ 腿覆盖。
+- 官方 parser 全文件**只有一处**用 `StartPos`（`paramList` 的
+  `errPos = StartPos(typ)`，`parser.go:2077`）—— `missing type parameter name`
+  的报错列。直译时用 `pos()` 会**右偏一列**（T-AP18 实测、已修）。
+  **新报错点必须先核对官方用的是哪一套。**
+
+#### 2.3.3 `File.eof`
+
+官方 `File.eof = p.tok.pos`（收尾时的 EOF 词元位置）。夹具 `package p\n` ⇒
+`eof = (2, 1)`。载体：`test_smoke.rs` 的 `t_a_99`。
 
 ---
 
@@ -275,3 +325,4 @@ M1/M2 需要回答的三个问题（本契约的输入）：
 | 2026-10-07 | **初稿创建**（T48）。从 `rgoc-hir/src/diag.rs` 反推位置表示与排序规则；显式标注**留位**（那时没有 lexer，本文件不构成「已实现位置跟踪」的证据） | Phase 3 的 `rgoc-hir`（T40）+ 门禁 E6/E7 |
 | 2026-10-12 | **由留位升为完整**（T-L20）。`Pos.file`：`String` → `FileId`；新增 `FileTable`（§2.0）与 `DiagCode`（`code`：`String` → 枚举，§3.1 两条新规则）；§6 第 2 问登记为**部分落地**；验证落点由 `rgoc-hir` 迁到 `rgoc-lex`（§7）。**排序规则不变** | M1 的 `rgoc-lex`（T-L01/T-L02 + 全部切面测试）；`M1-design.md` §10.1 预定的变更范围 |
 | 2026-10-14 | **`DiagCode` 按阶段分区**（M2 / `T-AP06`）。新增 3 个 `SYN-` 前缀的语法代号（工作集）⇒ 23 → **26**；§3.1 新增第 3 条；跨语言对撞由「全表逐字一致」**收窄为 `LEX-` 子表**（`tools/token-oracle` 只镜像词法段），`SYN-` 段归 `tools/ast-oracle`（`T-AP16`）；§7 两行断言随测试改名同步。**排序规则不变** | M2 的 parser 需要自己的语法诊断；`M2-design.md` `D-M2-2`/`D-M2-4` |
+| 2026-10-15 | **parser 侧位置语义收口**（M2 / `T-AP15`+`T-AP18`+`T-AP20`）。新增 §2.3（`//line` 基准链进 `Pos`、`Pos()`/`StartPos` 两套判据、`File.eof`）；头部注记：`DiagCode` 26 → **35**（`T-AP16` 冻结 8 个 + `T-AP20` 的 H 判据 1 个）；§6 「随机访问换算」归属 M2→**M4**（M2 无需它）。**排序规则不变**；`Pos.Ord` 按绝对坐标不变（偏离已登记） | `M2-plan.md` `T-AP21` Step 1；§2.3 的每条都有测试载体 |
