@@ -196,6 +196,21 @@ pub enum DiagCode {
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
     /// 它服务**赋值/声明**语境：`const x int = 1.5` ⇒ 「1.5 truncated to integer」。
     TypTruncatedFloat,
+    /// 请求了**约束接口的同一性**（含项集 `~T`/并集，或 `comparable`）——
+    /// **官方没有对应代号**：`go/types` 有完整类型集，判得了；M3 只表示不判定
+    /// （`D-M3-13`，`U-M3-05`）
+    ///
+    /// 它**刻意偏离**上面几条「与官方代号一一对应」的纪律：那几条是「官方也报，
+    /// 我们按同一类别报」；这条是「官方**不**报（它判得出来），我们明确说
+    /// 「M3 不判」」。混用官方 `Code` 会把「我方能力边界」伪装成「用户写错了」。
+    ///
+    /// 为什么不静默返回 `false`：**「不判」与「不等」是两件事**。静默 `false`
+    /// 会在上游造出一个「类型不匹配」的假诊断，把一条能力边界变成一条假报错
+    /// （`M3-tests.md` §4：`T-TY-81` 要的是**稳定拒绝码**）。
+    ///
+    /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
+    /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）落在检查器里，届时**复用**本码。
+    TypUnsupportedConstraintIdentity,
 }
 
 impl DiagCode {
@@ -203,7 +218,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 42] = [
+    pub const ALL: [DiagCode; 43] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -246,6 +261,7 @@ impl DiagCode {
         DiagCode::TypInvalidShiftOperand,
         DiagCode::TypNumericOverflow,
         DiagCode::TypTruncatedFloat,
+        DiagCode::TypUnsupportedConstraintIdentity,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -293,6 +309,7 @@ impl DiagCode {
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
+            DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
         }
     }
 }

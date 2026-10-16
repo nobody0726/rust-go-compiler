@@ -26,14 +26,14 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 
 #[test]
 fn 代号表恰为冻结总数且无重复() {
-    // 42 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 7 个 M3 类型（`TYP-`）。
+    // 43 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 8 个 M3 类型（`TYP-`）。
     //
     // `SYN-` 段的 12 个 = `T-AP06`/`T-AP15` 落的 3 个（`SynExpectedSemicolon` /
     // `SynInvalidLineDirective` / `SynUnexpectedToken`）+ `T-AP16` 从官方
     // `branches.go` 的 12 处 `errf` 枚举后收敛成的 8 个 + `T-AP20` 的
     // `SynNestingTooDeep`（H 判据，官方无此行为）。
     //
-    // `TYP-` 段的 6 个 = M3/Task 7 的移位代号（`TypInvalidShiftCount` /
+    // `TYP-` 段的 7 个 = M3/Task 7 的移位代号（`TypInvalidShiftCount` /
     // `TypInvalidShiftOperand`）+ Task 8 的常量代号（`TypInvalidConstVal` /
     // `TypInvalidConversion` / `TypTruncatedFloat`）+ Task 10 的
     // `TypNumericOverflow`，**全部刻意与官方 `go/types` 的
@@ -41,8 +41,12 @@ fn 代号表恰为冻结总数且无重复() {
     // `InvalidConversion` / `TruncatedFloat` / `NumericOverflow` 一一对应**
     // （不拆细，否则「按代号比对」时与 oracle 的类别对不上）。
     //
+    // 第 8 个 `TypUnsupportedConstraintIdentity`（M3/Task 17）**刻意相反**：
+    // 官方判得了约束接口的同一性（它有完整类型集），M3 只表示不判定
+    // （`D-M3-13`）⇒ 这是我方**能力边界**的代号，没有官方对应物。
+    //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 42);
+    assert_eq!(DiagCode::ALL.len(), 43);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
