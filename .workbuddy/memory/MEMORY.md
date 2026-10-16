@@ -14,9 +14,10 @@
   `.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
   已落地 `rgoc-const` / `rgoc-types` / `rgoc-load` 三 crate + `tools/types-oracle`；
-  **Task 1–18/21/22/23/24/25 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、
-  类型图合法性、单包多文件装载、声明收集与求值顺序、块作用域/遮蔽/未定义/重复声明），
-  workspace **1209 passed / 0 failed**，下一批 = **Task 26–30**（导出标识符 / 标签 → 源码 import →
+  **Task 1–18/21/22/23/24/25/26 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、
+  类型图合法性、单包多文件装载、声明收集与求值顺序、块作用域/遮蔽/未定义/重复声明、
+  导出标识符/标签/空标识符），
+  workspace **1236 passed / 0 failed**，下一批 = **Task 27–30**（源码 import →
   显式文件列表 → ExportSummary → 零 import 语料包冒烟）→ 31–36 对撞接线 → 37 变异 → 38 manifest
 - **M3 体阶段的两条结构事实（Task 25 落地，改动前必读）**：
   ① **体阶段唯一入口** `rgoc-load/src/scope.rs::resolve_bodies`（`load_sources` 末尾第 ⑦ 步，
@@ -74,8 +75,16 @@
 - `IfStmt.cond` 是 `Option<Expr>`；`Follow::Semi` 认三种来源；官方临时 nil 用短命中间形态，不用 `Expr::Bad` 当哨兵
 - `want(f)` 消息由 `tokstring(&Follow)` 一处派生；`syntaxErrorAt` 只实现 default 支；`checkBranches` 门控 = **本函数**无语法错；`BranchStmt.Target` 刻意不建模（回指，**M3 读**）
 - `Pos.base = Option<BaseId>`（NonZeroU32）；file base line/col 必须 **1/1**；base==None ⇒ rel_* 退回绝对
-- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **56** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 21 `TYP-`；Task 23 增 `TypMismatchedPkgName`；Task 24 补 4 条 = 官方 `InvalidConstInit` / `InvalidDeclCycle` / `InvalidInitCycle` / `WrongAssignCount`；Task 25 补 3 条 = 官方 `DuplicateDecl` / `UndeclaredName` / `RepeatedDecl` —— ⚠️ 计划稿点名的 `UndefinedIdent` / `RedeclaredInThisBlock` / `RedeclaredInThisPackage` 官方**不存在**）
+- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **63** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 28 `TYP-`；Task 23 增 `TypMismatchedPkgName`；Task 24 补 4 条 = 官方 `InvalidConstInit` / `InvalidDeclCycle` / `InvalidInitCycle` / `WrongAssignCount`；Task 25 补 3 条 = 官方 `DuplicateDecl` / `UndeclaredName` / `RepeatedDecl` —— ⚠️ 计划稿点名的 `UndefinedIdent` / `RedeclaredInThisBlock` / `RedeclaredInThisPackage` 官方**不存在**；Task 26 补 7 条 = `BlankPkgName` / `DuplicateLabel` / `InvalidBlank` / `JumpIntoBlock` / `MisplacedLabel` / `UndeclaredLabel` / `UnusedLabel`；**代号一律照官方实名核过两份表**：`src/internal/types/errors/codes.go` + `x/tools/.../typesinternal/errorcode.go`）
 - 深度守卫挂**三条递归边**：`expr` / `stmt_or_nil` / `type_or_nil`；超限**恰好 1 条** SYN-NESTING-TOO-DEEP
+
+## M3 硬事实（细节在 `.superpowers/sdd/M3-plan/progress.md` / commits）
+- **标签是独立一趟**（`rgoc-load/src/labels.rs`，照官方 `go/types/labels.go`）：`all` 是**体**级标签集，**每个函数体各跑一次**（含函数字面量）⇒ 跨函数不可见；标签**不进值作用域**（与变量同名不冲突）；`goto` 可**前向**引用 ⇒ 前向跳转表 + 收尾判 `UndeclaredLabel` / `JumpIntoBlock`。改 `check_labels` 的调用点必须两处都改（漏一处整族静默）
+- ⚠️ **标签在两层各报一次**：语法器 `checkBranches`（M2）报 `SYN-LABEL-*`（“defined/not defined”），类型检查器报 `TYP-*`（“declared/not declared”）；官方 `gc` 语法层报完就不类型检查，我们两层都跑 ⇒ 用例断言时先滤 `TYP-*`
+- ⚠️ **`_` 当值/类型是 `TypInvalidBlank`，不是 `undefined: _`**；豁免只在**左值位**（纯 `=` / `:=` / `range`）——复合赋值 `_ += 1` 与 `_++` 官方走 `check.expr` ⇒ **照报**
+- ⚠️ **两条包名诊断的位置差一个词**：`TypBlankPkgName` 取**包名标识符**处，`TypMismatchedPkgName` 取 **`package` 关键字**处；且 `BlankPkgName` 只在 `pkg.name` 还空时触发
+- ⚠️ **`is_exported` 用生成的 `is_upper`（类别 `Lu`），绝不用 Rust std `char::is_uppercase`**：std 是 derived `Uppercase`（`Lu` ∪ `Other_Uppercase`），比 Go 的 `unicode.IsUpper` **多 120 个码点**（5 段：U+2160..216F / U+24B6..24CF / U+1F130..1F149 / U+1F150..1F169 / U+1F170..1F189）⇒ 会把 `Ⅰx` 误判成导出。`unicode_tables.rs` 是**生成物**（`tools/token-oracle/gen_unicode`），永不手改
+- ⚠️ **变异 GREEN 先怀疑用例集，再怀疑变异**（两次都这样）：Task 25 的 M4（只测 `if` 体抓不到块不开层）、Task 26 的 M12（用例集里只有**前向** `goto`，没有**向后**跳）
 
 ## 文档索引
 - `docs/`：README / 01-feature-set(246) / 03-roadmap(M0–M12)；契约 C1–C6；M2-manifest.json；M0 环境陷阱 14 项在 M0-benchmarks.md §6；VSCode/调试复发点与自检脚本用法见 `AGENTS.md`
