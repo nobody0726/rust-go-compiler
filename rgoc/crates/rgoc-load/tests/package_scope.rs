@@ -109,7 +109,7 @@ fn 空标识符与点导入不引入名字() {
     let mut tt = TypeTable::new();
     let srcs = src(&[(
         "a.go",
-        "package p\n\nimport _ \"fmt\"\nimport . \"os\"\n\nvar _ T\n",
+        "package p\n\nimport _ \"fmt\"\nimport . \"os\"\n\nvar _ int\n",
     )]);
     let (pkg, bag) = load_sources(&mut tt, &borrowed(&srcs), None);
     assert!(bag.into_sorted().is_empty());
@@ -217,16 +217,28 @@ fn 同层重名先声明者胜() {
         ("a.go", "package p\n\ntype T int\n"),
         ("b.go", "package p\n\nvar T int\n"),
     ]);
-    let (pkg, _bag) = load_sources(&mut tt, &borrowed(&srcs), None);
+    let (pkg, bag) = load_sources(&mut tt, &borrowed(&srcs), None);
     assert_eq!(
         pkg.lookup("T").map(|o| o.kind),
         Some(ObjKind::TypeName),
-        "a.go 的 T 胜（Task 25 会在这里报 DuplicateDecl）"
+        "a.go 的 T 胜（后来的那个只被丢弃）"
     );
     assert_eq!(
         pkg.file_table
             .name(pkg.lookup("T").unwrap().pos.unwrap().file),
         "a.go"
+    );
+    // Task 25 接上了 Task 23 在这里预约的诊断：**跨文件**的包级重名
+    // （官方 `go/types` 对包级也写 "redeclared in this block" —— 实测；
+    //  我方按 SCP 口径分措辞，代号同一条）
+    let ds = bag.into_sorted();
+    assert_eq!(ds.len(), 1, "包级重名恰好一条：{ds:?}");
+    assert_eq!(ds[0].code, DiagCode::TypDuplicateDecl);
+    assert_eq!(ds[0].message, "T redeclared in this package");
+    assert_eq!(
+        (ds[0].pos.line(), ds[0].pos.col()),
+        (3, 5),
+        "报在**后来**那个声明处（b.go:3:5）"
     );
 }
 

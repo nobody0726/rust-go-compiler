@@ -67,7 +67,7 @@ pub struct Package {
     /// **包作用域**（`scopes` 里的一层）。
     pub scope: ScopeId,
     /// 每个被接受文件 → 它的**文件作用域**（`import` 名住在这里）。
-    file_scopes: Vec<(FileId, ScopeId)>,
+    pub(crate) file_scopes: Vec<(FileId, ScopeId)>,
     /// 每个文件生效的语言版本（`D-M3-15`：版本**按文件**）。
     ///
     /// 由 [`load_sources`] 在装载时算好（`pkg_versions` 的两处 `TooNew` 诊断
@@ -231,17 +231,23 @@ pub fn load_sources(
                 && let Some(n) = import_name(imp)
             {
                 let pos = imp.name.as_ref().map(|n| n.pos).unwrap_or(imp.pos);
-                let obj = Object {
-                    pos: Some(pos),
-                    ..Object::new(ObjKind::PkgName, n)
-                };
-                pkg.scopes.insert(fscope, obj);
+                // 同名 import 在**同一个文件**里重复 ⇒ 官方 `resolver.go:323`
+                // 走的是同一族 `%s redeclared in this block`（代号 `DuplicateDecl`）
+                crate::scope::declare_name(
+                    &mut pkg.scopes,
+                    fscope,
+                    ObjKind::PkgName,
+                    &n,
+                    pos,
+                    None,
+                    &mut bag,
+                );
             }
         }
 
         // ④ 顶层声明名进**包作用域**（占位：类型与值留给 Task 24）
         for decl in &ast.decls {
-            collect_top_level_names(&mut pkg.scopes, pkg_scope, decl);
+            collect_top_level_names(&mut pkg.scopes, pkg_scope, decl, &mut bag);
         }
 
         pkg.asts.push(ast);
@@ -262,6 +268,10 @@ pub fn load_sources(
     //    （M3 还没有门控点，但顺序先按将来正确的形状摆）。
     collect_decls(&mut pkg, tt, &mut bag);
 
+    // ⑦ 体内作用域与名字引用（Task 25）。放在最后：它要**读**包级对象的类型
+    //    （`lookup_type` 只在对象已求值时才给得出东西），而包级求值在 ⑥ 才完成。
+    crate::scope::resolve_bodies(&mut pkg, tt, &mut bag);
+
     (pkg, bag)
 }
 
@@ -270,50 +280,60 @@ pub fn load_sources(
 /// 与官方 `collectObjects` 的分工一致：`func` **没有接收者**才进包作用域；
 /// 方法名属于接收者的方法集（M3 还不做方法集 ⇒ 方法名此处**不声明**，
 /// 由 M4 的 `TYP-*` 补齐 —— 记在 `open_gaps`）。
-fn collect_top_level_names(scopes: &mut ScopeTable, scope: ScopeId, decl: &Decl) {
+fn collect_top_level_names(
+    scopes: &mut ScopeTable,
+    scope: ScopeId,
+    decl: &Decl,
+    bag: &mut DiagBag,
+) {
     match decl {
         Decl::Import(_) => {}
-        Decl::Type(d) => declare(scopes, scope, ObjKind::TypeName, &d.name.value, d.name.pos),
+        Decl::Type(d) => declare(
+            scopes,
+            scope,
+            ObjKind::TypeName,
+            &d.name.value,
+            d.name.pos,
+            bag,
+        ),
         Decl::Const(d) => {
             for n in &d.names {
-                declare(scopes, scope, ObjKind::Const, &n.value, n.pos);
+                declare(scopes, scope, ObjKind::Const, &n.value, n.pos, bag);
             }
         }
         Decl::Var(d) => {
             for n in &d.names {
-                declare(scopes, scope, ObjKind::Var, &n.value, n.pos);
+                declare(scopes, scope, ObjKind::Var, &n.value, n.pos, bag);
             }
         }
         Decl::Func(d) => {
             if d.recv.is_none() {
-                declare(scopes, scope, ObjKind::Func, &d.name.value, d.name.pos);
+                declare(scopes, scope, ObjKind::Func, &d.name.value, d.name.pos, bag);
             }
         }
     }
 }
 
-/// 声明一个名字（占位对象）。
+/// 声明一个包级名字（占位对象）。
 ///
 /// 两条纪律：
 ///
 /// - **`_` 永不绑定**（Go 规范：空标识符不引入绑定）⇒ 不进作用域；
-/// - **同层重名：先声明者胜**（`lookup_local` 先查）。官方在这里报
-///   `DuplicateDecl`，而那条代号的触发者整批归 **Task 25**（块作用域/遮蔽/未定义/重复声明）
-///   ⇒ 按「没有触发者的码不许进枚举」（`M3-plan` §4）本任务只做**确定性**处理：
-///   后来的那个被丢，而不是把先来的顶掉（顶掉会让诊断顺序依赖声明顺序，
-///   而「谁胜」在 Go 里是有定义的）。
-fn declare(scopes: &mut ScopeTable, scope: ScopeId, kind: ObjKind, name: &str, pos: Pos) {
-    if name == "_" {
-        return;
-    }
-    if scopes.get(scope).lookup_local(name).is_some() {
-        return; // Task 25 在此挂 `DuplicateDecl`
-    }
-    let obj = Object {
-        pos: Some(pos),
-        ..Object::new(kind, name)
-    };
-    scopes.insert(scope, obj);
+/// - **同层重名：先声明者胜**（`lookup_local` 先查，后来的那个被丢而不是顶掉先来的
+///   —— 顶掉会让「谁胜」依赖声明顺序，而「谁胜」在 Go 里是有定义的）。
+///
+/// Task 23 在这里留下「Task 25 在此挂 `DuplicateDecl`」，Task 25 就挂上了：
+/// 现在重名会出一条 [`rgoc_lex::DiagCode::TypDuplicateDecl`]（消息按作用域层
+/// 分措辞，见 [`crate::scope::declare_name`]）。
+fn declare(
+    scopes: &mut ScopeTable,
+    scope: ScopeId,
+    kind: ObjKind,
+    name: &str,
+    pos: Pos,
+    bag: &mut DiagBag,
+) {
+    crate::scope::declare_name(scopes, scope, kind, name, pos, None, bag);
 }
 
 /// `import` 引入了哪个名字（`None` ⇒ 本任务不引入）。

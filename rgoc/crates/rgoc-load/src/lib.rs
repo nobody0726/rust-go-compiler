@@ -29,6 +29,7 @@
 
 pub mod decls;
 pub mod package;
+pub mod scope;
 pub mod typeexpr;
 
 pub use decls::collect_decls;

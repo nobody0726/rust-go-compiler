@@ -19,8 +19,9 @@
 //!
 //! # 刻意**不**做的事（都登记在 `M3-manifest.json` 的 `open_gaps`）
 //!
-//! * **类型位置的未定义名** ⇒ `invalid`，**不报诊断**（`Undefined` 的归属是
-//!   Task 25 的块作用域，那里才知道「这个名字是不是某个内层作用域漏出来的」）；
+//! * **类型位置的未定义名** ⇒ 报 [`DiagCode::TypUndeclaredName`]（`undefined: X`）
+//!   并给 `invalid` —— Task 25 落地；**只看「这个名字在作用域链里存不存在」**，
+//!   「存在但不是类型」是官方 `NotAType`（M4，`open_gaps`）；
 //! * **非类型表达式出现在类型位置**（`var x 1+2`）⇒ `invalid`，**不报诊断**
 //!   （官方 `NotAType` 需要「值 vs 类型」的完整判定，那是 M4）；
 //! * **限定名**（`pkg.T`）⇒ `invalid` —— M3 不解析 import 路径（Task 27 才做），
@@ -57,7 +58,16 @@ impl Checker<'_> {
         match e {
             // 错误恢复占位：上游已经报过错，这里不再造第二条
             Expr::Bad(_) => self.tt.invalid(),
-            Expr::Name(n) => self.lookup_type(scope, &n.value),
+            // 类型位置的**未定义名**在这里与值位置走同一条代号（官方也是同一条
+            // `UndeclaredName`：类型位置 `typexpr.go:30`、值位置由解析器收尾统一报）。
+            // ⚠️ 只有「整个名字都找不到」才报：找到了但不是类型（`var x int; var y x`）
+            // 是官方 `NotAType`，归 M4（`open_gaps`）。
+            Expr::Name(n) => {
+                if self.scopes.lookup(scope, &n.value).is_none() {
+                    self.report_undefined(n.pos, &n.value);
+                }
+                self.lookup_type(scope, &n.value)
+            }
             Expr::Paren(p) => self.resolve_type(scope, &p.x),
 
             // 一元 `*T`（指针）。`Operation.y == None` 是一元的判据。

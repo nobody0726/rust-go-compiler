@@ -185,6 +185,42 @@ pub(crate) struct Checker<'a> {
     roots: Vec<TypeId>,
     /// 无类型基本类型的 `TypeId` 缓存（`add_basic` 不去重，见 `TypeTable::add_basic`）。
     untyped_cache: BTreeMap<BasicId, TypeId>,
+    /// 已经报过 `undefined` 的**书写位置**（Task 25）——`Pos` 唯一标识一次书写，
+    /// 见 [`crate::scope`] 的 `report_undefined`。
+    pub(crate) undefined_reported: BTreeSet<Pos>,
+}
+
+impl Checker<'_> {
+    /// 「只走体」用的构造（Task 25）：包级条目 / 求值状态**全空**。
+    ///
+    /// 为什么必须空：[`Checker`] 的那几个私有字段是**包级求值状态机**
+    /// （`items` / `states` / `stack` / `poisoned`），体内出现「某个包级项正在求值」
+    /// 是 bug 而不是特性。空表让 [`Checker::lookup_type`] 的惰性解析分支
+    /// 直接走不通（`items` 里没有名字）—— 而那正是想要的：包级对象在
+    /// [`collect_decls`] 结束时**已经全部求值完毕**。
+    pub(crate) fn for_bodies<'a>(
+        tt: &'a mut TypeTable,
+        scopes: &'a mut ScopeTable,
+        bag: &'a mut DiagBag,
+        pkg_scope: ScopeId,
+    ) -> Checker<'a> {
+        Checker {
+            tt,
+            scopes,
+            bag,
+            pkg_scope,
+            sizes: Sizes::HOST_ARM64,
+            items: BTreeMap::new(),
+            order: Vec::new(),
+            states: BTreeMap::new(),
+            stack: Vec::new(),
+            poisoned: BTreeSet::new(),
+            cycle_skip: BTreeSet::new(),
+            roots: Vec::new(),
+            untyped_cache: BTreeMap::new(),
+            undefined_reported: BTreeSet::new(),
+        }
+    }
 }
 
 /// 收集一个已装载包的**全部顶层声明**：类型、常量、dump 根。
@@ -217,6 +253,7 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
         cycle_skip: BTreeSet::new(),
         roots: Vec::new(),
         untyped_cache: BTreeMap::new(),
+        undefined_reported: BTreeSet::new(),
     };
     ck.pass1_collect(&asts);
     ck.pass2_resolve(&asts);
