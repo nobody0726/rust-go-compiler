@@ -62,7 +62,7 @@
 - `IfStmt.cond` 是 `Option<Expr>`；`Follow::Semi` 认三种来源；官方临时 nil 用短命中间形态，不用 `Expr::Bad` 当哨兵
 - `want(f)` 消息由 `tokstring(&Follow)` 一处派生；`syntaxErrorAt` 只实现 default 支；`checkBranches` 门控 = **本函数**无语法错；`BranchStmt.Target` 刻意不建模（回指，**M3 读**）
 - `Pos.base = Option<BaseId>`（NonZeroU32）；file base line/col 必须 **1/1**；base==None ⇒ rel_* 退回绝对
-- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **49** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 14 `TYP-`；Task 23 增 `TypMismatchedPkgName` = 官方 `MismatchedPkgName`）
+- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **53** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 18 `TYP-`；Task 23 增 `TypMismatchedPkgName`；Task 24 一次补 4 条 = 官方 `InvalidConstInit` / `InvalidDeclCycle` / `InvalidInitCycle` / `WrongAssignCount`）
 - 深度守卫挂**三条递归边**：`expr` / `stmt_or_nil` / `type_or_nil`；超限**恰好 1 条** SYN-NESTING-TOO-DEEP
 
 ## 文档索引
