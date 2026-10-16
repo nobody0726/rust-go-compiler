@@ -26,20 +26,23 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 
 #[test]
 fn 代号表恰为冻结总数且无重复() {
-    // 40 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 5 个 M3 类型（`TYP-`）。
+    // 41 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 6 个 M3 类型（`TYP-`）。
     //
     // `SYN-` 段的 12 个 = `T-AP06`/`T-AP15` 落的 3 个（`SynExpectedSemicolon` /
     // `SynInvalidLineDirective` / `SynUnexpectedToken`）+ `T-AP16` 从官方
     // `branches.go` 的 12 处 `errf` 枚举后收敛成的 8 个 + `T-AP20` 的
     // `SynNestingTooDeep`（H 判据，官方无此行为）。
     //
-    // `TYP-` 段的 2 个 = M3/Task 7 的移位代号（`TypInvalidShiftCount` /
-    // `TypInvalidShiftOperand`），**刻意与官方 `go/types` 的
-    // `InvalidShiftCount` / `InvalidShiftOperand` 一一对应**（不拆细，
-    // 否则「按代号比对」时与 oracle 的类别对不上）。
+    // `TYP-` 段的 6 个 = M3/Task 7 的移位代号（`TypInvalidShiftCount` /
+    // `TypInvalidShiftOperand`）+ Task 8 的常量代号（`TypInvalidConstVal` /
+    // `TypInvalidConversion` / `TypTruncatedFloat`）+ Task 10 的
+    // `TypNumericOverflow`，**全部刻意与官方 `go/types` 的
+    // `InvalidShiftCount` / `InvalidShiftOperand` / `InvalidConstVal` /
+    // `InvalidConversion` / `TruncatedFloat` / `NumericOverflow` 一一对应**
+    // （不拆细，否则「按代号比对」时与 oracle 的类别对不上）。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 40);
+    assert_eq!(DiagCode::ALL.len(), 41);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

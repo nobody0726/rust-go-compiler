@@ -179,7 +179,7 @@ pub fn fold_compare(op: Op, x: &Const, y: &Const) -> Const {
 // ── 内部 ──────────────────────────────────────────────────────────────────
 
 /// `Const` → 「整数值」（照官方 `constant.ToInt`）。
-fn as_int_value(c: &Const) -> Option<BigInt> {
+pub(crate) fn as_int_value(c: &Const) -> Option<BigInt> {
     match c {
         Const::Int(v) => Some(v.clone()),
         Const::Float(v) => v.to_int(),

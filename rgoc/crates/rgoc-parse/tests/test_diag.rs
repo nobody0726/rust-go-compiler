@@ -574,12 +574,12 @@ fn t_a_66_diagcode_总数已更新() {
     // = 3 个早先的（SynExpectedSemicolon / SynInvalidLineDirective / SynUnexpectedToken）
     // + T-AP16 新增 8 个（branches 的 6 类 + goto 的 2 类）
     // + T-AP20 新增 1 个（SynNestingTooDeep，H 判据：官方无此行为）
-    // + M3 新增 5 个（全部与官方 `go/types` 的 Code 一一对应，**刻意不拆细**：
+    // + M3 新增 6 个（全部与官方 `go/types` 的 Code 一一对应，**刻意不拆细**：
     //   TypInvalidConstVal / TypInvalidConversion / TypInvalidShiftCount /
-    //   TypInvalidShiftOperand / TypTruncatedFloat）。
+    //   TypInvalidShiftOperand / TypNumericOverflow / TypTruncatedFloat）。
     assert_eq!(
         DiagCode::ALL.len(),
-        40,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 5 个（TYP-）"
+        41,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 6 个（TYP-）"
     );
 }

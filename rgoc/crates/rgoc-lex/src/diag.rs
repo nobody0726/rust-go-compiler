@@ -179,6 +179,12 @@ pub enum DiagCode {
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 常量**放不进**目标类型 —— 官方 `NumericOverflow`
+    ///
+    /// 与 `TypTruncatedFloat` 的分界是**有没有丢信息**：
+    /// `int8(200)` 是「值太大」（这条），`int(1.5)` 是「值不是整数」（那条）。
+    /// 官方 `representation()` 也是这么分的（`go/types/const.go` 尾部）。
+    TypNumericOverflow,
     /// 常量向目标类型量化时被截断（`1.5` 赋给 `int`）—— 官方 `TruncatedFloat`
     ///
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
@@ -191,7 +197,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 40] = [
+    pub const ALL: [DiagCode; 41] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -231,6 +237,7 @@ impl DiagCode {
         DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypNumericOverflow,
         DiagCode::TypTruncatedFloat,
     ];
 
@@ -276,6 +283,7 @@ impl DiagCode {
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
         }
     }
