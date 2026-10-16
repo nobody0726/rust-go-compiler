@@ -27,6 +27,7 @@
 pub mod basic;
 pub mod bigint;
 pub mod bigrat;
+pub mod consts;
 pub mod convert;
 pub mod eval;
 pub mod fold;
@@ -70,15 +71,9 @@ pub use iota::expand_const_group;
 /// 可表示性判定（定义在 [`representable`]）。
 pub use representable::{Represented, representable};
 
-/// 常量在 [`ConstTable`] 里的下标。
+/// 常量在 [`ConstTable`] 里的下标 —— 定义在 [`consts`]。
 ///
 /// **为什么要有下标这一层**：`BigInt` 不是 `Copy`，而 `rgoc_types::Type`
 /// 必须保持廉价可拷贝（类型表要能整体复制/比较）⇒ 类型表里凡引用常量的地方
 /// （如 `array` 的长度）只存下标，常量本体集中在 [`ConstTable`]。
-/// M3/Task 5 填充。
-#[derive(Debug)]
-pub struct ConstId;
-
-/// 常量表。M3/Task 5 填充。
-#[derive(Debug)]
-pub struct ConstTable;
+pub use consts::{ConstId, ConstTable};
