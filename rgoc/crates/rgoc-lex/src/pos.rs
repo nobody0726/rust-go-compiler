@@ -47,8 +47,11 @@ use std::num::NonZeroU32;
 /// 无关的文件名 —— 这是**检测不出来**的。
 ///
 /// M1 的约束是**每次编译只有一张表**（`Lexer` 持有它），所以这个局限不会触发。
-/// 等到 M3 引入多包多文件时，如果那时出现跨表混用，需要给 `FileId` 加上表标识
-/// （或改成 `(TableId, Index)` 二元组）—— 那是一次契约变更，不是修 bug。
+/// **M3 仍是「每次装载只有一张表」**，只是表的持有者从 `Lexer` 换成了装载器
+/// （`Task 23` Ruling 23-4：`Lexer::new_in(&mut FileTable, …)` / `parse_file_in(…)`，
+/// 见 `rgoc-load`）。所以这条路仍然不触发 —— 代价是**必须**用 `*_in` 系列入口，
+/// 用错（多文件各自 `new`）时所有文件都落在 `FileId(0)` 上，而那是**检测不出来**的。
+/// 另一条出路（`FileId` 加表标识）没有走：那是一次契约变更。
 ///
 /// 当前防住的是**越界**（下标超出表长），见 [`FileTable::name`] 的 `Panics` 一节。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -77,7 +80,7 @@ impl FileId {
 ///
 /// 用 `Vec` 线性查而不是 `HashMap`：M1 处理的文件数是个位数，且线性查让
 /// 「同名字必须得到同一个 Id」这条不依赖哈希行为。
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct FileTable {
     names: Vec<String>,
 }

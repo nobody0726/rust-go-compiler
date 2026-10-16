@@ -4,7 +4,7 @@ use rgoc_ast::{AstFile, BasicLit, Decl, LitKind, Name, Pragma};
 use rgoc_lex::diag::{Diag, DiagBag, DiagCode};
 use rgoc_lex::lexer::Lexer;
 use rgoc_lex::message::Mode;
-use rgoc_lex::pos::{Pos, PosBases};
+use rgoc_lex::pos::{FileTable, Pos, PosBases};
 use rgoc_lex::token::{Delim, Keyword, OpForm, Operator, Token, TokenKind};
 
 use crate::decl::DeclKind;
@@ -53,11 +53,24 @@ pub struct ParseResult {
 /// 解析一个 Go 源文件（**尽量继续**档，对应官方 `errh != nil`）。
 ///
 /// 这是 M2 的默认入口 —— 设计上 M2 的主判据全在这一档（`M2-design.md` §5.3）。
+///
+/// ⚠️ **多文件的装载必须用 [`parse_file_in`]**：本入口自带一张新的 `FileTable`，
+/// 于是每个文件的 `FileId` 都是 `0`（Task 23 Ruling 23-4）。
 pub fn parse_file(src: &[u8], name: &str) -> ParseResult {
-    parse_file_with(src, name, ErrMode::Continue)
+    parse_file_in(&mut FileTable::new(), src, name)
 }
 
-/// 解析一个 Go 源文件，显式指定 [`ErrMode`]。
+/// 解析一个 Go 源文件，登记进**调用方持有的**文件表 —— 多文件装载的入口。
+pub fn parse_file_in(table: &mut FileTable, src: &[u8], name: &str) -> ParseResult {
+    parse_file_with_in(table, src, name, ErrMode::Continue)
+}
+
+/// 解析一个 Go 源文件，显式指定 [`ErrMode`]（自带一张新表；理由见 [`parse_file`]）。
+pub fn parse_file_with(src: &[u8], name: &str, mode: ErrMode) -> ParseResult {
+    parse_file_with_in(&mut FileTable::new(), src, name, mode)
+}
+
+/// 解析一个 Go 源文件，显式指定 [`ErrMode`]，并登记进调用方的文件表。
 ///
 /// # `StopOnFirst` 档为什么要 `catch_unwind`
 ///
@@ -67,8 +80,13 @@ pub fn parse_file(src: &[u8], name: &str) -> ParseResult {
 /// ⚠️ **只接住我们自己的 [`Abort`]，其它 panic 原样上抛**：把「控制流」和「bug」
 /// 混在一个 `Err(_)` 分支里，会让真正的崩溃被静默吞掉 —— 那正是 `AGENTS.md`
 /// 记的「静默失败」形状。
-pub fn parse_file_with(src: &[u8], name: &str, mode: ErrMode) -> ParseResult {
-    let mut p = Parser::new(src, name, mode);
+pub fn parse_file_with_in(
+    table: &mut FileTable,
+    src: &[u8],
+    name: &str,
+    mode: ErrMode,
+) -> ParseResult {
+    let mut p = Parser::new_in(table, src, name, mode);
 
     let file = if mode == ErrMode::StopOnFirst {
         install_quiet_abort_hook();
@@ -177,10 +195,24 @@ impl Parser {
     pub(crate) fn depth_leave(&mut self) {
         self.depth -= 1;
     }
-    /// 建一个 parser。`pub(crate)` 是因为 [`crate::recovery`] 的单元测试要直接驱动
-    /// `advance` 的边界语义（那些语义从 `parse_file` 外面看不见）。
+    /// **测试专用**：自带一张新表（本 crate 的单测都是单文件）。
+    ///
+    /// ⚠️ 多文件**不能**用它 —— 每个文件都会落在 `FileId(0)` 上（Ruling 23-4）。
+    /// 生产入口只有 [`crate::parse_file_in`]。
+    #[cfg(test)]
     pub(crate) fn new(src: &[u8], name: &str, mode: ErrMode) -> Self {
-        let mut lex = Lexer::new(src.to_vec(), name);
+        Self::new_in(&mut FileTable::new(), src, name, mode)
+    }
+
+    /// 建一个 parser，登记进**调用方持有的**文件表（多文件装载走这条）。
+    ///
+    /// `pub(crate)` 是因为 [`crate::recovery`] 的单元测试要直接驱动
+    /// `advance` 的边界语义（那些语义从 `parse_file` 外面看不见）。
+    /// 没有「自带新表」的**非测试**版本：多文件各自建表会让所有文件落在
+    /// `FileId(0)` 上（Ruling 23-4 的失效模式）。
+    pub(crate) fn new_in(table: &mut FileTable, src: &[u8], name: &str, mode: ErrMode) -> Self {
+        let mut lex = Lexer::new_in(table, src.to_vec(), name);
+        let file_id = lex.file();
         // 官方 `parser.go:89`：scanner 以 `directives` 模式初始化 —— 只上报
         // `//go:` / `//line` 指令（**不是**全部注释，那要 `comments` 模式）。
         lex.set_mode(Mode::DIRECTIVES);
@@ -195,7 +227,7 @@ impl Parser {
             tok: Token {
                 pos: Pos {
                     base: bases.current(),
-                    file: rgoc_lex::pos::FileId::from_index(0),
+                    file: file_id,
                     line: 0,
                     col: 0,
                 },

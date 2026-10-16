@@ -70,15 +70,36 @@ pub struct Lexer {
 }
 
 impl Lexer {
-    /// 建一个词法器。`name` 会登记进文件表（`Pos.file` 只是一张表的索引）。
+    /// 建一个词法器。`name` 会登记进**本词法器自己的**文件表
+    /// （`Pos.file` 只是一张表的索引）。
     ///
     /// **不预读第一个字符** —— 见 [`Lexer::started`] 的说明。
+    ///
+    /// ⚠️ **多文件必须用 [`Lexer::new_in`]**：本入口每次新建一张表 ⇒ 每个文件的
+    /// `FileId` 都是 `0`，跨文件的诊断排序与定位都会失准（Task 23 Ruling 23-4）。
     pub fn new(src: Vec<u8>, name: &str) -> Self {
         let mut table = FileTable::new();
+        let lx = Self::new_in(&mut table, src, name);
+        // `new_in` 里的快照就是这张只有本文件的表 —— 两者一致，不必再拷一次
+        lx
+    }
+
+    /// 用**调用方持有的**文件表登记本文件 —— **多文件装载的唯一正确形态**。
+    ///
+    /// 与 [`Lexer::new`] 的唯一区别是 `FileId` 的来源：这里登记进共享表，
+    /// 所以两个文件各自得到不同的 `FileId` —— `C1` §4 的诊断排序第一键
+    /// （`pos.file`）才有意义。
+    ///
+    /// 本词法器内部保存该表的一份**快照**（含本次之前登记的名字），
+    /// 供 [`Lexer::table`] 解释本文件及更早文件的位置：
+    /// `Lexer` 的几个错误路径要用它渲染位置，拿不到表就只能 panic。
+    /// 快照**不含**此后登记的文件 —— 那时位置也不该由本词法器解释。
+    pub fn new_in(table: &mut FileTable, src: Vec<u8>, name: &str) -> Self {
         let file = table.intern(name);
+        let snapshot = table.clone();
         Self {
             src: SourceReader::new(src, file),
-            table,
+            table: snapshot,
             file,
             diags: DiagBag::new(),
             mode: Mode::NONE,
