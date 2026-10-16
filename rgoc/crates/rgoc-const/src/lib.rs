@@ -28,6 +28,7 @@
 
 pub mod bigint;
 pub mod bigrat;
+pub mod fold;
 pub mod value;
 
 /// 基本类型的标识（26 个）。
@@ -60,6 +61,9 @@ pub use bigrat::{BigRat, RoundOutcome, RoundResult};
 
 /// 一个常量值（定义在 [`value`]）。
 pub use value::{Const, const_from_literal};
+
+/// 常量折叠（定义在 [`fold`]）。
+pub use fold::{fold_binary, fold_compare, fold_unary};
 
 /// 常量在 [`ConstTable`] 里的下标。
 ///

@@ -30,6 +30,19 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::ops::Neg;
 
+/// 按位运算类别（**无限精度补码**语义，照 Go 的常量）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BitOp {
+    /// `&`
+    And,
+    /// `|`
+    Or,
+    /// `^`
+    Xor,
+    /// `&^`
+    AndNot,
+}
+
 /// 任意精度整数。
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct BigInt {
@@ -520,6 +533,72 @@ impl BigInt {
         .canonical()
     }
 
+    /// 按位补：`^x == -x - 1`（**无限精度补码**，照 Go 常量：`^0 == -1`）。
+    pub fn bit_not(&self) -> Self {
+        BigInt::from_i64(-1).sub(self)
+    }
+
+    /// 按位运算（**无限精度补码**语义）。
+    ///
+    /// 做法：两个操作数各自在 `n = max(肢数) + 1` 肢的宽度上展开成补码
+    /// （负数在高位**补 1**），逐肢运算，再从补码判回符号。多出的那一肢是
+    /// **必需**的 —— 它保证最高位确实是结果的符号位（`-1 & 5 == 5` 这类
+    /// 跨符号用例靠它成立）。
+    pub fn bitwise(&self, op: BitOp, other: &Self) -> Self {
+        let n = self.limbs.len().max(other.limbs.len()) + 1;
+        let a = self.to_twos(n);
+        let b = other.to_twos(n);
+        let mut out = vec![0u32; n];
+        for (i, slot) in out.iter_mut().enumerate() {
+            *slot = match op {
+                BitOp::And => a[i] & b[i],
+                BitOp::Or => a[i] | b[i],
+                BitOp::Xor => a[i] ^ b[i],
+                BitOp::AndNot => a[i] & !b[i],
+            };
+        }
+        Self::from_twos(&out)
+    }
+
+    /// 在 `n` 肢宽度上展开成补码（负数高位补 1）。
+    fn to_twos(&self, n: usize) -> Vec<u32> {
+        let mut v = vec![0u32; n];
+        let take = self.limbs.len().min(n);
+        v[..take].copy_from_slice(&self.limbs[..take]);
+        if self.neg {
+            for limb in v.iter_mut() {
+                *limb = !*limb;
+            }
+            let mut carry = 1u64;
+            for limb in v.iter_mut() {
+                let s = *limb as u64 + carry;
+                *limb = s as u32;
+                carry = s >> 32;
+            }
+        }
+        v
+    }
+
+    /// 补码 → 符号-绝对值。
+    fn from_twos(v: &[u32]) -> Self {
+        let neg = v.last().is_some_and(|&top| top >> 31 == 1);
+        if !neg {
+            let mut limbs = v.to_vec();
+            trim(&mut limbs);
+            return BigInt { limbs, neg: false };
+        }
+        let mut mag: Vec<u32> = v.iter().map(|l| !l).collect();
+        let mut carry = 1u64;
+        for limb in mag.iter_mut() {
+            let s = *limb as u64 + carry;
+            *limb = s as u32;
+            carry = s >> 32;
+        }
+        trim(&mut mag);
+        let neg = !mag.is_empty();
+        BigInt { limbs: mag, neg }.canonical()
+    }
+
     /// 内部：整除（用于约分；不满足整除即违反内部不变量）。
     pub(crate) fn div_exact(&self, d: &Self) -> Self {
         let (q, r) = self.div_mod(d).expect("div_exact: 除零");
@@ -740,5 +819,28 @@ mod tests {
         assert_eq!(BigInt::from_i64(256).bit_len(), 9);
         assert_eq!(BigInt::from_i64(1).shl(100).bit_len(), 101);
         assert_eq!((-BigInt::from_i64(1)).bit_len(), 1, "符号不进 bit_len");
+    }
+
+    /// **无限精度补码**：跨符号与跨肢两类用例都必须对。
+    #[test]
+    fn 按位运算是无限精度补码() {
+        let i = BigInt::from_i64;
+        let bw = |a: i64, op: BitOp, b: i64| i(a).bitwise(op, &i(b));
+        assert_eq!(bw(-1, BitOp::And, 5), i(5));
+        assert_eq!(bw(-5, BitOp::And, 3), i(3));
+        assert_eq!(bw(-5, BitOp::Or, 3), i(-5));
+        assert_eq!(bw(-1, BitOp::Or, 0), i(-1));
+        assert_eq!(bw(5, BitOp::Xor, 3), i(6));
+        assert_eq!(bw(5, BitOp::AndNot, 3), i(4));
+        assert_eq!(bw(-1, BitOp::AndNot, 5), i(-6), "&^ 等价于 a & ^b");
+        // `^x == -x-1`
+        assert_eq!(i(0).bit_not(), i(-1));
+        assert_eq!(i(5).bit_not(), i(-6));
+        assert_eq!(i(-1).bit_not(), i(0));
+        // 跨肢：符号位必须由多出的那一肢定住
+        let big = i(1).shl(100);
+        assert_eq!(big.bitwise(BitOp::And, &big), big);
+        assert_eq!((-big.clone()).bitwise(BitOp::And, &big), big);
+        assert_eq!(big.bit_not().add(&i(1)), -big);
     }
 }
