@@ -29,6 +29,7 @@ pub mod bigint;
 pub mod bigrat;
 pub mod convert;
 pub mod fold;
+pub mod iota;
 pub mod sizes;
 pub mod value;
 
@@ -57,6 +58,9 @@ pub use value::{Const, const_from_literal};
 
 /// 常量折叠（定义在 [`fold`]）。
 pub use fold::{fold_binary, fold_compare, fold_unary};
+
+/// `iota` 与常量声明组展开（定义在 [`iota`]）。
+pub use iota::expand_const_group;
 
 /// 常量在 [`ConstTable`] 里的下标。
 ///
