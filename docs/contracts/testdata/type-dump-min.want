@@ -1,2 +1,5 @@
+# C7 §5 的最小对撞目标（`tools/types-oracle/testdata/type-dump-min.go`）
+# 输入：var x int; var y *int
+# 规则 1：`#` 行与空行两侧都忽略 —— 这份文件同时充当「说明」与「期望」
 0	basic int
 1	pointer 0

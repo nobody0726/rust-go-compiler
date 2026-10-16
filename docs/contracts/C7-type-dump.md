@@ -90,8 +90,14 @@
 1. **去重**：同一个类型条目**只编号一次**，取**首次出现**的号；再次遇到写同一个号。
    - 去重按**条目身份**：**定义型**（`named`/`alias`）按定义身份；**基本型**按种类
      （事实上每个 `BasicKind` 只有一个实例）。
-   - ⚠️ **结构型（pointer/slice/array/map/chan/struct/signature/tuple/interface/union）不去重** ——
-     `[]byte` 在源码里出现两次就**占两个号**。这不是疏漏：两侧都不做结构规范化
+   - ⚠️ **空元组是单例**（实测，Task 16）：`tuple 0` 全部共用一个号 ——
+     `var x func(); var y func(); var z func() ()` 只产出**一条** `0 tuple 0`。
+     `go/types` 里空元组是被复用的实例（`func(a int)` 的**结果**元组与 `func()`
+     的**参数**元组是同一个指针），而**非空**元组各自独立
+     （`A() (int,string)` 与 `Z() int` 的结果元组占两个号）。
+   - ⚠️ **结构型（pointer/slice/array/map/chan/struct/signature/非空 tuple/interface/union）不去重** ——
+     `[]byte` 在源码里出现两次就**占两个号**；`struct{}` / `interface{}` 两次也是两个号
+     （实测）。这不是疏漏：两侧都不做结构规范化
      （`go/types` 不提供），要求「同构即同号」会把一个语义判定偷偷塞进 dump 层。
 2. **后序**：**结构型先子后父**；**定义型（`named`/`alias`）先占号、再下钻其本体**
    （`Named` 取 underlying / `Alias` 取 RHS）。
@@ -246,3 +252,4 @@ var h interface{ comparable; M() }   // 非法：comparable 与方法的组合
 | 2026-10-16 | 新建并冻结（`Task 1`）；把 `M3-tests.md` §5.2 的 8 条规则抽成独立契约，并**补出** §3 编号顺序（原冻结清单未规定，两侧不可能自洽） | M3 开工 |
 | 2026-10-16 | **实测订正（`Task 3`，oracle 落地）**：§4.1 删掉 `byte` / `rune` / `error` 三个 token（`Byte=Uint8`、`Rune=Int32` 同一 `*Basic`；`error` 是 `Named`），basic 全集 **26 → 25**；§3 补「定义型先占号 + 顺带编号本体」「结构型不去重」「逐构造子节点顺序表」三条；§4.2 补「预声明名可能是 `alias`（`any`）」 | `tools/types-oracle` 首次对撞 |
 | 2026-10-17 | 新增 §5.1「对撞样本必须是**合法程序**」（环守卫的实测结论：`interface{comparable; M()}` 让走访成环）；§4.2 补记 `interface <m> <t>` 的 `t = 有无项集`（实测 `unionOf(x) != nil`，**不是** `IsMethodSet()`） | `Task 15` 探针 + oracle 环守卫 |
+| 2026-10-17 | §3 规则 1 增「**空元组是单例**」（实测 `probe/emptytup.go`：三个 `func()` 只产出**一条** `0 tuple 0`）；`named`/`alias` 行确认是 `named <ref(本体)>`（**不是**引用自己 ⇒ 不写 `#`，除非本体本身是定义型） | `Task 16` 渲染器落地 |

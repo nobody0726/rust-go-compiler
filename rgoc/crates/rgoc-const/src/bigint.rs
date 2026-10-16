@@ -390,6 +390,31 @@ impl BigInt {
         Some(acc)
     }
 
+    /// 十进制文本：**无前导 0**、零写 `0`、负数带 `-`。
+    ///
+    /// 任意精度 ⇒ **不能**走 [`BigInt::to_i64`]（`[1<<40]int` 是合法的数组长度，
+    /// 而且诊断要打印「constant 1000 overflows int8」里的那个值）。
+    /// `C7` §4.3 的数组长度文本取这里。
+    #[must_use]
+    pub fn to_dec(&self) -> String {
+        if self.limbs.is_empty() {
+            return "0".to_string();
+        }
+        let mut mag = self.limbs.clone();
+        let mut digits: Vec<u8> = Vec::new();
+        while !mag.is_empty() {
+            let (q, r) = div_mod_small_mag(&mag, 10);
+            digits.push(b'0' + r as u8);
+            mag = q;
+        }
+        digits.reverse();
+        let mut s = String::from_utf8(digits).expect("十进制数字必是 UTF-8");
+        if self.neg {
+            s.insert(0, '-');
+        }
+        s
+    }
+
     /// 转 `i64`；**超出范围返回 `None`**（不截断）。
     pub fn to_i64(&self) -> Option<i64> {
         match bit_len_mag(&self.limbs) {
@@ -692,6 +717,57 @@ mod tests {
             BigInt::from_dec("1267650600228229401496703205376"),
             Some(want)
         );
+    }
+
+    #[test]
+    fn to_dec_与_from_dec_互逆() {
+        for s in [
+            "0",
+            "1",
+            "-1",
+            "7",
+            "-7",
+            "255",
+            "256",
+            "-256",
+            "18446744073709551615",
+            "-18446744073709551615",
+            "1099511627776",
+            "1267650600228229401496703205376",
+            "-99999999999999999999999999999999999999",
+        ] {
+            let v = BigInt::from_dec(s).expect(s);
+            assert_eq!(v.to_dec(), s, "{s}");
+        }
+    }
+
+    #[test]
+    fn to_dec_的四处边界() {
+        assert_eq!(BigInt::zero().to_dec(), "0");
+        assert_eq!(BigInt::from_i64(0).to_dec(), "0");
+        // `-0` 读进来就是零 ⇒ 写出去**不带**负号
+        assert_eq!(BigInt::from_dec("-0").expect("-0").to_dec(), "0");
+        // `2^40` —— 合法的数组长度（`to_i64` 也能表示，但 `2^100` 不能 ⇒ 必须走十进制）
+        assert_eq!(BigInt::from_i64(1).shl(40).to_dec(), "1099511627776");
+        // `u64::MAX`（0 号 limb 全 1）
+        assert_eq!(BigInt::from_u64(u64::MAX).to_dec(), "18446744073709551615");
+        // `2^100`：`to_i64` 是 `None`，但十进制必须打得出来
+        let big = BigInt::from_i64(1).shl(100);
+        assert!(big.to_i64().is_none());
+        assert_eq!(big.to_dec(), "1267650600228229401496703205376");
+        // 负的大数
+        assert_eq!(
+            BigInt::zero().sub(&big).to_dec(),
+            "-1267650600228229401496703205376"
+        );
+    }
+
+    #[test]
+    fn to_dec_非十进制字面量也走同一条路() {
+        // 十六进制 / 八进制 / 二进制字面量读进来之后，写出去一律十进制（C7 §4.3）
+        assert_eq!(BigInt::from_hex("ff").expect("ff").to_dec(), "255");
+        assert_eq!(BigInt::from_oct("777").expect("777").to_dec(), "511");
+        assert_eq!(BigInt::from_bin("100000000").expect("bin").to_dec(), "256");
     }
 
     #[test]
