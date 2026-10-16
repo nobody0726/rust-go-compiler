@@ -49,6 +49,25 @@ use rgoc_ast::{ConstDecl, Expr};
 /// `const ( _ = iota; K )` 的 `K` 是 `1`。
 #[must_use]
 pub fn expand_const_group(decls: &[ConstDecl]) -> Vec<(usize, Expr)> {
+    expand_const_group_specs(decls)
+        .into_iter()
+        .flat_map(|(iota, values)| values.into_iter().map(move |v| (iota, v)))
+        .collect()
+}
+
+/// 同 [`expand_const_group`]，但**按规格分组**返回：一条 `const` 规格一项。
+///
+/// # 为什么要有它（`Task 24` Ruling 24-6）
+///
+/// 展平版丢掉了「这条规格有几个名字」—— 而调用方要按名字配对
+/// （`const a, b = 1, 2` 的 `a` 拿 `1`、`b` 拿 `2`）。分组版让配对就是
+/// `specs[i]` ↔ `decls[i]`，**不必复制**本文件的分组逻辑（复制就会有两份
+/// 「什么算新组」的判据，而它们会分叉）。
+///
+/// 越界的那一支（名字比表达式多）由调用方处理 —— 这里只**如实**返回
+/// 每条规格产出的表达式（组首省略 ⇒ 空 `Vec`）。
+#[must_use]
+pub fn expand_const_group_specs(decls: &[ConstDecl]) -> Vec<(usize, Vec<Expr>)> {
     let mut out = Vec::new();
     // 上一条规格的「组身份」（`None` = 无括号）。第一条之前用 `first` 标出。
     let mut prev_group: Option<Option<rgoc_ast::Group>> = None;
@@ -73,9 +92,7 @@ pub fn expand_const_group(decls: &[ConstDecl]) -> Vec<(usize, Expr)> {
         } else {
             d.values.clone()
         };
-        for v in &values {
-            out.push((iota, v.clone()));
-        }
+        out.push((iota, values.clone()));
         last_values = values;
         // 规格占一个 `iota` 槽位 —— **无论它是否产出了元素**（组首省略也占）。
         iota += 1;
@@ -255,5 +272,41 @@ mod tests {
         );
         assert_eq!(out[0].1, lit(7));
         assert_eq!(out[1].1, lit(9));
+    }
+
+    /// 分组版（`Task 24` 的名字↔值配对入口）：**一规格一项**，且展平后与旧函数**逐项相同**。
+    #[test]
+    fn 分组版与展平版一致() {
+        let mut g = spec(Some(10), vec![lit(1), lit(2)]);
+        g.names = vec![
+            Name {
+                value: "a".to_string(),
+                pos: pos(1),
+            },
+            Name {
+                value: "b".to_string(),
+                pos: pos(3),
+            },
+        ];
+        let decls = vec![
+            g,                        // `a, b = 1, 2` ⇒ 一条规格两个表达式
+            spec(Some(10), vec![]),   // 省略 ⇒ 复用上一条（仍是两个）
+            spec(None, vec![lit(9)]), // 无括号 ⇒ 新组、iota 归零
+        ];
+        let specs = expand_const_group_specs(&decls);
+        assert_eq!(specs.len(), 3, "一规格一项");
+        assert_eq!(specs[0].0, 0);
+        assert_eq!(specs[0].1.len(), 2, "`a, b = 1, 2` 产出两个");
+        assert_eq!(specs[1].0, 1);
+        assert_eq!(specs[1].1.len(), 2, "省略 ⇒ 复用上一条的两个");
+        assert_eq!(specs[2].0, 0, "无括号自成一组 ⇒ iota 归零");
+
+        // 展平后必须与旧函数**逐项相同**（旧函数的语义与测试零改动的依据）
+        let flat: Vec<(usize, Expr)> = specs
+            .clone()
+            .into_iter()
+            .flat_map(|(i, vs)| vs.into_iter().map(move |v| (i, v)))
+            .collect();
+        assert_eq!(flat, expand_const_group(&decls));
     }
 }

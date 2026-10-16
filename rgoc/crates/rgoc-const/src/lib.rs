@@ -66,7 +66,7 @@ pub use fold::{fold_binary, fold_compare, fold_unary};
 pub use eval::{ConstEnv, EvalOutcome, eval_const_expr};
 
 /// `iota` 与常量声明组展开（定义在 [`iota`]）。
-pub use iota::expand_const_group;
+pub use iota::{expand_const_group, expand_const_group_specs};
 
 /// 可表示性判定（定义在 [`representable`]）。
 pub use representable::{Represented, representable};

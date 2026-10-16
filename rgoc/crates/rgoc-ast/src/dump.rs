@@ -532,7 +532,13 @@ fn opt_lit_str(l: &Option<BasicLit>) -> String {
     }
 }
 
-fn op_str(op: Op) -> &'static str {
+/// 运算符的拼写（`+`、`<<`、`&^` …）。
+///
+/// 公开是**刻意的**：诊断消息里要按人读的方式写出表达式（`H + 1 is not
+/// constant`），而运算符表是**语言事实** —— 复制一份到别处就会多出一个
+/// 会分叉的真相（`rgoc-load` 的 `expr_text` 直接用它）。
+#[must_use]
+pub fn op_str(op: Op) -> &'static str {
     match op {
         Op::Add => "+",
         Op::Sub => "-",

@@ -512,6 +512,15 @@ impl TypeTable {
         self.type_param_def(id).self_ty
     }
 
+    /// 回填类型参数的**约束**（`Task 24` Ruling 24-7）。
+    ///
+    /// 为什么不是构造参数：约束可以引用**后声明**的类型参数
+    /// （`[T any, U ~[]T]`），而 `TypeParam` 必须先占号才能被引用 ⇒
+    /// 与 `set_named_underlying` / `set_alias_rhs` 同一形状（先占号、后回填）。
+    pub fn set_type_param_constraint(&mut self, id: TypeParamId, constraint: TypeId) {
+        self.type_params[id.index()].constraint = constraint;
+    }
+
     /// 并集（`~T | U`）。
     pub fn add_union(&mut self, terms: Vec<(bool, TypeId)>) -> UnionId {
         let id = UnionId::from_index(self.unions.len());
