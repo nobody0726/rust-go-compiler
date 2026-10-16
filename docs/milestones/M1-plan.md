@@ -1,6 +1,7 @@
 # M1 词法与位置 · 实施计划
 
 > **状态**：**已完成**（T-L01–T-L21，2026-10-12）　|　**测试清单**：`M1-tests.md`（已冻结）　|　**机器可读事实**：`M1-manifest.json`（已填实）
+> 2026-10-16 补记：全部 Step 复选框补勾（此前只翻了头部状态行，任务级 Step 漏勾）；T-L01–T-L21 的交付已按 M1 收口时的 commit 纪律分块提交。
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
@@ -94,7 +95,7 @@ if [ $fail -eq 0 ]; then echo "  四条门禁全过"; else echo "  有门禁未�
   - ⚠️ **`Pos` 不实现 `Display`**（R2）：它只有 `FileId`，单独打印会漏掉文件名，与 `C1` §2.2 冲突。
     格式化一律经 `FileTable::format_pos`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/test_pos.rs`：
 
@@ -140,12 +141,12 @@ fn pos_的_ord_顺序是_文件_行_列() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run:（按 G11）`scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex'`
 Expected: FAIL —— `package ID specification \`rgoc-lex\` did not match any packages`（exit 101）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `Cargo.toml`（workspace 成员）：`version.workspace = true` / `edition.workspace = true` /
 `rust-version.workspace = true` / `license.workspace = true` / `[lints] workspace = true`，无依赖。
@@ -154,12 +155,12 @@ Expected: FAIL —— `package ID specification \`rgoc-lex\` did not match any p
 不要提前上 `HashMap` —— 那会让"同名字得同 Id"的断言依赖哈希行为）。
 **`Pos` 只 derive `Debug`，不实现 `Display`**（R2）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: 同 Step 2
 Expected: 3 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/Cargo.toml rgoc/crates/rgoc-lex
@@ -182,7 +183,7 @@ git commit -m "feat(lex): 创建 rgoc-lex crate 与 Pos/FileId/FileTable（C1 �
   - `rgoc_lex::Diag { pub pos: Pos, pub code: DiagCode, pub message: String }`
   - `rgoc_lex::DiagBag`（`push(&mut self, Diag)` / `into_sorted(self) -> Vec<Diag>` / `len()` / `is_empty()`）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/test_diag.rs`：
 
@@ -216,23 +217,23 @@ fn diag_code_的声明顺序与_as_str_字典序一致() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_diag`
 Expected: 编译失败 —— `DiagBag` / `DiagCode` 不存在
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `DiagCode`：19 个变体，**声明顺序按 `as_str()` 的字典序排列**（这条由 `diag_code_的声明顺序与_as_str_字典序一致` 钉住）。
 `DiagBag::into_sorted` **消费 `self`** 并 `sort()`（`Pos` 的 `Ord` 已按 file→line→col，再按 `code`）——
 返回引用会让调用方忘记排序，那就绕过了这个类型存在的唯一理由（`C1` §4.3）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_diag`
 Expected: 4 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -260,7 +261,7 @@ git commit -m "feat(lex): Diag/DiagBag/DiagCode（C1 排序规则 + 23 个诊断
   - `rgoc_lex::Operator`（语义枚举；`prec(self) -> u8`）
   - `rgoc_lex::Delim`（10 个）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/test_token.rs`：
 
@@ -300,12 +301,12 @@ fn operator_prec_与_spec_一致() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_token`
 Expected: 编译失败 —— 类型不存在
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 按 `M1-design.md` §3.2 / §3.3 的清单定义。
 `Keyword` 的 `lookup` 用 `match` 而不是哈希表 —— 25 个分支的 `match` 编译成跳转表，
@@ -320,12 +321,12 @@ Rust 的 `match` 把这件事交给编译器）。
 > 同时新增 `Operator::ALL` / `Keyword::ALL` / `Delim::ALL` / `LitKind::ALL` / `SemiOrigin::ALL` /
 > `OpForm::ALL` 与 `LitKind::as_official_code`（钉住 F6 的官方数值编码）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_token`
 Expected: 17 passed（原计划写 4 —— 实际写了 17 条，见下）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -356,7 +357,7 @@ git commit -m "feat(lex): TokenKind 及配套枚举（25 关键字 / 48 项运�
 - Consumes: 无（Go 侧独立）
 - Produces: 一个可运行命令，把 `<file>` 扫成 `M1-tests.md` §5.2 格式的两条流
 
-- [ ] **Step 1: 写「测试」—— 这个任务的验收是一条可复现命令**
+- [x] **Step 1: 写「测试」—— 这个任务的验收是一条可复现命令**
 
 先写 README 的验收节，声明判据：
 
@@ -366,7 +367,7 @@ git commit -m "feat(lex): TokenKind 及配套枚举（25 关键字 / 48 项运�
       必须输出 == tokens == 与 == diags == 两节，且 tokens 节逐行等于 README 里的黄金文本。
 ```
 
-- [ ] **Step 2: 跑一遍确认失败**
+- [x] **Step 2: 跑一遍确认失败**
 
 Run: `scripts/in-container.sh go run ./tools/token-oracle tools/token-oracle/fixtures/hello.txt`
 Expected: 失败 —— 目录不存在
@@ -376,7 +377,7 @@ Expected: 失败 —— 目录不存在
 > （本目录自带 `go.mod`，仓库根没有 ⇒ 必须 `cd`；`RGOC_TTY=0` 见 **G12**）。
 > 实测失败输出：`no Go files in /work/tools/token-oracle`。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 1. 从 `go_source_code/src/cmd/compile/internal/syntax/` 复制 **5 个文件**到 `gosyntax/`，
    **不动内容**（保留 BSD-3-Clause 许可头）。
@@ -401,13 +402,13 @@ Expected: 失败 —— 目录不存在
 > - 运算符行在 `lit` 之后追加 ` op=<Op> prec=<N>`（官方对 `_Operator`/`_Star`/`_AssignOp`/`_IncOp`
 >   四类**确实设置**这两个字段）；`=`/`:=`/`<-` 官方不设 `op`，故不追加。
 
-- [ ] **Step 4: 跑一遍确认通过**
+- [x] **Step 4: 跑一遍确认通过**
 
 Run: 同 Step 2 的命令
 Expected: 两节输出；tokens 节逐行等于 README 的黄金文本
 
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add tools/token-oracle
@@ -428,7 +429,7 @@ git commit -m "feat(tools): vendor 官方 scanner 五文件 + token oracle adapt
 - Consumes: `T-L04` 的容器内 Go 环境
 - Produces: `rgoc_lex::unicode_tables::{is_letter(char) -> bool, is_digit(char) -> bool}`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/test_unicode_tables.rs`：
 
@@ -468,12 +469,12 @@ fn 两张表都含_ascii_基本段() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_unicode_tables`
 Expected: 编译失败 —— `unicode_tables` 模块不存在
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `gen_unicode/main.go`：遍历 `0x0..=0x10FFFF`（跳过代理区 `0xD800..=0xDFFF`），
 分别用 `unicode.IsLetter` / `unicode.IsDigit` 归并连续区间，输出 `&[(u32, u32)]`。
@@ -491,7 +492,7 @@ Expected: 编译失败 —— `unicode_tables` 模块不存在
 >    「元素相对**目标**的大小」（区间整体落在目标之下 ⇒ `Less`）。写反了是**静默**的错。
 > 4. **代码围栏**：文件头里的 ```text 需要三个哨兵（`¶¶¶`），只写一个会变成单反引号。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_unicode_tables`
 Expected: 11 passed（原计划写 4 条 —— 实写 11 条，见下）
@@ -508,7 +509,7 @@ Expected: 11 passed（原计划写 4 条 —— 实写 11 条，见下）
 > **另加第三层验收**：重跑生成器必须**逐字节相同**（sha256 `4b977ea0…2934d`）。
 > 三层各自的 7 道变异反向验证记录在 `M1-design.md` §6.3。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add tools/token-oracle/gen_unicode rgoc/crates/rgoc-lex
@@ -551,7 +552,7 @@ git commit -m "feat(lex): 由 oracle 生成 Unicode 分类表（字母 684 / 数
     **`attempt to subtract with overflow`**（Go 靠 `uint` 回绕兜住）⇒
     这里把两步合并成一次减法，得到同一终值但**不经过负的中间值**。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```rust
 #[test]
@@ -577,18 +578,18 @@ fn segment_不含当前字符() {
 fn rewind_回到段起点() { }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_source`
 Expected: 编译失败 —— `SourceReader` 不存在
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 按 `M1-design.md` §5.1 的状态定义。**三处相对官方的简化**（D-M1-7）：
 ① 一次性读入，不要 `io::Read` 流式填充；② 不要 sentinel 哨兵字节；③ 保留 `b`/`r` 与 `rewind()`。
 位置推进：`advance()` 里 `col += chw as u32`；若**上一个** `ch == '\n'` 则 `line += 1; col = 0`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_source`
 Expected: **14 passed**（原计划写 5 条）
@@ -605,7 +606,7 @@ Expected: **14 passed**（原计划写 5 条）
 > **反向验证 6 道变异全部变红且与预期一致**（删诊断 / 截断成一条 / 段含当前字符 /
 > 用官方两步算术 / `pos()` 不 +1 / 代号写错）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -624,7 +625,7 @@ git commit -m "feat(lex): SourceReader 字符层（UTF-8 解码 + 位置推进 +
 - Consumes: `T-L06`
 - Produces: 无新接口；`SourceReader` 在边界输入上产出诊断并继续
 
-- [ ] **Step 1: 写测试（`M1-tests.md` 的 `T-L-13`…`T-L-19`）—— 判据分两层**
+- [x] **Step 1: 写测试（`M1-tests.md` 的 `T-L-13`…`T-L-19`）—— 判据分两层**
 
 **第一层：密集对撞（主力）** —— `tests/test_char_golden.rs`
 
@@ -651,7 +652,7 @@ git commit -m "feat(lex): SourceReader 字符层（UTF-8 解码 + 位置推进 +
 | `回车不算换行只有换行改行号` | `\r` 在字符层只是普通字符（"当空白"是 `next()` 的事） |
 | `私有区字符在字符层是合法的且宽度为三` | ★ **修正**：计划原写"报 `LEX-BAD-IDENT-CHAR`" —— 那是 `T-L08`（`scanner.go:411` 的 `atIdentChar`）。字符层对 U+E000 **不报错** |
 
-- [ ] **Step 2: 跑测试确认 RED，并记录 RED 的**形态**
+- [x] **Step 2: 跑测试确认 RED，并记录 RED 的**形态**
 
 Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_char_golden'`
 Expected: **首次必然红** —— golden 是 oracle 产的，实现要与它对齐。
@@ -662,20 +663,20 @@ Expected: **首次必然红** —— golden 是 oracle 产的，实现要与它�
 > （当时选择"一次落全"而不是先打桩）⇒ 那 7 条代表用例**一开始就是绿的**。
 > 真正的 RED 来自密集对撞 —— 它一次就找出了一处**文档从未提到**的官方行为。
 
-- [ ] **Step 3: 实现（本任务是"测试侧重"）**
+- [x] **Step 3: 实现（本任务是"测试侧重"）**
 
 `source.rs` **不需要改动**。唯一的裁决是那 31 例偏离：判为**实现产物**
 （官方 `nextch` 的 NUL 检查只写在 ASCII 快路径里，懒填充让首字节走不到那条路），
 按 `D-M1-7`「照抄语义、不照抄实现」**不照抄**；偏离用**谓词 + 形状**
 双重断言登记在 `test_char_golden.rs` 里。详见 `M1-design.md` §5.1 / §8.2.1 / §12 R11。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_source --test test_char_golden'`
 Expected: `test_source` **21 passed**（T-L06 的 14 + 本任务 7）、`test_char_golden` **3 passed**
 （逐字节一致 1146 / 已登记偏离 31）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex tools/token-oracle docs/milestones
@@ -703,7 +704,7 @@ git commit -m "feat(lex): T-L07 字符层边界输入 + 字符级密集对撞（
 > 返回值 `TokenKind` 重复。同 R3（`from_str` → `lookup`）的先例：**改名字不改语义**。
 > 另外新增了三个观察用小方法（`table` / `file` / `peek`）与设计 §3.3 已定的 `take_diags`。
 
-- [ ] **Step 1: 写失败测试（`T-L-20`…`T-L-25`，实写 **17** 条）**
+- [x] **Step 1: 写失败测试（`T-L-20`…`T-L-25`，实写 **17** 条）**
 
 计划只列了 5 条骨架。实际按"每条钉一个**机制**"展开成 17 条，分七组：
 
@@ -719,12 +720,12 @@ git commit -m "feat(lex): T-L07 字符层边界输入 + 字符级密集对撞（
 
 > **为什么要 F29 组**：它是**先测后写**的产物 —— 见下 Step 3 的裁决。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_ident`
 Expected: 编译失败 —— `Lexer` 不存在
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 两段循环（照官方）：先 ASCII 快路径，再用 `unicode_tables` 走一般路径。
 **切完再查关键字**（`Keyword::lookup`）。**谓词必须用 `unicode_tables`，不得用 Rust std**（G7/D-M1-6）。
@@ -749,12 +750,12 @@ Expected: 编译失败 —— `Lexer` 不存在
 > 实测 `x\xff y` 的标识符原文里就有非法字节，`from_utf8_lossy` 会把它换成 U+FFFD ⇒ 静默丢信息。
 > 查关键字天然安全：关键字全是 ASCII，非法 UTF-8 转换必然失败 ⇒ 直接 `None`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_ident'`
 Expected: **17 passed**（计划原写 5 条 —— 见 Step 1 的分组表）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex tools/token-oracle docs/milestones
@@ -783,7 +784,7 @@ git commit -m "feat(lex): T-L08 标识符与关键字（切完再查）+ 订正 
 > 官方 `next()` 里那三条非词元出口，与其让调用方从 `None` 里猜，不如建成类型。
 > 另加 `Lexer::pos()`（词元起点 = 扫描**前**的游标位置，`next()` 要用它填 `Token::pos`）。
 
-- [ ] **Step 1: 写失败测试（`T-L-26`…`T-L-29`，含 **RF1**）**
+- [x] **Step 1: 写失败测试（`T-L-26`…`T-L-29`，含 **RF1**）**
 
 ```rust
 #[test]
@@ -814,12 +815,12 @@ fn 回退之后紧跟多字节字符_位置不漂移() {
 fn 关键字与标点紧邻也能分界() { /* "for(" "if{" "return(" */ }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_punct`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 用 `match` 对首字符分派 + 显式前瞻，**`+=` 一族收敛到同一段逻辑**（[`assignop`] 汇合点）。
 `..` 是**唯一**需要 `rewind()` 的地方：先吃掉第一个 `.`，若下一个是 `.` 则再看第三个；
@@ -847,12 +848,12 @@ Expected: FAIL
 > 来测"唯一回退点"，但实测 `1..2` 会变成 `literal "1."` + `literal ".2"` ——
 > **两个 Float，根本没有 `..`**。已换成 `..x` / `..中`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test -p rgoc-lex --test test_punct'`
 Expected: **16 passed**（计划原写 6 条 —— 另有 48 条表驱动、ASCII 全域穷举、`..\n` 行号、`.5` 交接）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex docs/milestones
@@ -886,7 +887,7 @@ git commit -m "feat(lex): T-L09 运算符最长匹配与 .. 回退（含 rewind 
 > **进制前缀与前导 `0` 都算一个"数码"**（`0x_1f` / `0_1` 合法）；
 > **非法数字的偏移相对词元起点**（`x:=089` 报 1:5 而不是 1:2）。
 
-- [ ] **Step 1: 写失败测试（`T-L-33`…`T-L-35`、`T-L-38`，含 **RF3**）**
+- [x] **Step 1: 写失败测试（`T-L-33`…`T-L-35`、`T-L-38`，含 **RF3**）**
 
 ```rust
 #[test]
@@ -914,23 +915,23 @@ fn 下划线出现在指数部分() {
 fn 畸形字面量仍产出词元且_bad_为真() { /* 0x / 1__2 / 0b__1000 */ }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_number`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 照官方结构：前缀定 `base`；`digits(base)` 返回 **`digsep` 位集**（bit0=有数字、bit1=有 `_`）；
 指数分支校验进制匹配（`e` 要十进制尾数、`p` 要十六进制尾数）；后缀 `i` ⇒ `Imag`；
 **最后**用 `invalidSep()` **事后**定位 `_` 的非法位置 —— 扫描时不维护错误状态。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_number`（命令形态按 **G11** 解释）
 Expected: **13 passed**（计划原估 7 条；另含 11 道变异反向验证）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -960,7 +961,7 @@ git commit -m "feat(lex): 数字字面量（4 进制 + 分隔符 + 指数 + 虚�
 > 测试已按实测拆成两条（合法 9 个 / `\"` 单列一条）。
 > 另：官方 `rune()` 里 `continue` 会走 `n++` ⇒ **转义算一个字符**（`'\n\n'` 是两个字符）。
 
-- [ ] **Step 1: 写失败测试（`T-L-36`、`T-L-53`）**
+- [x] **Step 1: 写失败测试（`T-L-36`、`T-L-53`）**
 
 ```rust
 #[test]
@@ -985,23 +986,23 @@ fn rune_字面量的四种错误() { /* '' 多字符 含换行 未终止 */ }
 fn rune_的_bad_标记() { /* 'ab' → lit_kind=Rune bad=true，仍产出词元 */ }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_rune`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `escape(quote)` 用 `(n, base, max)` 表驱动：简单转义 / `\ooo`=(3,8,255) / `\x`=(2,16,255) /
 `\u`=(4,16,MaxRune) / `\U`=(8,16,MaxRune)；最后统一查代理区与 `x > max`。
 `rune` 复用 `escape`，并统计字符数（`n != 1` 报 `RuneMulti`）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_rune`（命令形态按 **G11** 解释）
 Expected: **12 passed**（计划原估 7 条；另含 12 道变异反向验证）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1031,7 +1032,7 @@ git commit -m "feat(lex): rune 字面量与转义表（含代理区与八进制�
 > part of the literal value)」。「丢弃」是**值**层面的事（M3 的 unquote），
 > **M1 只管文本，一个字节都不动**。已按实测订正正文，并注册为 **F39**。
 
-- [ ] **Step 1: 写失败测试（`T-L-37`、`T-L-53`）**
+- [x] **Step 1: 写失败测试（`T-L-37`、`T-L-53`）**
 
 ```rust
 #[test]
@@ -1052,22 +1053,22 @@ fn 未终止的字符串报错但仍产出词元() {
 }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_string`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 解释型：遇 `"` 收尾；遇 `\` 走 `escape`；遇 `\n` 或 EOF 报未终止。
 原始型：遇 `` ` `` 收尾；**可跨行**；**一个字节都不改** —— `\r` **留在文本里**（**订正**：原文写「被丢弃」，实测与官方注释都是「leave」 —— 见 **F39**）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_string`（命令形态按 **G11** 解释）
 Expected: **12 passed**（计划原估 5 条；另含 9 道变异反向验证）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1096,7 +1097,7 @@ git commit -m "feat(lex): 解释型与原始型字符串字面量"
     —— `start`（注释起点）与 `nlsemi` 都是「官方字段 → 显式参数」的镜像；
     行/块的信息由 `scan_punct` 的返回值带出（它已消耗了判别所需的字符，见 R24）
 
-- [ ] **Step 1: 写失败测试（`T-L-45`、`T-L-46`、`T-L-52`、`T-L-70`，含 **RF2**）**
+- [x] **Step 1: 写失败测试（`T-L-45`、`T-L-46`、`T-L-52`、`T-L-70`，含 **RF2**）**
 
 ```rust
 #[test]
@@ -1133,12 +1134,12 @@ fn 未终止的块注释报错但不中止() { }
 // 附：未终止的**跨行**块注释 + nlsemi ⇒ 仍产 Semi（p06/p30，F45）
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_comment`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 行注释：`//` 到行尾，**不消费 `\n`**（`\n` 要留给分号逻辑）。
 块注释：跨行时**只有在 `nlsemi` 为真**才等价于换行（`Semi` 的位置取**注释起点**，F41）。
@@ -1149,12 +1150,12 @@ Expected: FAIL
 （p08/p22/p23 实测，见 F43 / R25）。
 **M1 只交出文本，不解析内容**（D-M1-1）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_comment`
 Expected: 12 passed（简报原估 8 条；实写 12 条，期望值全部经 oracle 探针取证）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1176,7 +1177,7 @@ git commit -m "feat(lex): 注释处理与 comments/directives 两种 mode"
 - Consumes: `T-L03` `TokenKind`/`Keyword`/`OpForm`
 - Produces: `rgoc_lex::SemicolonPolicy::{take(&mut self) -> bool, set_after(&mut self, &TokenKind)}`
 
-- [ ] **Step 1: 写失败测试（`T-L-49`）**
+- [x] **Step 1: 写失败测试（`T-L-49`）**
 
 ```rust
 #[test]
@@ -1193,22 +1194,22 @@ fn 规则表_不置位的类别() {
 fn take_取走并复位() { /* true 之后第二次 take 得 false */ }
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_semicolon`
 Expected: 编译失败
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 按 `M1-design.md` §5.4 的规则表实现 `set_after`。**逐类别穷举**（不要用"默认 false"兜住 ——
 那样新增一个 `TokenKind` 变体时不会有编译错误提示）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_semicolon`
 Expected: 3 passed
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1231,7 +1232,7 @@ git commit -m "feat(lex): SemicolonPolicy 状态机（LEX-07 独立可测）"
   ⚠️ 简报原写的 `new(src, file, table, mode)` **未采用**：保持 `new(src, name)` + `set_mode`
   （table 外传是 M2 多文件之事，见 R24；`next` 的命名裁决见 **R31**）
 
-- [ ] **Step 1: 写失败测试（`T-L-10`、`T-L-40`…`T-L-48`、**RF4**、**RF5**）**
+- [x] **Step 1: 写失败测试（`T-L-10`、`T-L-40`…`T-L-48`、**RF4**、**RF5**）**
 
 ```rust
 #[test]
@@ -1265,22 +1266,22 @@ fn 语料_semi1_至_semi7_逐词元与_oracle 相等() { }
 > `\r` 跳过 / `\x` 转义 / rune-raw 分派 / Dot）—— 补它们是**为反向验证补盲区**
 > （没有它们，好几道变异「红不了」）。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_next`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 照 `M1-design.md` §5.2 的骨架：`take()` → `loop`（skip 空白 → 记起点 → EOF 判定 → 首字符分派）
 → `set_after()`。**`'\n'` 只在 `nlsemi` 为假时被跳过**（LEX-07 第一处机关）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_next`
 Expected: 15 passed（简报原估 6 条；24 个 golden 逐字节 diff 全过）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1299,7 +1300,7 @@ git commit -m "feat(lex): Lexer::next 分派骨架与分号插入（含 EOF 补�
 - Consumes: `T-L15`
 - Produces: 无新接口
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `M1-tests.md` §4 的 **N1–N11** 逐个，**每条都断言两件事**（实现期口径）：
 
@@ -1321,7 +1322,7 @@ fn n1_非法_utf8_诊断与后续词元() {
 （`tests/golden/n*.golden` / `t54_*.golden`）由 `tools/token-oracle` 直出，探针在
 `fixtures/recovery/`。
 
-- [ ] **Step 2: 跑测试——实际【零红】（诚实记录）**
+- [x] **Step 2: 跑测试——实际【零红】（诚实记录）**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
 
@@ -1331,7 +1332,7 @@ Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
 ② `push_diag` 单入口（Step 3）。**测试有效性由反验 12 道变异兑现**（见 R33 裁定：
 不为凑 RED 而写不存在的行为）。
 
-- [ ] **Step 3: 实现（落地口径）**
+- [x] **Step 3: 实现（落地口径）**
 
 ① **行为侧零改动**（对撞已一致）；② `push_diag` 单入口重构：lexer 侧 4 处直写
 （`bump` / `rewind_to_segment_start` / `report` / `report_at`）收敛为 1 处。
@@ -1342,12 +1343,12 @@ Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
 ③ 反验跑 `cargo test` 必须加 **`--no-fail-fast`**：cargo 默认一个 target 失败后
 **不再运行后续 target** ⇒ 期望的失败者会被**观测截断**（第一轮 11/12 未达标即此因）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_recovery`
 Expected: 15 passed（实际 15 —— 计划原估 11；多出的是 N8b 与 T-L-54 的三条）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1369,7 +1370,7 @@ git commit -m "feat(lex): 错误恢复的负例全覆盖（诊断 + 后续词元
   （**不带 `table`** —— 表由 `Lexer` 自持，P2；**检查不在 `new`** —— 它收已入内存的
   `Vec`，查了也白查）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 实际落地 **7 条**（计划原估 3）：
 
@@ -1387,24 +1388,24 @@ git commit -m "feat(lex): 错误恢复的负例全覆盖（诊断 + 后续词元
 「先 metadata 再 read」逼出来（容器内 uid 501 非 root —— root 会无视权限）；
 `t63_exceeds.golden` 是**手写**的（`# source: hand-written`，全仓唯一 `H`）。
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_limits`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 实现 `Lexer::from_path(path, mode) -> io::Result<Self>`：**先 `fs::metadata().len()`
 检查**（超限 ⇒ `Ok` + 「空源实例」+ 一条诊断 @**文件起点 1:1**，**不读文件**）；
 否则 `fs::read` 后照常构造。**io 失败如实 `Err`**（错误面两分见 R38）。
 简报原设想的两处订正已折进 Interfaces（不带 `table` / 检查不在 `new`）。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-lex --test test_limits`
 Expected: 7 passed（实际 7 —— 计划原估 3）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-lex
@@ -1431,7 +1432,7 @@ git commit -m "feat(lex): 单文件 64 MiB 上限（读入前检查，登记为�
 > （T-L15 建立；24 个 golden 的比对即用它）。本任务只需 **I/O + 头两行**
 > （`# golden:` / `# source:` 的口径）+ 复用该渲染 —— **不要再写第二份渲染**。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 实际落地 **driver 8 条 + `rgoc-lex` 侧 5 条**（`test_render.rs`，计划原估 3）：
 
@@ -1454,12 +1455,12 @@ git commit -m "feat(lex): 单文件 64 MiB 上限（读入前检查，登记为�
 #[test] fn messages_转义走_quote_规则()              // \r 与非法字节
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-driver`
 Expected: FAIL
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 1. 在现有手写参数解析里加 `lex` 分支（**不引 clap**，沿用既有风格）：
    `Command::Lex(LexCommand { file, mode })` + `CliError::{LexNeedsFile, BadMode, ExtraArg}`。
@@ -1471,12 +1472,12 @@ Expected: FAIL
    与 oracle 唯一刻意不同就是 `# source:` 的值；腿乙 diff 时归一这一行。
 4. **不偷偷加第二个渲染**：正文一律走 `render::golden_body_with_messages`。
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 Run: `scripts/in-container.sh cargo test -p rgoc-driver`
 Expected: 31 passed（23 + 8 —— 计划原估 26/23+3；另有 `rgoc-lex` 侧 `test_render` 5 条）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-driver
@@ -1501,7 +1502,7 @@ git commit -m "feat(driver): lex 子命令（输出与 oracle adapter 同格式�
 > 字符串」时逐字节相同。`rgoc-lex` 侧 `test_render.rs` 已把 messages 节的渲染
 > 契约钉住（5 条），腿乙如覆盖 `--mode` 档可复用其期望。
 
-- [ ] **Step 1: 写「测试」—— 脚本本身就是判据**
+- [x] **Step 1: 写「测试」—— 脚本本身就是判据**
 
 ```sh
 # scripts/check-lex-golden.sh 的判据（写进脚本头注释）
@@ -1510,12 +1511,12 @@ git commit -m "feat(driver): lex 子命令（输出与 oracle adapter 同格式�
 #   判据     : 所有文件 diff 为空 -> exit 0；否则打印差异并 exit 1
 ```
 
-- [ ] **Step 2: 跑一遍确认失败**
+- [x] **Step 2: 跑一遍确认失败**
 
 Run: `scripts/check-lex-golden.sh`
 Expected: 失败 —— golden 尚未生成
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 1. golden 清单（语料相对路径 + 自有 fixture）。
 2. `--record` 走 `scripts/in-container.sh go run ./tools/token-oracle`。
@@ -1537,12 +1538,12 @@ Expected: 失败 —— golden 尚未生成
 > ⑤ 宿主脚本经 `--inner` 自重派进容器（`bash <脚本>` 形态退出码如实传播）；
 >    超限条目检查时现场造 64 MiB+1 **稀疏文件**，手写 golden **不重录**。
 
-- [ ] **Step 4: 跑一遍确认通过**
+- [x] **Step 4: 跑一遍确认通过**
 
 Run: `scripts/check-lex-golden.sh`
 Expected: **151/151 条一致**、守卫 A–E 全过、exit 0（录制侧 `--record`：150 落盘 / 1 跳过）
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add scripts/check-lex-golden.sh rgoc/tests/smoke/lex
@@ -1561,16 +1562,16 @@ git commit -m "test(lex): 腿乙 golden 全量与门禁脚本（SM-M1-LEX-GOLDEN
 - Consumes: `T-L01`/`T-L02` 的实现
 - Produces: 无代码接口
 
-- [ ] **Step 1: 写「测试」—— 一致性自检**
+- [x] **Step 1: 写「测试」—— 一致性自检**
 
 Run: `python3 scripts/check-m0-consistency.py`
 Expected: 通过（C1 的「留位」声明被改后，`[5g]` 那两条断言会失败 ⇒ 需要同步改断言或改契约表述）
 
-- [ ] **Step 2: 确认失败**
+- [x] **Step 2: 确认失败**
 
 Expected: `[5g]` 上报 C1 级别不符（这正是"断言锚定了会过期的状态"的正当复发）
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 1. `C1` 头部：级别由「留位」改为「**完整**」；删除"本文件不是位置跟踪证据"的留位声明
    （M1 之后它确实是位置跟踪的证据了），改为记录 `FileId`/`FileTable` 的落地位置。
@@ -1579,12 +1580,12 @@ Expected: `[5g]` 上报 C1 级别不符（这正是"断言锚定了会过期的�
 4. 加变更记录行。
 5. 同步 `scripts/check-m0-consistency.py` 的 `[5g]` 断言（**改完要做一次反向验证**）。
 
-- [ ] **Step 4: 跑确认通过**
+- [x] **Step 4: 跑确认通过**
 
 Run: `python3 scripts/check-m0-consistency.py`
 Expected: 228 条全过、exit 0
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add docs/contracts/C1-source-map.md docs/README.md AGENTS.md scripts/check-m0-consistency.py
@@ -1604,7 +1605,7 @@ git commit -m "docs(contracts): C1 由留位升为完整（FileId/FileTable/Diag
 - Consumes: 全部
 - Produces: `M1-manifest.json`
 
-- [ ] **Step 1: 判定清单（逐条跑并记录输出）**
+- [x] **Step 1: 判定清单（逐条跑并记录输出）**
 
 ```sh
 scripts/in-container.sh cargo fmt --check
@@ -1617,7 +1618,7 @@ scripts/in-container.sh cargo test -p rgoc-spikes        # SM-M0-NATIVE-HELLO �
 python3 scripts/check-m0-consistency.py
 ```
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 1. `M1-manifest.json`：`gate`（LEX 13 项 / golden / 负例 / native 回归 / 四条命令）+ `test_ids` + `unsupported` + `budget`。
 2. **GAP-01**：填 **LEX 13 项**的四维归属（**不填完 210 个** —— `M0-report.md` §7.2 明确警告）。
@@ -1625,16 +1626,16 @@ python3 scripts/check-m0-consistency.py
 4. 同步 `AGENTS.md` §0/§1/§2.1/§3/§7 与 `docs/README.md`。
 5. **裁决 R1**（LEX-06 的 47/48）并同步 `01` / `02`。
 
-- [ ] **Step 3: 反向验证断言**
+- [x] **Step 3: 反向验证断言**
 
 对每条新增断言，**故意制造它能抓的 bug**，确认变红。特别是 `M1-manifest.json` 的 gate 断言 ——
 M0 的教训是「写死的键列表会变成盲区」，所以 **gate 的键必须从 manifest 动态枚举**。
 
-- [ ] **Step 4: 全绿确认**
+- [x] **Step 4: 全绿确认**
 
 Expected: 上述 8 条命令全部通过
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add docs scripts
