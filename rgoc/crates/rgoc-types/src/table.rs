@@ -127,6 +127,14 @@ pub struct InterfaceDef {
     pub methods: Vec<(String, TypeId)>,
     /// 项集（`~T | U` 那个 `union` 的条目）；`None` ⇒ 普通接口。
     pub terms: Option<TypeId>,
+    /// 是不是**带 comparable 的类型集**（`F5`/`F8`）。
+    ///
+    /// 预声明的 `comparable` 就是「无方法、无项集，但 comparable 为真」那种接口，
+    /// 与 `interface{}` 的**表示**差别只在这个标记上。
+    /// ⚠️ 它在 `C7` 的 dump 里**不可见**（两者都写 `interface 0 0`）——
+    /// 因为 `comparable` 不能作变量类型，dump 的根永远到不了它。
+    /// 但「约束接口的同一性」要判它（`D-M3-13`），所以表示里必须有位置。
+    pub comparable: bool,
 }
 
 /// `typeparam` 条目（泛型类型参数）。
@@ -445,10 +453,13 @@ impl TypeTable {
     /// `methods` **不在这里排序** —— 调用方给什么顺序就存什么顺序（表是数据，
     /// 排序是渲染规约；见 `C7` §4 的 `interface` 行）。这样
     /// 「表的顺序」与「dump 的顺序」在需要时能分开断言。
+    ///
+    /// `comparable` ⇒ 带 comparable 的类型集（预声明的 `comparable` 用 `true`）。
     pub fn add_interface(
         &mut self,
         methods: Vec<(String, TypeId)>,
         terms: Option<TypeId>,
+        comparable: bool,
     ) -> InterfaceId {
         let id = InterfaceId::from_index(self.interfaces.len());
         let self_ty = self.push(Type::Interface(id));
@@ -456,6 +467,7 @@ impl TypeTable {
             self_ty,
             methods,
             terms,
+            comparable,
         });
         id
     }
@@ -634,7 +646,7 @@ mod tests {
         let results = t.add_tuple(vec![]);
         let sig = t.add_signature(None, params, results, false);
         let sig_ty = t.signature_type(sig);
-        let iface = t.add_interface(vec![("M".to_string(), sig_ty)], None);
+        let iface = t.add_interface(vec![("M".to_string(), sig_ty)], None, false);
         let un = t.add_union(vec![(true, int), (false, str_ty)]);
         let un_ty = t.union_type(un);
         let tp = t.add_type_param(0, un_ty);

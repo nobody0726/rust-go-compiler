@@ -18,13 +18,19 @@
 //! # 状态
 //!
 //! M3 逐任务落地：Task 13 = [`typ`]（`Type` 的 15 个变体），
-//! Task 14 = `table`（arena），Task 15 = universe，Task 16 = `dump`（C7）。
+//! Task 14 = [`table`]（arena），Task 15 = [`universe`] / [`object`] / [`scope`]，
+//! Task 16 = `dump`（C7）。
 
 pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
+pub mod object;
+pub mod scope;
 pub mod table;
 pub mod typ;
+pub mod universe;
 
+pub use object::{ObjKind, Object};
+pub use scope::Scope;
 pub use table::{
     AliasDef, Field, InterfaceDef, NamedDef, SignatureDef, StructDef, TupleDef, TypeParamDef,
     TypeTable, UnionDef,
@@ -33,3 +39,4 @@ pub use typ::{
     AliasId, ChanDir, InterfaceId, NamedId, SignatureId, StructId, TYPE_VARIANT_COUNT, TupleId,
     Type, TypeId, TypeParamId, UnionId,
 };
+pub use universe::{declare_universe, declared_names, universe};

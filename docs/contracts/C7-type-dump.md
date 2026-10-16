@@ -169,7 +169,13 @@
 - `recv` 为 `-` 表示**非方法**（普通函数 / 接口方法）。
 - `variadic`：`true`/`false`。
 - `tuple` 的 `<name或多->`：无名参数写 `-`。
-- `interface` 的 `t=1` 时**恰一行** `term`；`t=0` 时**无** `term` 行。
+- `interface` 的 `t` = **有没有项集**（实测：oracle 判据是 `unionOf(x) != nil`，
+  即该 interface 的类型集里有没有 term 项 —— **不是** `IsMethodSet()`）。
+  `t=1` 时**恰一行** `term`；`t=0` 时**无** `term` 行。
+- `interface` 的 `comparable` 标记（`F5`/`F8`）**不出现在 dump 里**：预声明的
+  `comparable` 与 `interface{}` 都是 `interface 0 0`。它只在表示里（「约束接口的
+  同一性」要判它，见 `D-M3-13`）；而 `comparable` 不能作变量类型 ⇒ dump 的根
+  永远到不了它（附带结论：**写对撞样本时不要把它放进变量类型位置**，见 §5.1）。
 - **约束接口的同一性不进对撞**（`D-M3-13`）：`interface` 的 `term` 行**只在 dump 里出现**，
   用于 `T-TY-17` 的**形状**对撞；`Identical` 判定遇到它按 `U-M3-05` 显式拒绝。
 - ⚠️ **预声明名也可能是 `alias`**（实测，M3/Task 3）：`go/types` 里 `any` 是
@@ -212,6 +218,25 @@ var y *int
 理由（照 §3 逐条走）：顶层声明 1 是 `var x int` ⇒ 后序 → `int` 得 `0`；
 顶层声明 2 是 `var y *int` ⇒ 后序先 `int`（**去重**，仍是 `0`）再 `*int` 得 `1`。
 
+### 5.1 对撞样本必须是**合法程序**（实测约束，Task 15）
+
+`number()` 的后序走访在**非法程序**上会遇到真正的环：
+
+```go
+var h interface{ comparable; M() }   // 非法：comparable 与方法的组合
+```
+
+`go/types` 仍会造出一个 term 指回该接口自身的**类型集**，走访于是无限下钻
+（实测以 `fatal error: stack overflow` 收场，1 GB 栈上限）。oracle 现在会
+**响亮 panic** 并给出这条文案，不再崩掉整个进程（`fix(m3-oracle): 环守卫`）。
+
+* 合法程序里匿名类型**不可能**自引用（自引用必须经 `Named`/`Alias`，而这两类
+  「先占号再下钻」，环在 `idx` 那一行就被挡掉了）⇒ 该分支只命中坏样本，
+  **不改变任何合法样本的编号**（回归证据：`fn.go` 的 dump 逐字节不变）。
+* 因此：**对撞 fixture 一律写合法 Go**。要写「错误恢复」类样本时，只允许
+  「类型本身仍可表示」的错误（如未定义标识符 ⇒ `invalid`），不允许把
+  `comparable` / 含约束的 interface 放进变量类型的位置。
+
 ---
 
 ## 6. 变更记录
@@ -220,3 +245,4 @@ var y *int
 |---|---|---|
 | 2026-10-16 | 新建并冻结（`Task 1`）；把 `M3-tests.md` §5.2 的 8 条规则抽成独立契约，并**补出** §3 编号顺序（原冻结清单未规定，两侧不可能自洽） | M3 开工 |
 | 2026-10-16 | **实测订正（`Task 3`，oracle 落地）**：§4.1 删掉 `byte` / `rune` / `error` 三个 token（`Byte=Uint8`、`Rune=Int32` 同一 `*Basic`；`error` 是 `Named`），basic 全集 **26 → 25**；§3 补「定义型先占号 + 顺带编号本体」「结构型不去重」「逐构造子节点顺序表」三条；§4.2 补「预声明名可能是 `alias`（`any`）」 | `tools/types-oracle` 首次对撞 |
+| 2026-10-17 | 新增 §5.1「对撞样本必须是**合法程序**」（环守卫的实测结论：`interface{comparable; M()}` 让走访成环）；§4.2 补记 `interface <m> <t>` 的 `t = 有无项集`（实测 `unionOf(x) != nil`，**不是** `IsMethodSet()`） | `Task 15` 探针 + oracle 环守卫 |
