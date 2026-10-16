@@ -56,11 +56,16 @@ fn 代号表恰为冻结总数且无重复() {
     // `go/types/assignments.go:130`）、`TypInvalidDeclCycle`（官方 `InvalidDeclCycle`，
     // `go/types/decl.go:286-290`；与 `TypInvalidRecursiveType` 分工见枚举注释）、
     // `TypInvalidInitCycle`（官方 `InvalidInitCycle`，`go/types/initorder.go:178`）
-    // 与 `TypWrongAssignCount`（官方 `WrongAssignCount`，`go/types/resolver.go:55`）
-    // ⇒ 共 **53**。
+    // 与 `TypWrongAssignCount`（官方 `WrongAssignCount`，`go/types/resolver.go:55`）。
+    // Task 25 再 +3（作用域）：`TypDuplicateDecl`（官方 `DuplicateDecl`，
+    // `go/types/decl.go:22`）、`TypUndeclaredName`（官方 `UndeclaredName`，
+    // `go/types/typexpr.go:30`）与 `TypRepeatedDecl`（官方 `RepeatedDecl`，
+    // `go/types/assignments.go:552`）—— ⚠️ 计划稿写的 `RedeclaredInThisBlock` /
+    // `RedeclaredInThisPackage` / `UndefinedIdent` 在官方**不存在**（见枚举注释），
+    // 故按「代号照官方」合并/改名 ⇒ 共 **56**。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 53);
+    assert_eq!(DiagCode::ALL.len(), 56);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

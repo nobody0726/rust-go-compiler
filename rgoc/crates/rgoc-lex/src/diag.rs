@@ -169,6 +169,16 @@ pub enum DiagCode {
     /// `invalid operation: division by zero`，其中 `invalid operation: `
     /// 是通用前缀，类别归 `DivByZero`）。
     TypDivByZero,
+    /// 同一个作用域里**重复声明** —— 官方 `DuplicateDecl`
+    ///
+    /// 官方 `go/types/decl.go:22-30`（`check.declare`）在**任何**作用域上都用同一条码，
+    /// 消息固定为 `%s redeclared in this block` —— **包括包级**（实测：同文件与跨文件的
+    /// 包级重复都写 "block"，`go/types` 并不区分）。⚠️ `M3-plan.md` Task 25 写的
+    /// 「包级 `RedeclaredInThisPackage`」在官方**不存在**（`internal/types/errors/codes.go`
+    /// 全表与 `x/tools/.../errorcode.go` 都没有这个名字，也不存在 `UndefinedIdent`）⇒
+    /// 按「代号照官方」的纪律合并成一条，块级/包级只差**消息措辞**（消息本来就自有渲染）。
+    /// 留存差异：官方同时输出一条 `other declaration of %s` 的**附加行**，我方只报一条（`open_gaps`）。
+    TypDuplicateDecl,
     /// 使用了**比该文件生效版本新**的语言特性 —— 官方 `UnsupportedFeature`
     /// （消息 `"%s requires %s or later"`，`go/types/errors.go:253`）
     ///
@@ -254,11 +264,25 @@ pub enum DiagCode {
     /// 位置取 **`files[0]`**（官方 `check.go:315-317`：`check.errorf(files[0], TooNew, …)`，
     /// 而 `ast.File.Pos()` 是 `package` **关键字**的位置）。
     TypPackageRequiresNewerGo,
+    /// 短变量声明的**同一个名字在左侧出现两次** —— 官方 `RepeatedDecl`
+    /// （消息 `%s repeated on left side of :=`，`go/types/assignments.go:552`）
+    ///
+    /// 与 `TypDuplicateDecl` 的分工是官方的分工：这条只看**一条 `:=` 的左值列表内**
+    /// （`x, y, y := …`），与作用域里本来有什么无关。
+    TypRepeatedDecl,
     /// 常量向目标类型量化时被截断（`1.5` 赋给 `int`）—— 官方 `TruncatedFloat`
     ///
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
     /// 它服务**赋值/声明**语境：`const x int = 1.5` ⇒ 「1.5 truncated to integer」。
     TypTruncatedFloat,
+    /// 引用了**没有声明**的名字 —— 官方 `UndeclaredName`（消息 `undefined: %s`）
+    ///
+    /// 官方两个来源：**类型位置** `go/types/typexpr.go:30`（`check.errorf(e, UndeclaredName, "undefined: %s", e.Name)`）、
+    /// **值位置**由解析器收尾统一报（同一个代号）。另有一条 `UndeclaredImportedName`
+    /// 专管 `pkg.Sel`（消息 `undefined: pkg.Sel`）—— 那条**归 Task 27**（源码 import）。
+    /// ⚠️ `M3-plan.md` Task 25 写的 `UndefinedIdent` 在官方**不存在** ⇒ 用官方名。
+    /// 位置取**该标识符**处；每次**出现**都报（实测 `y = 1; _ = y` 报两条）。
+    TypUndeclaredName,
     /// 请求了**约束接口的同一性**（含项集 `~T`/并集，或 `comparable`）——
     /// **官方没有对应代号**：`go/types` 有完整类型集，判得了；M3 只表示不判定
     /// （`D-M3-13`，`U-M3-05`）
@@ -290,7 +314,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 53] = [
+    pub const ALL: [DiagCode; 56] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -327,6 +351,7 @@ impl DiagCode {
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
         DiagCode::TypDivByZero,
+        DiagCode::TypDuplicateDecl,
         DiagCode::TypFeatureRequiresGoVersion,
         DiagCode::TypFileRequiresNewerGo,
         DiagCode::TypInvalidConstInit,
@@ -341,7 +366,9 @@ impl DiagCode {
         DiagCode::TypNestingTooDeep,
         DiagCode::TypNumericOverflow,
         DiagCode::TypPackageRequiresNewerGo,
+        DiagCode::TypRepeatedDecl,
         DiagCode::TypTruncatedFloat,
+        DiagCode::TypUndeclaredName,
         DiagCode::TypUnsupportedConstraintIdentity,
         DiagCode::TypWrongAssignCount,
     ];
@@ -385,6 +412,7 @@ impl DiagCode {
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
+            DiagCode::TypDuplicateDecl => "TYP-DUPLICATE-DECL",
             DiagCode::TypFeatureRequiresGoVersion => "TYP-FEATURE-REQUIRES-GO-VERSION",
             DiagCode::TypFileRequiresNewerGo => "TYP-FILE-REQUIRES-NEWER-GO",
             DiagCode::TypInvalidConstInit => "TYP-INVALID-CONST-INIT",
@@ -399,7 +427,9 @@ impl DiagCode {
             DiagCode::TypNestingTooDeep => "TYP-NESTING-TOO-DEEP",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",
+            DiagCode::TypRepeatedDecl => "TYP-REPEATED-DECL",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
+            DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
             DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",
         }

@@ -589,10 +589,13 @@ fn t_a_66_diagcode_总数已更新() {
     // + M3/Task 24 新增 4 个（TypInvalidConstInit = 官方 `InvalidConstInit`；
     //   TypInvalidDeclCycle = 官方 `InvalidDeclCycle`；TypInvalidInitCycle =
     //   官方 `InvalidInitCycle`；TypWrongAssignCount = 官方 `WrongAssignCount`）
-    //   ⇒ 共 53。
+    // + M3/Task 25 新增 3 个（TypDuplicateDecl = 官方 `DuplicateDecl`；
+    //   TypUndeclaredName = 官方 `UndeclaredName`；TypRepeatedDecl =
+    //   官方 `RepeatedDecl`）
+    //   ⇒ 共 56。
     assert_eq!(
         DiagCode::ALL.len(),
-        53,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 18 个（TYP-）"
+        56,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 21 个（TYP-）"
     );
 }
