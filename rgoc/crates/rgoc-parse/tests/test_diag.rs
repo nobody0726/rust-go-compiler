@@ -585,10 +585,14 @@ fn t_a_66_diagcode_总数已更新() {
     // + M3/Task 21 新增 3 个（版本门控：FeatureRequiresGoVersion 对官方
     //   `UnsupportedFeature`；File/PackageRequiresNewerGo 拆自官方同一个 `TooNew`）。
     // + M3/Task 23 新增 1 个（TypMismatchedPkgName = 官方 `MismatchedPkgName`，
-    //   同包多文件包名不一致 ⇒ 共 49。
+    //   同包多文件包名不一致）
+    // + M3/Task 24 新增 4 个（TypInvalidConstInit = 官方 `InvalidConstInit`；
+    //   TypInvalidDeclCycle = 官方 `InvalidDeclCycle`；TypInvalidInitCycle =
+    //   官方 `InvalidInitCycle`；TypWrongAssignCount = 官方 `WrongAssignCount`）
+    //   ⇒ 共 53。
     assert_eq!(
         DiagCode::ALL.len(),
-        49,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 14 个（TYP-）"
+        53,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 18 个（TYP-）"
     );
 }

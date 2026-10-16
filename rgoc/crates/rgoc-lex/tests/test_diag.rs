@@ -51,10 +51,16 @@ fn 代号表恰为冻结总数且无重复() {
     // `TypFileRequiresNewerGo` / `TypPackageRequiresNewerGo`（官方同一个 `TooNew`，
     // 这里**拆两条** —— 位置与消息都不同，合成一条会让「哪一层太新」丢失）。
     // Task 23 再 +1（包模型）：`TypMismatchedPkgName`（官方 `MismatchedPkgName`，
-    // `go/types/check.go:307`）⇒ 共 **49**。
+    // `go/types/check.go:307`）。
+    // Task 24 再 +4（声明收集）：`TypInvalidConstInit`（官方 `InvalidConstInit`，
+    // `go/types/assignments.go:130`）、`TypInvalidDeclCycle`（官方 `InvalidDeclCycle`，
+    // `go/types/decl.go:286-290`；与 `TypInvalidRecursiveType` 分工见枚举注释）、
+    // `TypInvalidInitCycle`（官方 `InvalidInitCycle`，`go/types/initorder.go:178`）
+    // 与 `TypWrongAssignCount`（官方 `WrongAssignCount`，`go/types/resolver.go:55`）
+    // ⇒ 共 **53**。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 49);
+    assert_eq!(DiagCode::ALL.len(), 53);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

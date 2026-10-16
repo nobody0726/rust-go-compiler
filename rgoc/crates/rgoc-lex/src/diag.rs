@@ -180,6 +180,13 @@ pub enum DiagCode {
     /// 位置取该文件的 `package` **名字**（官方 `check.go:346` 的原话是
     /// 「Use position of 'package [p]'」，为与 types/types2 对齐）。
     TypFileRequiresNewerGo,
+    /// `const` 的初始化式**不是常量**（在 M3 的常量子集口径下）—— 官方 `InvalidConstInit`
+    ///
+    /// 官方触发点在 `assignments.go:130`（`"%s is not constant"`），即
+    /// 「求值结果没有值」的场合。⚠️ M3 把它的语义**撑宽**（`D-M3-19`）：
+    /// 需要类型信息或源码外常量的初始化式（`pkg.C`、`len(s)`、`f()`）
+    /// 一律走这条码 —— 这是 M3 的**稳定拒绝码**（`T-TY-83`）。
+    TypInvalidConstInit,
     /// 常量**没有值**（`Const::Unknown`）却要参与转换 —— 官方 `InvalidConstVal`
     ///
     /// 与 `TypInvalidConversion` 的区别是**要害**：这条说的是「本来就没有值」
@@ -192,6 +199,21 @@ pub enum DiagCode {
     /// `… truncated to T`（转换语境下官方实测也给这条，见
     /// `go/types/conversions.go:52-93`）/ `constant … overflows T` 的转换形态。
     TypInvalidConversion,
+    /// **声明之间**的循环（`const A = B; const B = A`）—— 官方 `InvalidDeclCycle`
+    ///
+    /// 官方消息形状：`invalid cycle in declaration of %s`（`go/types/decl.go:286-290`）。
+    /// ⚠️ 与 `TypInvalidRecursiveType` **分工**：后者是**类型图**的环
+    /// （`valid_type`，Task 22，匿名构造之间），这条是**声明**的环（名字之间）。
+    /// 两条判据不同：`type A *A` 是合法的（它连 `TypInvalidRecursiveType` 都不报），
+    /// 而 `const A = A` 在这里报。
+    TypInvalidDeclCycle,
+    /// **初始化**之间的循环（`const A = B; const B = A`）—— 官方 `InvalidInitCycle`
+    ///
+    /// 官方消息形状：`initialization cycle for %s`（`go/types/initorder.go:178`），
+    /// 位置取环里**源码序最前**的那个对象。与 `TypInvalidDeclCycle` 的分工照官方：
+    /// 「环里**全是值**」⇒ 这条（官方由 initorder 报）；「环里只有别名、没有定义型」
+    /// ⇒ `TypInvalidDeclCycle`（官方由 `decl.go` 的 `cycle()` 报）。
+    TypInvalidInitCycle,
     /// 类型图里存在**非法的递归**（`type A [1]A`）—— 官方 `InvalidRecursiveType`
     ///
     /// 判据是「内存里装得下」：环只要**经过**指针/切片/映射/通道/函数就算合法
@@ -252,6 +274,15 @@ pub enum DiagCode {
     /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
     /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）落在检查器里，届时**复用**本码。
     TypUnsupportedConstraintIdentity,
+    /// 声明里**名字与初始化式的个数对不上** —— 官方 `WrongAssignCount`
+    ///
+    /// 官方 `go/types/resolver.go:55-90` 的 `arityMatch`：`const a, b = 1`
+    /// ⇒ `missing init expr for b`（位置取**那个名字**）；`const a = 1, 2`
+    /// ⇒ `extra init expr 2`（位置取**多出来的那个表达式**）。
+    /// ⚠️ `var` 一侧（同一代号）M3 **不报** —— 它要求求值 var 的初始化式，
+    /// 而 M3 不求值（`open_gaps`）；本任务只在 **`const`** 的「名字 ↔ 值」配对处
+    /// 报它（那里本来就要配对，不报就会**静默**丢名字）。
+    TypWrongAssignCount,
 }
 
 impl DiagCode {
@@ -259,7 +290,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 49] = [
+    pub const ALL: [DiagCode; 53] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -298,8 +329,11 @@ impl DiagCode {
         DiagCode::TypDivByZero,
         DiagCode::TypFeatureRequiresGoVersion,
         DiagCode::TypFileRequiresNewerGo,
+        DiagCode::TypInvalidConstInit,
         DiagCode::TypInvalidConstVal,
         DiagCode::TypInvalidConversion,
+        DiagCode::TypInvalidDeclCycle,
+        DiagCode::TypInvalidInitCycle,
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
@@ -309,6 +343,7 @@ impl DiagCode {
         DiagCode::TypPackageRequiresNewerGo,
         DiagCode::TypTruncatedFloat,
         DiagCode::TypUnsupportedConstraintIdentity,
+        DiagCode::TypWrongAssignCount,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -352,8 +387,11 @@ impl DiagCode {
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypFeatureRequiresGoVersion => "TYP-FEATURE-REQUIRES-GO-VERSION",
             DiagCode::TypFileRequiresNewerGo => "TYP-FILE-REQUIRES-NEWER-GO",
+            DiagCode::TypInvalidConstInit => "TYP-INVALID-CONST-INIT",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
+            DiagCode::TypInvalidDeclCycle => "TYP-INVALID-DECL-CYCLE",
+            DiagCode::TypInvalidInitCycle => "TYP-INVALID-INIT-CYCLE",
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
@@ -363,6 +401,7 @@ impl DiagCode {
             DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
+            DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",
         }
     }
 }
