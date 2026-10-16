@@ -14,9 +14,21 @@
   `.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
   已落地 `rgoc-const` / `rgoc-types` / `rgoc-load` 三 crate + `tools/types-oracle`；
-  **Task 1–18/21/22/23 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、类型图合法性、单包多文件装载），
-  workspace **1168 passed / 0 failed**，下一批 = **Task 24–30**（声明收集与类型求值顺序 → 块作用域 → 导出标识符 →
-  源码 import → 显式文件列表 → ExportSummary → 零 import 语料包冒烟）→ 31–36 对撞接线 → 37 变异 → 38 manifest
+  **Task 1–18/21/22/23/24/25 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、
+  类型图合法性、单包多文件装载、声明收集与求值顺序、块作用域/遮蔽/未定义/重复声明），
+  workspace **1209 passed / 0 failed**，下一批 = **Task 26–30**（导出标识符 / 标签 → 源码 import →
+  显式文件列表 → ExportSummary → 零 import 语料包冒烟）→ 31–36 对撞接线 → 37 变异 → 38 manifest
+- **M3 体阶段的两条结构事实（Task 25 落地，改动前必读）**：
+  ① **体阶段唯一入口** `rgoc-load/src/scope.rs::resolve_bodies`（`load_sources` 末尾第 ⑦ 步，
+  **在 `collect_decls` 之后**），内部用 `Checker::for_bodies` 造 `Checker` —— 包级状态机
+  （`items`/`states`/`stack`）**必须全空**；`Checker::undefined_reported: BTreeSet<Pos>` +
+  `report_undefined` 是 `undefined` 的**唯一报点**（按**书写位置**去重：前端把 `x, y int`
+  克隆成两份 `Field`，不去重会报两条而官方只报一条）。
+  ② **声明进作用域只有一个入口**：`scope.rs::declare_name(scopes, scope, kind, name, pos, typ, bag)`
+  —— 先声明者胜 + 重复报 `TypDuplicateDecl`（措辞按作用域层：包级 “in this package”、
+  其余 “in this block”）；包级 `declare` 与 **import 名**都走它。作用域层级逐条照官方
+  `openScope`（`if`/`for`/**`range`**/`switch`/**每个 case**/`select` 子句各一层；
+  `range` 的作用域在 **range 子句之后**才开）。
 - **M3 包模型的三条结构事实（Task 23 落地，改动前必读）**：
   ① 作用域是**竞技场**（`rgoc-types::scope::{ScopeId, ScopeTable, ScopeRef}`；节点 `Scope` 只做本层，
   沿链 `lookup`/`lookup_level`/`depth` 在 `ScopeTable`/`ScopeRef`）；`declare_universe(tt, &mut st) -> ScopeId`，
@@ -62,7 +74,7 @@
 - `IfStmt.cond` 是 `Option<Expr>`；`Follow::Semi` 认三种来源；官方临时 nil 用短命中间形态，不用 `Expr::Bad` 当哨兵
 - `want(f)` 消息由 `tokstring(&Follow)` 一处派生；`syntaxErrorAt` 只实现 default 支；`checkBranches` 门控 = **本函数**无语法错；`BranchStmt.Target` 刻意不建模（回指，**M3 读**）
 - `Pos.base = Option<BaseId>`（NonZeroU32）；file base line/col 必须 **1/1**；base==None ⇒ rel_* 退回绝对
-- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **53** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 18 `TYP-`；Task 23 增 `TypMismatchedPkgName`；Task 24 一次补 4 条 = 官方 `InvalidConstInit` / `InvalidDeclCycle` / `InvalidInitCycle` / `WrongAssignCount`）
+- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **56** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 21 `TYP-`；Task 23 增 `TypMismatchedPkgName`；Task 24 补 4 条 = 官方 `InvalidConstInit` / `InvalidDeclCycle` / `InvalidInitCycle` / `WrongAssignCount`；Task 25 补 3 条 = 官方 `DuplicateDecl` / `UndeclaredName` / `RepeatedDecl` —— ⚠️ 计划稿点名的 `UndefinedIdent` / `RedeclaredInThisBlock` / `RedeclaredInThisPackage` 官方**不存在**）
 - 深度守卫挂**三条递归边**：`expr` / `stmt_or_nil` / `type_or_nil`；超限**恰好 1 条** SYN-NESTING-TOO-DEEP
 
 ## 文档索引
