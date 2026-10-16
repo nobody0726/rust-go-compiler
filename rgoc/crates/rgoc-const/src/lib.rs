@@ -24,6 +24,9 @@
 //! 所以「还没实现」在类型层面就成立。真正的表示与算法从 Task 4
 //! （`BigInt`/`BigRat`）与 Task 5（`Const`）开始填。
 
+pub mod bigint;
+pub mod bigrat;
+
 /// 基本类型的标识（26 个）。
 ///
 /// 全集与拼写写在 `docs/contracts/C7-type-dump.md` §4.1（`T-TY-12` 的
@@ -42,15 +45,15 @@ pub enum BasicId {}
 pub struct Sizes;
 
 /// 任意精度整数（常量与数组长度的底座）。M3/Task 4 填充。
-#[derive(Debug)]
-pub struct BigInt;
+///
+/// 定义在 [`bigint`]，这里转导出。
+pub use bigint::BigInt;
 
 /// **精确**有理数 —— 浮点常量的表示（`D-M3-4`：不引入实现限制）。
 ///
 /// 只在**转换**到具体浮点类型时才做「向偶数舍入」，折叠过程本身是精确的。
-/// M3/Task 4 填充。
-#[derive(Debug)]
-pub struct BigRat;
+/// 定义在 [`bigrat`]，这里转导出。
+pub use bigrat::{BigRat, RoundOutcome, RoundResult};
 
 /// 一个常量值。M3/Task 5 填充。
 #[derive(Debug)]
