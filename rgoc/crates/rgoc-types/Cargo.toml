@@ -1,0 +1,15 @@
+# rgoc-types —— 类型表示 / 同一性 / 版本门控（M3）。依赖 rgoc-const 与 rgoc-lex。
+[package]
+name = "rgoc-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M3：类型表示、universe、Identical 判定与按文件的版本门控。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-const = { path = "../rgoc-const" }
+rgoc-lex = { path = "../rgoc-lex" }

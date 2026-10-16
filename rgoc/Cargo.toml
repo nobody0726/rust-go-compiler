@@ -13,17 +13,25 @@
 # T40/41 起新增（Phase 3 · 三个架构 spike，决策 D-M0-13 / D-M0-14）：
 #   rgoc-hir   —— **SPIKE-ONLY**，三个 spike 共享的最小 HIR，M5 整体替换
 #   rgoc-spikes—— spike 的隔离载体（三个 bin + 共享 fixture），可整块删除
+#
+# M3（符号与类型检查入口）起新增三个**正式** crate（D-M3-8，单向依赖）：
+#   rgoc-const —— 常量与大数（任意精度 + 可表示性）
+#   rgoc-types —— 类型表示 + universe + Identical + 按文件的版本门控
+#   rgoc-load  —— 单包多文件 + 源码 import + 导出摘要
 
 [workspace]
 resolver = "3"
 members = [
     "crates/rgoc-ast",
+    "crates/rgoc-const",
     "crates/rgoc-driver",
     "crates/rgoc-harness",
     "crates/rgoc-hir",
     "crates/rgoc-lex",
+    "crates/rgoc-load",
     "crates/rgoc-parse",
     "crates/rgoc-spikes",
+    "crates/rgoc-types",
     "xtask",
 ]
 

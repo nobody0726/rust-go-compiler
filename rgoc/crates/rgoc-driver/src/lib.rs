@@ -19,15 +19,20 @@
 //! rgoc-driver harness report [--out <路径>]       跑完出报告
 //! rgoc-driver lex <file> [--mode comments|directives]   词法输出（T-L18）
 //! rgoc-driver ast <file>                          AST dump（T-AP19）
+//! rgoc-driver types <file>...                     类型检查入口（M3/Task 2 登记）
 //! ```
 //!
 //! **不预留**未实现的子命令（见 [`cli`] 模块头的说明）。
+//!
+//! 📌 `types` 目前**登记了但未实现**：它**显式报错**（`D-M3-11`），
+//! 与「未登记的子命令报未知命令」是两件不同的事 —— 前者是**在做**，后者是**没做**。
 
 pub mod ast_cmd;
 pub mod cli;
 pub mod lex_cmd;
 pub mod report;
 pub mod samples;
+pub mod types_cmd;
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -140,6 +145,11 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
         }
         Command::Ast(a) => {
             let text = ast_cmd::run_ast(&a.file)?;
+            print!("{text}");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Types(t) => {
+            let text = types_cmd::run_types(&t.files)?;
             print!("{text}");
             Ok(ExitCode::SUCCESS)
         }

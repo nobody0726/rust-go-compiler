@@ -3,7 +3,8 @@
 //! # 为什么不引解析库
 //!
 //! M1 起 CLI 有 `harness`（`list` / `run` / `report` 三动作）与 `lex`（词法输出，
-//! `T-L18`）两个子命令，M2 又加了 `ast`（AST dump，`T-AP19`）—— 仍然不值得引
+//! `T-L18`）两个子命令，M2 又加了 `ast`（AST dump，`T-AP19`），M3 加了
+//! `types`（类型检查入口，本阶段）—— 仍然不值得引
 //! clap：M0 阶段 workspace 是**零依赖**的（`rgoc-harness`），为几个动作引入
 //! 一棵依赖树会破掉「离线可构建」这个属性。
 //!
@@ -29,6 +30,21 @@ pub enum Command {
     Lex(LexCommand),
     /// `ast` 子命令（T-AP19）
     Ast(AstCommand),
+    /// `types` 子命令（M3/Task 2 起登记；实现从 Task 28 起）
+    Types(TypesCommand),
+}
+
+/// `types` 子命令的参数（M3/Task 2）。
+///
+/// # 为什么收**多个**文件
+///
+/// M3 的包模型是「**单包多文件**」（`D-M3-5`）—— 一个包的标准形态就是若干
+/// 同属一个 `package` 子句的 `.go` 文件，所以这里天然是列表而不是单文件
+/// （与 `lex`/`ast` 的单文件形态刻意不同）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypesCommand {
+    /// 组成**同一个包**的文件（按用户给出的顺序；装载与编号依赖这个顺序）
+    pub files: Vec<PathBuf>,
 }
 
 /// `ast` 子命令的参数（T-AP19）。
@@ -110,6 +126,8 @@ pub enum CliError {
     ExtraArg(String),
     /// `ast` 没给文件参数（T-AP19）
     AstNeedsFile,
+    /// `types` 一个文件参数都没给（M3/Task 2）
+    TypesNeedsFile,
 }
 
 impl fmt::Display for CliError {
@@ -123,12 +141,13 @@ impl fmt::Display for CliError {
              rgoc-driver harness run --all | <T-C-nn>...\n  \
              rgoc-driver harness report [--out <路径>]\n  \
              rgoc-driver lex <file> [--mode comments|directives]\n  \
-             rgoc-driver ast <file>";
+             rgoc-driver ast <file>\n  \
+             rgoc-driver types <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness、lex 与 ast 三个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex、ast 与 types 四个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -150,6 +169,7 @@ impl fmt::Display for CliError {
                 write!(f, "lex 只接受一个文件参数（多余的：{a:?}）。{USAGE}")
             }
             Self::AstNeedsFile => write!(f, "ast 需要一个文件参数。{USAGE}"),
+            Self::TypesNeedsFile => write!(f, "types 至少需要一个文件参数。{USAGE}"),
         }
     }
 }
@@ -169,8 +189,28 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
         "harness" => Ok(Command::Harness(parse_harness(rest)?)),
         "lex" => Ok(Command::Lex(parse_lex(rest)?)),
         "ast" => Ok(Command::Ast(parse_ast(rest)?)),
+        "types" => Ok(Command::Types(parse_types(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
+}
+
+/// `types <file>...` —— 与 `lex`/`ast` 同族，但**收多个文件**（M3 的包模型是单包多文件）。
+///
+/// 此刻**没有** flag：`--lang`（版本门控）与 `--dump`（C7 dump）分别在
+/// Task 21 / Task 32 才落地 —— 本仓纪律是**不预留**未实现的选项。
+fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    for a in rest {
+        if a.starts_with("--") {
+            // `--help` 也走这里：报错文本里带 USAGE，等价于「列出用法」。
+            return Err(CliError::UnknownFlag(a.to_string()));
+        }
+        files.push(PathBuf::from(a));
+    }
+    if files.is_empty() {
+        return Err(CliError::TypesNeedsFile);
+    }
+    Ok(TypesCommand { files })
 }
 
 /// `ast <file>` —— 与 `lex` 同形：文件参数一个、无 flag（T-AP19）。

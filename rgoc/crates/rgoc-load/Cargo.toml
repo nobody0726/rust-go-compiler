@@ -1,0 +1,16 @@
+# rgoc-load —— 包模型与装载（M3）。依赖 rgoc-types / rgoc-parse / rgoc-lex。
+[package]
+name = "rgoc-load"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M3：单包多文件装载、源码 import 与导出摘要。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-lex = { path = "../rgoc-lex" }
+rgoc-parse = { path = "../rgoc-parse" }
+rgoc-types = { path = "../rgoc-types" }

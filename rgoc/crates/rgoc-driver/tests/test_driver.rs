@@ -15,7 +15,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use rgoc_driver::cli::{CliError, Command, HarnessCommand, LexCommand, LexMode, parse_args};
+use rgoc_driver::cli::{
+    CliError, Command, HarnessCommand, LexCommand, LexMode, TypesCommand, parse_args,
+};
 use rgoc_driver::lex_cmd;
 use rgoc_driver::report::{RunSummary, render_text, summarize, to_json};
 use rgoc_driver::samples::{CORPUS_M0_SAMPLES, LoadedSamples, SampleEntry, index_of};
@@ -766,5 +768,68 @@ fn lex_读不到文件时非零退出且指出路径() {
     assert!(
         err.contains("not/exist/t-l18.go"),
         "stderr 指出问题的文件：{err}"
+    );
+}
+
+// ══ 6. types 子命令（M3/Task 2 的占位）═════════════════════════════════════
+
+/// `types` 接受**一个或多个**文件 —— M3 的包模型是「单包多文件」
+/// （`D-M3-5`：源码 import，不读二进制 export data），所以至少要能收多个。
+#[test]
+fn 解析_types_子命令_一个或多个文件() {
+    for (argv, want) in [
+        (vec!["types", "a.go"], vec![PathBuf::from("a.go")]),
+        (
+            vec!["types", "a.go", "b.go"],
+            vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
+        ),
+    ] {
+        let got = parse_args(&argv).unwrap_or_else(|e| panic!("{argv:?} 应可解析：{e}"));
+        assert_eq!(
+            got,
+            Command::Types(TypesCommand { files: want }),
+            "argv = {argv:?}"
+        );
+    }
+}
+
+#[test]
+fn types_参数错误逐个报对() {
+    assert!(matches!(
+        parse_args(&["types"]),
+        Err(CliError::TypesNeedsFile)
+    ));
+    // 未知长选项要说清是哪个（与 lex 同形）
+    assert!(matches!(
+        parse_args(&["types", "--nope", "a.go"]),
+        Err(CliError::UnknownFlag(m)) if m == "--nope"
+    ));
+    let s = parse_args(&["types"]).unwrap_err().to_string();
+    assert!(s.contains("types <file>"), "错误信息应给出 types 用法：{s}");
+}
+
+/// ★ 占位期最重要的一条：**未实现必须响亮地非零退出**。
+///
+/// 「接受子命令但静默成功」是最坏的形态 —— 门禁会把它读成「类型检查通过」。
+/// 所以这里三条一起断言：非零退出、无 stdout、不是 panic（是显式拒绝）。
+#[test]
+fn types_未实现时_非零退出且文案稳定_不是_panic() {
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "a.go"])
+        .output()
+        .expect("起进程");
+    assert_ne!(
+        out.status.code(),
+        Some(0),
+        "未实现必须非零退出 —— 静默成功会被读成「类型检查通过」"
+    );
+    assert!(out.stdout.is_empty(), "未实现时不应有 stdout");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("types"), "stderr 要指明是哪个子命令：{err}");
+    assert!(err.contains("未实现"), "stderr 要有稳定文案：{err}");
+    assert!(
+        !err.contains("panicked"),
+        "必须是显式拒绝（`D-M3-11`），不是 panic：{err}"
     );
 }

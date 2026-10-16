@@ -1,0 +1,14 @@
+# rgoc-const —— 常量与大数（M3）。依赖只允许指向 rgoc-lex（见 src/lib.rs 的位置说明）。
+[package]
+name = "rgoc-const"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M3：常量表示、任意精度大数、常量折叠与可表示性。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-lex = { path = "../rgoc-lex" }
