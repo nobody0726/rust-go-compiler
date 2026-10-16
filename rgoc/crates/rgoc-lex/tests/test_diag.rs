@@ -63,9 +63,13 @@ fn 代号表恰为冻结总数且无重复() {
     // `go/types/assignments.go:552`）—— ⚠️ 计划稿写的 `RedeclaredInThisBlock` /
     // `RedeclaredInThisPackage` / `UndefinedIdent` 在官方**不存在**（见枚举注释），
     // 故按「代号照官方」合并/改名 ⇒ 共 **56**。
+    // Task 26 再 +7（导出标识符 / 标签 / 空标识符）：`TypBlankPkgName`、
+    // `TypDuplicateLabel`、`TypInvalidBlank`、`TypJumpIntoBlock`、`TypMisplacedLabel`、
+    // `TypUndeclaredLabel`、`TypUnusedLabel`（**全部**照官方名，见枚举注释）
+    // ⇒ 共 **63**。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 56);
+    assert_eq!(DiagCode::ALL.len(), 63);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

@@ -41,6 +41,7 @@ use rgoc_ast::{
     ArrayType, ChanType, Expr, Field as AstField, FuncType, InterfaceType, MapType, Op, StructType,
 };
 use rgoc_const::Const;
+use rgoc_lex::{Diag, DiagCode};
 use rgoc_types::{ChanDir, Field as TField, ObjKind, Object, ScopeId, Type, TypeId};
 
 use crate::decls::Checker;
@@ -63,6 +64,16 @@ impl Checker<'_> {
             // ⚠️ 只有「整个名字都找不到」才报：找到了但不是类型（`var x int; var y x`）
             // 是官方 `NotAType`，归 M4（`open_gaps`）。
             Expr::Name(n) => {
+                // 空标识符**不是类型**：官方 `typexpr.go:28` 的 `InvalidBlank`
+                // （“cannot use _ as value **or type**”）——不能走 `undefined: _`。
+                if n.value == "_" {
+                    self.bag.push(Diag {
+                        pos: n.pos,
+                        code: DiagCode::TypInvalidBlank,
+                        message: "cannot use _ as value or type".to_owned(),
+                    });
+                    return self.tt.invalid();
+                }
                 if self.scopes.lookup(scope, &n.value).is_none() {
                     self.report_undefined(n.pos, &n.value);
                 }

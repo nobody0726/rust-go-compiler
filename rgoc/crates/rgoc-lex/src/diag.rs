@@ -163,6 +163,14 @@ pub enum DiagCode {
     // ⚠️ 计划与 `M3-tests.md` 冻结稿都写「**左值**非负检查」，**实测是错的**
     // （oracle：`-1 << 2 == -4` 合法）。见 `M3-tests.md` 修订 R1 与
     // `.superpowers/sdd/M3-plan/progress.md` 的 Task 7 Ruling。
+    /// 包名标识符是**空标识符** `_` —— 官方 `BlankPkgName`（消息 `invalid package name _`）
+    ///
+    /// 位置取 **`package` 名字标识符**处（官方 `go/types/check.go:299`
+    /// 的 `check.error(file.Name, …)`）—— 这正是它**区别于** `TypMismatchedPkgName`
+    /// 的地方（那条取 `package` 关键字处）。
+    /// 触发面与官方 `initFiles` 的 switch 同形：**在 `pkg.name` 还是空串时**遇到
+    /// `package _` 才报（此后再遇到 `package _` 落进 `MismatchedPkgName`）。
+    TypBlankPkgName,
     /// 常量**除数为零**（`/` 与 `%`，整数与浮点都算）—— 官方 `DivByZero`
     ///
     /// 实测官方四条都报它：`1/0`、`1%0`、`1.0/0`、`1/0.0`（消息是
@@ -179,6 +187,16 @@ pub enum DiagCode {
     /// 按「代号照官方」的纪律合并成一条，块级/包级只差**消息措辞**（消息本来就自有渲染）。
     /// 留存差异：官方同时输出一条 `other declaration of %s` 的**附加行**，我方只报一条（`open_gaps`）。
     TypDuplicateDecl,
+    /// **标签**重复声明 —— 官方 `DuplicateLabel`（消息 `label %s already declared`）
+    ///
+    /// 位置取**后声明**的那个标签（官方 `labels.go:137`：`err.addf(lbl, …)`，
+    /// 而 `lbl` 是新建的、即后一个）。官方是 `soft` 错（不抑制后续诊断）。
+    /// 标签**不在值作用域里** —— 它有自己的空间，且**每个函数体一个**
+    /// （官方 `labels.go:17` 的 `NewScope(…, "label")`，只在 `funcBody` 里调一次）
+    /// ⇒ 跨函数不可见、`goto` 不能跨函数。
+    /// 留存差异：官方同时输出一条 `other declaration of %s` 附加行（同
+    /// `TypDuplicateDecl`，`open_gaps`）。
+    TypDuplicateLabel,
     /// 使用了**比该文件生效版本新**的语言特性 —— 官方 `UnsupportedFeature`
     /// （消息 `"%s requires %s or later"`，`go/types/errors.go:253`）
     ///
@@ -190,6 +208,16 @@ pub enum DiagCode {
     /// 位置取该文件的 `package` **名字**（官方 `check.go:346` 的原话是
     /// 「Use position of 'package [p]'」，为与 types/types2 对齐）。
     TypFileRequiresNewerGo,
+    /// 空标识符 `_` 被当**值或类型**用 —— 官方 `InvalidBlank`（消息 `cannot use _ as value or type`）
+    ///
+    /// 官方唯一触发点：`go/types/typexpr.go:28`（`check.error(e, InvalidBlank, …)`）。
+    /// 位置取那个 `_`。
+    /// ⚠️ **不是**「未定义」：`_` 从不绑定（官方 `check.declare` 第一句就返回），
+    /// 所以任何「查作用域查不到」的通用路径都会把它误报成 `undefined: _`。
+    /// 赋值 / 短变量声明 / `range` 的**左值位**是官方唯一容许 `_` 的地方
+    /// （官方在 `assignVar` / `shortVarDecl` 里**先**特判 `_`），所以这个判据
+    /// 不能只看「出现在表达式里」，要看**出现在哪**。
+    TypInvalidBlank,
     /// `const` 的初始化式**不是常量**（在 M3 的常量子集口径下）—— 官方 `InvalidConstInit`
     ///
     /// 官方触发点在 `assignments.go:130`（`"%s is not constant"`），即
@@ -235,6 +263,14 @@ pub enum DiagCode {
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 前向 `goto` 跳进了**嵌套块内部**的标签 —— 官方 `JumpIntoBlock`
+    /// （消息 `goto %s jumps into block`）
+    ///
+    /// 位置取 `goto` 的**标签标识符**处（官方 `labels.go:40` 的 `check.errorf(jmp.Label, …)`）。
+    /// 与 `TypUndeclaredLabel` 的分工靠**整函数体的标签全集**：收尾时前向跳转仍未匹配，
+    /// 若全集里有同名标签 ⇒ 本条（跳进了块）；没有 ⇒ 那条（根本没声明）。
+    /// 官方同时把那个标签标成「已使用」（免得再报一条 `UnusedLabel`）。
+    TypJumpIntoBlock,
     /// 同包多文件里出现了**不一致的包名** —— 官方 `MismatchedPkgName`
     ///
     /// 官方 `go/types/check.go:307`（`check.errorf(atPos(file.Package), MismatchedPkgName, …)`）：
@@ -243,6 +279,19 @@ pub enum DiagCode {
     /// 包名以**第一个**文件为准（官方 `initFiles` 的 `case "": pkg.name = name`），
     /// 不一致的文件被**整个忽略**（不进 `pkg.files`）—— 对齐官方那句 `// ignore this file`。
     TypMismatchedPkgName,
+    /// `break`/`continue` 的标签**不是**它外层那个可跳转语句 —— 官方 `MisplacedLabel`
+    /// （消息 `invalid break label %s` / `invalid continue label %s`）
+    ///
+    /// 位置取 `break`/`continue` 的**标签标识符**处（官方 `labels.go:193`/`208`
+    /// 的 `check.errorf(s.Label, …)`）。
+    /// 两个触发面（官方 `enclosingTarget` 返回 `nil` 的两种情况都算）：
+    /// ① 名字在本函数体里根本没有；② 有，但它标的不是 `for`/`range`/`switch`/`select`
+    /// （`continue` 只认 `for`/`range`）。
+    /// ⚠️ 与 `TypUndeclaredLabel` 分开是官方的选择：`break L` 名字不存在时官方**不**说
+    /// 「未声明」，而说「break 的标签位置不对」。
+    /// 官方此处 `return`（**不**把标签标成已使用）⇒ 一个只被非法 `break` 引用的标签
+    /// 还会再报一条 `UnusedLabel`（实测 `s3.go` 两条）。
+    TypMisplacedLabel,
     /// 类型**嵌套**超过本仓上限（**`H` 判据：官方无此行为**）
     ///
     /// 与 `SynNestingTooDeep` 是同一个理由：官方编译器靠 Go 运行时的可增长栈，
@@ -275,6 +324,15 @@ pub enum DiagCode {
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
     /// 它服务**赋值/声明**语境：`const x int = 1.5` ⇒ 「1.5 truncated to integer」。
     TypTruncatedFloat,
+    /// `goto` 的标签在整个函数体里**找不到** —— 官方 `UndeclaredLabel`
+    /// （消息 `label %s not declared`）
+    ///
+    /// 位置取 `goto` 的**标签标识符**处（官方 `labels.go:38`：`check.errorf(jmp.Label, …)`）。
+    /// 判据是**收尾**时的：前向跳转在整个体里转完仍未匹配 ⇒ 要么没声明（本条）、
+    /// 要么跳进了嵌套块（`TypJumpIntoBlock`）。
+    /// ⚠️ 官方消息是 `label %s not declared`（**not declared**），不是 `undefined: %s` ——
+    /// 尽管它在同一族里，字面不同就是不同诊断。
+    TypUndeclaredLabel,
     /// 引用了**没有声明**的名字 —— 官方 `UndeclaredName`（消息 `undefined: %s`）
     ///
     /// 官方两个来源：**类型位置** `go/types/typexpr.go:30`（`check.errorf(e, UndeclaredName, "undefined: %s", e.Name)`）、
@@ -298,6 +356,15 @@ pub enum DiagCode {
     /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
     /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）落在检查器里，届时**复用**本码。
     TypUnsupportedConstraintIdentity,
+    /// 标签**声明了却没被用** —— 官方 `UnusedLabel`（消息 `label %s declared and not used`）
+    ///
+    /// 位置取**标签声明**处（官方 `labels.go:51` 的 `check.softErrorf(lbl, …)`）。
+    /// 官方是 `soft` 错。判据是「整个函数体的分支语句里没有任何一处引用它」——
+    /// 包括**被非法 `break`/`continue` 引用也不算**（官方在那两处 `return`，
+    /// 见 `TypMisplacedLabel`）。
+    /// 真实语料里不会假阳：`gc` 对同一条也是**硬错**（「label L defined and not used」），
+    /// 所以能编译过的代码必然没有未用标签。
+    TypUnusedLabel,
     /// 声明里**名字与初始化式的个数对不上** —— 官方 `WrongAssignCount`
     ///
     /// 官方 `go/types/resolver.go:55-90` 的 `arityMatch`：`const a, b = 1`
@@ -314,7 +381,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 56] = [
+    pub const ALL: [DiagCode; 63] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -350,10 +417,13 @@ impl DiagCode {
         DiagCode::SynLabelUnused,
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
+        DiagCode::TypBlankPkgName,
         DiagCode::TypDivByZero,
         DiagCode::TypDuplicateDecl,
+        DiagCode::TypDuplicateLabel,
         DiagCode::TypFeatureRequiresGoVersion,
         DiagCode::TypFileRequiresNewerGo,
+        DiagCode::TypInvalidBlank,
         DiagCode::TypInvalidConstInit,
         DiagCode::TypInvalidConstVal,
         DiagCode::TypInvalidConversion,
@@ -362,14 +432,18 @@ impl DiagCode {
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypJumpIntoBlock,
         DiagCode::TypMismatchedPkgName,
+        DiagCode::TypMisplacedLabel,
         DiagCode::TypNestingTooDeep,
         DiagCode::TypNumericOverflow,
         DiagCode::TypPackageRequiresNewerGo,
         DiagCode::TypRepeatedDecl,
         DiagCode::TypTruncatedFloat,
+        DiagCode::TypUndeclaredLabel,
         DiagCode::TypUndeclaredName,
         DiagCode::TypUnsupportedConstraintIdentity,
+        DiagCode::TypUnusedLabel,
         DiagCode::TypWrongAssignCount,
     ];
 
@@ -411,10 +485,13 @@ impl DiagCode {
             DiagCode::SynLabelUnused => "SYN-LABEL-UNUSED",
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
+            DiagCode::TypBlankPkgName => "TYP-BLANK-PKG-NAME",
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypDuplicateDecl => "TYP-DUPLICATE-DECL",
+            DiagCode::TypDuplicateLabel => "TYP-DUPLICATE-LABEL",
             DiagCode::TypFeatureRequiresGoVersion => "TYP-FEATURE-REQUIRES-GO-VERSION",
             DiagCode::TypFileRequiresNewerGo => "TYP-FILE-REQUIRES-NEWER-GO",
+            DiagCode::TypInvalidBlank => "TYP-INVALID-BLANK",
             DiagCode::TypInvalidConstInit => "TYP-INVALID-CONST-INIT",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
@@ -423,14 +500,18 @@ impl DiagCode {
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypJumpIntoBlock => "TYP-JUMP-INTO-BLOCK",
             DiagCode::TypMismatchedPkgName => "TYP-MISMATCHED-PKG-NAME",
+            DiagCode::TypMisplacedLabel => "TYP-MISPLACED-LABEL",
             DiagCode::TypNestingTooDeep => "TYP-NESTING-TOO-DEEP",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",
             DiagCode::TypRepeatedDecl => "TYP-REPEATED-DECL",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
+            DiagCode::TypUndeclaredLabel => "TYP-UNDECLARED-LABEL",
             DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
+            DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",
             DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",
         }
     }

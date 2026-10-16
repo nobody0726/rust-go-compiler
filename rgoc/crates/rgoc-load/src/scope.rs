@@ -27,8 +27,6 @@
 //!
 //! # 刻意**不**做的事（进 `M3-manifest.json` 的 `open_gaps`）
 //!
-//! * **标签**（`LabeledStmt` / `BranchStmt`）整块跳过 ⇒ 归 Task 26
-//!   （`goto L` 的 `L` 不是值位置的名字，现在当作引用会误报）；
 //! * **结构体字面量的 `Key: value` 里那个裸名字 key** ⇒ 不当作引用
 //!   （它多半是**字段名**：`T{Field: 1}`。没有类型信息分不出字段名与 map 键，
 //!   而「字段名当引用」会把每一个结构体字面量都误报成 `undefined` ⇒
@@ -37,6 +35,13 @@
 //!   `RepeatedDecl`（`x, y, y := …`）**报**，因为它按官方规则是硬错误；
 //! * **体内声明的类型名**的 `typ` 取 RHS 的**本体**（不做包级那种「具名实例」）：
 //!   局部类型不参与 dump 根、也不进同一性验收面 ⇒ 造一个 Named 只会多一处对不上的地方。
+//!
+//! # 标签走**另一趟**（[`crate::labels`]，M3/Task 26）
+//!
+//! `LabeledStmt` 只走下去、`BranchStmt` 整块跳过 —— 因为标签**不是值位置的名字**：
+//! `goto L` 的 `L` 与变量同名不冲突、且可以**前向**引用（先 `goto` 后声明）。
+//! 硬塞进这一趟会同时错掉「同名不冲突」与「前向可见」两条。
+//! 两趟都在**每个函数体**各跑一次（含函数字面量）⇒ 标签跨函数不可见。
 //!
 //! # 与 `resolve_type` 的分工（**不重复报**的关键）
 //!
@@ -129,6 +134,15 @@ pub(crate) fn declare_name(
     );
 }
 
+/// 这个表达式是不是**空标识符** `_`。
+///
+/// 只用在**容许空标识符的左值位**上（`_ = x`、`for _ = range x`）——
+/// 官方在这两处是**先特判 `_`、不走 `check.expr`**，所以那里不该报
+/// [`DiagCode::TypInvalidBlank`]。
+fn is_blank(e: &Expr) -> bool {
+    matches!(e, Expr::Name(n) if n.value == "_")
+}
+
 impl Checker<'_> {
     /// 逐文件走一遍：包级的**值**表达式 + 每个 `func` 的体。
     fn walk_files(&mut self, asts: &[AstFile], file_scopes: &[ScopeId]) {
@@ -164,6 +178,9 @@ impl Checker<'_> {
         let fscope = self.func_scope(parent, &f.tparams, ft, f.recv.as_ref(), false);
         let bscope = self.scopes.child(ScopeKind::Block, fscope);
         self.walk_stmts(bscope, &body.stmts);
+        // 值作用域走完，再走**标签**那一趟（官方 `stmt.go:44` 的
+        // `if check.hasLabel { check.labels(body) }` —— 两趟、**每个函数体各一次**）
+        crate::labels::check_labels(&body.stmts, self.bag);
     }
 
     /// 函数字面量：**全部**解析（没有别人替它解析过）。
@@ -177,6 +194,8 @@ impl Checker<'_> {
         let fscope = self.func_scope(outer, &[], ft, None, true);
         let bscope = self.scopes.child(ScopeKind::Block, fscope);
         self.walk_stmts(bscope, &fl.body.stmts);
+        // **每个**函数体（含字面量）各有一个标签空间 ⇒ 跨函数不可见
+        crate::labels::check_labels(&fl.body.stmts, self.bag);
     }
 
     /// 类型参数层 ⇒ 函数层（接收者 / 参数 / 结果）。
@@ -257,7 +276,7 @@ impl Checker<'_> {
     fn walk_stmt(&mut self, scope: ScopeId, s: &Stmt) {
         match s {
             Stmt::Empty(_) => {}
-            // `L: stmt` —— 标签对象与标签引用归 Task 26；这里只走下去
+            // `L: stmt` —— 标签在**另一趟**（`crate::labels`）；这里只走下去
             Stmt::Labeled(l) => self.walk_stmt(scope, &l.stmt),
             Stmt::Block(b) => {
                 let inner = self.scopes.child(ScopeKind::Block, scope);
@@ -270,7 +289,7 @@ impl Checker<'_> {
             }
             Stmt::Decl(d) => self.walk_decl_stmt(scope, d),
             Stmt::Assign(a) => self.walk_assign(scope, a),
-            // `break`/`continue`/`goto`/`fallthrough`：跳转目标是**标签**（Task 26）
+            // `break`/`continue`/`goto`/`fallthrough`：跳转目标是**标签** ⇒ `crate::labels`
             Stmt::Branch(_) => {}
             Stmt::Call(c) => self.walk_expr(scope, &c.call),
             Stmt::Return(r) => {
@@ -495,6 +514,12 @@ impl Checker<'_> {
     fn walk_assign(&mut self, scope: ScopeId, a: &AssignStmt) {
         if a.op != AssignOp::Define {
             for e in &a.lhs {
+                // `_ = x` 的 `_` 是**空赋值**，不是值引用（官方 `assignVar` 里先特判 `_`）。
+                // ⚠️ 只对**纯 `=`** 成立：复合赋值（`_ += 1`）与 `_++` 走的是
+                // `check.binary`/`check.expr`（`stmt.go:530`）⇒ 那里报 `InvalidBlank`。
+                if a.op == AssignOp::Assign && is_blank(e) {
+                    continue;
+                }
                 self.walk_expr(scope, e);
             }
             for e in &a.rhs {
@@ -549,6 +574,10 @@ impl Checker<'_> {
         self.walk_expr(scope, &r.x);
         if !r.is_define {
             for e in &r.lhs {
+                // `for _ = range x`：`_` 同样是空赋值位（与 `=` 同一条规则）
+                if is_blank(e) {
+                    continue;
+                }
                 self.walk_expr(scope, e);
             }
             return;
@@ -662,8 +691,20 @@ impl Checker<'_> {
     }
 
     /// 一次名字**引用**。
+    ///
+    /// ⚠️ 空标识符 `_` 走的是**另一条**诊断：官方 `typexpr.go:28` 的
+    /// `InvalidBlank`（“cannot use _ as value or type”）——不是 `undefined: _`。
+    /// `_` 从不绑定，所以任何「查作用域查不到」的通用路径都会把它误报成
+    /// `undefined`；判据不能是「出现在表达式里」，只能是「出现在**哪个位置**」。
+    /// 赋值（`=`）/ 短变量声明（`:=`）/ `range` 的**左值位**是官方唯一容许它的地方，
+    /// 那几处由调用方**先**筛掉（见 [`Checker::walk_assign`]、[`Checker::walk_range_clause`]）。
     fn use_name(&mut self, scope: ScopeId, n: &Name) {
         if n.value == "_" {
+            self.bag.push(Diag {
+                pos: n.pos,
+                code: DiagCode::TypInvalidBlank,
+                message: "cannot use _ as value or type".to_owned(),
+            });
             return;
         }
         if self.scopes.lookup(scope, &n.value).is_none() {

@@ -15,6 +15,7 @@
 //! |---|---|---|---|
 //! | 字母 `IsLetter`(L*) | 145,672 码点 | `is_alphabetic` 147,421 | **多 1,749**（全是 Mn 组合符） |
 //! | 数字 `IsDigit`(Nd) | 770 码点 | `is_numeric` 1,924 | **多 1,154**（全是 No） |
+//! | 大写 `IsUpper`(Lu) | 1,886 码点 | `is_uppercase` 2,006 | **多 120**（5 段 Other_Uppercase，M3/Task 26 量化） |
 //!
 //! **后果是静默的**，但**不在词元边界上**（F29 实测更正）：官方 `atIdentChar` 对
 //! 「不是字母、也不是 Nd」的非 ASCII 字符**报错但仍然吸收** ⇒ `x²` 在 Go 里是
@@ -23,10 +24,12 @@
 //!
 //! **少一条诊断比「词元切错」更难发现** —— 切错了至少词元数会变。
 //!
-//! 所以本文件里那两条"**拒绝 Rust std 会接受的那批**"是核心断言，
-//! 它们同时**反证** Rust std 确实会接受 —— 否则那两条断言可能毫无信息量（恒真）。
+//! 所以本文件里那几条"**拒绝 Rust std 会接受的那批**"是核心断言，
+//! 它们同时**反证** Rust std 确实会接受 —— 否则那几条断言可能毫无信息量（恒真）。
 
-use rgoc_lex::unicode_tables::{DIGIT_RANGES, LETTER_RANGES, is_digit, is_letter};
+use rgoc_lex::unicode_tables::{
+    DIGIT_RANGES, LETTER_RANGES, UPPER_RANGES, is_digit, is_letter, is_upper,
+};
 
 // ── ① 覆盖：官方样本里的非 ASCII 标识符 ──────────────────────────────
 
@@ -86,10 +89,14 @@ fn 数字表_拒绝_rust_std_会接受的那批() {
 // ── ③ 表本身的不变式（binary_search 的前提）──────────────────────────
 
 #[test]
-fn 两张表都是有序且互不重叠的() {
+fn 三张表都是有序且互不重叠的() {
     // `lookup` 用 binary_search —— 表一旦乱序或有重叠，查找会**静默**给出错误答案
     // （不 panic、不报错，只是偶尔答错）。所以这条断言是查找正确性的前提，不是洁癖。
-    for (name, table) in [("LETTER", LETTER_RANGES), ("DIGIT", DIGIT_RANGES)] {
+    for (name, table) in [
+        ("LETTER", LETTER_RANGES),
+        ("DIGIT", DIGIT_RANGES),
+        ("UPPER", UPPER_RANGES),
+    ] {
         for i in 0..table.len() {
             let (lo, hi) = table[i];
             assert!(lo <= hi, "{name}[{i}] 区间反了：({lo:#x}, {hi:#x})");
@@ -105,8 +112,8 @@ fn 两张表都是有序且互不重叠的() {
 }
 
 #[test]
-fn 两张表的区间数与实测值一致() {
-    // 与 `M1-design.md` §6 / §10.3 的记录对齐。
+fn 三张表的区间数与实测值一致() {
+    // 与 `M1-design.md` §6 / §10.3 的记录对齐（UPPER 是 M3/Task 26 加的）。
     // 这条同时防"生成器中途截断"—— 截断后表仍有序、仍能查出部分码点，只是**少了尾巴**，
     // 不数一遍是看不出来的。
     assert_eq!(LETTER_RANGES.len(), 684, "字母区间数（unicode.IsLetter）");
@@ -114,6 +121,11 @@ fn 两张表的区间数与实测值一致() {
         DIGIT_RANGES.len(),
         72,
         "数字区间数（unicode.IsDigit，即 Nd）"
+    );
+    assert_eq!(
+        UPPER_RANGES.len(),
+        655,
+        "大写区间数（unicode.IsUpper，即 Lu）"
     );
 }
 
@@ -128,6 +140,11 @@ fn 区间总数与码点数也对得上() {
         "字母码点数（Go unicode.IsLetter）"
     );
     assert_eq!(count(DIGIT_RANGES), 770, "数字码点数（Go unicode.IsDigit）");
+    assert_eq!(
+        count(UPPER_RANGES),
+        1_886,
+        "大写码点数（Go unicode.IsUpper）"
+    );
 }
 
 // ── ④ `_` 的特殊性（Go 规范，不是 Unicode 属性）──────────────────────
@@ -158,7 +175,11 @@ fn 下划线不是数字() {
 fn 表里没有代理区码点() {
     // `char` 本身排除了代理区，但生成器是**按 u32 遍历**的 —— 若忘了跳过 0xD800..=0xDFFF，
     // 表里会出现永远查不到的区间（`char` 造不出来），也就是**死数据**。
-    for (name, table) in [("LETTER", LETTER_RANGES), ("DIGIT", DIGIT_RANGES)] {
+    for (name, table) in [
+        ("LETTER", LETTER_RANGES),
+        ("DIGIT", DIGIT_RANGES),
+        ("UPPER", UPPER_RANGES),
+    ] {
         for &(lo, hi) in table {
             assert!(
                 hi < 0xD800 || lo > 0xDFFF,
@@ -169,8 +190,12 @@ fn 表里没有代理区码点() {
 }
 
 #[test]
-fn 两张表都止于_unicode_最大码点之内() {
-    for (name, table) in [("LETTER", LETTER_RANGES), ("DIGIT", DIGIT_RANGES)] {
+fn 三张表都止于_unicode_最大码点之内() {
+    for (name, table) in [
+        ("LETTER", LETTER_RANGES),
+        ("DIGIT", DIGIT_RANGES),
+        ("UPPER", UPPER_RANGES),
+    ] {
         let last = table.last().expect("表不该为空");
         assert!(
             last.1 <= 0x10FFFF,
@@ -178,4 +203,55 @@ fn 两张表都止于_unicode_最大码点之内() {
             last.1
         );
     }
+}
+
+// ── ⑥ IsUpper（M3/Task 26：导出标识符判定）─────────────────────────────
+
+/// 大写表要覆盖官方样本里真会出现的非 ASCII 大写字母。
+#[test]
+fn 大写表覆盖_非_ascii_大写字母() {
+    // 官方 `go/token.IsExported` 的样本：É（LATIN CAPITAL E WITH ACUTE）、
+    // Ł（LATIN CAPITAL L WITH STROKE）、Ω（GREEK CAPITAL OMEGA）、
+    // 日（CJK 没有大小写之分 ⇒ **不算**大写，`IsExported("日x")` = false）。
+    for c in ['É', 'Ł', 'Ω', 'Á', 'Ξ'] {
+        assert!(is_upper(c), "{c} 应当是大写（Lu）");
+    }
+    for c in ['a', 'z', 'é', 'ω', '中', '日'] {
+        assert!(!is_upper(c), "{c} 不该是大写（Lu）");
+    }
+    // ASCII 也必须一并覆盖（生成器没把 a-z / A-Z 弄丢）
+    for c in ['A', 'Z'] {
+        assert!(is_upper(c), "{c} 应当是大写");
+    }
+}
+
+/// **拒绝 Rust std 的 `char::is_uppercase` 会多收的那 120 个码点**。
+///
+/// 这是本节的核型断言：std 的 `Uppercase` 是 derived 属性（Lu ∪ Other_Uppercase），
+/// 多出 5 段共 120 个码点。若这里用了 std 的谓词，导出面就会把 `Ⅰx` 这种
+/// **不导出**的名字判成导出（Go `unicode.IsUpper('Ⅰ')` = false）。
+#[test]
+fn 大写表_拒绝_rust_std_会接受的那批() {
+    // 五段的第一码点各取一个（由 `m3-26` 探针实测：Rs 2006 / Go 1886 / 多 120）
+    const EXTRAS: [(char, &str); 5] = [
+        ('\u{2160}', "罗马数字 Ⅰ（Nl）"),
+        ('\u{24B6}', "带圈 Ⓐ（So）"),
+        ('\u{1F130}', "带框 🄰（So）"),
+        ('\u{1F150}', "反白 🅐（So）"),
+        ('\u{1F170}', "方块 🅰（So）"),
+    ];
+    for (c, what) in EXTRAS {
+        assert!(!is_upper(c), "{what} 不是 Lu，不该判成大写");
+        assert!(
+            c.is_uppercase(),
+            "反证失败：Rust std 也不认为 {what} 是大写，本断言失去意义"
+        );
+    }
+}
+
+#[test]
+fn 下划线不是大写() {
+    // Go：`unicode.IsUpper('_')` = false ⇒ `IsExported("_")` = false（与「`_` 不绑定」两回事）
+    assert!(!is_upper('_'));
+    assert!(!'_'.is_uppercase(), "反证：std 也不认为 `_` 是大写");
 }

@@ -202,10 +202,18 @@ pub fn load_sources(
             "" => {
                 if ast.pkg_name.value != "_" {
                     pkg.name = ast.pkg_name.value.clone();
+                } else {
+                    // 官方 `check.go:299`：`check.error(file.Name, BlankPkgName, "invalid package name _")`
+                    // ——位置取**包名标识符**处（与 `MismatchedPkgName` 取 `package` 关键字处不同）。
+                    // 官方此处 `fallthrough`：`_` 包名的文件**照收**（本函数一致）。
+                    // 触发面也同样受 `pkg.name` 是否为空约束 ⇒ 第一个有名字的文件之后
+                    // 再出现 `package _` 落进下面的 `default`（`MismatchedPkgName`）。
+                    bag.push(Diag {
+                        pos: ast.pkg_name.pos,
+                        code: DiagCode::TypBlankPkgName,
+                        message: "invalid package name _".to_owned(),
+                    });
                 }
-                // else：官方报 `BlankPkgName`（位置取**包名标识符**）。
-                // 该代号没有触发者之外的消费者，且空标识符归 Task 26 ⇒ 这里只**不收**包名。
-                // ⚠️ 官方此处 `fallthrough`：`_` 包名的文件**照收**（本函数一致）。
                 pkg.files.push(fid);
             }
             // `case name:` —— 同名 ⇒ 收

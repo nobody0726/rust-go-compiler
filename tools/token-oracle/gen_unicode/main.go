@@ -12,6 +12,11 @@
 //	  · 用 std 的近似谓词时 ² 被当成数字 ⇒ **不报错** ⇒ **少一条诊断**。
 //	**少一条诊断比"词元切错"更难发现** —— 详见 M1-design.md §2.3 的 F29。
 //
+//	M3/Task 26 又加了第三张（IsUpper，类别 Lu）：导出标识符判定
+//	（go/token.IsExported：`unicode.IsUpper(首码点)`）也**不能**用 std 的
+//	char::is_uppercase（derived Uppercase = Lu ∪ Other_Uppercase，多 120 个码点）——
+//	那个判定是**导出面**的输入，错一个码点就是错一个 API 表面。
+//
 // 所以表**由 oracle 生成**（D-M1-6），不引第三方依赖、也不用 std 的近似谓词。
 //
 // 用法：
@@ -56,19 +61,21 @@ func main() {
 
 	letters := ranges(unicode.IsLetter)
 	digits := ranges(unicode.IsDigit)
+	uppers := ranges(unicode.IsUpper)
 
 	var b bytes.Buffer
-	writeHeader(&b, letters, digits)
+	writeHeader(&b, letters, digits, uppers)
 	writeTable(&b, "LETTER_RANGES", "字母：unicode.IsLetter（Unicode 类别 L*）", letters)
 	writeTable(&b, "DIGIT_RANGES", "数字：unicode.IsDigit（Unicode 类别 Nd）", digits)
+	writeTable(&b, "UPPER_RANGES", "大写字母：unicode.IsUpper（Unicode 类别 Lu）", uppers)
 	b.WriteString(fill(accessors))
 
 	if err := os.WriteFile(out, b.Bytes(), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "写入失败：", err)
 		os.Exit(2)
 	}
-	fmt.Printf("已生成 %s\n  LETTER_RANGES = %d 区间 / %d 码点\n  DIGIT_RANGES  = %d 区间 / %d 码点\n  Unicode 版本  = %s\n",
-		out, len(letters), count(letters), len(digits), count(digits), unicode.Version)
+	fmt.Printf("已生成 %s\n  LETTER_RANGES = %d 区间 / %d 码点\n  DIGIT_RANGES  = %d 区间 / %d 码点\n  UPPER_RANGES  = %d 区间 / %d 码点\n  Unicode 版本  = %s\n",
+		out, len(letters), count(letters), len(digits), count(digits), len(uppers), count(uppers), unicode.Version)
 }
 
 // ranges 归并连续码点为闭区间 [(lo, hi), ...]，**升序且互不重叠**。
@@ -128,12 +135,14 @@ const headerTpl = `//! 字符分类表 —— **自动生成，请勿手改**（
 //!
 //! # 为什么不用 Rust std 的近似谓词
 //!
-//! 官方 scanner 用的是 unicode.IsLetter / unicode.IsDigit，而 Rust std：
+//! 官方 scanner 用的是 unicode.IsLetter / unicode.IsDigit（导出面用 unicode.IsUpper），
+//! 而 Rust std：
 //!
 //! | 谓词 | Go（oracle） | Rust std | 差异 |
 //! |---|---|---|---|
 //! | 字母 IsLetter(L*) | %d 码点 | is_alphabetic 147,421 | **多 1,749**（全是 Mn 组合符） |
 //! | 数字 IsDigit(Nd) | %d 码点 | is_numeric 1,924 | **多 1,154**（全是 No） |
+//! | 大写 IsUpper(Lu) | %d 码点 | is_uppercase 2,006 | **多 120**（5 段，全是 Other_Uppercase） |
 //!
 //! 差异是**静默的**，但**不在词元边界上** —— 边界通常相同。
 //!
@@ -155,16 +164,17 @@ const headerTpl = `//! 字符分类表 —— **自动生成，请勿手改**（
 //!
 //! # 表的内容边界
 //!
-//! 两张表**严格等于** unicode.IsLetter / unicode.IsDigit 的区间：
+//! 三张表**严格等于** unicode.IsLetter / unicode.IsDigit / unicode.IsUpper 的区间：
 //!
 //! - **不含代理区**（U+D800..U+DFFF）—— 它不是标量值，char 造不出来
-//! - **不含下划线 U+005F** —— 见 is_letter 的说明
+//! - **只有 LETTER_RANGES 需要补下划线 U+005F** —— 见 is_letter 的说明
+//!   （¶is_upper('_')¶ 是 false，与 Go 一致：¶_¶ 不是大写）
 //!
 //! 区间按码点**升序、互不重叠** —— 这是 lookup 用二分查找的前提。
 `
 
-func writeHeader(b *bytes.Buffer, letters, digits [][2]uint32) {
-	fmt.Fprintf(b, fill(headerTpl), unicode.Version, count(letters), count(digits))
+func writeHeader(b *bytes.Buffer, letters, digits, uppers [][2]uint32) {
+	fmt.Fprintf(b, fill(headerTpl), unicode.Version, count(letters), count(digits), count(uppers))
 }
 
 func writeTable(b *bytes.Buffer, name, doc string, rs [][2]uint32) {
@@ -199,6 +209,38 @@ pub fn is_letter(c: char) -> bool {
 #[inline]
 pub fn is_digit(c: char) -> bool {
     lookup(DIGIT_RANGES, c)
+}
+
+/// 是否是「大写字母」（Unicode 类别 Lu）—— 官方导出标识符判定的那一位。
+///
+/// 对应 ¶go/token.IsExported¶：
+///
+/// ¶¶¶go
+/// func IsExported(name string) bool {
+///     ch, _ := utf8.DecodeRuneInString(name)
+///     return unicode.IsUpper(ch)   // 首码点，不是「名字里有没有大写」
+/// }
+/// ¶¶¶
+///
+/// # 为什么不用 Rust std 的 ¶char::is_uppercase¶
+///
+/// std 的是 **derived ¶Uppercase¶** 属性 = Lu ∪ **Other_Uppercase**，实测多 120 个码点
+/// （5 段，全部是 Nl / So 的「带圈/带框/罗马数字」）：
+///
+/// | 区间 | 码点 | 例子 |
+/// |---|---|---|
+/// | U+2160..U+216F | 16 | Ⅰ（罗马数字一，Nl） |
+/// | U+24B6..U+24CF | 26 | Ⓐ（带圈，So） |
+/// | U+1F130..U+1F149 | 26 | 🄰（带框，So） |
+/// | U+1F150..U+1F169 | 26 | 🅐（反白，So） |
+/// | U+1F170..U+1F189 | 26 | 🅰（方块，So） |
+///
+/// 后果：¶Ⅰx¶ 在 Go 里**不导出**，用 std 就判成导出 —— 而导出判定是**导出面**
+/// （¶ExportSummary¶ / 跨包可见性）的输入，错一个码点就是错一个 API 表面。
+/// 与 M1 的两张表同一个理由（D-M1-6）：**表由 oracle 生成**。
+#[inline]
+pub fn is_upper(c: char) -> bool {
+    lookup(UPPER_RANGES, c)
 }
 
 /// 在升序、互不重叠的区间表里二分查找。

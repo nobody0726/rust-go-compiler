@@ -24,13 +24,18 @@
 //! M3 逐任务落地：**Task 23 = [`package`]**（单包多文件 + `universe ⊃ package ⊃ file`
 //! 三层作用域 + 包名一致性 + 顶层声明名占位 + 文件级 import 名）；
 //! **Task 24 = [`decls`] + [`typeexpr`]**（类型/常量求值、前向引用、声明环、
-//! 版本表接线、dump 根）。块作用域归 Task 25，源码 import 归 Task 27，
+//! 版本表接线、dump 根）；**Task 25 = [`scope`]**（体内作用域：遮蔽 / 未定义 /
+//! 重复声明）；**Task 26 = [`exported`] + [`labels`]**（导出标识符判定 =
+//! `SCP-06` 缺口、标签命名空间与跳转校验、空标识符）。源码 import 归 Task 27，
 //! 显式文件列表的 CLI 侧归 Task 28，导出摘要归 Task 29。
 
 pub mod decls;
+pub mod exported;
+mod labels;
 pub mod package;
 pub mod scope;
 pub mod typeexpr;
 
 pub use decls::collect_decls;
+pub use exported::is_exported;
 pub use package::{Package, Source, load_from_explicit_files, load_sources};
