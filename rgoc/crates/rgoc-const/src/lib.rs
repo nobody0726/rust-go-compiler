@@ -28,6 +28,7 @@ pub mod basic;
 pub mod bigint;
 pub mod bigrat;
 pub mod convert;
+pub mod eval;
 pub mod fold;
 pub mod iota;
 pub mod representable;
@@ -59,6 +60,9 @@ pub use value::{Const, const_from_literal};
 
 /// 常量折叠（定义在 [`fold`]）。
 pub use fold::{fold_binary, fold_compare, fold_unary};
+
+/// 常量表达式求值（定义在 [`eval`]）—— 只看值、不看类型。
+pub use eval::{ConstEnv, EvalOutcome, eval_const_expr};
 
 /// `iota` 与常量声明组展开（定义在 [`iota`]）。
 pub use iota::expand_const_group;

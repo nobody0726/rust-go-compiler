@@ -163,6 +163,12 @@ pub enum DiagCode {
     // ⚠️ 计划与 `M3-tests.md` 冻结稿都写「**左值**非负检查」，**实测是错的**
     // （oracle：`-1 << 2 == -4` 合法）。见 `M3-tests.md` 修订 R1 与
     // `.superpowers/sdd/M3-plan/progress.md` 的 Task 7 Ruling。
+    /// 常量**除数为零**（`/` 与 `%`，整数与浮点都算）—— 官方 `DivByZero`
+    ///
+    /// 实测官方四条都报它：`1/0`、`1%0`、`1.0/0`、`1/0.0`（消息是
+    /// `invalid operation: division by zero`，其中 `invalid operation: `
+    /// 是通用前缀，类别归 `DivByZero`）。
+    TypDivByZero,
     /// 常量**没有值**（`Const::Unknown`）却要参与转换 —— 官方 `InvalidConstVal`
     ///
     /// 与 `TypInvalidConversion` 的区别是**要害**：这条说的是「本来就没有值」
@@ -197,7 +203,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 41] = [
+    pub const ALL: [DiagCode; 42] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -233,6 +239,7 @@ impl DiagCode {
         DiagCode::SynLabelUnused,
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
+        DiagCode::TypDivByZero,
         DiagCode::TypInvalidConstVal,
         DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidShiftCount,
@@ -279,6 +286,7 @@ impl DiagCode {
             DiagCode::SynLabelUnused => "SYN-LABEL-UNUSED",
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
+            DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
