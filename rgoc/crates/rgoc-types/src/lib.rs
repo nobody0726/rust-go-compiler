@@ -22,8 +22,13 @@
 
 pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
+pub mod table;
 pub mod typ;
 
+pub use table::{
+    AliasDef, Field, InterfaceDef, NamedDef, SignatureDef, StructDef, TupleDef, TypeParamDef,
+    TypeTable, UnionDef,
+};
 pub use typ::{
     AliasId, ChanDir, InterfaceId, NamedId, SignatureId, StructId, TYPE_VARIANT_COUNT, TupleId,
     Type, TypeId, TypeParamId, UnionId,
