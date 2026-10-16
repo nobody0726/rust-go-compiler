@@ -13,8 +13,9 @@
 - **M3（符号与类型检查入口）进行中**：native/inline `executing-plans`，ledger =
   `.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
-  已落地 `rgoc-const` / `rgoc-types` 两 crate + `tools/types-oracle`；**Task 1–18 完成**（C7 契约、
-  常量层、类型表示/dump/同一性），下一批 = Task 21+（版本门控 / 包与作用域 / 装载 / 对撞接线 / manifest）
+  已落地 `rgoc-const` / `rgoc-types` 两 crate + `tools/types-oracle`；**Task 1–18/21/22 完成**
+  （C7 契约、常量层、类型表示/dump/同一性、版本门控、类型图合法性），
+  下一批 = **Task 23–30 包模型（`rgoc-load` 仍是空骨架）** → 31–36 对撞接线 → 37 变异 → 38 manifest
 - ⚠️ **本地与远端是平行历史**：本地 main = M3 的 ~20 个提交（基于 0d267ea），远端
   origin/main = 43843d6。**别 force push**；收敛走 `git fetch origin` → `git rebase origin/main`
   （或 merge），评估后再推。`2026-10-16.md` 记了这段分叉的来龙去脉
@@ -47,7 +48,7 @@
 - `IfStmt.cond` 是 `Option<Expr>`；`Follow::Semi` 认三种来源；官方临时 nil 用短命中间形态，不用 `Expr::Bad` 当哨兵
 - `want(f)` 消息由 `tokstring(&Follow)` 一处派生；`syntaxErrorAt` 只实现 default 支；`checkBranches` 门控 = **本函数**无语法错；`BranchStmt.Target` 刻意不建模（回指，**M3 读**）
 - `Pos.base = Option<BaseId>`（NonZeroU32）；file base line/col 必须 **1/1**；base==None ⇒ rel_* 退回绝对
-- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **43** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 8 `TYP-`）
+- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **48** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 13 `TYP-`）
 - 深度守卫挂**三条递归边**：`expr` / `stmt_or_nil` / `type_or_nil`；超限**恰好 1 条** SYN-NESTING-TOO-DEEP
 
 ## 文档索引
