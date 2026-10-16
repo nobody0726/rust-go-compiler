@@ -16,9 +16,11 @@
   已落地 `rgoc-const` / `rgoc-types` 两 crate + `tools/types-oracle`；**Task 1–18/21/22 完成**
   （C7 契约、常量层、类型表示/dump/同一性、版本门控、类型图合法性），
   下一批 = **Task 23–30 包模型（`rgoc-load` 仍是空骨架）** → 31–36 对撞接线 → 37 变异 → 38 manifest
-- ⚠️ **本地与远端是平行历史**：本地 main = M3 的 ~20 个提交（基于 0d267ea），远端
-  origin/main = 43843d6。**别 force push**；收敛走 `git fetch origin` → `git rebase origin/main`
-  （或 merge），评估后再推。`2026-10-16.md` 记了这段分叉的来龙去脉
+- **平行历史已合流**（2026-10-17）：`origin/main`(43843d6) merge 进本地 main。
+  两侧对 `M1-plan`/`M2-plan` 的补勾**逐字节相同** ⇒ 零冲突上代码；只有
+  `.workbuddy/memory/*` 两处冲突，一律取**本地侧**（M3 记录更靠后）。
+  **不得 force push**（远端 43843d6 是已推送的历史，必须留在祖先里）。
+  `2026-10-16.md` 记了这段分叉的来龙去脉
 - 遗留：`-lang` deferred（M3 的 Task 21 会落地按文件版本门控）、`//go:` 未知指令裁决（M3 收下不报错）
 
 ## 环境硬事实
