@@ -12,3 +12,6 @@ workspace = true
 
 [dependencies]
 rgoc-lex = { path = "../rgoc-lex" }
+# `const_from_literal(&rgoc_ast::BasicLit)` 要吃 AST 的字面量节点（`M3-plan.md` Task 5）。
+# 方向：rgoc-lex ◄── rgoc-ast ◄── rgoc-const，**无环**（rgoc-ast 不看常量）。
+rgoc-ast = { path = "../rgoc-ast" }

@@ -3,10 +3,12 @@
 //! # 位置与依赖方向（`D-M3-8` / `D-M3-16`）
 //!
 //! ```text
-//! rgoc-lex ◄── rgoc-const ◄── rgoc-types ◄── rgoc-load
+//! rgoc-lex ◄── rgoc-ast ◄── rgoc-const ◄── rgoc-types ◄── rgoc-load
 //! ```
 //!
-//! 本 crate **只依赖 `rgoc-lex`**（诊断与位置的表示），且 **不得依赖 `rgoc-types`**。
+//! 本 crate 依赖 `rgoc-lex`（诊断与位置）与 `rgoc-ast`（字面量节点，
+//! `const_from_literal(&BasicLit)`），且 **不得依赖 `rgoc-types`**。
+//! `rgoc-ast` 这条边**无环**：AST 层不看常量。
 //!
 //! 这条方向是 `D-M3-16` 说的「解环」逼出来的：`convert_const()` 与 `representable()`
 //! 住在**本 crate**，而它们要吃 `BasicId` + `Sizes`。若把这两个类型放在
@@ -26,6 +28,7 @@
 
 pub mod bigint;
 pub mod bigrat;
+pub mod value;
 
 /// 基本类型的标识（26 个）。
 ///
@@ -55,9 +58,8 @@ pub use bigint::BigInt;
 /// 定义在 [`bigrat`]，这里转导出。
 pub use bigrat::{BigRat, RoundOutcome, RoundResult};
 
-/// 一个常量值。M3/Task 5 填充。
-#[derive(Debug)]
-pub struct Const;
+/// 一个常量值（定义在 [`value`]）。
+pub use value::{Const, const_from_literal};
 
 /// 常量在 [`ConstTable`] 里的下标。
 ///

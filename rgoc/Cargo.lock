@@ -78,6 +78,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rgoc-const"
+version = "0.0.0"
+dependencies = [
+ "rgoc-ast",
+ "rgoc-lex",
+]
+
+[[package]]
 name = "rgoc-driver"
 version = "0.0.0"
 dependencies = [
@@ -101,6 +109,15 @@ name = "rgoc-lex"
 version = "0.0.0"
 
 [[package]]
+name = "rgoc-load"
+version = "0.0.0"
+dependencies = [
+ "rgoc-lex",
+ "rgoc-parse",
+ "rgoc-types",
+]
+
+[[package]]
 name = "rgoc-parse"
 version = "0.0.0"
 dependencies = [
@@ -114,6 +131,14 @@ name = "rgoc-spikes"
 version = "0.0.0"
 dependencies = [
  "rgoc-hir",
+]
+
+[[package]]
+name = "rgoc-types"
+version = "0.0.0"
+dependencies = [
+ "rgoc-const",
+ "rgoc-lex",
 ]
 
 [[package]]
