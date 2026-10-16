@@ -79,22 +79,43 @@
 
 **根遍历**：按 fixture 的**顶层声明源码序**逐条走；每条声明内部：
 
-| 声明形态 | 遍历 |
+| 声明形态 | 根 |
 |---|---|
-| `type D <T>` | **先**给 `D` 本身编一个 `named`/`alias` 条目的号（**先占位**），**再**后序遍历 `<T>` |
-| `var` / `const` / `func`（含方法） | 对声明里的**类型表达式**做后序遍历（先子后父） |
+| `type D <T>` | **`D` 本身**（**定义**，见下） |
+| `var` / `const` | 声明里写出的**类型表达式**（`var x []int` 的 `[]int`；初始化式里的类型**不在**范围内） |
+| `func` / 方法 | 该函数的**签名**（记在 `Defs[名字]` 上，**不是**在类型表达式表里） |
 
-**后序遍历**：对类型表达式 `*E` / `[]E` / `[N]E` / `map[K]V` / `chan E` / `struct{...}` /
-`func(...) (...)` / `interface{...}` / `T1 | T2` —— **先**走子表达式，**再**给本节点编号。
+**`number(T)` 的两条规则**：
 
-**去重**：**同一个类型条目只编号一次**，取**首次出现**的号；再次遇到写同一个号。
+1. **去重**：同一个类型条目**只编号一次**，取**首次出现**的号；再次遇到写同一个号。
+   - 去重按**条目身份**：**定义型**（`named`/`alias`）按定义身份；**基本型**按种类
+     （事实上每个 `BasicKind` 只有一个实例）。
+   - ⚠️ **结构型（pointer/slice/array/map/chan/struct/signature/tuple/interface/union）不去重** ——
+     `[]byte` 在源码里出现两次就**占两个号**。这不是疏漏：两侧都不做结构规范化
+     （`go/types` 不提供），要求「同构即同号」会把一个语义判定偷偷塞进 dump 层。
+2. **后序**：**结构型先子后父**；**定义型（`named`/`alias`）先占号、再下钻其本体**
+   （`Named` 取 underlying / `Alias` 取 RHS）。
+   占号在前是**递归类型终止**的唯一手段（`type N struct{ p *N }`），也**顺带**解决了
+   「引用一个未在本 fixture 里声明的定义」——如 universe 的 `error`（`Named`，本体是
+   `interface{ Error() string }`）——它的本体同样会被拉进来编号。
 
-**为什么 `type` 声明先占位**：递归类型（`type N struct{ p *N }`）必须能终止，
-且官方 checker 也是**先声明后解析 RHS**。这一条同时保证 `named` 的自我引用
-（`p *N` 里的 `N`）指向**同一个** `#号`。
+**逐构造的子节点顺序**（两侧必须一致）：
 
-**循环安全**：结构型节点**不去重**（每次展开），但结构型的无限展开只能经由 `named`
-发生，而 `named` 去重 ⇒ dump 必然有限。
+| 构造 | 先编号的子节点（按此序） | 最后编号 |
+|---|---|---|
+| `pointer` / `slice` / `chan` | elem | 自身 |
+| `array` | elem（**长度不是类型条目**，只在行里以十进制文本出现） | 自身 |
+| `map` | key、value | 自身 |
+| `struct` | 各字段类型（**字段声明序**） | 自身 |
+| `tuple` | 各元素类型（**参数声明序**，含无名参数） | 自身 |
+| `signature` | recv（若有）、params 的**各元素类型**、params 元组、results 的**各元素类型**、results 元组 | 自身 |
+| `interface` | 各方法的签名、项集各 term 的类型、项集（`union`） | 自身 |
+| `union` | 各 term 的类型 | 自身 |
+| `typeparam` | 约束 | 自身 |
+| `named` / `alias` | （见规则 2：本体在**自身之后**） | 自身（**先**） |
+
+**循环安全**：结构型不去重且可能自引用，但自引用只能经由 `named` 发生，
+而 `named` 先占号且去重 ⇒ dump 必然有限。
 
 ---
 
@@ -114,19 +135,23 @@
 | `map` | `map <ref(key)> <ref(value)>` | 无 |
 | `chan` | `chan <dir> <ref(elem)>`，`dir ∈ sendrecv\|sendonly\|recvonly` | 无 |
 
-- `basic名`：`BasicId` 的**小写无空格拼写**，全集 **26** 个（`T-TY-12` 的 H 侧计数器与之对账）：
+- `basic名`：**25 个**，与 `go/types` 的 `BasicKind` **一一对应**（去掉 `Invalid` —— 它走 `invalid` 标签）；
+  拼写为小写无空格形：
 
-  ```
-  bool byte complex64 complex128 error float32 float64 int int8 int16 int32 int64
-  uint uint8 uint16 uint32 uint64 uintptr rune string unsafe_pointer
+  ```text
+  bool int int8 int16 int32 int64 uint uint8 uint16 uint32 uint64 uintptr
+  float32 float64 complex64 complex128 string unsafe_pointer
   untyped_bool untyped_int untyped_rune untyped_float untyped_complex untyped_string untyped_nil
-  invalid
   ```
 
-  （`byte`/`rune` 是 `uint8`/`int32` 的**别名拼写**，官方 `types2` 里是独立 `Basic` 实例，
-  故**保留为独立 token**；`unsafe_pointer` 同理对应 `unsafe.Pointer`。）
-- `len文本`：数组长度的**十进制**文本；长度不是常量或为 `-1`（`[...]T` 未定）时写 **`-`**。
-  非整数长（非法源码）写 **`?`**（配合 `invalid` 条目）。
+  ⚠️ **实测订正（M3/Task 3）**：本契约初稿把 `byte` / `rune` / `error` 当成独立 token，**是错的**。
+  `go/types` 里 `Byte = Uint8`、`Rune = Int32` 是**同一个 `*Basic`**（同一指针 ⇒ 同一 Kind），
+  所以 `byte` dump 成 `basic uint8`、`rune` dump 成 `basic int32`；而 `error` 是
+  **`Named`**（其 underlying 是 `interface{ Error() string }`），走 `named` 标签。
+  25 + 1（`invalid` 标签）= 26 个 `BasicKind`，恰好覆盖全集。
+  `T-TY-12` 的 H 侧计数器对账的是 **25**。
+- `len文本`：数组长度的**十进制**文本；长度未定（`[...]T`）写 **`-`**。
+  （`go/types` 直接给 `int64`，未定为 `-1` ⇒ 写 `-`；非整数长是非法源码，不由本契约兜底。）
 
 ### 4.2 定义与聚合
 
@@ -147,6 +172,9 @@
 - `interface` 的 `t=1` 时**恰一行** `term`；`t=0` 时**无** `term` 行。
 - **约束接口的同一性不进对撞**（`D-M3-13`）：`interface` 的 `term` 行**只在 dump 里出现**，
   用于 `T-TY-17` 的**形状**对撞；`Identical` 判定遇到它按 `U-M3-05` 显式拒绝。
+- ⚠️ **预声明名也可能是 `alias`**（实测，M3/Task 3）：`go/types` 里 `any` 是
+  **`Alias`**（`type any = interface{}`）。所以 `G[T any]` 的约束位置上会出现
+  `alias` 条目，而**不是** `named`。`byte`/`rune` 则连 `alias` 都不是（见 §4.1）。
 
 ### 4.3 数组长度的文本来源
 
@@ -191,3 +219,4 @@ var y *int
 | 日期 | 变更 | 触发 |
 |---|---|---|
 | 2026-10-16 | 新建并冻结（`Task 1`）；把 `M3-tests.md` §5.2 的 8 条规则抽成独立契约，并**补出** §3 编号顺序（原冻结清单未规定，两侧不可能自洽） | M3 开工 |
+| 2026-10-16 | **实测订正（`Task 3`，oracle 落地）**：§4.1 删掉 `byte` / `rune` / `error` 三个 token（`Byte=Uint8`、`Rune=Int32` 同一 `*Basic`；`error` 是 `Named`），basic 全集 **26 → 25**；§3 补「定义型先占号 + 顺带编号本体」「结构型不去重」「逐构造子节点顺序表」三条；§4.2 补「预声明名可能是 `alias`（`any`）」 | `tools/types-oracle` 首次对撞 |
