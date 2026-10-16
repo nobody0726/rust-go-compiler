@@ -169,6 +169,17 @@ pub enum DiagCode {
     /// `invalid operation: division by zero`，其中 `invalid operation: `
     /// 是通用前缀，类别归 `DivByZero`）。
     TypDivByZero,
+    /// 使用了**比该文件生效版本新**的语言特性 —— 官方 `UnsupportedFeature`
+    /// （消息 `"%s requires %s or later"`，`go/types/errors.go:253`）
+    ///
+    /// 「生效版本」按**文件**算（`-lang` 或 `//go:build go1.N` 抬高后的 `max(v, go1.21)`），
+    /// 见 [`crate::version`]。
+    TypFeatureRequiresGoVersion,
+    /// 文件的 `//go:build go1.N` 比当前工具链**新** —— 官方 `TooNew`
+    ///
+    /// 位置取该文件的 `package` **名字**（官方 `check.go:346` 的原话是
+    /// 「Use position of 'package [p]'」，为与 types/types2 对齐）。
+    TypFileRequiresNewerGo,
     /// 常量**没有值**（`Const::Unknown`）却要参与转换 —— 官方 `InvalidConstVal`
     ///
     /// 与 `TypInvalidConversion` 的区别是**要害**：这条说的是「本来就没有值」
@@ -208,6 +219,11 @@ pub enum DiagCode {
     /// `int8(200)` 是「值太大」（这条），`int(1.5)` 是「值不是整数」（那条）。
     /// 官方 `representation()` 也是这么分的（`go/types/const.go` 尾部）。
     TypNumericOverflow,
+    /// 包级 `-lang` 比当前工具链**新** —— 官方 `TooNew`
+    ///
+    /// 位置取 **`files[0]`**（官方 `check.go:315-317`：`check.errorf(files[0], TooNew, …)`，
+    /// 而 `ast.File.Pos()` 是 `package` **关键字**的位置）。
+    TypPackageRequiresNewerGo,
     /// 常量向目标类型量化时被截断（`1.5` 赋给 `int`）—— 官方 `TruncatedFloat`
     ///
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
@@ -235,7 +251,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 45] = [
+    pub const ALL: [DiagCode; 48] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -272,6 +288,8 @@ impl DiagCode {
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
         DiagCode::TypDivByZero,
+        DiagCode::TypFeatureRequiresGoVersion,
+        DiagCode::TypFileRequiresNewerGo,
         DiagCode::TypInvalidConstVal,
         DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidRecursiveType,
@@ -279,6 +297,7 @@ impl DiagCode {
         DiagCode::TypInvalidShiftOperand,
         DiagCode::TypNestingTooDeep,
         DiagCode::TypNumericOverflow,
+        DiagCode::TypPackageRequiresNewerGo,
         DiagCode::TypTruncatedFloat,
         DiagCode::TypUnsupportedConstraintIdentity,
     ];
@@ -322,6 +341,8 @@ impl DiagCode {
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
+            DiagCode::TypFeatureRequiresGoVersion => "TYP-FEATURE-REQUIRES-GO-VERSION",
+            DiagCode::TypFileRequiresNewerGo => "TYP-FILE-REQUIRES-NEWER-GO",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
@@ -329,6 +350,7 @@ impl DiagCode {
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
             DiagCode::TypNestingTooDeep => "TYP-NESTING-TOO-DEEP",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
+            DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
         }

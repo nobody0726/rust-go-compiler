@@ -570,7 +570,7 @@ fn t_a_66_diagcode_冻结() {
 /// `DiagCode::ALL` 的**长度**要跟着新代号一起涨 —— 让「漏了一个代号」有地方可查。
 #[test]
 fn t_a_66_diagcode_总数已更新() {
-    // M1 的 23 个 `LEX-` + M2 的 12 个 `SYN-` + M3 的 10 个 `TYP-`
+    // M1 的 23 个 `LEX-` + M2 的 12 个 `SYN-` + M3 的 13 个 `TYP-`
     // = 3 个早先的（SynExpectedSemicolon / SynInvalidLineDirective / SynUnexpectedToken）
     // + T-AP16 新增 8 个（branches 的 6 类 + goto 的 2 类）
     // + T-AP20 新增 1 个（SynNestingTooDeep，H 判据：官方无此行为）
@@ -581,10 +581,12 @@ fn t_a_66_diagcode_总数已更新() {
     // + M3/Task 17 新增 1 个（TypUnsupportedConstraintIdentity —— 这条**没有**
     //   官方对应物：官方判得了约束接口同一性，M3 形似显式拒绝，见 D-M3-13）
     // + M3/Task 22 新增 2 个（TypInvalidRecursiveType 对官方 `InvalidRecursiveType`；
-    //   TypNestingTooDeep 是 **H 判据**，与 SynNestingTooDeep 同理）。
+    //   TypNestingTooDeep 是 **H 判据**，与 SynNestingTooDeep 同理）
+    // + M3/Task 21 新增 3 个（版本门控：FeatureRequiresGoVersion 对官方
+    //   `UnsupportedFeature`；File/PackageRequiresNewerGo 拆自官方同一个 `TooNew`）。
     assert_eq!(
         DiagCode::ALL.len(),
-        45,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 10 个（TYP-）"
+        48,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 13 个（TYP-）"
     );
 }

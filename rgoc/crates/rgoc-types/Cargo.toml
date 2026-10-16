@@ -11,5 +11,6 @@ description = "M3：类型表示、universe、Identical 判定与按文件的版
 workspace = true
 
 [dependencies]
+rgoc-ast = { path = "../rgoc-ast" }
 rgoc-const = { path = "../rgoc-const" }
 rgoc-lex = { path = "../rgoc-lex" }

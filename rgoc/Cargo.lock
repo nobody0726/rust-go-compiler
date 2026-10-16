@@ -137,6 +137,7 @@ dependencies = [
 name = "rgoc-types"
 version = "0.0.0"
 dependencies = [
+ "rgoc-ast",
  "rgoc-const",
  "rgoc-lex",
 ]
