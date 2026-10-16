@@ -42,6 +42,7 @@
 //! （`C7` §3 规则 1 明写「仅定义型/基本型去重」）—— 两处判据一致，不冲突。
 
 use rgoc_const::{BasicId, ConstId, ConstTable};
+use rgoc_lex::Pos;
 
 use crate::typ::{
     AliasId, ChanDir, InterfaceId, NamedId, SignatureId, StructId, TupleId, Type, TypeId,
@@ -72,6 +73,12 @@ pub struct NamedDef {
     /// 本体。构造协议：`add_named` 之后**立即** `set_named_underlying`
     /// （递归类型要求先占号，所以没做成必填参数）。
     pub underlying: Option<TypeId>,
+    /// 类型名**声明处**的位置（诊断用；`None` = 交给本表的手工构造没给位置）。
+    ///
+    /// 与官方一致：`go/types` 的 `cycleError` 报在**环路径起点的对象**上，
+    /// 而那个对象是类型名声明 —— 所以位置挂在**定义**上，而不是判定入口的参数上
+    /// （Task 22 的 `valid_type` 签名因此没有 `Pos` 参数）。
+    pub pos: Option<Pos>,
 }
 
 /// `alias` 定义（`type D = T`）。
@@ -312,6 +319,7 @@ impl TypeTable {
             self_ty,
             name: name.into(),
             underlying: None,
+            pos: None,
         });
         id
     }
@@ -319,6 +327,14 @@ impl TypeTable {
     /// 填 `named` 的本体。
     pub fn set_named_underlying(&mut self, id: NamedId, t: TypeId) {
         self.named[id.index()].underlying = Some(t);
+    }
+
+    /// 填 `named` 的**声明位置**（诊断用；`M1` 的 `Pos`）。
+    ///
+    /// 官方 `types.TypeName` 悬挂在作用域对象上，位置随对象走；本表不持有作用域，
+    /// 所以把位置挂在**定义**上 —— 见 [`NamedDef::pos`]。
+    pub fn set_named_pos(&mut self, id: NamedId, pos: Pos) {
+        self.named[id.index()].pos = Some(pos);
     }
 
     /// `named` 定义 → 它在 `types` 里的条目（**同一个定义恒等** ⇒ 引用要复用它）。

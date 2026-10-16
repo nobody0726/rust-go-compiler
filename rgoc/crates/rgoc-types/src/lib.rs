@@ -19,7 +19,8 @@
 //!
 //! M3 逐任务落地：Task 13 = [`typ`]（`Type` 的 15 个变体），
 //! Task 14 = [`table`]（arena），Task 15 = [`universe`] / [`object`] / [`scope`]，
-//! Task 16 = [`dump`]（C7），Task 17/18 = [`identical`]（同一性判定）。
+//! Task 16 = [`dump`]（C7），Task 17/18 = [`identical`]（同一性判定），
+//! Task 22 = [`validtype`]（非法递归 / 嵌套深度）。
 //!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
@@ -28,6 +29,7 @@
 //! [`scope`]: crate::scope
 //! [`dump`]: crate::dump
 //! [`identical`]: crate::identical
+//! [`validtype`]: crate::validtype
 
 pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
@@ -38,6 +40,7 @@ pub mod scope;
 pub mod table;
 pub mod typ;
 pub mod universe;
+pub mod validtype;
 
 pub use dump::dump_types;
 pub use identical::{identical, unalias};
@@ -52,3 +55,4 @@ pub use typ::{
     Type, TypeId, TypeParamId, UnionId,
 };
 pub use universe::{declare_universe, declared_names, universe};
+pub use validtype::{MAX_TYPE_NEST_DEPTH, valid_type};

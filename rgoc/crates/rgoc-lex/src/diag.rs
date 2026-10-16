@@ -181,10 +181,27 @@ pub enum DiagCode {
     /// `… truncated to T`（转换语境下官方实测也给这条，见
     /// `go/types/conversions.go:52-93`）/ `constant … overflows T` 的转换形态。
     TypInvalidConversion,
+    /// 类型图里存在**非法的递归**（`type A [1]A`）—— 官方 `InvalidRecursiveType`
+    ///
+    /// 判据是「内存里装得下」：环只要**经过**指针/切片/映射/通道/函数就算合法
+    /// （`type A *A` 是合法的），只有纯由「按值包含」的类型
+    /// （数组元素 / 结构体字段 / 并集项 / 接口项集 / 具名类型的本体）串成的环才非法。
+    /// 对齐 `go/types/validtype.go`（`F9`）。
+    TypInvalidRecursiveType,
     /// 移位计数非法（负 / 非 uint / 超上界）—— 官方 `InvalidShiftCount`
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 类型**嵌套**超过本仓上限（**`H` 判据：官方无此行为**）
+    ///
+    /// 与 `SynNestingTooDeep` 是同一个理由：官方编译器靠 Go 运行时的可增长栈，
+    /// 我们落在固定的宿主栈上，必须自设上限防栈溢出。上限 1000
+    /// （`rgoc-types` 的 `MAX_TYPE_NEST_DEPTH`），每次判定只报一次。
+    ///
+    /// ⚠️ 它**不是**「类型写法非法」：1001 层的 `[1][1]…[1]int` 在 Go 里是合法类型，
+    /// 报出来是**我方能力边界**。所以它**不能**复用 `TypInvalidRecursiveType`
+    /// （那会说用户写错了）——两者必须分开，有测试钉住。
+    TypNestingTooDeep,
     /// 常量**放不进**目标类型 —— 官方 `NumericOverflow`
     ///
     /// 与 `TypTruncatedFloat` 的分界是**有没有丢信息**：
@@ -218,7 +235,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 43] = [
+    pub const ALL: [DiagCode; 45] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -257,8 +274,10 @@ impl DiagCode {
         DiagCode::TypDivByZero,
         DiagCode::TypInvalidConstVal,
         DiagCode::TypInvalidConversion,
+        DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypNestingTooDeep,
         DiagCode::TypNumericOverflow,
         DiagCode::TypTruncatedFloat,
         DiagCode::TypUnsupportedConstraintIdentity,
@@ -305,8 +324,10 @@ impl DiagCode {
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
+            DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypNestingTooDeep => "TYP-NESTING-TOO-DEEP",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
