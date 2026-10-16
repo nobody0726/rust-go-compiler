@@ -98,10 +98,12 @@ type dumper struct {
 	idx   map[types.Type]int
 	order []types.Type
 	info  *types.Info
+	// descending 是**环守卫**（见 number）。
+	descending map[types.Type]bool
 }
 
 func dumpAll(files []*ast.File, fset *token.FileSet, info *types.Info) string {
-	d := &dumper{idx: map[types.Type]int{}, info: info}
+	d := &dumper{idx: map[types.Type]int{}, info: info, descending: map[types.Type]bool{}}
 	for _, f := range files {
 		for _, root := range d.roots(f) {
 			d.number(root)
@@ -167,6 +169,22 @@ func (d *dumper) number(t types.Type) int {
 	if i, ok := d.idx[t]; ok {
 		return i
 	}
+	// 环守卫：**非法程序**的接口类型集可以成环 —— 例如
+	// `var h interface{ comparable; M() }`（`comparable` 与方法的组合是非法用法，
+	// 但检查器仍会造出一个 term 指回该接口自身的类型集）。后序走访在环上会
+	// 无限下钻，最后以 `fatal error: stack overflow` 收场（实测，一次吃掉 1 GB 栈）。
+	//
+	// **合法程序里匿名类型不可能自引用**（自引用必须经 `Named`/`Alias`，
+	// 而那两类是「先占号再下钻」，环在 idx 那一行就被挡掉了）——
+	// 所以这个分支**只**在坏样本上命中，不会改变任何合法样本的编号。
+	//
+	// 命中时响亮地炸（不是静默补号）：对撞样本必须是**合法程序**（C7 §5）。
+	if d.descending[t] {
+		panic("types-oracle: 类型图成环 —— 对撞样本必须是合法 Go 程序" +
+			"（典型触发：interface{ comparable; M() } 这类非法接口用法）")
+	}
+	d.descending[t] = true
+	defer delete(d.descending, t)
 	// 定义型：先占号，再下钻本体（顺序与「后序」相反，这是刻意的）
 	switch x := t.(type) {
 	case *types.Named:
