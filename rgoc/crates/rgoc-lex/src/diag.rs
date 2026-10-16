@@ -203,6 +203,14 @@ pub enum DiagCode {
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 同包多文件里出现了**不一致的包名** —— 官方 `MismatchedPkgName`
+    ///
+    /// 官方 `go/types/check.go:307`（`check.errorf(atPos(file.Package), MismatchedPkgName, …)`）：
+    /// 位置取 **`package` 关键字**处（不是包名标识符处 —— 那是 `BlankPkgName` 的位置），
+    /// 消息 `package %s; expected package %s`。
+    /// 包名以**第一个**文件为准（官方 `initFiles` 的 `case "": pkg.name = name`），
+    /// 不一致的文件被**整个忽略**（不进 `pkg.files`）—— 对齐官方那句 `// ignore this file`。
+    TypMismatchedPkgName,
     /// 类型**嵌套**超过本仓上限（**`H` 判据：官方无此行为**）
     ///
     /// 与 `SynNestingTooDeep` 是同一个理由：官方编译器靠 Go 运行时的可增长栈，
@@ -251,7 +259,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 48] = [
+    pub const ALL: [DiagCode; 49] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -295,6 +303,7 @@ impl DiagCode {
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypMismatchedPkgName,
         DiagCode::TypNestingTooDeep,
         DiagCode::TypNumericOverflow,
         DiagCode::TypPackageRequiresNewerGo,
@@ -348,6 +357,7 @@ impl DiagCode {
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypMismatchedPkgName => "TYP-MISMATCHED-PKG-NAME",
             DiagCode::TypNestingTooDeep => "TYP-NESTING-TOO-DEEP",
             DiagCode::TypNumericOverflow => "TYP-NUMERIC-OVERFLOW",
             DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",

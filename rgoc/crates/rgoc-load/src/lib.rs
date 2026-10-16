@@ -3,7 +3,9 @@
 //! # 位置与依赖方向
 //!
 //! ```text
-//! rgoc-lex ◄── rgoc-const ◄── rgoc-types ◄── rgoc-load
+//! rgoc-lex ◄── rgoc-ast ◄── rgoc-const ◄── rgoc-types ◄── rgoc-load
+//!                                               ▲
+//!                              rgoc-lex ◄── rgoc-parse
 //! ```
 //!
 //! 本 crate 在链条末端：它把 `rgoc-parse` 的语法树按**包**组织起来，
@@ -19,34 +21,11 @@
 //!
 //! # 状态
 //!
-//! **M3/Task 2 只建骨架**：[`Package`] 是空 struct，[`load_from_explicit_files`]
-//! 是**未被接线**的桩。详见该函数的文档。
+//! M3 逐任务落地：**Task 23 = [`package`]**（单包多文件 + `universe ⊃ package ⊃ file`
+//! 三层作用域 + 包名一致性 + 顶层声明名占位 + 文件级 import 名）。
+//! 类型/常量求值顺序归 Task 24，块作用域归 Task 25，源码 import 归 Task 27，
+//! 显式文件列表的 CLI 侧归 Task 28，导出摘要归 Task 29。
 
-use std::path::PathBuf;
+pub mod package;
 
-use rgoc_lex::DiagBag;
-
-/// 一个已装载的包。
-///
-/// M3/Task 23 填充（包名、文件表、包作用域、导出摘要……）。
-#[derive(Debug)]
-pub struct Package;
-
-/// 从一个**显式的文件列表**装载一个包 —— M3 唯一的装载入口。
-///
-/// # ⚠️ 本桩**刻意不被任何东西调用**
-///
-/// 它现在返回「空包 + 空诊断」，也就是**「一切正常」**。那个语义在
-/// `M3-plan.md` Task 28 之前**没有资格被相信**（装载、作用域、类型检查都还没写）。
-///
-/// 所以这里不把它接给 `rgoc types`：CLI 此刻**直接显式报错**
-/// （见 `rgoc-driver` 的 `types_cmd`）。一个「调了就得到成功」的桩比没有更危险
-/// —— 它会让「还没实现」伪装成「检查通过」。Task 28 起它才是真入口。
-///
-/// 参数 `lang` 是 `-lang go1.N` 的覆盖值；`None` ⇒ 按每个文件自己的
-/// `//go:build` 版本（`D-M3-15`：版本门控**按文件**）。
-pub fn load_from_explicit_files(files: &[PathBuf], lang: Option<&str>) -> (Package, DiagBag) {
-    // 占位实现：明天（Task 28）这里会真的读文件、解析、建作用域。
-    let _ = (files, lang);
-    (Package, DiagBag::new())
-}
+pub use package::{Package, Source, load_from_explicit_files, load_sources};

@@ -50,9 +50,11 @@ fn 代号表恰为冻结总数且无重复() {
     // Task 21 再 +3（版本门控）：`TypFeatureRequiresGoVersion`（官方 `UnsupportedFeature`）、
     // `TypFileRequiresNewerGo` / `TypPackageRequiresNewerGo`（官方同一个 `TooNew`，
     // 这里**拆两条** —— 位置与消息都不同，合成一条会让「哪一层太新」丢失）。
+    // Task 23 再 +1（包模型）：`TypMismatchedPkgName`（官方 `MismatchedPkgName`，
+    // `go/types/check.go:307`）⇒ 共 **49**。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 48);
+    assert_eq!(DiagCode::ALL.len(), 49);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

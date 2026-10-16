@@ -11,6 +11,7 @@ description = "M3：单包多文件装载、源码 import 与导出摘要。"
 workspace = true
 
 [dependencies]
+rgoc-ast = { path = "../rgoc-ast" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-parse = { path = "../rgoc-parse" }
 rgoc-types = { path = "../rgoc-types" }

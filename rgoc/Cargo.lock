@@ -112,6 +112,7 @@ version = "0.0.0"
 name = "rgoc-load"
 version = "0.0.0"
 dependencies = [
+ "rgoc-ast",
  "rgoc-lex",
  "rgoc-parse",
  "rgoc-types",
