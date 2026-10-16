@@ -21,32 +21,25 @@
 //!
 //! # 状态
 //!
-//! **M3/Task 2 只建骨架。** 本文件里的类型都是**不可构造的占位**
-//! （空 enum / 空 struct）：它们让骨架能编译，但**造不出值**，
-//! 所以「还没实现」在类型层面就成立。真正的表示与算法从 Task 4
-//! （`BigInt`/`BigRat`）与 Task 5（`Const`）开始填。
+//! M3 的常量核心已经落地：`BigInt`/`BigRat`（Task 4）、`Const` 与字面量
+//! （Task 5）、折叠（Task 6–7）、`BasicId`/`Sizes`/转换（Task 8）。
 
+pub mod basic;
 pub mod bigint;
 pub mod bigrat;
+pub mod convert;
 pub mod fold;
+pub mod sizes;
 pub mod value;
 
-/// 基本类型的标识（26 个）。
-///
-/// 全集与拼写写在 `docs/contracts/C7-type-dump.md` §4.1（`T-TY-12` 的
-/// 计数断言与之对账）。M3/Task 14 填充变体。
-#[derive(Debug)]
-pub enum BasicId {}
+/// 基本类型标识（25 个）—— 定义在 [`basic`]，`rgoc-types` 转导出。
+pub use basic::BasicId;
 
-/// 目标平台的整数/指针字长规格。
-///
-/// `int` / `uint` / `uintptr` / 指针宽度是**平台相关**的，而常量可表示性判定
-/// （`Representable`）必须知道它们 —— 这是官方 `types2/const.go:76`
-/// 的 `representableConst(x, check, typ, rounded)` 里 `check` 那一半的作用。
-///
-/// M3/Task 8（首个消费者）填充，宿主值 `HOST_ARM64` 亦在那里给出。
-#[derive(Debug)]
-pub struct Sizes;
+/// 平台尺寸（`int`/`uint`/`uintptr` 的字节宽）—— 定义在 [`sizes`]。
+pub use sizes::Sizes;
+
+/// 无类型常量的默认类型与常量转换（定义在 [`convert`]）。
+pub use convert::{convert_const, default_type_of, untyped_default_type};
 
 /// 任意精度整数（常量与数组长度的底座）。M3/Task 4 填充。
 ///

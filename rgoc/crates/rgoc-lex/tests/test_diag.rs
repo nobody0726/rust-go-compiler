@@ -26,7 +26,7 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 
 #[test]
 fn 代号表恰为冻结总数且无重复() {
-    // 37 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 2 个 M3 类型（`TYP-`）。
+    // 40 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 5 个 M3 类型（`TYP-`）。
     //
     // `SYN-` 段的 12 个 = `T-AP06`/`T-AP15` 落的 3 个（`SynExpectedSemicolon` /
     // `SynInvalidLineDirective` / `SynUnexpectedToken`）+ `T-AP16` 从官方
@@ -39,7 +39,7 @@ fn 代号表恰为冻结总数且无重复() {
     // 否则「按代号比对」时与 oracle 的类别对不上）。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 37);
+    assert_eq!(DiagCode::ALL.len(), 40);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

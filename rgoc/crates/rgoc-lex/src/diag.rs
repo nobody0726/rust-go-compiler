@@ -163,10 +163,27 @@ pub enum DiagCode {
     // ⚠️ 计划与 `M3-tests.md` 冻结稿都写「**左值**非负检查」，**实测是错的**
     // （oracle：`-1 << 2 == -4` 合法）。见 `M3-tests.md` 修订 R1 与
     // `.superpowers/sdd/M3-plan/progress.md` 的 Task 7 Ruling。
+    /// 常量**没有值**（`Const::Unknown`）却要参与转换 —— 官方 `InvalidConstVal`
+    ///
+    /// 与 `TypInvalidConversion` 的区别是**要害**：这条说的是「本来就没有值」
+    /// （畸形字面量、除零、折叠失败），那条说的是「有值但转不过去」。
+    /// 混成一个代号会把「上游出了内部不一致」伪装成「用户写错了」。
+    TypInvalidConstVal,
+    /// 常量转换不合法 —— 官方 `InvalidConversion`
+    ///
+    /// 覆盖官方的三种文案：`cannot convert … to type T` /
+    /// `… truncated to T`（转换语境下官方实测也给这条，见
+    /// `go/types/conversions.go:52-93`）/ `constant … overflows T` 的转换形态。
+    TypInvalidConversion,
     /// 移位计数非法（负 / 非 uint / 超上界）—— 官方 `InvalidShiftCount`
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 常量向目标类型量化时被截断（`1.5` 赋给 `int`）—— 官方 `TruncatedFloat`
+    ///
+    /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
+    /// 它服务**赋值/声明**语境：`const x int = 1.5` ⇒ 「1.5 truncated to integer」。
+    TypTruncatedFloat,
 }
 
 impl DiagCode {
@@ -174,7 +191,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 37] = [
+    pub const ALL: [DiagCode; 40] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -210,8 +227,11 @@ impl DiagCode {
         DiagCode::SynLabelUnused,
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
+        DiagCode::TypInvalidConstVal,
+        DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypTruncatedFloat,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -252,8 +272,11 @@ impl DiagCode {
             DiagCode::SynLabelUnused => "SYN-LABEL-UNUSED",
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
+            DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
+            DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
         }
     }
 }

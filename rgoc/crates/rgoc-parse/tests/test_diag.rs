@@ -570,15 +570,16 @@ fn t_a_66_diagcode_冻结() {
 /// `DiagCode::ALL` 的**长度**要跟着新代号一起涨 —— 让「漏了一个代号」有地方可查。
 #[test]
 fn t_a_66_diagcode_总数已更新() {
-    // M1 的 23 个 `LEX-` + M2 的 12 个 `SYN-` + M3 的 2 个 `TYP-`
+    // M1 的 23 个 `LEX-` + M2 的 12 个 `SYN-` + M3 的 5 个 `TYP-`
     // = 3 个早先的（SynExpectedSemicolon / SynInvalidLineDirective / SynUnexpectedToken）
     // + T-AP16 新增 8 个（branches 的 6 类 + goto 的 2 类）
     // + T-AP20 新增 1 个（SynNestingTooDeep，H 判据：官方无此行为）
-    // + M3/Task 7 新增 2 个（TypInvalidShiftCount / TypInvalidShiftOperand，
-    //   与官方 `go/types` 的 `InvalidShiftCount`/`InvalidShiftOperand` 一一对应）。
+    // + M3 新增 5 个（全部与官方 `go/types` 的 Code 一一对应，**刻意不拆细**：
+    //   TypInvalidConstVal / TypInvalidConversion / TypInvalidShiftCount /
+    //   TypInvalidShiftOperand / TypTruncatedFloat）。
     assert_eq!(
         DiagCode::ALL.len(),
-        37,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 2 个（SHIFT）"
+        40,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 5 个（TYP-）"
     );
 }
