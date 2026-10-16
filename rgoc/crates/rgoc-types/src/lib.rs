@@ -20,7 +20,9 @@
 //! M3 逐任务落地：Task 13 = [`typ`]（`Type` 的 15 个变体），
 //! Task 14 = [`table`]（arena），Task 15 = [`universe`] / [`object`] / [`scope`]，
 //! Task 16 = [`dump`]（C7），Task 17/18 = [`identical`]（同一性判定），
-//! Task 21 = [`version`]（版本门控），Task 22 = [`validtype`]（非法递归 / 嵌套深度）。
+//! Task 21 = [`version`]（版本门控），Task 22 = [`validtype`]（非法递归 / 嵌套深度），
+//! **Task 23 = [`scope`] 改竞技场**（`ScopeId` / `ScopeTable` / `ScopeRef`，
+//! 见该模块文档的 Ruling 23-1）。
 //!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
@@ -47,7 +49,7 @@ pub mod version;
 pub use dump::dump_types;
 pub use identical::{identical, unalias};
 pub use object::{ObjKind, Object};
-pub use scope::Scope;
+pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};
 pub use table::{
     AliasDef, Field, InterfaceDef, NamedDef, SignatureDef, StructDef, TupleDef, TypeParamDef,
     TypeTable, UnionDef,

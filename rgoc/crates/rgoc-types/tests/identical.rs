@@ -448,9 +448,10 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
     // ⑤ universe 里的 `comparable` 对象真的落在拒绝侧
     //    （把「表示里有位置」与「判定会拒绝」两端接上）
     let mut u_tt = TypeTable::new();
-    let scope = rgoc_types::declare_universe(&mut u_tt);
-    let cmp_obj = scope.lookup("comparable").and_then(|o| o.typ).unwrap();
-    let any_obj = scope.lookup("any").and_then(|o| o.typ).unwrap();
+    let mut u_st = rgoc_types::ScopeTable::new();
+    let u = rgoc_types::declare_universe(&mut u_tt, &mut u_st);
+    let cmp_obj = u_st.lookup(u, "comparable").and_then(|o| o.typ).unwrap();
+    let any_obj = u_st.lookup(u, "any").and_then(|o| o.typ).unwrap();
     assert_eq!(
         refused(&u_tt, cmp_obj, any_obj),
         DiagCode::TypUnsupportedConstraintIdentity

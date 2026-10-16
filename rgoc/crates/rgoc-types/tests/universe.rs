@@ -21,7 +21,8 @@ use rgoc_types::{Type, TypeTable, declared_names, universe};
 
 #[test]
 fn 名字全集恰好是那_44_个() {
-    let (s, _tt) = universe();
+    let (st, u, _tt) = universe();
+    let s = st.scope(u);
     let mut got: Vec<&str> = s.names().collect();
     got.sort_unstable();
     let mut want: Vec<&str> = vec![
@@ -82,7 +83,8 @@ fn 名字全集恰好是那_44_个() {
 
 #[test]
 fn 种类分区正确() {
-    let (s, _tt) = universe();
+    let (st, u, _tt) = universe();
+    let s = st.scope(u);
     // 内建与 Func **分开**：内建不能当值传递
     for n in ["len", "cap", "make", "new", "append"] {
         assert_eq!(s.lookup(n).map(|o| o.kind), Some(ObjKind::Builtin), "{n}");
@@ -100,7 +102,8 @@ fn 种类分区正确() {
 
 #[test]
 fn byte_与_rune_折到本体() {
-    let (s, tt) = universe();
+    let (st, u, tt) = universe();
+    let s = st.scope(u);
     let byte_ty = s.lookup("byte").and_then(|o| o.typ).expect("byte 有类型");
     let rune_ty = s.lookup("rune").and_then(|o| o.typ).expect("rune 有类型");
     // 实测 oracle：`var a byte` ⇒ `basic uint8`、`var b rune` ⇒ `basic int32`
@@ -110,7 +113,8 @@ fn byte_与_rune_折到本体() {
 
 #[test]
 fn error_是_named_且本体是_error_方法集() {
-    let (s, tt) = universe();
+    let (st, u, tt) = universe();
+    let s = st.scope(u);
     let ty = s.lookup("error").and_then(|o| o.typ).expect("error 有类型");
     // 实测 oracle：`var e error` ⇒ `named` + `interface 1 0` + `method "Error"`
     let Type::Named(nid) = tt.type_of(ty) else {
@@ -151,7 +155,8 @@ fn error_是_named_且本体是_error_方法集() {
 
 #[test]
 fn any_是_alias_且右侧是空接口() {
-    let (s, tt) = universe();
+    let (st, u, tt) = universe();
+    let s = st.scope(u);
     let ty = s.lookup("any").and_then(|o| o.typ).expect("any 有类型");
     // 实测 oracle：`var y any` ⇒ `alias 9` + `9 interface 0 0`
     let Type::Alias(aid) = tt.type_of(ty) else {
@@ -170,7 +175,8 @@ fn any_是_alias_且右侧是空接口() {
 
 #[test]
 fn comparable_是特殊约束而不是普通类型名() {
-    let (s, tt) = universe();
+    let (st, u, tt) = universe();
+    let s = st.scope(u);
     let ty = s
         .lookup("comparable")
         .and_then(|o| o.typ)
@@ -203,7 +209,8 @@ fn comparable_是特殊约束而不是普通类型名() {
 
 #[test]
 fn 常量的值_true_false_有_iota_没有() {
-    let (s, tt) = universe();
+    let (st, u, tt) = universe();
+    let s = st.scope(u);
     assert_eq!(
         s.lookup("true").and_then(|o| o.val.clone()),
         Some(Const::Bool(true))
@@ -229,7 +236,8 @@ fn 常量的值_true_false_有_iota_没有() {
 
 #[test]
 fn 内建函数只登记名字与种类() {
-    let (s, _tt) = universe();
+    let (st, u, _tt) = universe();
+    let s = st.scope(u);
     for n in ["len", "cap", "make", "new", "panic", "recover"] {
         let o = s.lookup(n).expect(n);
         assert_eq!(o.kind, ObjKind::Builtin);
@@ -244,7 +252,9 @@ fn 检查器的表可以自己声明_universe() {
     // `declare_universe` 的主用法：声明进检查器**同一张**表 ——
     // fixture 引用 `error` 时 dump 才能把它拉进来编号（实测 oracle 正是如此）
     let mut tt = TypeTable::new();
-    let s = rgoc_types::declare_universe(&mut tt);
+    let mut st = rgoc_types::ScopeTable::new();
+    let u = rgoc_types::declare_universe(&mut tt, &mut st);
+    let s = st.scope(u);
     assert_eq!(s.len(), 44);
     let error_ty = s.lookup("error").and_then(|o| o.typ).expect("有 error");
     assert_eq!(

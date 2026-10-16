@@ -26,13 +26,13 @@
 //!
 //! 检查器要把 universe **声明进它自己那张表**（fixture 引用 `error` 时，
 //! dump 必须把 `error` 拉进来编号 —— 实测 oracle 正是如此），所以主入口收
-//! `&mut TypeTable`。[`universe()`] 只是「自带一张表」的便利包装（测试与
-//! 独立使用）。
+//! `&mut TypeTable`（Task 23 起还收 `&mut ScopeTable`）。[`universe()`] 只是
+//! 「自带两张表」的便利包装（测试与独立使用）。
 
 use rgoc_const::{BasicId, Const};
 
 use crate::object::{ObjKind, Object};
-use crate::scope::Scope;
+use crate::scope::{ScopeId, ScopeKind, ScopeTable};
 use crate::table::TypeTable;
 
 /// 预声明**类型名**（22 个：18 个基本名 + `byte`/`rune` 两个别名拼写
@@ -81,7 +81,7 @@ pub const UNIVERSE_SIZE: usize = 22 + 3 + 1 + 18;
 /// universe 的全部名字，**按字典序**（`UNIVERSE_SIZE` 个）。
 ///
 /// 它是 [`declare_universe`] 会登记的名字集，**与登记的先后无关** ——
-/// 供测试与报告做「清单对账」（`Scope::names()` 的序来自表实现，
+/// 供测试与报告做「清单对账」（[`crate::scope::Scope::names`] 的序来自表实现，
 /// 这里是清单自身的规范序）。
 #[must_use]
 pub fn declared_names() -> Vec<&'static str> {
@@ -96,18 +96,22 @@ pub fn declared_names() -> Vec<&'static str> {
     v
 }
 
-/// 把预声明对象声明进 `tt`，返回 **universe 作用域**（它拥有那些对象）。
+/// 把预声明对象声明进 `tt` 与作用域表 `st`，返回 **universe 作用域**（它拥有那些对象）。
 ///
-/// 返回的 `Scope<'static>` 没有父 —— 它是作用域链的底。
-#[must_use]
-pub fn declare_universe(tt: &mut TypeTable) -> Scope<'static> {
-    let mut s = Scope::root();
+/// 返回的层没有父 —— 它是作用域链的底（[`ScopeKind::Universe`]）。
+///
+/// # 为什么要收 `&mut ScopeTable`（`Task 23` Ruling 23-1）
+///
+/// 作用域自 Task 23 起是**竞技场**（[`crate::scope`] 的模块文档有完整理由）：
+/// 层只能由 [`ScopeTable`] 产出。universe 是唯一合法的**根**，所以它必须从表里建。
+pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
+    let u = st.root(ScopeKind::Universe);
 
     // ① 基本类型名（含 byte/rune 的别名拼写）
     for name in TYPE_NAMES {
         if let Some(b) = basic_name_to_id(name) {
             let ty = tt.add_basic(b);
-            s.insert(Object::with_type(ObjKind::TypeName, name, ty));
+            st.insert(u, Object::with_type(ObjKind::TypeName, name, ty));
         }
     }
 
@@ -123,7 +127,7 @@ pub fn declare_universe(tt: &mut TypeTable) -> Scope<'static> {
     let err_iface = tt.add_interface(vec![("Error".to_string(), sig_ty)], None, false);
     let err_iface_ty = tt.interface_type(err_iface);
     tt.set_named_underlying(error_ty, err_iface_ty);
-    s.insert(Object::with_type(ObjKind::TypeName, "error", error_self));
+    st.insert(u, Object::with_type(ObjKind::TypeName, "error", error_self));
 
     // ③ `any`：**alias**，右侧 `interface{}`
     let any_ty = tt.add_alias("any");
@@ -131,48 +135,51 @@ pub fn declare_universe(tt: &mut TypeTable) -> Scope<'static> {
     let empty_iface = tt.add_interface(Vec::new(), None, false);
     let empty_iface_ty = tt.interface_type(empty_iface);
     tt.set_alias_rhs(any_ty, empty_iface_ty);
-    s.insert(Object::with_type(ObjKind::TypeName, "any", any_self));
+    st.insert(u, Object::with_type(ObjKind::TypeName, "any", any_self));
 
     // ④ `comparable`：预声明**特殊约束接口**（`F8`：不是普通类型名）
     let cmp_iface = tt.add_interface(Vec::new(), None, true);
     let cmp_ty = tt.interface_type(cmp_iface);
-    s.insert(Object::with_type(ObjKind::TypeName, "comparable", cmp_ty));
+    st.insert(
+        u,
+        Object::with_type(ObjKind::TypeName, "comparable", cmp_ty),
+    );
 
     // ⑤ 常量：`true`/`false` 有值，`iota` **没有**（值随组内位置变）
     let untyped_bool = tt.add_basic(BasicId::UntypedBool);
-    s.insert(Object::const_with_val(
-        "true",
-        untyped_bool,
-        Const::Bool(true),
-    ));
-    s.insert(Object::const_with_val(
-        "false",
-        untyped_bool,
-        Const::Bool(false),
-    ));
+    st.insert(
+        u,
+        Object::const_with_val("true", untyped_bool, Const::Bool(true)),
+    );
+    st.insert(
+        u,
+        Object::const_with_val("false", untyped_bool, Const::Bool(false)),
+    );
     let untyped_int = tt.add_basic(BasicId::UntypedInt);
-    s.insert(Object::with_type(ObjKind::Const, "iota", untyped_int));
+    st.insert(u, Object::with_type(ObjKind::Const, "iota", untyped_int));
 
     // ⑥ `nil`
     let untyped_nil = tt.add_basic(BasicId::UntypedNil);
-    s.insert(Object::with_type(ObjKind::Nil, "nil", untyped_nil));
+    st.insert(u, Object::with_type(ObjKind::Nil, "nil", untyped_nil));
 
     // ⑦ 内建函数：只有名字与种类（签名不在 M3 范围 ⇒ `open_gaps`）
     for name in BUILTIN_NAMES {
-        s.insert(Object::new(ObjKind::Builtin, name));
+        st.insert(u, Object::new(ObjKind::Builtin, name));
     }
 
-    s
+    u
 }
 
 /// 自带一张表的便利包装（`declare_universe` 的主用法是往检查器的表里声明）。
 ///
-/// 返回 `(universe 作用域, 表)`；表**拥有** universe 的类型条目。
+/// 返回 `(作用域表, universe 层, 类型表)`：作用域表**拥有**那些层，
+/// 类型表**拥有**那些类型条目（universe 的对象引用它们的 [`crate::TypeId`]）。
 #[must_use]
-pub fn universe() -> (Scope<'static>, TypeTable) {
+pub fn universe() -> (ScopeTable, ScopeId, TypeTable) {
     let mut tt = TypeTable::new();
-    let s = declare_universe(&mut tt);
-    (s, tt)
+    let mut st = ScopeTable::new();
+    let u = declare_universe(&mut tt, &mut st);
+    (st, u, tt)
 }
 
 /// 预声明类型名 → `BasicId`（**只有基本类型名**；`byte`/`rune` 折到本体）。
@@ -249,8 +256,11 @@ mod tests {
 
     #[test]
     fn 声明的对象数等于_universe_size() {
-        let (s, _tt) = universe();
+        let (st, u, _tt) = universe();
+        let s = st.scope(u);
         assert_eq!(s.len(), UNIVERSE_SIZE);
         assert_eq!(s.depth(), 1, "universe 是最外层，没有父");
+        assert_eq!(s.kind(), ScopeKind::Universe);
+        assert_eq!(st.len(), 1, "只有 universe 一层");
     }
 }

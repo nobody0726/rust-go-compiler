@@ -328,7 +328,8 @@ fn t_ty_17_interface_方法集与项集() {
 
     // ③ `comparable` 与空接口**同形**（都是 `interface 0 0`）——
     //    这是「表示做宽」要留住的那一点在 dump 里看不见的证据
-    let (u_scope, u_tt) = universe();
+    let (u_st, u, u_tt) = universe();
+    let u_scope = u_st.scope(u);
     let cmp_ty = u_scope.lookup("comparable").and_then(|o| o.typ).unwrap();
     let any_ty = u_scope.lookup("any").and_then(|o| o.typ).unwrap();
     assert_eq!(
@@ -437,9 +438,10 @@ fn basic_按_basic_id_去重_同一张表里允许多个条目() {
     // 若两个 `basic int` 条目各占一个号，dump 就会与 oracle 分叉（实测 oracle：
     // `func g() (int, error)` 把 universe 的 `error` 拉了进来 ⇒ 必须是同一个号）。
     let mut tt = TypeTable::new();
-    let u = declare_universe(&mut tt);
-    let universe_int = u
-        .lookup("int")
+    let mut u_st = rgoc_types::ScopeTable::new();
+    let u = declare_universe(&mut tt, &mut u_st);
+    let universe_int = u_st
+        .lookup(u, "int")
         .and_then(|o| o.typ)
         .expect("universe 有 int");
     // 模拟 fixture 又造了一个 `int`（`add_basic` 不去重）
