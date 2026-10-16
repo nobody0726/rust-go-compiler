@@ -22,8 +22,11 @@ rgoc/target/
 *~
 
 # ── Go 工具链构建产物（tools/ 下的 oracle 一律 `go run .`，不留二进制）──
-# 教训（M3/Task 3）：一次 `go build` 把 4.7 MB 的 arm64 ELF 带进了提交。
-# 该产物与平台绑定、且与本仓「只在容器内跑」的口径重复 ⇒ 不入库。
+# 教训（M3/Task 15/16 清理）：一次 `go build` 就把 arm64 ELF 带进了提交
+# （`typesoracle` 4.7 MB、`astoracle` 2.7 MB）。该产物与平台绑定、
+# 与本仓「只在容器内跑」的口径重复、还会随源码改动过期 ⇒ 一律不入库。
+# 二进制名 = Go module 名（即目录名），故逐目录列出。
+tools/ast-oracle/astoracle
 tools/types-oracle/typesoracle
 
 # ── Superpowers 执行账本（临时工作区，不入库）─────────────────────────
