@@ -33,8 +33,11 @@ use rgoc_ast::{AstFile, Decl, ImportDecl};
 use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, FileTable, Pos};
 use rgoc_parse::parse_file_in;
 use rgoc_types::{
-    ObjKind, Object, ScopeId, ScopeKind, ScopeRef, ScopeTable, TypeTable, declare_universe,
+    ObjKind, Object, ScopeId, ScopeKind, ScopeRef, ScopeTable, TypeId, TypeTable, Versions,
+    declare_universe, pkg_versions,
 };
+
+use crate::decls::collect_decls;
 
 /// 一个已装载的包。
 ///
@@ -65,6 +68,19 @@ pub struct Package {
     pub scope: ScopeId,
     /// 每个被接受文件 → 它的**文件作用域**（`import` 名住在这里）。
     file_scopes: Vec<(FileId, ScopeId)>,
+    /// 每个文件生效的语言版本（`D-M3-15`：版本**按文件**）。
+    ///
+    /// 由 [`load_sources`] 在装载时算好（`pkg_versions` 的两处 `TooNew` 诊断
+    /// 也在那时进诊断袋）。M3 还没有「门控点」来消费它（有门控的地方都在
+    /// M4+），所以它现在只是**如实记录**各文件版本 —— 但接线在这里就位，
+    /// 免得以后加门控时要回头改装载入口。
+    pub versions: Versions,
+    /// **dump 根**（`C7` §3 口径，声明序）—— [`collect_decls`] 填。
+    ///
+    /// 谁消费它：`rgoc-types::dump_types(tt, &pkg.type_roots)`。
+    /// 顺序不是「类型表里的下标序」：表的下标是**创建序**，而根序是**声明序**
+    /// （`C7` §3 冻结的正是后者，节 2 的编号规则要求两侧遍历顺序一致）。
+    pub type_roots: Vec<TypeId>,
     /// 读不到的文件（路径, 原因）。
     ///
     /// 为什么不报诊断：`go/types` **不读文件**（调用方读），所以官方没有
@@ -118,8 +134,6 @@ pub type Source<'a> = (&'a str, &'a [u8]);
 ///
 /// `lang` 是 `-lang go1.N` 的覆盖值；`None` ⇒ 按每个文件自己的
 /// `//go:build` 版本（`D-M3-15`：版本门控**按文件**）。
-/// ⚠️ **本任务不消费它**：版本门控的消费者是 Task 24（`pkg_versions` 的接线），
-/// 现在提前接上只会造出一个「看着在判、其实没判」的位置。
 pub fn load_from_explicit_files(
     tt: &mut TypeTable,
     files: &[PathBuf],
@@ -153,8 +167,6 @@ pub fn load_sources(
     sources: &[Source<'_>],
     lang: Option<&str>,
 ) -> (Package, DiagBag) {
-    let _ = lang; // 版本门控的接线在 Task 24（见 `load_from_explicit_files` 的说明）
-
     let mut bag = DiagBag::new();
     let mut file_table = FileTable::new();
     let mut scopes = ScopeTable::new();
@@ -169,6 +181,8 @@ pub fn load_sources(
         scopes,
         scope: pkg_scope,
         file_scopes: Vec::new(),
+        versions: Versions::default(),
+        type_roots: Vec::new(),
         skipped: Vec::new(),
     };
 
@@ -234,6 +248,20 @@ pub fn load_sources(
     }
 
     pkg.file_table = file_table;
+
+    // ⑤ 版本表（`D-M3-15`）：每个文件的生效版本 + 两处 `TooNew` 诊断
+    let refs: Vec<&AstFile> = pkg.asts.iter().collect();
+    let (versions, vbag) = pkg_versions(lang, &refs);
+    for d in vbag.into_sorted() {
+        bag.push(d);
+    }
+    pkg.versions = versions;
+
+    // ⑥ 声明收集与求值（Task 24）：类型表达式、常量、dump 根。
+    //    放在版本之后是**有意的**：解析类型时要能问「这个文件允许哪些特性」
+    //    （M3 还没有门控点，但顺序先按将来正确的形状摆）。
+    collect_decls(&mut pkg, tt, &mut bag);
+
     (pkg, bag)
 }
 

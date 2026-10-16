@@ -6,9 +6,10 @@
 
 use std::fs;
 
+use rgoc_const::{BigInt, Const};
 use rgoc_lex::DiagCode;
 use rgoc_load::{load_from_explicit_files, load_sources};
-use rgoc_types::{ObjKind, ScopeKind, TypeTable};
+use rgoc_types::{ObjKind, ScopeKind, Type, TypeTable};
 
 /// 把 `(文件名, 源码)` 对转成装载器的入参。
 fn src(pairs: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
@@ -229,17 +230,30 @@ fn 同层重名先声明者胜() {
     );
 }
 
-/// 占位对象**没有**类型与值（那两样归 Task 24 求值）。
+/// 装载**之后**对象已求值（类型 + 值）—— 两遍式的分界在装载**内部**，
+/// 从 `Package` 外面看不到「占位」那个中间态。
+///
+/// # 为什么这条断言改过（Task 24）
+///
+/// Task 23 时这里是「占位对象没有类型与值」—— 那时求值还没落地，断言是**对的**。
+/// Task 24 之后 `load_sources` 末尾接上了 `collect_decls`，再断言 `typ == None`
+/// 就成了「把正确行为判红」。中间态依然存在也必须存在（前向引用靠它），
+/// 但它现在只在装载内部可观察 —— 由 `decl_collect.rs` 的前向引用 / 环用例守。
 #[test]
-fn 占位对象没有类型与值() {
+fn 装载后对象已求值() {
     let mut tt = TypeTable::new();
     let srcs = src(&[("a.go", "package p\n\ntype T int\nconst C = 1\n")]);
-    let (pkg, _bag) = load_sources(&mut tt, &borrowed(&srcs), None);
+    let (pkg, bag) = load_sources(&mut tt, &borrowed(&srcs), None);
+    assert!(bag.into_sorted().is_empty());
+
     let t = pkg.lookup("T").unwrap();
-    assert_eq!(t.typ, None, "类型求值归 Task 24");
-    assert_eq!(t.val, None);
-    assert!(t.pos.is_some(), "但有位置（诊断要用）");
-    assert!(!t.has_value());
+    assert!(t.pos.is_some(), "位置照样要有（诊断要用）");
+    let ty = t.typ.expect("装载后类型必须已求值");
+    assert!(matches!(tt.type_of(ty), Type::Named(_)), "T 是具名类型");
+
+    let c = pkg.lookup("C").unwrap();
+    assert_eq!(c.val, Some(Const::Int(BigInt::from_i64(1))));
+    assert!(c.has_value());
 }
 
 /// `T-TY-52` 的**盘上**路径：显式文件列表（`D-M3-14`）能真的读文件，
