@@ -26,15 +26,20 @@ fn d(file: u32, line: u32, col: u32, code: DiagCode) -> Diag {
 
 #[test]
 fn 代号表恰为冻结总数且无重复() {
-    // 35 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）。
+    // 37 = 23 个 M1 词法（`LEX-`）+ 12 个 M2 语法（`SYN-`）+ 2 个 M3 类型（`TYP-`）。
     //
     // `SYN-` 段的 12 个 = `T-AP06`/`T-AP15` 落的 3 个（`SynExpectedSemicolon` /
     // `SynInvalidLineDirective` / `SynUnexpectedToken`）+ `T-AP16` 从官方
     // `branches.go` 的 12 处 `errf` 枚举后收敛成的 8 个 + `T-AP20` 的
     // `SynNestingTooDeep`（H 判据，官方无此行为）。
     //
+    // `TYP-` 段的 2 个 = M3/Task 7 的移位代号（`TypInvalidShiftCount` /
+    // `TypInvalidShiftOperand`），**刻意与官方 `go/types` 的
+    // `InvalidShiftCount` / `InvalidShiftOperand` 一一对应**（不拆细，
+    // 否则「按代号比对」时与 oracle 的类别对不上）。
+    //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 35);
+    assert_eq!(DiagCode::ALL.len(), 37);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
@@ -86,13 +91,14 @@ fn 同位置的诊断按_code_排序_保证输出唯一() {
 /// |---|---|---|
 /// | `LEX-` | `rgoc-lex` | `tools/token-oracle/diagmap.go` |
 /// | `SYN-` | `rgoc-parse` | `tools/ast-oracle/diagmap.go`（T-AP16 建立） |
+/// | `TYP-` | `rgoc-types` | `tools/types-oracle/diagmap.go`（M3/Task 31 建立） |
 ///
 /// 后半段的反向断言比前半段更关键：只查「前缀合法」的话，一个前缀写错的新代号会
 /// 静默落进「没人管」的区 —— 那正是 `AGENTS.md` 记的「漏了不会报错」形状。
 /// 但白名单本身也不能恒真：留了个没人用的前缀，说明它对应的那一半镜像表**不存在**。
 #[test]
 fn diag_code_的_as_str_前缀落在阶段白名单内() {
-    const PHASES: [&str; 2] = ["LEX-", "SYN-"];
+    const PHASES: [&str; 3] = ["LEX-", "SYN-", "TYP-"];
 
     for c in DiagCode::ALL {
         let s = c.as_str();

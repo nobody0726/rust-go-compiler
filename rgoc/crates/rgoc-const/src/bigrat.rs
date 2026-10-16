@@ -184,6 +184,19 @@ impl BigRat {
         ))
     }
 
+    /// 是否是**整数值**；是则给出该整数（照官方 `constant.ToInt`）。
+    ///
+    /// `2.0` ⇒ `Some(2)`；`1.5` ⇒ `None`。移位与「无类型浮点常量可作整数用」
+    /// 这两处都要靠它 —— 官方 `go/types/expr.go:625` 的
+    /// `constant.ToInt(x.val).Kind() == constant.Int` 就是这条。
+    pub fn to_int(&self) -> Option<BigInt> {
+        if self.den == BigInt::from_i64(1) {
+            Some(self.num.clone())
+        } else {
+            None
+        }
+    }
+
     /// `⌊log₂|x|⌋`（零上无定义 ⇒ panic；调用方先查零）。
     pub fn floor_log2(&self) -> i64 {
         assert!(!self.num.is_zero(), "floor_log2(0) 无定义");
@@ -449,6 +462,19 @@ mod tests {
         let y = x.mul(&x);
         assert_eq!(y, BigRat::from_bigint(big.shl(1000)));
         assert_eq!(y.num().bit_len(), 2001);
+    }
+
+    #[test]
+    fn to_int_只在整数值上成立() {
+        assert_eq!(int(3).to_int(), Some(BigInt::from_i64(3)));
+        assert_eq!(r(2, 1).to_int(), Some(BigInt::from_i64(2)));
+        assert_eq!(r(3, 2).to_int(), None);
+        assert_eq!(
+            r(-4, 2).to_int(),
+            Some(BigInt::from_i64(-2)),
+            "规范化后 den == 1"
+        );
+        assert_eq!(int(0).to_int(), Some(BigInt::from_i64(0)));
     }
 
     #[test]

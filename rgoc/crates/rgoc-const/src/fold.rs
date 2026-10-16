@@ -33,10 +33,54 @@
 use std::cmp::Ordering;
 
 use rgoc_ast::Op;
+use rgoc_lex::DiagCode;
 
 use crate::bigint::{BigInt, BitOp};
 use crate::bigrat::BigRat;
 use crate::value::Const;
+
+/// 常量移位计数的上界（**与官方 `go/types` 同界**，见 [`shift_ok`]）。
+pub const SHIFT_BOUND: u32 = 1023 - 1 + 52;
+
+/// 移位计数的合法性检查；合法则给出计数。
+///
+/// # 三条规则全部来自**实测 oracle**，不是推断（`go/types/expr.go:644-700`）
+///
+/// | 输入 | 官方行为 |
+/// |---|---|
+/// | `1 << -1` | 拒绝 `InvalidShiftCount`（negative shift count） |
+/// | `1 << 2.0` | **接受**，`== 4`（无类型浮点，值是整数 ⇒ 可表示成 `uint`） |
+/// | `1 << 1.5` | 拒绝 |
+/// | `1 << 2i` | 拒绝（"truncated to uint"） |
+/// | `1 << 1074` | 接受（`s <= 1074`） |
+/// | `1 << 1075` | 拒绝（"invalid shift count"） |
+///
+/// ⚠️ **偏离 `M3-plan.md` Task 7 的签名**：计划写 `shift_ok(x: &Const)`，
+/// 且把检查对象当成**左值**。实测**左值可以是负数**（`-1 << 2 == -4` 合法，
+/// `go build` 与 `go/types` 一致），要检查的是**计数**（右操作数）。
+/// 返回 `u32` 而非 `()` 是因为移位**需要这个数**；返回 `DiagCode` 是因为
+/// 诊断属于调用方，而代号必须唯一（`C1`：按代号比对）。
+pub fn shift_ok(count: &Const) -> Result<u32, DiagCode> {
+    let invalid = DiagCode::TypInvalidShiftCount;
+    let n = as_int_value(count).ok_or(invalid)?;
+    if n.is_neg() {
+        return Err(invalid);
+    }
+    let s = n.to_i64().ok_or(invalid)?;
+    if s > i64::from(SHIFT_BOUND) {
+        return Err(invalid);
+    }
+    Ok(s as u32)
+}
+
+/// 移位**左操作数**是否为整数（官方 `allInteger(typ) || ToInt(val).Kind()==Int`）。
+///
+/// ⚠️ **负数算「是整数」** —— `-1 << 2` 合法（oracle 实测）。
+/// 这里只判「**值**是不是整数」，因为折叠器只看得到无类型常量；
+/// 有类型的操作数由 Task 11 的检查器在类型层判。
+pub fn shift_operand_ok(x: &Const) -> bool {
+    as_int_value(x).is_some()
+}
 
 /// 二元运算折叠（算术 / 按位 / 逻辑 / 字符串拼接）。
 pub fn fold_binary(op: Op, x: &Const, y: &Const) -> Const {
@@ -59,8 +103,9 @@ pub fn fold_binary(op: Op, x: &Const, y: &Const) -> Const {
         },
         _ => match op {
             Op::And | Op::Or | Op::Xor | Op::AndNot => bitwise(op, x, y),
+            Op::Shl | Op::Shr => shift(op, x, y),
             Op::Add | Op::Sub | Op::Mul | Op::Quo | Op::Rem => arithmetic(op, x, y),
-            // 比较走 [`fold_compare`]；移位在 Task 7 落地
+            // 比较走 [`fold_compare`]
             _ => Const::Unknown,
         },
     }
@@ -132,6 +177,32 @@ pub fn fold_compare(op: Op, x: &Const, y: &Const) -> Const {
 }
 
 // ── 内部 ──────────────────────────────────────────────────────────────────
+
+/// `Const` → 「整数值」（照官方 `constant.ToInt`）。
+fn as_int_value(c: &Const) -> Option<BigInt> {
+    match c {
+        Const::Int(v) => Some(v.clone()),
+        Const::Float(v) => v.to_int(),
+        // `1+0i` 也是整数（官方 `ToInt` 对有零虚部的复常量成立）
+        Const::Complex { re, im } if im.is_zero() => re.to_int(),
+        _ => None,
+    }
+}
+
+/// 移位：**结果种类修正为整数**（`1.0 << 2 == 4`，官方把结果类型改成 `untyped int`）。
+fn shift(op: Op, x: &Const, y: &Const) -> Const {
+    let Ok(count) = shift_ok(y) else {
+        return Const::Unknown;
+    };
+    let Some(v) = as_int_value(x) else {
+        return Const::Unknown;
+    };
+    match op {
+        Op::Shl => Const::Int(v.shl(count)),
+        Op::Shr => Const::Int(v.shr(count)),
+        _ => Const::Unknown,
+    }
+}
 
 /// `Const` → 实数有理数（`Int` / `Float`）。
 fn as_rat(c: &Const) -> Option<BigRat> {
@@ -426,6 +497,92 @@ mod tests {
         assert_eq!(
             fold_compare(Op::Eql, &Const::Unknown, &i(0)),
             Const::Unknown
+        );
+    }
+
+    /// `T-TY-37`：常量移位 —— `1 << 100` **精确**（不是 0、不 panic）。
+    #[test]
+    fn 移位_长移位精确() {
+        assert_eq!(
+            fold_binary(Op::Shl, &i(1), &i(100)),
+            Const::Int(BigInt::from_i64(1).shl(100))
+        );
+        // 2^1000 的十进制有 302 位 ⇒ 确实没有截断
+        match fold_binary(Op::Shl, &i(1), &i(1000)) {
+            Const::Int(v) => assert_eq!(v.to_string().len(), 302),
+            other => panic!("应为 Int，实得 {other:?}"),
+        }
+        assert_eq!(fold_binary(Op::Shl, &i(1), &i(0)), i(1));
+        assert_eq!(fold_binary(Op::Shr, &i(1024), &i(10)), i(1));
+        // 算术右移（下取整）：oracle 实测 `-7 >> 1 == -4`
+        assert_eq!(fold_binary(Op::Shr, &i(-7), &i(1)), i(-4));
+        assert_eq!(fold_binary(Op::Shr, &i(-1), &i(1)), i(-1));
+    }
+
+    /// 左操作数是**负数**时移位**合法**（oracle 推翻冻结稿的「非负左值检查」）。
+    #[test]
+    fn 移位_负左值合法() {
+        // `go build` 与 `go/types` 一致：`-1 << 2 == -4`
+        assert_eq!(fold_binary(Op::Shl, &i(-1), &i(2)), i(-4));
+        assert_eq!(fold_binary(Op::Shl, &i(-3), &i(2)), i(-12));
+        assert_eq!(fold_binary(Op::Shr, &i(-8), &i(2)), i(-2));
+        assert!(shift_operand_ok(&i(-1)), "负左值是**整数**，合法");
+    }
+
+    /// 左操作数是**无类型浮点但值为整数** ⇒ 合法，且结果种类**修正为整数**。
+    #[test]
+    fn 移位_值有整数的无类型浮点() {
+        // oracle：`1.0 << 2 == 4`，类型 `untyped int`
+        assert_eq!(fold_binary(Op::Shl, &f(1, 1), &i(2)), i(4));
+        assert_eq!(fold_binary(Op::Shr, &f(8, 1), &i(1)), i(4));
+        // 值不是整数 ⇒ 不给值（官方 "shifted operand 1.5 must be integer"）
+        assert_eq!(fold_binary(Op::Shl, &f(3, 2), &i(1)), Const::Unknown);
+        assert_eq!(fold_binary(Op::Shl, &s("a"), &i(1)), Const::Unknown);
+        assert_eq!(fold_binary(Op::Shl, &b(true), &i(1)), Const::Unknown);
+        assert!(!shift_operand_ok(&f(3, 2)));
+        assert!(!shift_operand_ok(&s("a")));
+        assert!(!shift_operand_ok(&b(true)));
+        assert!(!shift_operand_ok(&Const::Unknown));
+    }
+
+    /// 计数非法 ⇒ 不给值。
+    #[test]
+    fn 移位_计数非法() {
+        assert_eq!(fold_binary(Op::Shl, &i(1), &i(-1)), Const::Unknown);
+        assert_eq!(fold_binary(Op::Shl, &i(1), &f(3, 2)), Const::Unknown);
+        assert_eq!(fold_binary(Op::Shl, &i(1), &s("2")), Const::Unknown);
+    }
+
+    /// `CON-08`：计数检查的**逐条 oracle 依据**。
+    #[test]
+    fn shift_ok_与上界() {
+        assert_eq!(shift_ok(&i(3)), Ok(3));
+        assert_eq!(shift_ok(&i(0)), Ok(0));
+        assert_eq!(shift_ok(&f(2, 1)), Ok(2), "`1 << 2.0` 合法");
+        assert_eq!(shift_ok(&i(1074)), Ok(SHIFT_BOUND), "上界**含**");
+        assert_eq!(shift_ok(&i(1075)), Err(DiagCode::TypInvalidShiftCount));
+        assert_eq!(shift_ok(&i(-1)), Err(DiagCode::TypInvalidShiftCount));
+        assert_eq!(shift_ok(&f(3, 2)), Err(DiagCode::TypInvalidShiftCount));
+        assert_eq!(shift_ok(&s("2")), Err(DiagCode::TypInvalidShiftCount));
+        assert_eq!(
+            shift_ok(&Const::Complex {
+                re: BigRat::from_i64(1),
+                im: BigRat::from_i64(0)
+            }),
+            Ok(1),
+            "`1 << (1+0i)`：ToInt 成立"
+        );
+        assert_eq!(
+            shift_ok(&Const::Complex {
+                re: BigRat::from_i64(0),
+                im: BigRat::from_i64(2)
+            }),
+            Err(DiagCode::TypInvalidShiftCount),
+            "`1 << 2i` 拒绝"
+        );
+        assert_eq!(
+            shift_ok(&Const::Unknown),
+            Err(DiagCode::TypInvalidShiftCount)
         );
     }
 }

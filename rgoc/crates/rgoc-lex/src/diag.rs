@@ -147,6 +147,26 @@ pub enum DiagCode {
     SynNestingTooDeep,
     /// 意外的词元
     SynUnexpectedToken,
+
+    // ── M3 类型检查（`TYP-` 前缀）──
+    //
+    // 同 `SYN-` 段：**声明顺序必须与 `as_str()` 的字典序一致**。
+    //
+    // 这两条是 M3/Task 7 落下的**移位**代号，刻意**贴合官方 `go/types` 的
+    // 检查粒度**（`go/types/expr.go:630-700`）：
+    //
+    // - 官方的 `InvalidShiftCount` 用**同一个** `errorf` 覆盖三种失败
+    //   （负计数 / 非 uint 计数 / 计数超 1074），所以这里也只给**一个**代号；
+    //   拆细会让我们在「按代号比对」时与 oracle 的类别对不上。
+    // - 同理 `InvalidShiftOperand` 一条。
+    //
+    // ⚠️ 计划与 `M3-tests.md` 冻结稿都写「**左值**非负检查」，**实测是错的**
+    // （oracle：`-1 << 2 == -4` 合法）。见 `M3-tests.md` 修订 R1 与
+    // `.superpowers/sdd/M3-plan/progress.md` 的 Task 7 Ruling。
+    /// 移位计数非法（负 / 非 uint / 超上界）—— 官方 `InvalidShiftCount`
+    TypInvalidShiftCount,
+    /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
+    TypInvalidShiftOperand,
 }
 
 impl DiagCode {
@@ -154,7 +174,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 35] = [
+    pub const ALL: [DiagCode; 37] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -190,6 +210,8 @@ impl DiagCode {
         DiagCode::SynLabelUnused,
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
+        DiagCode::TypInvalidShiftCount,
+        DiagCode::TypInvalidShiftOperand,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -230,6 +252,8 @@ impl DiagCode {
             DiagCode::SynLabelUnused => "SYN-LABEL-UNUSED",
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
+            DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
+            DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
         }
     }
 }
