@@ -13,9 +13,19 @@
 - **M3（符号与类型检查入口）进行中**：native/inline `executing-plans`，ledger =
   `.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
-  已落地 `rgoc-const` / `rgoc-types` 两 crate + `tools/types-oracle`；**Task 1–18/21/22 完成**
-  （C7 契约、常量层、类型表示/dump/同一性、版本门控、类型图合法性），
-  下一批 = **Task 23–30 包模型（`rgoc-load` 仍是空骨架）** → 31–36 对撞接线 → 37 变异 → 38 manifest
+  已落地 `rgoc-const` / `rgoc-types` / `rgoc-load` 三 crate + `tools/types-oracle`；
+  **Task 1–18/21/22/23 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、类型图合法性、单包多文件装载），
+  workspace **1168 passed / 0 failed**，下一批 = **Task 24–30**（声明收集与类型求值顺序 → 块作用域 → 导出标识符 →
+  源码 import → 显式文件列表 → ExportSummary → 零 import 语料包冒烟）→ 31–36 对撞接线 → 37 变异 → 38 manifest
+- **M3 包模型的三条结构事实（Task 23 落地，改动前必读）**：
+  ① 作用域是**竞技场**（`rgoc-types::scope::{ScopeId, ScopeTable, ScopeRef}`；节点 `Scope` 只做本层，
+  沿链 `lookup`/`lookup_level`/`depth` 在 `ScopeTable`/`ScopeRef`）；`declare_universe(tt, &mut st) -> ScopeId`，
+  `universe() -> (ScopeTable, ScopeId, TypeTable)` ⇒ 旧 `Scope<'a>`/`Scope::root()` 已不存在（Ruling 23-1）。
+  ② **多文件必须共享一张 `FileTable`**：`Lexer::new_in(&mut FileTable, …)` / `parse_file_in(&mut FileTable, …)`；
+  `Lexer::new`/`parse_file` 自带新表 ⇒ 每文件都是 `FileId(0)`（诊断排序第一键失效，Ruling 23-4）。
+  ③ 装载入口 `load_from_explicit_files(tt, &[PathBuf], lang) -> (Package, DiagBag)`（**多一个 `tt` 形参**，Ruling 23-2）
+  与 `load_sources(tt, &[(name, bytes)], lang)`；`Package { name, files, file_table, asts, scopes, scope, skipped }`，
+  类型表**不**在 `Package` 里（universe 要声明进 dump 那张表）；顶层声明名先**占位**（`typ/val = None`），求值归 Task 24。
 - **平行历史已合流**（2026-10-17）：`origin/main`(43843d6) merge 进本地 main。
   两侧对 `M1-plan`/`M2-plan` 的补勾**逐字节相同** ⇒ 零冲突上代码；只有
   `.workbuddy/memory/*` 两处冲突，一律取**本地侧**（M3 记录更靠后）。
@@ -32,7 +42,9 @@
   `cargo clean` EBUSY → `find rgoc/target -mindepth 1 -delete`
 - ⚠️ /Volumes/MacBookData mtime 整秒 + 容器缓存 ⇒ 写盘后容器内 md5sum 轮询一致才跑测试；查代码一律 Grep/Read 工具
 - ⚠️ cargo 陈旧产物：同一次容器调用里 touch **被改文件本身** + 核验 `Compiling`（check/clippy 是 `Checking`）；「复原后还红」= 陈旧二进制污染
+- ⚠️⚠️ **`os.utime` + `Compiling` 守卫不足**（2026-10-17 Task 23 实测）：写盘/还原的时间戳把 cargo 指纹搅乱后，后续 run 会**静默复用上一个变异的产物**（症状 = 每个变异都报同一组失败，且复原后仍红）。**唯一可信的做法是每次变异前 `cargo clean -p <crate>`**（连带强制依赖方重编）；被污染后要 `cargo clean -p` 那一组 crate 才能恢复
 - ⚠️ 容器 `/tmp` 调用即焚；**变异与恢复必须同一调用内完成**；变异 runner 走 in-container.sh（宿主 subprocess 静默空输出）；复原覆盖本组每个文件；变异必须可编译
+- ⚠️ **别拿 `| tail` 的尾巴当「全绿」证据**（Task 23 踩过）：断言数、通过数必须逐行看到；truncated 输出里没出现的测试等于没跑
 - zsh 吃 `${!arr[@]}`；容器 `go build` 要 `-buildvcs=false`；脚本首行 `set -euo pipefail`；ast-oracle `go run .` 在 `tools/ast-oracle/` 内跑，dump 契约 = `rgoc-ast::dump.rs`
 
 ## 纪律（案例细节在 ledger / commit message）
@@ -50,7 +62,7 @@
 - `IfStmt.cond` 是 `Option<Expr>`；`Follow::Semi` 认三种来源；官方临时 nil 用短命中间形态，不用 `Expr::Bad` 当哨兵
 - `want(f)` 消息由 `tokstring(&Follow)` 一处派生；`syntaxErrorAt` 只实现 default 支；`checkBranches` 门控 = **本函数**无语法错；`BranchStmt.Target` 刻意不建模（回指，**M3 读**）
 - `Pos.base = Option<BaseId>`（NonZeroU32）；file base line/col 必须 **1/1**；base==None ⇒ rel_* 退回绝对
-- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **48** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 13 `TYP-`）
+- **DiagCode 五件套**：变体声明序=字典序（derive(Ord) 按声明序不是 ALL 序）+ ALL + as_str + 两个总数测试；现 **49** 个（M1 的 23 `LEX-` + M2 的 12 `SYN-` + M3 的 14 `TYP-`；Task 23 增 `TypMismatchedPkgName` = 官方 `MismatchedPkgName`）
 - 深度守卫挂**三条递归边**：`expr` / `stmt_or_nil` / `type_or_nil`；超限**恰好 1 条** SYN-NESTING-TOO-DEEP
 
 ## 文档索引
