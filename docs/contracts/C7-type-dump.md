@@ -178,15 +178,29 @@
 - `interface` 的 `t` = **有没有项集**（实测：oracle 判据是 `unionOf(x) != nil`，
   即该 interface 的类型集里有没有 term 项 —— **不是** `IsMethodSet()`）。
   `t=1` 时**恰一行** `term`；`t=0` 时**无** `term` 行。
-- `interface` 的 `comparable` 标记（`F5`/`F8`）**不出现在 dump 里**：预声明的
-  `comparable` 与 `interface{}` 都是 `interface 0 0`。它只在表示里（「约束接口的
-  同一性」要判它，见 `D-M3-13`）；而 `comparable` 不能作变量类型 ⇒ dump 的根
+- `interface` 的 `comparable` 标记（`F5`/`F8`）**不出现在 dump 里**：那个接口本身
+  渲染成 `interface 0 0`（与 `interface{}` 的**本体**同形）。它只在表示里（「约束接口的
+  同一性」要判它，见 `D-M3-13`）；而 `comparable` 不能作变量类型 ⇒ **变量类型位置**
   永远到不了它（附带结论：**写对撞样本时不要把它放进变量类型位置**，见 §5.1）。
+  ⚠️ 但它仍然**可被到达**：`[T comparable]` 的约束位置上就是它（见下方订正 ②）。
 - **约束接口的同一性不进对撞**（`D-M3-13`）：`interface` 的 `term` 行**只在 dump 里出现**，
   用于 `T-TY-17` 的**形状**对撞；`Identical` 判定遇到它按 `U-M3-05` 显式拒绝。
 - ⚠️ **预声明名也可能是 `alias`**（实测，M3/Task 3）：`go/types` 里 `any` 是
   **`Alias`**（`type any = interface{}`）。所以 `G[T any]` 的约束位置上会出现
   `alias` 条目，而**不是** `named`。`byte`/`rune` 则连 `alias` 都不是（见 §4.1）。
+
+#### 执行期订正（2026-10-17，`Task 31`/`Task 33` 首次真实对撞实测）
+
+冻结时这四条**没有钉死**（或钉得不够准），对撞把它们钉住了。两侧实现都必须照此，
+否则从那一行起整体错位（对撞是逐字节的）：
+
+| # | 订正内容 | 证据 |
+|---|---|---|
+| ① | **接口方法的 `recv` 是 `-`**。`go/types` 内部给接口方法的签名也设了接收者（`Signature.Recv()` = 该接口自身，实测），但**渲染口径**是 `-`；下钻接收者还会造出真环（匿名约束接口的接收者就是它自己）。`rgoc` 侧同理：`error` 的方法签名 `recv` 是 `None`。 | `type-dump-func.go`（`error.Error`） |
+| ② | **`comparable` 有 `named` 壳**：约束位置上它是 `named <ref(本体)>`（本体 `interface 0 0`），因为 `go/types` 里 `Universe.Lookup("comparable").Type()` 就是 `*types.Named`。 | `type-dump-generics.go`（`[T comparable]`） |
+| ③ | **变参参数的类型是 `[]T` 切片**，不是元素类型 `T`（`go/types` 的 `Signature.Params()` 末位就是切片；`variadic` 位只表示「可这样调用」）。 | `type-dump-func.go`（`f3(xs ...int)`） |
+| ④ | **裸非接口约束被包成隐式接口**：`[T int]` ⇒ `interface 0 1` + 一行 `term exact <ref(int)>`（官方语义 `interface{ T }`，与 `[T ~[]int]` / `[T A\|B]` 同形）；而 `any`（alias→接口）、`comparable`（named，本体接口）、`type Num interface{…}` **原样**用，不包。 | `type-dump-generics.go`（`[T int]`） |
+| ⑤ | **`byte`/`rune` 与 `uint8`/`int32` 共用一个号**（它们**是同一个类型**）。`go/types` 为别名拼写保留了**另一个 `*types.Basic` 对象**（Kind 相同、指针不同，为的是错误消息里能写 `byte`）⇒ oracle 侧必须按 Kind 规范化后再编号。 | `type-dump-basics.go` |
 
 ### 4.3 数组长度的文本来源
 

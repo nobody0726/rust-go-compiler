@@ -130,12 +130,16 @@ fn error_是_named_且本体是_error_方法集() {
     assert_eq!(def.methods[0].0, "Error");
     assert!(!def.comparable, "error 不是带 comparable 的类型集");
     assert!(def.terms.is_none(), "error 没有项集");
-    // 方法的 recv 是 **error 自己**（实测 `signature #2 3 5 false`）
+    // 方法的 recv 是 **None**：接口方法没有接收者。
+    // ⚠️ 这里订正过一次口径（M3/Task 33 对撞）：**旧**写法给接口方法也设了
+    // 接收者（go/types 内部确实这么存 —— 实测 `Signature.Recv()` 是接口自己），
+    // 但 C7 §4.2 的**渲染口径**是 `-`（「非方法（普通函数 / **接口方法**）」），
+    // oracle 侧也按 `-` 出 —— 两侧不一致的根因就在这一行。
     let Type::Signature(sig_id) = tt.type_of(def.methods[0].1) else {
         panic!("方法的类型应当是签名")
     };
     let sig = tt.signature_def(*sig_id);
-    assert_eq!(sig.recv, Some(ty), "recv 是 error 本身");
+    assert_eq!(sig.recv, None, "接口方法没有接收者（C7 §4.2）");
     assert!(!sig.variadic);
     // 结果是 `string`
     let Type::Tuple(results) = tt.type_of(sig.results) else {
@@ -181,8 +185,14 @@ fn comparable_是特殊约束而不是普通类型名() {
         .lookup("comparable")
         .and_then(|o| o.typ)
         .expect("comparable 有类型");
-    let Type::Interface(iid) = tt.type_of(ty) else {
-        panic!("comparable 应当表示成 interface（F8）")
+    // 壳是 **named**（go1.27.1 实测：`Universe.Lookup("comparable").Type()`
+    // 就是 `*types.Named`）；订正记录见 `universe.rs` ④ 的注释。
+    let Type::Named(nid) = tt.type_of(ty) else {
+        panic!("comparable 应当表示成 named（实测）")
+    };
+    assert_eq!(tt.named_def(*nid).name, "comparable");
+    let Type::Interface(iid) = tt.type_of(tt.named_underlying(*nid)) else {
+        panic!("comparable 的本体应当是 interface（F8）")
     };
     let def = tt.interface_def(*iid);
     // `F8`：它是**带 comparable 的类型集**，但方法集为空、无项集
@@ -196,7 +206,7 @@ fn comparable_是特殊约束而不是普通类型名() {
             other => panic!("any 应当是 alias，得到 {other:?}"),
         },
     );
-    assert_ne!(ty, any_rhs, "两者是不同的条目");
+    assert_ne!(tt.named_underlying(*nid), any_rhs, "两者是不同的条目");
     assert!(
         !tt.interface_def(match tt.type_of(any_rhs) {
             Type::Interface(i) => *i,

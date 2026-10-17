@@ -7,7 +7,7 @@
 use rgoc_const::{BasicId, BigInt, Const};
 use rgoc_lex::diag::DiagCode;
 use rgoc_types::table::Field;
-use rgoc_types::{ChanDir, TypeId, TypeTable, identical, unalias};
+use rgoc_types::{ChanDir, Type, TypeId, TypeTable, identical, unalias};
 
 /// 判定并断言「判得出」（M3 支持面内）。
 fn same(tt: &TypeTable, x: TypeId, y: TypeId) -> bool {
@@ -445,17 +445,29 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
         Ok(false)
     );
 
-    // ⑤ universe 里的 `comparable` 对象真的落在拒绝侧
-    //    （把「表示里有位置」与「判定会拒绝」两端接上）
+    // ⑤ universe 里的 `comparable`：**壳是 `named`**，落进拒绝侧的是它的**本体**
+    //    —— 把「表示里有位置」与「判定会拒绝」两端接上。
+    //
+    //    ⚠️ 别拿 `comparable` 直接和 `any` 比：壳不同（`named` vs `alias`）⇒
+    //    那就是「两个不同的类型」（`Ok(false)`），**走不到**类型集推理。
+    //    官方表示同理（go1.27.1 实测 `Universe.Lookup("comparable").Type()`
+    //    是 `*types.Named`，Task 33 对撞订正了此处口径）。
     let mut u_tt = TypeTable::new();
     let mut u_st = rgoc_types::ScopeTable::new();
     let u = rgoc_types::declare_universe(&mut u_tt, &mut u_st);
     let cmp_obj = u_st.lookup(u, "comparable").and_then(|o| o.typ).unwrap();
     let any_obj = u_st.lookup(u, "any").and_then(|o| o.typ).unwrap();
+    let Type::Named(cmp_n) = u_tt.type_of(cmp_obj) else {
+        panic!("comparable 该是具名类型，实际 {:?}", u_tt.type_of(cmp_obj));
+    };
+    let cmp_body = u_tt.named_underlying(*cmp_n);
     assert_eq!(
-        refused(&u_tt, cmp_obj, any_obj),
-        DiagCode::TypUnsupportedConstraintIdentity
+        refused(&u_tt, cmp_body, any_obj),
+        DiagCode::TypUnsupportedConstraintIdentity,
+        "带 comparable 标记的**本体**必须落在拒绝侧"
     );
+    // 壳对自己：定义恒等（与 ② 的短路同一条）
+    assert_eq!(identical(&u_tt, cmp_obj, cmp_obj), Ok(true));
     // `any` = `interface{}`（空方法集）⇒ 判得出
     assert_eq!(identical(&u_tt, any_obj, any_obj), Ok(true));
 }

@@ -42,7 +42,7 @@ use rgoc_ast::{
 };
 use rgoc_const::Const;
 use rgoc_lex::{Diag, DiagCode};
-use rgoc_types::{ChanDir, Field as TField, ObjKind, Object, ScopeId, Type, TypeId};
+use rgoc_types::{ChanDir, Field as TField, ObjKind, Object, ScopeId, Type, TypeId, unalias};
 
 use crate::decls::Checker;
 
@@ -327,8 +327,16 @@ impl Checker<'_> {
         let mut params: Vec<(Option<String>, TypeId)> = Vec::with_capacity(ft.params.len());
         for f in &ft.params {
             let (t, dots) = match &f.type_ {
-                // 变参：末位参数的 `...T`（parser 已保证只在末位）
-                Expr::DotsType(d) => (self.resolve_type(scope, &d.elem), true),
+                // 变参：末位参数的 `...T`（parser 已保证只在末位）。
+                //
+                // ⚠️ 参数类型是 **`[]T` 切片**，不是元素类型 `T` —— 这是 go/types
+                // 实测口径（`Signature.Params()` 的末位就是切片），也是 C7 对撞的
+                // 判据（`variadic` 位只表示「可这样调用」，不改变参数本身的类型）。
+                // 写成 `T` 会让两侧编号整体错位（M3/Task 33 实测）。
+                Expr::DotsType(d) => {
+                    let elem = self.resolve_type(scope, &d.elem);
+                    (self.tt.add_slice(elem), true)
+                }
                 other => (self.resolve_type(scope, other), false),
             };
             variadic |= dots;
@@ -375,12 +383,17 @@ impl Checker<'_> {
             // 一行 `term <union>`）—— 所以这两条**不能**走 `resolve_type`
             // （那条路对 `~T` 给 `invalid`，环表里就成了「约束 = invalid」）。
             // 显式 `interface{…}` 与纯类型名（`any` / `comparable` / `int`）走
-            // `resolve_type`：实测 `[T any]` 的约束位置上出现的是 **`alias`** 条目
-            // （`C7` §4.2 的注已钉），`[T comparable]` 是 universe 里那个特殊接口。
+            // `resolve_type`，随后按「**是不是接口类型**」决定要不要包一层：
+            //   * `any`（alias→接口）、`comparable`（named，本体是接口）、
+            //     用户写的 `type Num interface{…}` ⇒ 本来就有接口类型，**原样**用；
+            //   * `int` / `[]int` / 具名结构体等**裸非接口**类型 ⇒ 官方包成
+            //     隐式接口 `interface{ T }`（`interface 0 1` + 一行 `term exact`）。
             //
-            // 注意 `[T int]`（**裸**非接口类型）这类**没得对撞**：oracle 自己会
-            // 在编号阶段报「类型图成环」而崩（实测，见 `M3-manifest.json`
-            // 的 `open_gaps`）⇒ M3 照写出的类型表示，判定不做（`D-M3-2`）。
+            // ⚠️ `[T int]` 这条口径**订正过一次**（M3/Task 33）：原先不包，理由是
+            // 「oracle 在编号阶段报『类型图成环』而崩，没得对撞」。那个 oracle 崩溃
+            // 已在 Task 31 修掉（根因是合成 union 的指针不稳定 + 接口方法下钻
+            // 接收者），于是这一条从「照写出的表示」变成**可对撞**，实测官方
+            // 就是包成接口 —— 不包会让 `type-dump-generics.go` 从那一行起错位。
             let c = if is_type_set(&f.type_) {
                 let mut methods = Vec::new();
                 let mut terms = Vec::new();
@@ -388,11 +401,42 @@ impl Checker<'_> {
                 self.collect_iface_elem(scope, &f.type_, &mut methods, &mut terms, &mut comparable);
                 self.build_iface(methods, terms, comparable)
             } else {
-                self.resolve_type(scope, &f.type_)
+                let t = self.resolve_type(scope, &f.type_);
+                if self.is_interface_type(t) {
+                    t
+                } else {
+                    self.build_iface(Vec::new(), vec![(false, t)], false)
+                }
             };
             self.tt.set_type_param_constraint(*tp, c);
         }
         scope
+    }
+
+    /// 这个类型**是不是接口类型**（官方 `Underlying().(*Interface)` 的对应物）。
+    ///
+    /// 别名与具名都要**穿透**：`any` 是 alias（右侧 `interface{}`）、`comparable`
+    /// 与用户的 `type Num interface{…}` 是 named（本体是接口）。`type A B`
+    /// （B 具名）会让本体又是一层 named ⇒ 逐层走。
+    ///
+    /// `seen` 是**环卫**：`type A B; type B A` 这类非法程序在报告之前本体确实
+    /// 互指（`validType` 的环诊断另有其人），这里不能跟着绕 —— 环不是接口类型。
+    fn is_interface_type(&self, t: TypeId) -> bool {
+        let mut seen: Vec<rgoc_types::NamedId> = Vec::new();
+        let mut cur = unalias(self.tt, t);
+        loop {
+            match self.tt.type_of(cur) {
+                Type::Interface(_) => return true,
+                Type::Named(n) => {
+                    if seen.contains(n) {
+                        return false;
+                    }
+                    seen.push(*n);
+                    cur = self.tt.named_underlying(*n);
+                }
+                _ => return false,
+            }
+        }
     }
 }
 

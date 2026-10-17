@@ -645,26 +645,34 @@ fn 签名_变参_无名参数_接收者() {
     let d = tt.signature_def(*fid);
     assert!(d.variadic, "末参 `...int` ⇒ 变参位");
     assert!(d.recv.is_none(), "函数不是方法");
-    let params: Vec<(Option<String>, BasicId)> = tt
+    let params: Vec<(Option<String>, TypeId)> = tt
         .tuple_def(match tt.type_of(d.params) {
             Type::Tuple(t) => *t,
             other => panic!("参数该是元组，实际 {other:?}"),
         })
         .vars
-        .iter()
-        .map(|(n, t)| (n.clone(), basic_of(&tt, *t)))
-        .collect();
+        .clone();
     assert_eq!(
-        params,
+        params.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
         vec![
-            (Some("a".into()), BasicId::Int),
-            (Some("b".into()), BasicId::Int),
+            Some("a".into()),
+            Some("b".into()),
             // 写出来的空标识符参数**保留**（它不是「没写名字」）
-            (Some("_".into()), BasicId::String),
-            // 变参参数的类型是**元素类型**（`...int` 的元组里是 `int`）
-            (Some("c".into()), BasicId::Int),
+            Some("_".into()),
+            Some("c".into()),
         ]
     );
+    assert_eq!(basic_of(&tt, params[0].1), BasicId::Int);
+    assert_eq!(basic_of(&tt, params[1].1), BasicId::Int);
+    assert_eq!(basic_of(&tt, params[2].1), BasicId::String);
+    // ⚠️ 变参参数的类型是 **`[]int` 切片**，不是元素类型 `int`。
+    // 这是 Task 33 对撞**订正**的口径：go/types 的 `Signature.Params()` 末位
+    // 就是切片（`variadic` 位只表示「可这样调用」）。写成 `int` 会让两侧
+    // 编号从那一行起整体错位（`type-dump-func.go`）。
+    let Type::Slice(elem) = tt.type_of(params[3].1) else {
+        panic!("变参参数该是切片，实际 {:?}", tt.type_of(params[3].1));
+    };
+    assert_eq!(basic_of(&tt, *elem), BasicId::Int);
     // 结果全无名 ⇒ 名字位 `None`（dump 写 `-`），`error` 是 universe 里的具名类型
     let Type::Tuple(rid) = tt.type_of(d.results) else {
         panic!("结果该是元组");

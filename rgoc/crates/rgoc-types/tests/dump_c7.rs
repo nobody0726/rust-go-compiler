@@ -12,7 +12,7 @@
 
 use rgoc_const::{BasicId, BigInt, Const};
 use rgoc_types::table::Field;
-use rgoc_types::{ChanDir, TypeTable, declare_universe, dump_types, universe};
+use rgoc_types::{ChanDir, Type, TypeTable, declare_universe, dump_types, universe};
 
 /// 去掉 `#` 注释行与空行（`C7` §2 规则 1：**两侧都忽略**）。
 fn strip(s: &str) -> String {
@@ -326,16 +326,30 @@ fn t_ty_17_interface_方法集与项集() {
         ])
     );
 
-    // ③ `comparable` 与空接口**同形**（都是 `interface 0 0`）——
-    //    这是「表示做宽」要留住的那一点在 dump 里看不见的证据
+    // ③ `comparable` 在 dump 里是 **`named`**（本体 `interface 0 0`）。
+    //
+    //    两层都要断言，因为它们分别钉住两件不同的事：
+    //    * 壳存在 —— go/types 实测 `Universe.Lookup("comparable").Type()` 就是
+    //      `*types.Named`（Task 33 对撞：少了壳 ⇒ `[T comparable]` 少一行）；
+    //    * **`comparable` 标记在 dump 里看不见**（C7 §4.2：它与 `interface{}`
+    //      的**本体**同形）—— 这正是「表示做宽」要留住的那一点，
+    //      所以用 `interface_def().comparable` 断言它，而不是看 dump。
     let (u_st, u, u_tt) = universe();
     let u_scope = u_st.scope(u);
     let cmp_ty = u_scope.lookup("comparable").and_then(|o| o.typ).unwrap();
     let any_ty = u_scope.lookup("any").and_then(|o| o.typ).unwrap();
     assert_eq!(
         strip(&dump_types(&u_tt, &[cmp_ty])),
-        want(&["0\tinterface 0 0"])
+        want(&["0\tnamed 1", "1\tinterface 0 0"])
     );
+    let Type::Named(n) = u_tt.type_of(cmp_ty) else {
+        panic!("comparable 该是具名类型，实际 {:?}", u_tt.type_of(cmp_ty));
+    };
+    let Type::Interface(i) = u_tt.type_of(u_tt.named_underlying(*n)) else {
+        panic!("comparable 的本体该是接口");
+    };
+    assert!(u_tt.interface_def(*i).comparable, "comparable 标记必须留住");
+    assert!(u_tt.interface_def(*i).terms.is_none(), "它不是项集");
     // `any` 是 alias ⇒ 先占号 0，右侧空接口 1
     assert_eq!(
         strip(&dump_types(&u_tt, &[any_ty])),

@@ -9,7 +9,7 @@
 //! | `rune` | `int32` 的**别名**，dump 出 `basic int32` | `var b rune` ⇒ `basic int32` |
 //! | `error` | **`named`**（本体是 `interface{ Error() string }`） | `var e error` ⇒ `named` + `interface 1 0` |
 //! | `any` | **`alias`**（右侧是 `interface{}`） | `var y any` ⇒ `alias` + `interface 0 0` |
-//! | `comparable` | 预声明的**特殊约束接口**（`F8`），不能作变量类型 | 只能作约束；`interface 0 0` 与 `interface{}` **同形** |
+//! | `comparable` | **`named`**（本体是带 `comparable` 标记的接口） | 只能作约束；`named` + `interface 0 0` 与 `interface{}` 的**本体**同形 |
 //!
 //! ⚠️ `byte`/`rune` 折到 `Uint8`/`Int32` 是**与 `BasicId` 的 25 项口径一致**的
 //! （`C7` §4.1 的实测订正：`go/types` 的 `BasicKind` 有 26 个，但 `byte`/`rune`
@@ -116,13 +116,18 @@ pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
     }
 
     // ② `error`：**named**，本体 `interface{ Error() string }`
-    //    （官方与 oracle 一致；recv 是 error 自己）
+    //
+    // ⚠️ 方法签名的 `recv` 是 **`None`**：接口方法**没有接收者**（C7 §4.2：
+    // 「`recv` 为 `-` 表示非方法（普通函数 / **接口方法**）」）。go/types 在
+    // 内部给接口方法的签名也设了接收者（实测 `Signature.Recv()` = 接口本身），
+    // 但那是它的实现细节 —— C7 与 oracle 的**渲染口径**都是 `-`
+    // （M3/Task 33 对撞实测：写成 `Some(error_self)` 会让两侧 dump 不一致）。
     let error_ty = tt.add_named("error");
     let error_self = tt.named_type(error_ty);
     let no_params = tt.add_tuple(Vec::new());
     let str_ty = tt.add_basic(BasicId::String);
     let results = tt.add_tuple(vec![(None, str_ty)]);
-    let sig = tt.add_signature(Some(error_self), no_params, results, false);
+    let sig = tt.add_signature(None, no_params, results, false);
     let sig_ty = tt.signature_type(sig);
     let err_iface = tt.add_interface(vec![("Error".to_string(), sig_ty)], None, false);
     let err_iface_ty = tt.interface_type(err_iface);
@@ -137,12 +142,20 @@ pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
     tt.set_alias_rhs(any_ty, empty_iface_ty);
     st.insert(u, Object::with_type(ObjKind::TypeName, "any", any_self));
 
-    // ④ `comparable`：预声明**特殊约束接口**（`F8`：不是普通类型名）
+    // ④ `comparable`：预声明**特殊约束接口**（`F8`：不是普通类型名），
+    //    但它在官方表示里是 **`named`**（go1.27.1 实测：
+    //    `types.Universe.Lookup("comparable").Type()` 是 `*types.Named`，
+    //    本体是那个带 `comparable` 标记的接口）⇒ 这里也必须有这层 Named 壳，
+    //    否则 dump 少一层（对撞实测：`[T comparable]` 的约束少 `named` 行）。
+    //    ⚠️ 「有 `comparable` 标记」这件事**不进 dump**（C7 §4.2）：`interface 0 0`。
+    let cmp_ty = tt.add_named("comparable");
+    let cmp_self = tt.named_type(cmp_ty);
     let cmp_iface = tt.add_interface(Vec::new(), None, true);
-    let cmp_ty = tt.interface_type(cmp_iface);
+    let cmp_iface_ty = tt.interface_type(cmp_iface);
+    tt.set_named_underlying(cmp_ty, cmp_iface_ty);
     st.insert(
         u,
-        Object::with_type(ObjKind::TypeName, "comparable", cmp_ty),
+        Object::with_type(ObjKind::TypeName, "comparable", cmp_self),
     );
 
     // ⑤ 常量：`true`/`false` 有值，`iota` **没有**（值随组内位置变）
