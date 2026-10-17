@@ -1,0 +1,732 @@
+{
+  "stage": "M3",
+  "generated_at": "2026-10-17T00:00:00Z",
+  "scope": "符号与类型检查入口：常量精度（任意精度 + 可表示性）+ 类型表示/同一性 + 块作用域与对象 + 单包多文件装载与源码 import + 版本门控 + 拒绝侧双向断言；验收 = 自有 fixture + `tools/types-oracle`（go/types）对撞 + 语料精选对撞",
+  "crates": [
+    "rgoc/crates/rgoc-const（常量层：BigInt/BigRat/折叠/转换/可表示性）",
+    "rgoc/crates/rgoc-types（类型表示/同一性/dump C7/作用域竞技场/universe/版本门控）",
+    "rgoc/crates/rgoc-load（装载：声明收集与求值顺序、作用域与对象、源码 import、ExportSummary、显式文件列表）",
+    "rgoc/crates/rgoc-driver（`types` / `types --dump` / `types --cmp` 子命令）",
+    "tools/types-oracle（go/parser + go/types 的中立 dump 与 identical/representable 判定 + run-collide.sh）",
+    "docs/contracts/C7-type-dump.md（冻结的中立 dump 格式）"
+  ],
+  "gate": {
+    "TY-1": {
+      "name": "类型表示穷尽性",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "`T-TY-11..19` 全绿；穷尽性断言存在且**反向验证过**（删一个变体即红）",
+      "evidence": "T-TY-11..19 全绿；`tools/types-oracle/testdata/type-dump-*.go` 六个 fixture 与 oracle 逐字节一致；变异 M11a ⇒ **编译期**红（E0599）、M11b ⇒ 计数断言红（14 vs 15）、M19 ⇒ 幂等红"
+    },
+    "TY-2": {
+      "name": "同一性正确",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "自有 fixture + 对撞全绿；**排除集**与 `U-M3-05` 一致",
+      "evidence": "rgoc-types/tests/identical.rs 全绿；cmp-basic 对撞 2/2 逐字节一致；约束接口的同一性**不进对撞**而是显式拒绝（T-TY-81：`TYP-UNSUPPORTED-CONSTRAINT-IDENTITY`）"
+    },
+    "TY-3": {
+      "name": "常量精度",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "全绿；长字面量不截断有**独立**证据",
+      "evidence": "rgoc-const 全绿（bigint/bigrat/fold/convert/iota/representable）；`1<<1000` 与 100 位十进制精确（独立断言）；T-TY-47 溢出不截断独立断言；变异 M47（范围检查失效 ⇒ 红）"
+    },
+    "TY-4": {
+      "name": "版本门控",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "正反例齐备；**按文件**语义有 `O` 级证据",
+      "evidence": "version_gate.rs + decl_collect.rs：`-lang` 允许/拒绝两侧 + `max(v, go1.21)` + 包级/文件级 TooNew；端到端由 types_e2e.rs::ty84 反向钉住（`//go:build go1.99` ⇒ TYP-FILE-REQUIRES-NEWER-GO）"
+    },
+    "TY-5": {
+      "name": "包模型",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "全绿；cycle 有诊断",
+      "evidence": "package_scope / scopes / imports / file_selection / exported_label / export_summary / smoke_corpus 全绿；import 环在环上每个包各一条诊断；变异 M65（错误评估构建约束 ⇒ file_count 3≠4 红）"
+    },
+    "TY-6": {
+      "name": "拒绝侧双向",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "**每条都成对**；缺反向的一律不算过",
+      "evidence": "rgoc-driver/tests/types_e2e.rs 六条断言族（ty81/82/83/84/85 + 退出码语义）全绿；变异 M81（拒绝改错答 ⇒ 红）、M84（未知指令改报错 ⇒ 红）"
+    },
+    "TY-7": {
+      "name": "四条 cargo 门禁",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "§7.3 四条命令 exit 0、无 warning",
+      "evidence": "`cargo fmt --all --check` / `cargo check --workspace --all-targets` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace --no-fail-fast` 四条 exit 0（gates.sh 的 gate_fail=0）"
+    },
+    "TY-8": {
+      "name": "既有自检不回归",
+      "status": "pass",
+      "confirmed_at": "2026-10-17",
+      "definition": "既有自检全过、exit 0",
+      "evidence": "check-m0-consistency.py（231 条）/ check-m1-consistency.py / check-lex-golden.sh / check-ast-golden.sh / check-ast-testdata.sh / check-ast-stdlib.sh 全过"
+    }
+  },
+  "coverage": {
+    "note": "A1 型证据：M3-tests §2 的每个 ✅ 行都指得到任务与测试 ID；`TYP-13/18/19/23..26` 与 §6 白名单一一对应",
+    "matrix_rows": 68,
+    "test_ids_total": 68,
+    "unsupported_total": 13,
+    "function_items": {
+      "CON-01..08": {
+        "covered": 8,
+        "total": 8
+      },
+      "TYP-01..12,14..17,20..22": {
+        "covered": 19,
+        "total": 19
+      },
+      "TYP-13,18,19,23..26": {
+        "covered": 0,
+        "total": 8,
+        "note": "显式不做 ⇒ U-M3-01..04"
+      },
+      "SCP-01..10": {
+        "covered": 10,
+        "total": 10,
+        "note": "SCP-06（九缺口之一）由 T-TY-56 自有测试覆盖"
+      },
+      "PIPE-06": {
+        "covered": 1,
+        "total": 1
+      },
+      "PIPE-07,08,09": {
+        "covered": 3,
+        "total": 3
+      }
+    }
+  },
+  "test_ids": [
+    {
+      "id": "T-TY-11",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "rgoc-types/src/typ.rs：`TYPE_VARIANT_COUNT = 15` + 穷尽 match；变异 M11a（删变体 ⇒ 编译期红）/ M11b（删标签 ⇒ 计数断言红），notes §1"
+    },
+    {
+      "id": "T-TY-12",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-basics.go（25 个预声明基本类型）与 oracle 逐字节一致；rgoc-const/src/basic.rs 的拼写表"
+    },
+    {
+      "id": "T-TY-13",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-compound.go（指针/切片/数组/映射/三向通道）与 oracle 逐字节一致"
+    },
+    {
+      "id": "T-TY-14",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-compound.go 的 struct 段（tag / 嵌入 / 空字段名 `_`）逐字节一致"
+    },
+    {
+      "id": "T-TY-15",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-func.go（无名/有名/变参/多结果/函数类型参数/方法）逐字节一致"
+    },
+    {
+      "id": "T-TY-16",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-named.go（具名/别名/递归具名，C7 §5.2 表内序号）逐字节一致"
+    },
+    {
+      "id": "T-TY-17",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-generics.go（方法集 + 项集 `~T`/并集）逐字节一致；T-TY-17/18 亦在 rgoc-load/tests/decl_collect.rs 有断言"
+    },
+    {
+      "id": "T-TY-18",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "tools/types-oracle/testdata/type-dump-generics.go（typeparam / union / `~T`）逐字节一致"
+    },
+    {
+      "id": "T-TY-19",
+      "verdict": "pass",
+      "gate": "TY-1",
+      "evidence": "rgoc-load/tests/decl_collect.rs::dump_根序按声明序（同进程两次 dump 相等）+ tools/types-oracle/run-collide.sh 重复运行 sha256 一致；变异 M19 ⇒ 红"
+    },
+    {
+      "id": "T-TY-21",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（basic 相等/不等，byte≡uint8、rune≡int32）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-22",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（具名 vs 底层：`type A int` 与 `int` 不等）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-23",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/src/identical.rs（别名归一 unalias）+ tests/identical.rs + tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-24",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（pointer/slice/map/**chan 方向**）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-25",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（数组长度**常量相等**：`[2]int` vs `[1+1]int`）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-26",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（struct 字段名 / Tag / 嵌入 / 顺序）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-27",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（signature：变参标记、参数/结果元组）+ tools/types-oracle/testdata/cmp-basic.go 对撞"
+    },
+    {
+      "id": "T-TY-28",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-types/tests/identical.rs（**方法集版** interface 同一性）+ tools/types-oracle/testdata/cmp-basic.go 对撞（对撞集**不含**约束接口，见 T-TY-81）"
+    },
+    {
+      "id": "T-TY-29",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc/crates/rgoc-load/src/typeexpr.rs + tests/decl_collect.rs（无实例化 ⇒ 退化为「同一 Id」）；corpus-allowlist.txt 的 `U-M3-04` 理由行"
+    },
+    {
+      "id": "T-TY-31",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/bigint.rs + value.rs（`1<<100` / `1<<1000` / 100 位十进制**不截断**）"
+    },
+    {
+      "id": "T-TY-32",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/value.rs（十进制 / `0x` / `0o` / `0b` / 下划线 / rune / 转义）"
+    },
+    {
+      "id": "T-TY-33",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/bigrat.rs（`0.1`、`1/3`、`1e400` 精确有理数；`RoundOutcome`/`RoundResult`）"
+    },
+    {
+      "id": "T-TY-34",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/bigrat.rs（复常量实/虚部）+ tools/types-oracle/testdata/cmp-representable.go 的复常量段"
+    },
+    {
+      "id": "T-TY-35",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/fold.rs（`+ - * / %` 含 `%` 符号规则）"
+    },
+    {
+      "id": "T-TY-36",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/fold.rs（常量比较 / 逻辑运算）"
+    },
+    {
+      "id": "T-TY-37",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/fold.rs（移位：计数视为无符号 + 非负检查；上界 `1<<1075` 拒绝照抄官方）。**修订 R1** 把原「左值非负」判据订正为「计数非负」，实测证据在 M3-tests §3.3"
+    },
+    {
+      "id": "T-TY-38",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/convert.rs（int↔float↔complex↔string 的允许集）"
+    },
+    {
+      "id": "T-TY-39",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/iota.rs（组内递增 + 表达式省略重复）+ rgoc-load/tests/decl_collect.rs"
+    },
+    {
+      "id": "T-TY-3a",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/fold.rs（字符串常量拼接）"
+    },
+    {
+      "id": "T-TY-3b",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/basic.rs + convert.rs（无类型常量的默认类型与隐式转换）+ tests/decl_collect.rs"
+    },
+    {
+      "id": "T-TY-41",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（int8/uint8/int16/int32/int64/uint64 边界±1）+ tools/types-oracle/testdata/cmp-representable.go 对撞"
+    },
+    {
+      "id": "T-TY-42",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（`uintptr` 取 `Sizes`；`Sizes::HOST_ARM64`）"
+    },
+    {
+      "id": "T-TY-43",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（`byte`/`rune` 走 uint8/int32）+ tools/types-oracle/testdata/cmp-representable.go 对撞"
+    },
+    {
+      "id": "T-TY-44",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（float32 向偶数舍入边界；`Represented{value,status}` 带上舍入后的值）+ tools/types-oracle/testdata/cmp-representable.go 对撞"
+    },
+    {
+      "id": "T-TY-45",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（float64 边界 / 次正规数）+ tools/types-oracle/testdata/cmp-representable.go 对撞"
+    },
+    {
+      "id": "T-TY-46",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-const/src/representable.rs（complex64/complex128 实虚部各自判定）+ tools/types-oracle/testdata/cmp-representable.go 对撞"
+    },
+    {
+      "id": "T-TY-47",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-load/tests/decl_collect.rs::t_ty_47_溢出不截断（诊断码命中 + 常量仍是精确原值）；变异 M47（范围检查失效 ⇒ 红）"
+    },
+    {
+      "id": "T-TY-48",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "tools/types-oracle/testdata/cmp-representable.go（`const _ int8 = 1<<20`、`const _ float32 = 1e400` 两侧都判不可表示）"
+    },
+    {
+      "id": "T-TY-51",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-types/tests/universe.rs（类型名 / true / false / iota / nil / 内建函数名）"
+    },
+    {
+      "id": "T-TY-52",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/package_scope.rs（同包跨文件引用可见；共享一张 FileTable）"
+    },
+    {
+      "id": "T-TY-53",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/scopes.rs + rgoc-load/src/scope.rs（块作用域与遮蔽，SCP-02/03）"
+    },
+    {
+      "id": "T-TY-54",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/scopes.rs（未定义标识符 ⇒ 稳定码；按书写位置去重）+ rgoc-driver/tests/test_driver.rs"
+    },
+    {
+      "id": "T-TY-55",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/scopes.rs（重复声明：包级/块级措辞不同）"
+    },
+    {
+      "id": "T-TY-56",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/exported_label.rs（**SCP-06 九缺口之一**：Unicode 首字母大写判定，非 ASCII 上界）"
+    },
+    {
+      "id": "T-TY-57",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/src/labels.rs + tests/exported_label.rs（标签作用域与 Label 对象）"
+    },
+    {
+      "id": "T-TY-58",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/exported_label.rs + rgoc-types/src/object.rs（`_` 不进作用域、不可引用）"
+    },
+    {
+      "id": "T-TY-61",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/package_scope.rs + rgoc-load/src/package.rs（单包多文件，文件级声明同包可见）"
+    },
+    {
+      "id": "T-TY-62",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/imports.rs + rgoc-driver/tests/types_e2e.rs::ty85 反向（源码路径 import + `-I` ⇒ 0）"
+    },
+    {
+      "id": "T-TY-63",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/imports.rs（import cycle：环上每个包一条诊断）"
+    },
+    {
+      "id": "T-TY-64",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/export_summary.rs（ExportSummary 内存 API 形状与内容；不冻文本格式，D-M3-18）"
+    },
+    {
+      "id": "T-TY-65",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/file_selection.rs::t_ty_65_显式列表里的文件一个都不筛；变异 M65（错误评估构建约束 ⇒ file_count 3≠4 红）"
+    },
+    {
+      "id": "T-TY-66",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/package_scope.rs（同包多文件 package 名不一致 ⇒ 诊断）"
+    },
+    {
+      "id": "T-TY-67",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/decl_collect.rs（包级 const 块含 iota，跨文件引用）"
+    },
+    {
+      "id": "T-TY-71",
+      "verdict": "pass",
+      "gate": "TY-4",
+      "evidence": "rgoc-types/tests/version_gate.rs + rgoc-load/tests/decl_collect.rs（`-lang` 高版本允许侧）"
+    },
+    {
+      "id": "T-TY-72",
+      "verdict": "pass",
+      "gate": "TY-4",
+      "evidence": "rgoc-types/tests/version_gate.rs（`-lang` 低版本拒绝侧 ⇒ 稳定码）+ rgoc-driver/tests/types_e2e.rs::ty84 反向（`//go:build go1.99`）"
+    },
+    {
+      "id": "T-TY-73",
+      "verdict": "pass",
+      "gate": "TY-4",
+      "evidence": "rgoc-types/tests/version_gate.rs（**每文件**版本：`max(v, go1.21)`；读版本 ≠ 筛文件）"
+    },
+    {
+      "id": "T-TY-74",
+      "verdict": "pass",
+      "gate": "TY-4",
+      "evidence": "rgoc-load/tests/decl_collect.rs（包级 TooNew，位置 `files[0]`）"
+    },
+    {
+      "id": "T-TY-75",
+      "verdict": "pass",
+      "gate": "TY-4",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty84 反向 + rgoc-types/src/version.rs（文件级 TooNew，位置取 `package` 名）"
+    },
+    {
+      "id": "T-TY-81",
+      "verdict": "pass",
+      "gate": "TY-6",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty81（正：约束接口 ⇒ `reject` + `# reject <行> TYP-UNSUPPORTED-CONSTRAINT-IDENTITY`；反：方法集接口与**具名**约束接口都不拒）；变异 M81（reject 改 false ⇒ 红）"
+    },
+    {
+      "id": "T-TY-82",
+      "verdict": "pass",
+      "gate": "TY-6",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty82（正：`assignable`/`implements`/`instance` ⇒ 退出码 2 + `[TYP-CMP-KIND-UNSUPPORTED]`；反：identical/representable 有答）；修订 R-36-1"
+    },
+    {
+      "id": "T-TY-83",
+      "verdict": "pass",
+      "gate": "TY-6",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty83（正：`const x = len(\"abc\")` ⇒ `[TYP-INVALID-CONST-INIT]` 退出码 1；反：常量子集 + `var` ⇒ 0）"
+    },
+    {
+      "id": "T-TY-84",
+      "verdict": "pass",
+      "gate": "TY-6",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty84（正：未知 `//go:` 指令 ⇒ 0 诊断；反：`//go:build go1.99` ⇒ `[TYP-FILE-REQUIRES-NEWER-GO]`、`//line` 不报）；变异 M84（未知指令改报错 ⇒ 红）"
+    },
+    {
+      "id": "T-TY-85",
+      "verdict": "pass",
+      "gate": "TY-6",
+      "evidence": "rgoc-driver/tests/types_e2e.rs::ty85（正：`import \"fmt\"` 有无 `-I` 都 ⇒ `[TYP-UNSUPPORTED-IMPORT-FORM]`；反：源码路径 + 正确 root ⇒ 0，root 指错 ⇒ 同码对照）"
+    },
+    {
+      "id": "T-TY-91",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-driver/tests/collide_dump.rs（自有 fixture vs 冻结 .want）+ tools/types-oracle/run-collide.sh 默认形态（8 个 fixture 两侧现跑逐字节一致 + stderr 空）"
+    },
+    {
+      "id": "T-TY-92",
+      "verdict": "pass",
+      "gate": "TY-2",
+      "evidence": "rgoc-driver/tests/collide_cmp.rs + tools/types-oracle/run-collide.sh `--cmp`（2 个 fixture；声明对逐对一致；排除集落 T-TY-81）"
+    },
+    {
+      "id": "T-TY-93",
+      "verdict": "pass",
+      "gate": "TY-3",
+      "evidence": "rgoc-driver/tests/collide_cmp.rs（representable 段）+ rgoc-const/src/bigrat.rs"
+    },
+    {
+      "id": "T-TY-94",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-driver/tests/collide_corpus.rs（候选 57 / 入选 31 / 排除 26 的**精确值** + 两向集合相等）+ tools/types-oracle/run-collide.sh `--corpus`（31 个 fixture 两侧现跑逐字节一致）"
+    },
+    {
+      "id": "T-TY-95",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "tools/types-oracle/run-collide.sh（每形态都跑两遍 + 两侧 stderr 空 + sha256 一致）；dump 幂等的同进程侧见 T-TY-19"
+    },
+    {
+      "id": "T-TY-96",
+      "verdict": "pass",
+      "gate": "TY-5",
+      "evidence": "rgoc-load/tests/smoke_corpus.rs（语料里 8 个**零 import** 单包：零诊断 / 文件数+包名 / 名字数 / dump 根数，后三个是精确值）"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U-M3-01",
+      "item": "`TYP-13` 接口实现判定",
+      "why": "D-M3-2",
+      "planned_phase": "M4",
+      "positive_evidence": "T-TY-82 正向（`//rgoc:cmp implements` ⇒ `[TYP-CMP-KIND-UNSUPPORTED]`）"
+    },
+    {
+      "id": "U-M3-02",
+      "item": "`TYP-18` 可赋值性",
+      "why": "D-M3-2",
+      "planned_phase": "M4",
+      "positive_evidence": "T-TY-82 正向（`assignable`）"
+    },
+    {
+      "id": "U-M3-03",
+      "item": "`TYP-19` 方法集",
+      "why": "D-M3-2",
+      "planned_phase": "M4",
+      "positive_evidence": "T-TY-82 正向（`methodset`）；`T-TY-28` 只做**表示**与方法集版同一性"
+    },
+    {
+      "id": "U-M3-04",
+      "item": "`TYP-23..26` 约束/实例化/推断/统一",
+      "why": "D-M3-2",
+      "planned_phase": "M4",
+      "positive_evidence": "T-TY-82 正向（`instance`）；语料里 15 例 DIFF 的**同一根因**（corpus-allowlist.txt）"
+    },
+    {
+      "id": "U-M3-05",
+      "item": "**约束接口的同一性**",
+      "why": "D-M3-13",
+      "planned_phase": "M4 必须解除",
+      "positive_evidence": "T-TY-81 正反两侧（拒面窄于本项措辞：**只**在两侧都是匿名接口且含项集/`comparable` 时拒，修订 R-32-1）"
+    },
+    {
+      "id": "U-M3-06",
+      "item": "构建约束筛选、`_test.go`/cgo/汇编",
+      "why": "D-M3-14",
+      "planned_phase": "M4+",
+      "positive_evidence": "T-TY-65（**反向**断言：不筛文件 ⇒ 不报错、文件在包里；变异 M65）"
+    },
+    {
+      "id": "U-M3-07",
+      "item": "官方二进制 export data、模块下载、`go.mod`",
+      "why": "D-M3-5",
+      "planned_phase": "M4+",
+      "positive_evidence": "T-TY-85 正向（`import \"fmt\"` ⇒ `[TYP-UNSUPPORTED-IMPORT-FORM]`，给不给 `-I` 都拒）"
+    },
+    {
+      "id": "U-M3-08",
+      "item": "需类型信息的 `const` 初始化式",
+      "why": "D-M3-19",
+      "planned_phase": "M4",
+      "positive_evidence": "T-TY-83 正向（`const x = len(\"abc\")` ⇒ `[TYP-INVALID-CONST-INIT]`）"
+    },
+    {
+      "id": "U-M3-09",
+      "item": "`//go:` 未知指令的**裁定**",
+      "why": "D-M3-6",
+      "planned_phase": "noder 等价阶段",
+      "positive_evidence": "T-TY-84 正向（未知指令 ⇒ **不**报错、退出码 0）"
+    },
+    {
+      "id": "U-M3-10",
+      "item": "诊断消息与官方**逐字**一致",
+      "why": "D-M1-9 沿用",
+      "planned_phase": "不承诺",
+      "positive_evidence": "全仓诊断断言一律只比**代号**与位置、不比文本（`rgoc-load/tests/` 与 `rgoc-driver/tests/` 的每一条诊断断言）"
+    },
+    {
+      "id": "U-M3-11",
+      "item": "非法 UTF-8 字面量的 dump 分叉",
+      "why": "M2 `open_gaps`",
+      "planned_phase": "暴露时回填",
+      "positive_evidence": "承继 `docs/milestones/M2-manifest.json` 同名项；M3 未触发（语料与 fixture 都是合法 UTF-8）"
+    },
+    {
+      "id": "U-M3-12",
+      "item": "`Pos::Ord` 按绝对坐标（非 rel）",
+      "why": "M2 `open_gaps`",
+      "planned_phase": "未触发",
+      "positive_evidence": "承继 `docs/milestones/M2-manifest.json` 同名项；M3 全部用例未触发（同文件多基准且行号回退才会不同序）"
+    },
+    {
+      "id": "U-M3-13",
+      "item": "相对路径拼接 + `filepath.Clean`",
+      "why": "M2 `open_gaps`",
+      "planned_phase": "需 SourceMap 目录信息",
+      "positive_evidence": "承继 `docs/milestones/M2-manifest.json` 同名项；M3 未触发（诊断位置只取文件内坐标）"
+    }
+  ],
+  "budget": {
+    "recursion_depth_max": 1000,
+    "recursion_depth_note": "类型图递归上限，与 parser 的 MAX_NEST_DEPTH 一致（M3-tests §7.4）",
+    "import_depth_max": 100,
+    "import_depth_note": "超限出诊断，不栈溢出（M3-design §7.2）",
+    "const_size_max": "不设人为上限（D-M3-4：任意精度）",
+    "smoke_wall_s_max": 300,
+    "milestone_wall_s_max": 1800,
+    "per_file_bytes_max": "64 MiB（沿用 M1 D-M1-4）",
+    "measured": {
+      "workspace_tests_passed": 1280,
+      "workspace_tests_failed": 0,
+      "oracle_go_tests": "go test ./...（GOPROXY=off）ok",
+      "collide_dump_fixtures": 8,
+      "collide_cmp_fixtures": 2,
+      "collide_corpus_fixtures": 31,
+      "corpus_candidates": 57,
+      "corpus_allowlisted": 26,
+      "mutation_probes": 7,
+      "mutation_notes": "scripts/mutation-m3-notes.md（7/7 红；含「陈旧产物」那次的如实登记）"
+    }
+  },
+  "open_gaps": {
+    "note": "M3 完成的定义 = 四维推进，不以「246 项全勾选」为退出条件。以下缺口如实登记（Task 24/25/26/27/30/32–35 累积）。",
+    "items": [
+      {
+        "id": "import 名取路径末段",
+        "item": "`import \"a/b/c\"` 的名字取 `c`，不做官方 `ImportName` 的完整规则（`go/ast` 的 `Ident` 与路径不一致时回退）",
+        "status": "已登记：语料与 fixture 未触发",
+        "owner": "M4 或暴露时回填"
+      },
+      {
+        "id": "跨包引用解析不了",
+        "item": "被 import 包的**对象**没有跨包可见性判定（`pkg.X` 只确认 X 存在，不做导出性/类型比对）",
+        "status": "已登记：`imports.rs` 只断言装载与环诊断",
+        "owner": "M4"
+      },
+      {
+        "id": "不做转义解码",
+        "item": "字符串/字符字面量的转义只在**常量值**层处理，`Object::name`/标签等文本层不解码",
+        "status": "已登记：无触发者（fixture 与语料都未触发文本层转义）",
+        "owner": "M4+"
+      },
+      {
+        "id": "`UndeclaredImportedName` 不做",
+        "item": "`pkg.Nope` 的形状尚未细分（现落 `TYP-UNDECLARED-NAME` 邻域）",
+        "status": "已登记：无触发者",
+        "owner": "M4"
+      },
+      {
+        "id": "`-uint32(5)` / `uint32(0)-1` 漏报",
+        "item": "值层没有类型接线 ⇒ 官方报 `overflows uint32` 的两例我们漏报（`^u` 具名无符号常量同源）",
+        "status": "已登记（Task 30，`^` 的有类型补码已修，漏报两例留给 M4）",
+        "owner": "M4（需值层类型接线）"
+      },
+      {
+        "id": "reject 范围窄于 `U-M3-05` 措辞",
+        "item": "只拒「两侧都是匿名接口 + 含项集/`comparable`」；具名约束接口按名字判、混合形状按 `T-TY-81` 的反例走",
+        "status": "有意为之（修订 R-32-1），非缺口；写明是因为下一棒容易误读成「都拒」",
+        "owner": "M4 解除 U-M3-05 时一并重审"
+      },
+      {
+        "id": "`T-TY-37` 移位上界 1074/1075",
+        "item": "`1 << 1075` 拒绝是**官方实现限制**（规范允许），照抄以保住与 oracle 的对撞",
+        "status": "已登记（修订 R1 的「代价与已登记项」）",
+        "owner": "官方若改则跟改"
+      },
+      {
+        "id": "语料 15 例 DIFF（实例化）",
+        "item": "`types/testdata` 候选里 15 例两侧 dump 不一致，根因**同一**：M3 不建模实例化（`U-M3-04`）",
+        "status": "已登记：`tools/types-oracle/corpus-allowlist.txt` 逐行理由",
+        "owner": "M4（实例化）"
+      },
+      {
+        "id": "语料 10 例两侧拒绝",
+        "item": "4 例两侧 code12（oracle panic / rgoc 环拒绝）+ 6 例 oracle 单侧拒绝（实例环，rgoc 不成环）",
+        "status": "已登记：同 allowlist",
+        "owner": "M4"
+      },
+      {
+        "id": "`issue39711` 根集口径",
+        "item": "`type _ T` 不引入绑定 ⇒ 该例两侧 dump **都空**（`roots 0`）；根集口径已由 C7 §3 与修订 R-35-2 冻结",
+        "status": "已登记：oracle `roots()` 跳过 `_`",
+        "owner": "已关闭（口径已定），保留一行备查"
+      },
+      {
+        "id": "`-lang` 版本门控的**特性**面",
+        "item": "M2 的 T-A-97 遗留：只落了读取侧（`//go:build` → `goVersion`）与包/文件级 TooNew，未按版本拒绝**语法特性**（泛型/range-over-func）",
+        "status": "已登记（M2 open_gaps 承继）",
+        "owner": "M4+"
+      },
+      {
+        "id": "`//go:` 未知指令的裁定",
+        "item": "M3 按「不报错」实现（`U-M3-09`）",
+        "status": "已登记：裁定归 noder 等价阶段",
+        "owner": "noder 等价阶段"
+      }
+    ]
+  },
+  "phase_summary": {
+    "tasks": "T-TY-01..T-TY-38（5 个 Phase：常量层 → 类型层 → 装载层 → 对撞接线 → 收口）",
+    "status": "done",
+    "completed": [
+      "Phase 1（Task 1–12）：C7 契约 + 常量层（BigInt/BigRat/折叠/转换/可表示性）",
+      "Phase 2（Task 13–22）：类型表示 + dump + 同一性 + 版本门控 + 类型图合法性",
+      "Phase 3（Task 23–30）：单包多文件装载 + 声明收集与求值 + 作用域与对象 + 源码 import + ExportSummary + 语料冒烟",
+      "Phase 4（Task 31–35）：oracle 对撞接线（dump/cmp/语料）+ 语料精选纪律 + 三处现场修复（接收者类型参数 / dump 匿名环 / 空标识符口径）",
+      "Phase 5（Task 36–38）：`rgoc types` 端到端双向断言 + 变异反向验证（7 条）+ 本 manifest 收口"
+    ],
+    "workspace_tests": {
+      "passed": 1280,
+      "failed": 0
+    },
+    "gate_commands": "cargo fmt --all --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --no-fail-fast",
+    "gate_scripts": [
+      "scripts/check-m0-consistency.py",
+      "scripts/check-m1-consistency.py",
+      "scripts/check-lex-golden.sh",
+      "scripts/check-ast-golden.sh",
+      "scripts/check-ast-testdata.sh",
+      "scripts/check-ast-stdlib.sh",
+      "tools/types-oracle/run-collide.sh（dump / --cmp / --corpus 三形态）"
+    ]
+  }
+}

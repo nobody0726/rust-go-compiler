@@ -1,7 +1,7 @@
 # 项目长期记忆 —— rust_go_compiler (`rgoc`)
 
 > 只保「每轮都要知道」的硬事实；细节去 `AGENTS.md`（工程入口，任何任务先读）、`docs/`、
-> `.superpowers/sdd/*/progress.md`、`docs/milestones/M2-manifest.json`（open_gaps）。
+> `.superpowers/sdd/*/progress.md`、`docs/milestones/M3-manifest.json`（open_gaps / unsupported）。
 
 ## 概况
 - Rust 重写 Go 编译器 `rgoc`；origin = github.com/nobody0726/rust-go-compiler（main）；语料 `go_source_code/` 只读不入库；首发 Linux/arm64（Docker）→ aarch64 ELF
@@ -9,16 +9,11 @@
 - **commit 纪律（2026-10-15 授权）**：阶段收口即可 commit + push（按交付块分 commit）；push 被拦走 `gh api` 建链；`.superpowers/` gitignore；`tools/ast-oracle` vendor 入库
 
 ## 状态
-- **M0/M1/M2 全部完成**（M2 = T-AP01..21：A1–A8 全过、oracle 对撞 31/31、stdlib 6670 文件零错、深度上限 1000）
-- **M3（符号与类型检查入口）进行中**：native/inline `executing-plans`，ledger =
-  `.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
+- **M0–M3 四个里程碑全部完成**：M1 = T-L01..21（**L1–L7**，151 条 golden）；M2 = T-AP01..21（**A1–A8**，oracle 对撞 31/31、stdlib 6670 文件零错、深度上限 1000）；M3 = T-TY-01..38（**TY-1–TY-8**，对撞 dump 8 / cmp 2 / 语料 31 三条腿逐字节一致、7 条变异全红、`M3-manifest.json` 已填实并由 `rgoc-driver/tests/manifest_m3.rs` 与冻结文档对账）。workspace **1282 passed / 0 failed**
+- **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）尚未开工**：开工前读 `M3-manifest.json` 的 `open_gaps` + `unsupported`（`U-M3-05` 是 M4 **必须**解除的那条）与 `M3-tests.md` §6。若把某条 `U-M3-xx` 翻成「做」，**必须同步改 manifest 与 `M3-tests.md`**，否则 `manifest_m3.rs` 会红（设计意图）
+- **M3 的执行台账**（历史用）：`.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
-  已落地 `rgoc-const` / `rgoc-types` / `rgoc-load` 三 crate + `tools/types-oracle`；
-  **Task 1–18/21/22/23/24/25/26/27 完成**（C7 契约、常量层、类型表示/dump/同一性、版本门控、
-  类型图合法性、单包多文件装载、声明收集与求值顺序、块作用域/遮蔽/未定义/重复声明、
-  导出标识符/标签/空标识符、源码 import/环诊断/三类 import 诊断），
-  workspace **1245 passed / 0 failed**，下一批 = **Task 28–30**（显式文件列表 →
-  ExportSummary → 零 import 语料包冒烟）→ 31–36 对撞接线 → 37 变异 → 38 manifest
+  三 crate = `rgoc-const` / `rgoc-types` / `rgoc-load` + `tools/types-oracle`。
 - **M3 体阶段的两条结构事实（Task 25 落地，改动前必读）**：
   ① **体阶段唯一入口** `rgoc-load/src/scope.rs::resolve_bodies`（`load_sources` 末尾第 ⑦ 步，
   **在 `collect_decls` 之后**），内部用 `Checker::for_bodies` 造 `Checker` —— 包级状态机
@@ -44,7 +39,8 @@
   `.workbuddy/memory/*` 两处冲突，一律取**本地侧**（M3 记录更靠后）。
   **不得 force push**（远端 43843d6 是已推送的历史，必须留在祖先里）。
   `2026-10-16.md` 记了这段分叉的来龙去脉
-- 遗留：`-lang` deferred（M3 的 Task 21 会落地按文件版本门控）、`//go:` 未知指令裁决（M3 收下不报错）
+- 遗留：`//go:` 未知指令的**裁定**归 noder 等价阶段（M3 按「收下不报错」实现，`U-M3-09`）；`-lang` 按文件版本门控已由 M3 的 Task 21 落地（**特性面**仍未做，M2 `open_gaps` 承继）
+- ⚠️ **产物陈旧陷阱（M3 两次踩，务必记）**：绑定挂载上 cargo 的 mtime 判据不可靠 ⇒ 变异/复原后可能拿到**旧 rlib**（一面是假绿、一面是假红：复原后 `rgoc-parse` 里还编着 M84 变异 ⇒ `test_directive.rs` 8 条假红）。变异前 `cargo clean -p <crate>`；收尾后若结果可疑，`find rgoc/target -mindepth 1 -delete` 全量重建再跑门禁（`cargo clean` 会 EBUSY）。详见 `scripts/mutation-m3-notes.md` §0 / §0.1
 
 ## 环境硬事实
 - 构建/测试全在容器：`RGOC_TTY=0 scripts/in-container.sh bash -lc 'cd /work/rgoc && …'`
@@ -98,6 +94,17 @@
 - **Task 27 的四个已知缺口（Task 38 进 `open_gaps`）**：import 名取**路径最后一段**（不是被依赖包 `package` 子句的真名）/
   **跨包引用 `lib.T` 解析不了**（装载顺序是「先求值本包、再解析 import」⇒ M4 改两阶段）/ `import` 路径不做转义解码（只剥引号）/
   `UndeclaredImportedName`（选择子）M3 不做（无触发者、`M3-tests.md` 没要求）
+- **manifest 与冻结文档的「对账」是一个可执行断言**（M3/Task 38 新建的**落点**，
+  M1/M2 的 manifest 此前没有任何脚本引用它）：`rgoc/crates/rgoc-driver/tests/manifest_m3.rs`
+  —— ① `test_ids` 集合 == `M3-tests.md` §3 表**第一列**（68）；② `unsupported` 集合 == §6（13）；
+  ③ `gate` 键**恰好** `TY-1..8` 且全 `pass`、证据带指针；④ `budget` == §7.4 冻结值；
+  ⑤ `coverage` 计数器自洽；⑥ §6 纪律：拒绝侧那几条必须有 `T-TY-8x` 正向指针。
+  **五条例外**单列成判据表（`U-M3-06/10/11/12/13`：约定路径 / 不承诺逐字 / M2 承继未触发）——
+  硬要 8x 会逼人写假测试。另有 **15 条合成反例**（13 改 manifest + 2 改**文档**）证明它真在读文档
+- **语料口径（Task 35 普查，可重放 `probe/corpus-survey.sh`）**：**57 候选** = 入选 **31**
+  （`tools/types-oracle/corpus-selected.txt`）/ DIFF **15**（根因同一 ⇒ `U-M3-04` 实例化）/
+  两侧都拒绝 4 / oracle 单侧拒绝 6 / 两侧都空 1；排除集逐行理由在 `corpus-allowlist.txt`
+  （`<路径>\t<理由>`），**两个清单互斥且合起来恰好覆盖候选**（Rust 侧断言，Ruling 35-3/4）
 
 ## 文档索引
-- `docs/`：README / 01-feature-set(246) / 03-roadmap(M0–M12)；契约 C1–C6；M2-manifest.json；M0 环境陷阱 14 项在 M0-benchmarks.md §6；VSCode/调试复发点与自检脚本用法见 `AGENTS.md`
+- `docs/`：README / 01-feature-set(246) / 03-roadmap(M0–M12)；契约 C1–C7；`M0/M1/M2/M3-manifest.json`；M0 环境陷阱 14 项在 M0-benchmarks.md §6；VSCode/调试复发点与自检脚本用法见 `AGENTS.md`

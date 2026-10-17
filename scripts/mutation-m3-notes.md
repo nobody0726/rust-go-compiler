@@ -25,6 +25,26 @@
 ⇒ 结论照实登记：**那两条「照不出」是执行方式的问题，不是覆盖缺口**；而这条陷阱本身
 值得写进纪律 —— 它会让**任何**变异测试（包括 `M0` 那批）静默失效。
 
+### 0.1 反过来也踩了一次（Task 38 收口时实测）
+
+同一个根因的**另一面**：7 条探针**全部复原**（工作区 `git diff` 干净、md5 逐字节相同）之后，
+Task 38 第一次跑全量门禁是 **`passed=1274 failed=8`**，红的 8 条全在
+`rgoc-parse/tests/test_directive.rs`，报的还是 `M84` 那句
+`"syntax error: unknown //go: directive"` —— 也就是说 **`rgoc-parse` 的 rlib 里还编着变异版**，
+cargo 认为它新鲜，没重编。
+
+修法只有一条：**全量重建**
+
+```sh
+find /work/rgoc/target -mindepth 1 -delete   # cargo clean 会 EBUSY（target 在命名卷上）
+```
+
+重建后同一条命令 **`passed=1282 failed=0`、`gate_fail=0`**（1280 + Task 38 新加的 2 条对账测试）。
+
+**纪律**：变异收尾之后，**别相信紧接着的那次门禁结果** —— 要么 `cargo clean -p` 每个被变异的 crate，
+要么直接 `find rgoc/target -mindepth 1 -delete` 全量重建（≈4 min）。
+假绿与假红**都是**这个陷阱的表现，而**假红**比假绿更危险：它会让人去「修」一个根本没坏的东西。
+
 ## 1. 探针总表
 
 | # | 覆盖 ID | 变异（改哪儿 → 改成什么） | 期望 | 实测 |
