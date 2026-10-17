@@ -46,7 +46,7 @@ pub mod universe;
 pub mod validtype;
 pub mod version;
 
-pub use dump::dump_types;
+pub use dump::{DumpError, dump_types, try_dump_types};
 pub use identical::{identical, unalias};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};

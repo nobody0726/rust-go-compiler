@@ -35,16 +35,27 @@
 //! 类型放进**同一张表**（实测 oracle 在 `func g() (int, error)` 上把 `error`
 //! 拉了进来），若不按 `BasicId` 去重，`int` 会出现两次而 oracle 只会有一次。
 //!
-//! # 环守卫：本文件**不需要**它
+//! # 环守卫：本文件**需要**它（一度以为不需要，被语料推翻）
 //!
-//! oracle 侧有环守卫（`interface{ comparable; M() }` 这类**非法**样本会让后序
-//! 走访成环 ⇒ 曾经的 `fatal error: stack overflow`，见 `C7` §5.1）。本文件
-//! **结构上不可能**成环：`Type` 里唯一能指向「尚未填好的条目」的是
-//! `Named`/`Alias`（它们「先占号、后填本体」），而这两类在成环时**已经占过号**
-//! ⇒ 递归在 `assigned` 那一行就返回了。结构型（`struct`/`tuple`/`interface`/…）
-//! 的子节点必须先于父节点存在 ⇒ 匿名类型无法自引用。
+//! oracle 侧有环守卫（`interface{ comparable; M() }` 这类样本会让后序走访成环
+//! ⇒ 曾经的 `fatal error: stack overflow`，见 `C7` §5.1）。本文件曾断言
+//! 「结构上不可能成环：能指向尚未填好的条目的只有 `Named`/`Alias`，而它们先占号」
+//! —— **这条断言是错的**，`Task 35` 的语料普查给了三个反例：
+//! `types/testdata/fixedbugs/issue43056.go`、`issue48695.go`、`issue50426.go`
+//! 让 rgoc **SIGABRT**（`fatal runtime error: stack overflow`）。
+//!
+//! 成环的真实机制：**类型参数的约束是回填的**（`set_type_param_constraint`）。
+//! `interface{ M(T) }` → 方法签名 → 参数元组 → 类型参数 `T` → `T` 的约束 →
+//! **回到那个接口**：环上没有任何定义型来「先占号」⇒ 后序走访不终止。
+//! 这类程序在 Go 里合法（`go/types` 检查得动），但 `C7` 的 dump **没有定义**
+//! （匿名结构自引用，号没法排）⇒ 两侧都**拒绝产出**：oracle 侧 panic，
+//! 本层返回 [`DumpError::CyclicTypeGraph`]（driver 把它变成退出码 2）。
+//!
+//! 守卫的位置与 oracle 一致：**键**（不是 `TypeId`）在「正在下钻」集合里再次出现
+//! ⇒ 环。定义型（`named`/`alias`）先占号 ⇒ 它们的环在 `assigned` 那一行就返回了，
+//! 不会被误判。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use rgoc_const::{BasicId, Const, ConstId};
@@ -59,17 +70,53 @@ use crate::typ::{AliasId, NamedId, Type, TypeId};
 /// 用来标记「这份 dump 谁产的」）。
 ///
 /// 末尾**恰一个**换行（`C7` §2）。
+///
+/// ⚠️ 撞上**匿名环**（见模块文档）时它 `panic!` —— 那是 `oracle` 侧的行为
+/// （`C7` §5.1：对撞样本必须是合法程序）。**生产路径**（`rgoc-driver types`）
+/// 走 [`try_dump_types`]，把环变成可判定的错误（退出码 2），别用这个版本。
 #[must_use]
 pub fn dump_types(tt: &TypeTable, roots: &[TypeId]) -> String {
+    try_dump_types(tt, roots).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`dump_types`] 的可判定版本：环 ⇒ `Err`。
+///
+/// 为什么要有两个入口：`C7` 的 dump 只有**一份**实现（对撞要求两侧逐字节同），
+/// 而「撞上环」这件事在**测试**里希望是响亮的 panic（那是两侧都拒绝的形状），
+/// 在 **CLI** 里必须是可判定的错误。用一个 `Result` 内核 + 两个入口比让调用方
+/// 到处 `match` 更省。
+pub fn try_dump_types(tt: &TypeTable, roots: &[TypeId]) -> Result<String, DumpError> {
     let mut d = Dumper {
         tt,
         order: Vec::new(),
         assigned: HashMap::new(),
+        descending: HashSet::new(),
+        cycled: false,
     };
     for &r in roots {
-        d.number(r);
+        if !d.number(r) {
+            return Err(DumpError::CyclicTypeGraph);
+        }
     }
-    d.render()
+    Ok(d.render())
+}
+
+/// dump 拒绝产出的原因（`C7` §5.1）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DumpError {
+    /// **匿名**结构成环（典型：`interface{ M(T) }` 里 `T` 的约束就是这个接口）。
+    /// 定义型自引用**不是**这种（它先占号，能正常 dump）。
+    CyclicTypeGraph,
+}
+
+impl std::fmt::Display for DumpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DumpError::CyclicTypeGraph => f.write_str(
+                "类型图成环（匿名结构经类型参数约束自引用）—— C7 §5.1：对撞样本必须是合法程序，本 dump 拒绝产出",
+            ),
+        }
+    }
 }
 
 /// 编号的「键」：同一个键只占一个号（见模块文档的表）。
@@ -107,39 +154,59 @@ struct Dumper<'a> {
     order: Vec<TypeId>,
     /// 键 → 号。
     assigned: HashMap<Key, usize>,
+    /// **正在**下钻的键（环守卫；离开时移除 —— 不移除会把合法的重复访问误判成环）。
+    descending: HashSet<Key>,
+    /// 撞上环（整份 dump 作废；见模块文档）。
+    cycled: bool,
 }
 
 impl Dumper<'_> {
-    /// 走访并占号（`C7` §3）。
-    fn number(&mut self, id: TypeId) {
+    /// 走访并占号（`C7` §3）。返回 `false` ⇒ 撞上环，调用方丢弃整份 dump。
+    fn number(&mut self, id: TypeId) -> bool {
+        if self.cycled {
+            return false;
+        }
         let tt = self.tt;
         let key = key_of(tt, id);
         if self.assigned.contains_key(&key) {
-            return;
+            return true;
         }
-        // 定义型：**先占号，再下钻本体**（顺序与「后序」相反，这是刻意的）
-        match tt.type_of(id) {
+        // 环守卫：**还没有号**的键再次进入 ⇒ 匿名结构成环（模块文档里的三例实测）
+        if !self.descending.insert(key) {
+            self.cycled = true;
+            return false;
+        }
+        let ok = match tt.type_of(id) {
+            // 定义型：**先占号，再下钻本体**（顺序与「后序」相反，这是刻意的）
             Type::Named(n) => {
                 let n = *n;
                 self.occupy(id, key);
                 let under = tt.named_underlying(n);
-                self.number(under);
-                return;
+                self.number(under)
             }
             Type::Alias(a) => {
                 let a = *a;
                 self.occupy(id, key);
                 let rhs = tt.alias_rhs(a);
-                self.number(rhs);
-                return;
+                self.number(rhs)
             }
-            _ => {}
-        }
-        // 其余：先子后父
-        for child in children(tt, id) {
-            self.number(child);
-        }
-        self.occupy(id, key);
+            // 其余：先子后父
+            _ => {
+                let mut ok = true;
+                for child in children(tt, id) {
+                    if !self.number(child) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if ok {
+                    self.occupy(id, key);
+                }
+                ok
+            }
+        };
+        self.descending.remove(&key);
+        ok
     }
 
     fn occupy(&mut self, id: TypeId, key: Key) {

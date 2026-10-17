@@ -137,6 +137,9 @@ pub fn export_summary(pkg: &Package, tt: &TypeTable) -> ExportSummary {
 ///   （数组长度、无名元组都用它）。
 /// * 去掉 `# source: rgoc` 头行：那是**来源标记**，不是类型描述
 ///   （`C7` §2 规则 1 说 `#` 行两侧都忽略 ⇒ 摘要在语义上没丢东西）。
+/// * ⚠️ 匿名环（`C7` §5.1）⇒ 这里的 [`dump_types`] **响亮地炸**：摘要没有
+///   「拒绝」这种取值（`-` 的含义是「没有类型」），而那类程序整份 dump 都作废
+///   —— 想要可判定的版本走 [`rgoc_types::try_dump_types`]（driver 就是那么做的）。
 fn type_dump(tt: &TypeTable, obj: &Object) -> String {
     let Some(id) = obj.typ else {
         return "-".to_owned();

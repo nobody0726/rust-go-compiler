@@ -35,7 +35,7 @@ use std::fmt::Write as _;
 
 use rgoc_lex::Diag;
 use rgoc_load::{Package, load_with_imports};
-use rgoc_types::{TypeTable, dump_types};
+use rgoc_types::{TypeTable, try_dump_types};
 
 use crate::cli::TypesCommand;
 
@@ -80,7 +80,11 @@ pub fn run_types(cmd: &TypesCommand) -> Result<TypesOutcome, String> {
                 .join(" ")
         );
         let _ = writeln!(stdout, "# package: {}", pkg.name);
-        stdout.push_str(&dump_types(&tt, &pkg.type_roots));
+        // ⚠️ 环（`C7` §5.1）⇒ **可判定的错误**（退出码 2）：`types/testdata` 里有
+        //    三例（`issue43056/48695/50426`）会让后序走访不终止；从前是
+        //    `fatal runtime error: stack overflow`（SIGABRT），现在是响亮的一句。
+        let body = try_dump_types(&tt, &pkg.type_roots).map_err(|e| e.to_string())?;
+        stdout.push_str(&body);
     } else {
         // 摘要：**人读**用（门禁读的是退出码，对撞读的是 `--dump`）。
         // 数字都摆出来是为了让「装载悄悄少收了文件」可见（静默失败的老形状）。

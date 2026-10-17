@@ -544,3 +544,59 @@ fn 最小对撞目标与契约的_want_一致() {
 fn iface_type(tt: &TypeTable, id: rgoc_types::InterfaceId) -> rgoc_types::TypeId {
     tt.interface_type(id)
 }
+
+// ── 环守卫（`C7` §5.1）────────────────────────────────────────────────────
+
+/// 建一个**匿名环**：`interface{ M(T) }` 里 `T` 的约束就是那个接口。
+///
+/// 形状来自语料实测（`Task 35` 的普查）：`types/testdata/fixedbugs/issue43056.go`
+/// 的 `func g[T interface{ Equal(T) bool }](a, b T)`。环上**没有**定义型
+/// （`named`/`alias`）来「先占号」⇒ 后序走访不终止 —— rgoc 修前是
+/// `fatal runtime error: stack overflow`（SIGABRT），oracle 侧按 `C7` §5.1 panic。
+fn cyclic_tt() -> (TypeTable, rgoc_types::TypeId) {
+    let mut tt = TypeTable::new();
+    // 约束**先占位**（`invalid`），等接口建好再回填 —— 环正是在这里长出来的
+    let inv = tt.invalid();
+    let tp = tt.add_type_param(0, inv);
+    let tp_ty = tt.type_param_type(tp);
+    let params = tt.add_tuple(vec![(None, tp_ty)]);
+    let results = tt.add_tuple(Vec::new());
+    let sig = tt.add_signature(None, params, results, false);
+    let iface = tt.add_interface(vec![("M".to_string(), tt.signature_type(sig))], None, false);
+    let iface_ty = tt.interface_type(iface);
+    tt.set_type_param_constraint(tp, iface_ty);
+    (tt, iface_ty)
+}
+
+/// 环 ⇒ **拒绝产出**（可判定版本），而不是把栈踩爆。
+#[test]
+fn c7_匿名环拒绝产出() {
+    let (tt, root) = cyclic_tt();
+    let err = rgoc_types::try_dump_types(&tt, &[root]).unwrap_err();
+    assert_eq!(err, rgoc_types::DumpError::CyclicTypeGraph);
+    // 反向：同一张图上**摘掉环**（约束换成空接口）⇒ 正常产出（否则上一条
+    // 可能只是「凡类型参数就拒绝」）
+    let mut tt = TypeTable::new();
+    let any = tt.add_interface(Vec::new(), None, false);
+    let any_ty = tt.interface_type(any);
+    let tp = tt.add_type_param(0, any_ty);
+    let tp_ty = tt.type_param_type(tp);
+    let params = tt.add_tuple(vec![(None, tp_ty)]);
+    let results = tt.add_tuple(Vec::new());
+    let sig = tt.add_signature(None, params, results, false);
+    let iface = tt.add_interface(vec![("M".to_string(), tt.signature_type(sig))], None, false);
+    let iface_ty = tt.interface_type(iface);
+    assert!(
+        rgoc_types::try_dump_types(&tt, &[iface_ty]).is_ok(),
+        "无环的类型参数必须照常 dump"
+    );
+}
+
+/// 反向：**未检查**版本（`dump_types`）撞上环时**响亮地炸** —— 它是对外的
+/// `C7` 事实源（`export_summary` 用它），不许静默给半份 dump。
+#[test]
+#[should_panic(expected = "类型图成环")]
+fn c7_匿名环_unchecked_响亮地炸() {
+    let (tt, root) = cyclic_tt();
+    let _ = dump_types(&tt, &[root]);
+}

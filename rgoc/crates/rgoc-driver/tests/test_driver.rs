@@ -924,8 +924,7 @@ fn types_有诊断_退出码一_且两条通道分得开() {
 
 /// 文件读不到 ⇒ 退出码 **2**（不是 1）：它不是语言错，官方也没有对应代号。
 #[test]
-fn types_文件读不到_退出码二() {
-    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+fn types_文件读不到_退出码二() {    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
     let out = std::process::Command::new(bin)
         .args(["types", "/definitely/not/exist/m3.go"])
         .output()
@@ -934,6 +933,37 @@ fn types_文件读不到_退出码二() {
     assert!(out.stdout.is_empty());
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("m3.go"), "stderr 指出问题的文件：{err}");
+    assert!(
+        !err.contains("panicked"),
+        "必须是显式报错，不是 panic：{err}"
+    );
+}
+
+/// **匿名环**（`C7` §5.1）⇒ 退出码 **2**，且**不是** SIGABRT。
+///
+/// 谁抓到过：`Task 35` 的语料普查 —— `types/testdata/fixedbugs/issue43056.go`
+/// 等三例让 rgoc `fatal runtime error: stack overflow`（信号 6）。
+/// oracle 侧同样拒绝（panic，退出码 1）⇒ 这类样本**不可对撞**，但 rgoc 不许崩。
+#[test]
+fn types_匿名环_退出码二且不崩() {
+    let f = 临时_go(
+        "anoncycle",
+        "package p\n\nfunc g[T interface{ Equal(T) bool }](a, b T) {}\n",
+    );
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "--dump"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "环 ⇒ 2（可判定的拒绝，不是 1 也不是信号）"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("类型图成环"), "stderr 要说清原因：{err}");
+    assert!(!err.contains("stack overflow"), "不许是栈溢出：{err}");
     assert!(
         !err.contains("panicked"),
         "必须是显式报错，不是 panic：{err}"
