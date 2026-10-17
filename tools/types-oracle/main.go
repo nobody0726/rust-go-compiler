@@ -200,6 +200,14 @@ func (d *dumper) roots(f *ast.File) []types.Type {
 			case token.TYPE:
 				for _, s := range x.Specs {
 					if ts, ok := s.(*ast.TypeSpec); ok {
+						// ⚠️ **空标识符不是声明**（Go 语义：`_` 不引入绑定）⇒ 它不是根。
+						// go/types 的 `Defs[_]` 里**有**一个对象（那是它检查右值用的），
+						// 照抄会把一个「包里并不存在的类型」编进号 —— 实测
+						// `types/testdata/fixedbugs/issue39711.go`（`type _ interface{…}`）。
+						// rgoc 侧同样跳过（`pass2_resolve` 的第一句就是 `_` ⇒ continue）。
+						if ts.Name.Name == "_" {
+							continue
+						}
 						out = append(out, d.defType(ts.Name))
 					}
 				}
