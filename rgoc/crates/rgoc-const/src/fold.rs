@@ -35,8 +35,10 @@ use std::cmp::Ordering;
 use rgoc_ast::Op;
 use rgoc_lex::DiagCode;
 
+use crate::basic::BasicId;
 use crate::bigint::{BigInt, BitOp};
 use crate::bigrat::BigRat;
+use crate::sizes::Sizes;
 use crate::value::Const;
 
 /// 常量移位计数的上界（**与官方 `go/types` 同界**，见 [`shift_ok`]）。
@@ -129,6 +131,40 @@ pub fn fold_unary(op: Op, x: &Const) -> Const {
         },
         _ => Const::Unknown,
     }
+}
+
+/// 带**操作数类型**的一元折叠（M3/Task 30：`^` 不是纯值运算）。
+///
+/// 只有 `^` 需要它 —— 官方语义**按类型分岔**：
+///
+/// | 操作数 | 官方语义 | 实测 |
+/// |---|---|---|
+/// | 有类型**无符号** | 按宽度取补 `m ^ x`（`m` = 该宽度全 1）⇒ **非负** | `^uint32(0)` = 4294967295 |
+/// | 有类型**有符号** | 无限精度补码 `-x-1` | `^int8(0)` = -1 |
+/// | **无类型** | 同上（无类型常量不分宽度） | `^0` = -1 |
+///
+/// 前两行的官方判据由 go1.27.1 实测（`const a = ^uint32(0)` 合法，
+/// 值 4294967295）。`ty` 是**调用方能确定**的操作数类型：`None` ⇒ 不知道 ⇒
+/// 按无类型语义算，**不猜**（本层没有类型表，见 [`crate::eval`] 的模块文档）。
+///
+/// ⚠️ **已知边界**：`ty` 目前只在「操作数是**转换到预声明基本类型**」时才给得出
+/// （[`crate::eval`] 的 `operand_basic_ty`）⇒ `^x` 里 `x` 是**具名**的无符号常量
+/// （`const u uint32 = 0; const b = ^u`）时仍按无类型算，值偏 `-x-1`。
+/// 那条记在 `M3-manifest.json` 的 `open_gaps`（修它要 `ConstEnv` 报出名字的类型）。
+#[must_use]
+pub fn fold_unary_typed(op: Op, x: &Const, ty: Option<BasicId>, sizes: &Sizes) -> Const {
+    if op == Op::Xor
+        && let Some(b) = ty
+        && b.is_unsigned()
+        && let (Const::Int(v), Some(w)) = (x, sizes.width_of(b))
+    {
+        // `m - v`：`v` 来自转换到该无符号类型 ⇒ 转换时已判过可表示 `v ∈ [0, m]`
+        // ⇒ 结果非负。**不**在值层做「超出宽度就回绕」：那是转换/可表示的事。
+        let one = BigInt::from_u64(1);
+        let m = one.shl(w).sub(&one);
+        return Const::Int(m.sub(v));
+    }
+    fold_unary(op, x)
 }
 
 /// 比较运算折叠（结果恒为 [`Const::Bool`] 或 [`Const::Unknown`]）。
@@ -463,6 +499,52 @@ mod tests {
                 re: BigRat::from_i64(-1),
                 im: BigRat::from_i64(-2)
             }
+        );
+    }
+
+    /// `^` 的**类型依赖**（M3/Task 30）：无符号**有类型** ⇒ 按宽度取补（非负）；
+    /// 有符号 / 无类型 / **不知道类型** ⇒ 无限精度补码 `-x-1`。
+    ///
+    /// 判据来自 go1.27.1 实测：`^uint32(0)` 合法且 = 4294967295。
+    #[test]
+    fn 一元补_按操作数类型分岔() {
+        let s = Sizes::HOST_ARM64;
+        // 无符号有类型：`m - x`，宽度随类型
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &i(0), Some(BasicId::Uintptr), &s),
+            Const::Int(BigInt::from_u64(u64::MAX))
+        );
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &i(0), Some(BasicId::Uint32), &s),
+            Const::Int(BigInt::from_u64(0xFFFF_FFFF))
+        );
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &i(1), Some(BasicId::Uint8), &s),
+            Const::Int(BigInt::from_u64(0xFE))
+        );
+        // 有符号 / 无类型 / 不知道 ⇒ `-x-1`，与 [`fold_unary`] 一致
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &i(0), Some(BasicId::Int64), &s),
+            i(-1)
+        );
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &i(0), Some(BasicId::UntypedInt), &s),
+            i(-1)
+        );
+        assert_eq!(fold_unary_typed(Op::Xor, &i(0), None, &s), i(-1));
+        // 非 `^` 的一元运算与 [`fold_unary`] 逐字相同
+        assert_eq!(
+            fold_unary_typed(Op::Sub, &i(5), Some(BasicId::Uint32), &s),
+            fold_unary(Op::Sub, &i(5))
+        );
+        // 种类不匹配仍然是 `Unknown`（不因为给了类型就乱给值）
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &Const::Bool(true), Some(BasicId::Uint32), &s),
+            Const::Unknown
+        );
+        assert_eq!(
+            fold_unary_typed(Op::Xor, &Const::Unknown, Some(BasicId::Uint32), &s),
+            Const::Unknown
         );
     }
 

@@ -19,6 +19,21 @@
 //! 本层**不报错**、把判断权留给类型层（Task 16+）。这条边界是**有意**的：
 //! 在值层猜类型会造出「有时误报、有时漏报」的诊断。
 //!
+//! ## 唯一一处例外：`^`（Task 30 的语料冒烟发现）
+//!
+//! `^x` 的**值**依赖 `x` 的类型（无符号有类型 ⇒ 按宽度取补，结果非负；
+//! 有符号 / 无类型 ⇒ 无限精度补码 `-x-1`，两者差一个宽度）。
+//! 本层**不建类型表**，但有一种形状**语法自己就说得出类型**：
+//! 「转换到预声明基本类型」——`^uintptr(0)` 的目标写在源码里。
+//! 所以 [`operand_basic_ty`] 只认这种形状（+ 括号穿透），
+//! [`fold_unary_typed`] 据此取补；**给不出类型时按无类型算，不猜**。
+//!
+//! 这不是把类型表偷偷搬进来：它读的是**操作数自己写的那个类型名**，
+//! 与「查到某名字的类型」是两回事（后者仍然留给类型层）。
+//! 为什么必须补：`const ptrSize = 4 << (^uintptr(0) >> 63)`（语料
+//! `unicode/utf8/utf8.go:459`）在合法代码上会被判成 `TYP-INVALID-SHIFT-COUNT`
+//! —— **误报**比漏报更贵（它把能力边界伪装成用户的错）。
+//!
 //! # 三种返回值，别混
 //!
 //! ```text
@@ -54,7 +69,7 @@ use rgoc_lex::{Diag, DiagBag, DiagCode, Pos};
 
 use crate::basic::BasicId;
 use crate::convert::convert_const;
-use crate::fold::{fold_binary, fold_compare, fold_unary, shift_ok, shift_operand_ok};
+use crate::fold::{fold_binary, fold_compare, fold_unary_typed, shift_ok, shift_operand_ok};
 use crate::representable::representable;
 use crate::sizes::Sizes;
 use crate::value::{Const, const_from_literal};
@@ -138,7 +153,12 @@ fn eval(
             let x = eval(&op.x, env, sizes, diags);
             match x {
                 EvalOutcome::NotAConstant => EvalOutcome::NotAConstant,
-                EvalOutcome::Const(v) => EvalOutcome::Const(fold_unary(op.op, &v)),
+                // `^` 的值**依赖操作数的类型**（无符号有类型 ⇒ 按宽度取补，非负；
+                // 其余 ⇒ 无限精度补码）。类型只在本层**语法上就能确定**时才给得出
+                // （见 `operand_basic_ty`）；给不出就按无类型算。
+                EvalOutcome::Const(v) => {
+                    EvalOutcome::Const(fold_unary_typed(op.op, &v, operand_basic_ty(&op.x), sizes))
+                }
             }
         }
         Expr::Binary(op) => {
@@ -284,6 +304,28 @@ fn is_zero(c: &Const) -> bool {
         Const::Float(r) => r.is_zero(),
         Const::Complex { re, im } => re.is_zero() && im.is_zero(),
         _ => false,
+    }
+}
+
+/// 操作数**能确定**的预声明基本类型（`^` 需要，见 [`fold_unary_typed`]）。
+///
+/// 只在**语法自己就说得出类型**的形状上给答案 —— 不需要类型表，也没有作用域：
+///
+/// * 转换到预声明基本类型：`uintptr(0)` / `uint32(x)` / `byte(x)`
+///   （`byte` / `rune` 是别名，折到本体）；
+/// * 括号穿透：`^(uintptr(0))` 也要认。
+///
+/// 其余形状（字面量、具名常量、复合运算…）返回 `None`：本层**不猜**类型
+/// （模块文档的边界：在值层猜类型会造出「有时误报、有时漏报」的诊断）。
+/// 已知代价见 [`fold_unary_typed`] 的「已知边界」。
+fn operand_basic_ty(expr: &Expr) -> Option<BasicId> {
+    match expr {
+        Expr::Paren(p) => operand_basic_ty(&p.x),
+        Expr::Call(c) if !c.has_dots && c.args.len() == 1 => match &*c.fun {
+            Expr::Name(n) => basic_from_name(&n.value),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

@@ -440,3 +440,67 @@ fn 坏字面量_没有值但不报错() {
     assert_eq!(codes(bag2), Vec::<DiagCode>::new());
     assert_eq!(out2, EvalOutcome::Const(Const::Unknown));
 }
+
+// ── `^` 的类型依赖（Task 30 语料冒烟顺带发现）────────────────────────────
+
+/// `^x` 的值**依赖 x 的类型**：无符号有类型 ⇒ 按宽度取补（非负）；
+/// 有符号 / 无类型 ⇒ 无限精度补码 `-x-1`。
+///
+/// 真实触发点在语料 `unicode/utf8/utf8.go:459`：
+/// `const ptrSize = 4 << (^uintptr(0) >> 63)`（官方 = `0` ⇒ `ptrSize = 8`）。
+/// 折叠器早先对 `^` 一律用无限精度补码 ⇒ `^uintptr(0)` 得到 `-1`、
+/// `>> 63` 得到 `-1`，于是**在合法代码上报了 `TYP-INVALID-SHIFT-COUNT`**。
+#[test]
+fn 无符号有类型操作数的补按宽度取补() {
+    // ① 有类型**无符号**：结果非负，按该类型的宽度（本层只知道预声明基本类型）
+    assert_eq!(
+        value(&un(Op::Xor, call("uintptr", vec![ilit("0")]))),
+        Const::Int(rgoc_const::BigInt::from_u64(u64::MAX)),
+        "`^uintptr(0)` = 2^64-1（**不是** -1）"
+    );
+    assert_eq!(
+        value(&un(Op::Xor, call("uint32", vec![ilit("0")]))),
+        Const::Int(rgoc_const::BigInt::from_u64(0xFFFF_FFFF))
+    );
+    assert_eq!(
+        value(&un(Op::Xor, call("uint8", vec![ilit("1")]))),
+        Const::Int(rgoc_const::BigInt::from_u64(0xFE))
+    );
+    // 别名 `byte` 折到 `uint8`（`basic_from_name` 的口径）
+    assert_eq!(
+        value(&un(Op::Xor, call("byte", vec![ilit("1")]))),
+        Const::Int(rgoc_const::BigInt::from_u64(0xFE))
+    );
+    // ② 有符号 / 无类型：无限精度补码，与宽度无关
+    assert_eq!(value(&un(Op::Xor, ilit("0"))), int(-1));
+    assert_eq!(value(&un(Op::Xor, call("int8", vec![ilit("0")]))), int(-1));
+    assert_eq!(value(&un(Op::Xor, call("int64", vec![ilit("0")]))), int(-1));
+    // ③ 语料里那一行的**逐字**形状：零诊断 + 值 8
+    let ptr_size = bin(
+        Op::Shl,
+        ilit("4"),
+        paren(bin(
+            Op::Shr,
+            un(Op::Xor, call("uintptr", vec![ilit("0")])),
+            ilit("63"),
+        )),
+    );
+    let (out, bag) = eval(&ptr_size);
+    assert_eq!(codes(bag), Vec::<DiagCode>::new(), "合法表达式不许报错");
+    assert_eq!(
+        out,
+        EvalOutcome::Const(int(8)),
+        "`4 << (^uintptr(0) >> 63)` = 8"
+    );
+    // ④ 同形的 32 位版本：`^uint32(0) >> 63` = 0 ⇒ `4 << 0` = 4
+    let p32 = bin(
+        Op::Shl,
+        ilit("4"),
+        paren(bin(
+            Op::Shr,
+            un(Op::Xor, call("uint32", vec![ilit("0")])),
+            ilit("63"),
+        )),
+    );
+    assert_eq!(value(&p32), int(4));
+}
