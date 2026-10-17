@@ -54,6 +54,19 @@ use crate::types_cmd::TypesOutcome;
 /// 各自的诊断都靠它归位）。
 const SYN_NAME: &str = "<rgoc:cmp>";
 
+/// `//rgoc:cmp` 的 kind 不是 M3 支持的两个之一时的**稳定拒绝码**（`T-TY-82`）。
+///
+/// 为什么是驱动层的码、而不是 [`rgoc_lex::DiagCode`]：它说的是「这个**请求**
+/// 我们不判」——没有官方对应代号，也不来自某个源码位置。它与 `T-TY-81` 的
+/// `TYP-UNSUPPORTED-CONSTRAINT-IDENTITY` 同理不同层：那条是**语言层**的能力边界
+/// （判同一性时撞上类型集），这条是**请求层**的能力边界（连问都没法问）。
+///
+/// 为什么「拼错的 kind」与「M3 不判的判定」共用一个码：语法上不可分
+/// （`assignable` / `implements` / `instance` 都只是没见过的名字）。kind 集合
+/// **与 oracle 侧共用且封闭**（都只认 `identical` / `representable`）—— 不发明
+/// 新 kind 名：fixture 由两侧读**同一份**文件，输入语言分叉比少支持一个 kind 坏。
+pub const KIND_UNSUPPORTED: &str = "TYP-CMP-KIND-UNSUPPORTED";
+
 /// 指令种类（`D-M3-17` 的两种）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CmpKind {
@@ -287,8 +300,11 @@ fn read_directives(path: &Path) -> Result<Vec<CmpEntry>, String> {
             "identical" => CmpKind::Identical,
             "representable" => CmpKind::Representable,
             other => {
+                // `T-TY-82`：请求 `TYP-13/18/19/23..26` 的判定在 M3 的**唯一入口**
+                // 就是这个 kind 名。往后 `[…]` 里那份稳定码是给 grep / 断言用的。
                 return Err(err(format!(
-                    "未知的 cmp kind {other:?}（只认 identical / representable）"
+                    "未知的 cmp kind {other:?}（M3 只判 identical / representable；\
+                     TYP-13/18/19/23..26 的判定属 M4，U-M3-01..04）[{KIND_UNSUPPORTED}]"
                 )));
             }
         };

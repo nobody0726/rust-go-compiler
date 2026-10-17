@@ -377,7 +377,11 @@ pub enum DiagCode {
     /// （`M3-tests.md` §4：`T-TY-81` 要的是**稳定拒绝码**）。
     ///
     /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
-    /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）落在检查器里，届时**复用**本码。
+    /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）在 M3 的**唯一入口**是
+    /// `//rgoc:cmp` 的 kind 名 ⇒ 由驱动层用 `TYP-CMP-KIND-UNSUPPORTED` 拒绝
+    /// （`rgoc-driver/src/cmp_cmd.rs` 的 `KIND_UNSUPPORTED`）—— 那条是「**请求**层」
+    /// 的边界，与本码（**语言层**边界）不同层。本码留给 M4：等真检查器开始问
+    /// 「约束接口同一性」时复用。参见 `M3-tests.md` §4 的 `T-TY-82` 行。
     TypUnsupportedConstraintIdentity,
     /// 用了 **M3 不支持的 import 形式** —— **官方没有对应代号**
     ///

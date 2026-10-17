@@ -230,6 +230,29 @@
 > **诊断码纪律**：新增 `DiagCode` 遵守**五件套**（枚举按字典序落位 + `ALL` 数组 + `as_str` + **两个总数测试**）。
 > 每个新码都要有**至少一条**触发它的测试 ID（上表）。**没有触发者的码不许进枚举。**
 
+**修订 R-36-1（Task 36 执行期，2026-10-17；把 `T-TY-82` 的「请求」落到具体入口）**
+
+上表 `T-TY-82` 只写了「判定请求」四个字 —— 执行期要回答「M3 里**从哪**发出这种请求」：
+
+* **入口只有一个**：`//rgoc:cmp <kind> …` 的 kind 名。M3 支持的 kind **封闭**且
+  **与 oracle 侧共用**（两边都只认 `identical` / `representable`）——
+  `assignable` / `implements` / `methodset` / `instance` / `infer` / `unify`
+  这类名字一律落在这条拒绝上。
+* **不发明新 kind 名**：fixture 由两侧读**同一份**文件，输入语言分叉比「少支持一个 kind」
+  坏得多（那会让「对撞」这个装置本身失真）。
+* **稳定码**：`[TYP-CMP-KIND-UNSUPPORTED]`，**驱动层**的码（不进 `DiagCode` 枚举 ——
+  它不是语言诊断：没有官方对应代号、也不来自某个源码位置）。退出码 **2**（请求本身
+  不合格，与「诊断 ⇒ 1」分得开）。
+  「拼错的 kind」与「M3 不判的判定」在语法上**不可分** ⇒ 共用一条码，消息里写明
+  「M3 只判 identical / representable」。
+* 反向（相邻支持项不报）由 `identical` / `representable` 两条正常判定承担。
+* `DiagCode::TypUnsupportedConstraintIdentity` 的文档注同步订正：**不再**声称
+  `T-TY-82` 复用它（它是**语言层**边界，那条是**请求层**边界）。
+
+`M3-plan.md` Task 36 Step 1 里的「仅警告 ⇒ 0」是**空条款**：M3 的 `Diag` 没有严重
+级别（`pos`/`code`/`message`）⇒ 不存在「只有警告」的运行。测试改为钉
+`exit == 0 ⟺ diagnostics == 0`。
+
 ---
 
 ## 5. oracle 口径（`tools/types-oracle`）
