@@ -771,7 +771,7 @@ fn lex_读不到文件时非零退出且指出路径() {
     );
 }
 
-// ══ 6. types 子命令（M3/Task 2 的占位）═════════════════════════════════════
+// ══ 6. types 子命令（M3；Task 31/33 起接线）════════════════════════════════
 
 /// `types` 接受**一个或多个**文件 —— M3 的包模型是「单包多文件」
 /// （`D-M3-5`：源码 import，不读二进制 export data），所以至少要能收多个。
@@ -787,9 +787,37 @@ fn 解析_types_子命令_一个或多个文件() {
         let got = parse_args(&argv).unwrap_or_else(|e| panic!("{argv:?} 应可解析：{e}"));
         assert_eq!(
             got,
-            Command::Types(TypesCommand { files: want }),
+            Command::Types(TypesCommand {
+                files: want,
+                dump: false,
+                roots: Vec::new(),
+                lang: None,
+            }),
             "argv = {argv:?}"
         );
+    }
+}
+
+/// 选项与文件参数**先后无关**；三个选项各自落到自己的字段上。
+#[test]
+fn 解析_types_选项() {
+    let want = Command::Types(TypesCommand {
+        files: vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
+        dump: true,
+        roots: vec![PathBuf::from("r1"), PathBuf::from("r2")],
+        lang: Some("go1.24".to_string()),
+    });
+    for argv in [
+        vec![
+            "types", "--dump", "--lang", "go1.24", "-I", "r1", "-I", "r2", "a.go", "b.go",
+        ],
+        // 同样的选项，换个位置写 —— 解析结果必须**逐字段相同**
+        vec![
+            "types", "a.go", "-I", "r1", "b.go", "--lang", "go1.24", "-I", "r2", "--dump",
+        ],
+    ] {
+        let got = parse_args(&argv).unwrap_or_else(|e| panic!("{argv:?} 应可解析：{e}"));
+        assert_eq!(got, want, "argv = {argv:?}");
     }
 }
 
@@ -804,32 +832,85 @@ fn types_参数错误逐个报对() {
         parse_args(&["types", "--nope", "a.go"]),
         Err(CliError::UnknownFlag(m)) if m == "--nope"
     ));
+    // 已知选项缺值：报的是**那个选项**，不是笼统的「参数错误」
+    assert!(matches!(
+        parse_args(&["types", "--lang"]),
+        Err(CliError::MissingValue(f)) if f == "--lang"
+    ));
+    assert!(matches!(
+        parse_args(&["types", "a.go", "-I"]),
+        Err(CliError::MissingValue(f)) if f == "-I"
+    ));
     let s = parse_args(&["types"]).unwrap_err().to_string();
-    assert!(s.contains("types <file>"), "错误信息应给出 types 用法：{s}");
+    assert!(s.contains("types"), "错误信息应给出 types 用法：{s}");
 }
 
-/// ★ 占位期最重要的一条：**未实现必须响亮地非零退出**。
-///
-/// 「接受子命令但静默成功」是最坏的形态 —— 门禁会把它读成「类型检查通过」。
-/// 所以这里三条一起断言：非零退出、无 stdout、不是 panic（是显式拒绝）。
+/// 一个临时 `.go` 文件（同 process 的临时目录可用；跨 process 的容器 `/tmp` 会丢）。
+fn 临时_go(tag: &str, src: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("rgoc-m3-types-{tag}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("建临时目录");
+    let p = dir.join("p.go");
+    std::fs::write(&p, src).expect("写临时 .go");
+    p
+}
+
+/// `types --dump`：出 C7 正文 + **来源标注**（`M3-tests.md` §5.3），退出码 0。
 #[test]
-fn types_未实现时_非零退出且文案稳定_不是_panic() {
+fn types_dump_出正文与来源标注() {
+    let f = 临时_go("dump", "package p\n\nvar x int\n");
     let bin = env!("CARGO_BIN_EXE_rgoc-driver");
     let out = std::process::Command::new(bin)
-        .args(["types", "a.go"])
+        .args(["types", "--dump"])
+        .arg(&f)
         .output()
         .expect("起进程");
-    assert_ne!(
+    assert_eq!(out.status.code(), Some(0), "合法单文件应零诊断");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.starts_with("# source: rgoc\n"), "来源必须如实标注：{s}");
+    assert!(s.contains("# package: p"), "包名要可见：{s}");
+    assert!(s.contains("0\tbasic int"), "dump 正文缺失：{s}");
+    assert!(out.stderr.is_empty(), "零诊断 ⇒ stderr 空");
+}
+
+/// 有诊断 ⇒ 退出码 **1**（不是 2），且诊断走 stderr、dump 走 stdout。
+///
+/// 用的是一条**确定会报**的形状：未定义标识符（`T-TY-54` 邻域）。
+#[test]
+fn types_有诊断_退出码一_且两条通道分得开() {
+    let f = 临时_go("diag", "package p\n\nvar x int = y\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "--dump"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(
         out.status.code(),
-        Some(0),
-        "未实现必须非零退出 —— 静默成功会被读成「类型检查通过」"
+        Some(1),
+        "语言层面的诊断 ⇒ 1（2 留给参数/io 错）"
     );
-    assert!(out.stdout.is_empty(), "未实现时不应有 stdout");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("types"), "stderr 要指明是哪个子命令：{err}");
-    assert!(err.contains("未实现"), "stderr 要有稳定文案：{err}");
+    assert!(err.contains("[TYP-"), "stderr 要有稳定代号：{err}");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("[TYP-"),
+        "诊断不许混进 dump（两条通道分得开）"
+    );
+}
+
+/// 文件读不到 ⇒ 退出码 **2**（不是 1）：它不是语言错，官方也没有对应代号。
+#[test]
+fn types_文件读不到_退出码二() {
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "/definitely/not/exist/m3.go"])
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(2));
+    assert!(out.stdout.is_empty());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("m3.go"), "stderr 指出问题的文件：{err}");
     assert!(
         !err.contains("panicked"),
-        "必须是显式拒绝（`D-M3-11`），不是 panic：{err}"
+        "必须是显式报错，不是 panic：{err}"
     );
 }

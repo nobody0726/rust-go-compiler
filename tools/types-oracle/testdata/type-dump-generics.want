@@ -1,0 +1,84 @@
+# source: oracle
+# files: testdata/type-dump-generics.go
+# package: p
+0	named 4
+1	basic int
+2	basic float64
+3	union 2
+  term tilde 1
+  term tilde 2
+4	interface 0 1
+  term 3
+5	named 10
+6	tuple 0
+7	basic string
+8	tuple 1
+  - 7
+9	signature - 6 8 false
+10	interface 1 0
+  method "String" 9
+11	named 15
+12	alias 13
+13	interface 0 0
+14	typeparam 0 #12
+15	struct 1
+  "v" 14 - false
+16	typeparam 0 #12
+17	tuple 1
+  "x" 16
+18	signature - 17 6 false
+19	named 20
+20	interface 0 0
+21	typeparam 0 #19
+22	tuple 1
+  "x" 21
+23	signature - 22 6 false
+24	union 1
+  term exact 1
+25	interface 0 1
+  term 24
+26	typeparam 0 25
+27	tuple 1
+  "x" 26
+28	signature - 27 6 false
+29	slice 1
+30	union 1
+  term tilde 29
+31	interface 0 1
+  term 30
+32	typeparam 0 31
+33	tuple 1
+  "x" 32
+34	signature - 33 6 false
+35	union 2
+  term exact 1
+  term tilde 7
+36	interface 0 1
+  term 35
+37	typeparam 0 36
+38	tuple 1
+  "x" 37
+39	signature - 38 6 false
+40	typeparam 0 #0
+41	tuple 1
+  "x" 40
+42	signature - 41 6 false
+43	typeparam 0 #5
+44	tuple 1
+  "x" 43
+45	signature - 44 6 false
+46	tuple 1
+  - 7
+47	signature - 6 46 false
+48	interface 1 0
+  method "String" 47
+49	typeparam 0 48
+50	tuple 1
+  "x" 49
+51	signature - 50 6 false
+52	typeparam 0 #12
+53	typeparam 1 #19
+54	tuple 2
+  "a" 52
+  "b" 53
+55	signature - 54 6 false

@@ -92,7 +92,9 @@ dependencies = [
  "rgoc-ast",
  "rgoc-harness",
  "rgoc-lex",
+ "rgoc-load",
  "rgoc-parse",
+ "rgoc-types",
  "serde_json",
 ]
 

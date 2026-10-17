@@ -19,13 +19,17 @@
 //! rgoc-driver harness report [--out <路径>]       跑完出报告
 //! rgoc-driver lex <file> [--mode comments|directives]   词法输出（T-L18）
 //! rgoc-driver ast <file>                          AST dump（T-AP19）
-//! rgoc-driver types <file>...                     类型检查入口（M3/Task 2 登记）
+//! rgoc-driver types [--dump] [--lang go1.N] [-I <root>]... <file>...
+//!                                                类型检查入口（M3）
 //! ```
 //!
 //! **不预留**未实现的子命令（见 [`cli`] 模块头的说明）。
 //!
-//! 📌 `types` 目前**登记了但未实现**：它**显式报错**（`D-M3-11`），
-//! 与「未登记的子命令报未知命令」是两件不同的事 —— 前者是**在做**，后者是**没做**。
+//! # `types` 的两条通道
+//!
+//! 默认只出**诊断 + 退出码**（门禁读这个）；给 `--dump` 才出 C7 中性类型 dump
+//! （`T-TY-91` 的对撞入口）。两条通道分开是刻意的：dump 是中间产物，
+//! 把「检查通过没有」混进 dump 会让两侧的 diff 变得没法判。
 
 pub mod ast_cmd;
 pub mod cli;
@@ -149,9 +153,14 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Types(t) => {
-            let text = types_cmd::run_types(&t.files)?;
-            print!("{text}");
-            Ok(ExitCode::SUCCESS)
+            let out = types_cmd::run_types(&t)?;
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            Ok(if out.errors > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
         }
     }
 }

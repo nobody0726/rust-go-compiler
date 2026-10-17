@@ -1,0 +1,48 @@
+# source: oracle
+# files: testdata/type-dump-func.go
+# package: p
+0	tuple 0
+1	signature - 0 0 false
+2	basic int
+3	tuple 1
+  "x" 2
+4	tuple 1
+  - 2
+5	signature - 3 4 false
+6	tuple 2
+  "x" 2
+  "y" 2
+7	named 11
+8	basic string
+9	tuple 1
+  - 8
+10	signature - 0 9 false
+11	interface 1 0
+  method "Error" 10
+12	tuple 2
+  - 2
+  - #7
+13	signature - 6 12 false
+14	slice 2
+15	tuple 1
+  "xs" 14
+16	signature - 15 0 true
+17	tuple 1
+  - 2
+18	tuple 1
+  - 2
+19	signature - 17 18 false
+20	tuple 1
+  "f" 19
+21	signature - 20 0 false
+22	tuple 2
+  "n" 2
+  "err" #7
+23	signature - 0 22 false
+24	named 25
+25	struct 0
+26	tuple 1
+  "x" 2
+27	signature #24 26 0 false
+28	pointer #24
+29	signature 28 0 0 false

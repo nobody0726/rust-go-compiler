@@ -1,0 +1,5 @@
+# source: oracle
+# files: testdata/type-dump-min.go
+# package: p
+0	basic int
+1	pointer 0

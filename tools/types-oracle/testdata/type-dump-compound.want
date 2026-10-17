@@ -1,0 +1,28 @@
+# source: oracle
+# files: testdata/type-dump-compound.go
+# package: p
+0	named 2
+1	basic int
+2	struct 2
+  "X" 1 - false
+  "Y" 1 - false
+3	named 6
+4	basic string
+5	basic uint8
+6	struct 4
+  "A" 1 "json:\"a\"" false
+  "b" 4 - false
+  - #0 - true
+  "_" 5 - false
+7	pointer 1
+8	slice 1
+9	pointer 1
+10	map 4 9
+11	slice 10
+12	array 4 1
+13	map 4 1
+14	chan sendrecv 1
+15	chan sendonly 1
+16	chan recvonly 1
+17	struct 1
+  "x" 1 - false

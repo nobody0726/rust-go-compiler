@@ -1,0 +1,27 @@
+# source: oracle
+# files: testdata/type-dump-basics.go
+# package: p
+0	basic bool
+1	basic int
+2	basic int8
+3	basic int16
+4	basic int32
+5	basic int64
+6	basic uint
+7	basic uint8
+8	basic uint16
+9	basic uint32
+10	basic uint64
+11	basic uintptr
+12	basic float32
+13	basic float64
+14	basic complex64
+15	basic complex128
+16	basic string
+17	named 21
+18	tuple 0
+19	tuple 1
+  - 16
+20	signature - 18 19 false
+21	interface 1 0
+  method "Error" 20

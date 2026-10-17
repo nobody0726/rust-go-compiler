@@ -45,6 +45,19 @@ pub enum Command {
 pub struct TypesCommand {
     /// 组成**同一个包**的文件（按用户给出的顺序；装载与编号依赖这个顺序）
     pub files: Vec<PathBuf>,
+    /// `--dump`：输出 C7 中性类型 dump（`T-TY-91` 的对撞入口）。
+    ///
+    /// 不给时只报诊断与摘要 —— 「检查通过没有」是门禁要读的信号，
+    /// dump 是给对撞看的中间产物，两者刻意分开。
+    pub dump: bool,
+    /// `-I <root>`：import 解析根（可给多次）。
+    ///
+    /// 有了它才有 import 解析（`Ruling 27-1`：`load_with_imports`）；
+    /// 一个都不给时**没有根** ⇒ 一切 import 都报「不支持的 import 形式」
+    /// （`D-M3-5`：M3 不读二进制 export data、不做模块解析）。
+    pub roots: Vec<PathBuf>,
+    /// `--lang go1.N`：版本门控覆盖（`D-M3-15` 的显式覆盖路径）
+    pub lang: Option<String>,
 }
 
 /// `ast` 子命令的参数（T-AP19）。
@@ -142,7 +155,7 @@ impl fmt::Display for CliError {
              rgoc-driver harness report [--out <路径>]\n  \
              rgoc-driver lex <file> [--mode comments|directives]\n  \
              rgoc-driver ast <file>\n  \
-             rgoc-driver types <file>...";
+             rgoc-driver types [--dump] [--lang go1.N] [-I <root>]... <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
@@ -194,23 +207,54 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
     }
 }
 
-/// `types <file>...` —— 与 `lex`/`ast` 同族，但**收多个文件**（M3 的包模型是单包多文件）。
+/// `types [--dump] [--lang go1.N] [-I <root>]... <file>...` —— 与 `lex`/`ast` 同族，
+/// 但**收多个文件**（M3 的包模型是单包多文件）。
 ///
-/// 此刻**没有** flag：`--lang`（版本门控）与 `--dump`（C7 dump）分别在
-/// Task 21 / Task 32 才落地 —— 本仓纪律是**不预留**未实现的选项。
+/// 选项与文件参数的先后无关。**没实现的长选项一律报错**（T37 的纪律）：
+/// `--cmp` 在 Task 32 才接线，所以此刻它还不是合法选项。
 fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
-    for a in rest {
-        if a.starts_with("--") {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut dump = false;
+    let mut lang: Option<String> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--dump" => {
+                dump = true;
+                i += 1;
+            }
+            "--lang" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--lang"));
+                };
+                lang = Some((*v).to_string());
+                i += 2;
+            }
+            "-I" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("-I"));
+                };
+                roots.push(PathBuf::from(*v));
+                i += 2;
+            }
             // `--help` 也走这里：报错文本里带 USAGE，等价于「列出用法」。
-            return Err(CliError::UnknownFlag(a.to_string()));
+            a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                files.push(PathBuf::from(a));
+                i += 1;
+            }
         }
-        files.push(PathBuf::from(a));
     }
     if files.is_empty() {
         return Err(CliError::TypesNeedsFile);
     }
-    Ok(TypesCommand { files })
+    Ok(TypesCommand {
+        files,
+        dump,
+        roots,
+        lang,
+    })
 }
 
 /// `ast <file>` —— 与 `lex` 同形：文件参数一个、无 flag（T-AP19）。

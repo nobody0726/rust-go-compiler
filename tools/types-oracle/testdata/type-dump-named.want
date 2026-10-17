@@ -1,0 +1,20 @@
+# source: oracle
+# files: testdata/type-dump-named.go
+# package: p
+0	basic int
+1	named 0
+2	alias 0
+3	alias #1
+4	named 6
+5	pointer #4
+6	struct 2
+  "next" 5 - false
+  "value" 0 - false
+7	named 9
+8	pointer #4
+9	struct 2
+  "head" 8 - false
+  "n" 0 - false
+10	array 4 0
+11	array 4 #1
+12	pointer #7
