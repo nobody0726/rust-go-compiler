@@ -67,7 +67,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 ├── docker/                           ← 镜像定义
 │   ├── Dockerfile                    ←     唯一镜像定义（6 层，含架构断言与登录 shell 修正）
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
-├── scripts/                          ← 入口脚本（10 个）+ 1 份人读记录
+├── scripts/                          ← 入口脚本（11 个）+ 1 份人读记录
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
 │   ├── check-m0-consistency.py       ←     M0 一致性自检（231 条断言，退出码即结论；**宿主**跑，要用 docker CLI）
 │   ├── check-m1-consistency.py       ←     M1 阶段一致性自检（28 条断言，退出码即结论）
@@ -78,6 +78,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── install-codelldb.sh           ←     CodeLLDB【平台包】离线安装（绕开宿主下发的死代理）
 │   ├── install-vscode-server.sh      ←     VS Code Server 离线安装进持久卷 /vscode（宿主升级 VSCode 后用）
 │   ├── debug-smoke-test.sh           ←     无头调试链路冒烟测试（E5 的下层证据；第 2 节 A/B/C + 9 项断言）
+│   ├── push-via-api.py               ←     `git push` 被网络拦住时的推送备用路径（Git Data API，逐个提交校验 SHA）
 │   └── mutation-m3-notes.md          ←     M3 反向验证记录（7 条变异；**人读**，不是脚本）
 ├── tools/                            ← oracles（vendor 官方实现 + 中立 dump；对撞装置，不入编译流水线）
 │   ├── ast-oracle/                   ←     M2：vendor 官方 syntax + 中立 AST dump
@@ -342,24 +343,36 @@ python3 scripts/check-m1-consistency.py
 
 ### 6.2 推送到 GitHub
 
-`github.com` 的 CONNECT 在本机常被会话代理拦截（`git push` 报 `CONNECT tunnel failed, response 502`），而 `api.github.com` 正常。
+`github.com` 的 CONNECT 在本机常被会话代理拦截（`git push` 报 `CONNECT tunnel failed, response 502`，
+或干脆 `Recv failure: Operation timed out`），而 `api.github.com` 正常。
 
 ```sh
 # 1) 先直接重试 —— 该故障是间歇性的
 git push origin main
 
-# 2) 仍不通则走 Git Data API（脚本自带 SHA 校验，保证远端与本地完全一致）
-python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
-    --repo nobody0726/rust-go-compiler --cwd . --gh /opt/homebrew/bin/gh
+# 2) 仍不通则走 Git Data API
+python3 scripts/push-via-api.py            # repo/branch 从 origin 与 main 推；--dry-run 只解析不写
 ```
 
-**空仓库的坑**：GitHub 的 Git Data API 在**完全空的仓库**上会拒绝 `POST /git/blobs`（409 `Git Repository is empty`）。此时先用 Contents API 造一个引导提交使仓库非空，再用 `--root` 把 ref 强制指向本地根提交：
+**脚本怎么保证「远端 == 本地」**：它**逐个提交重建对象并校验 SHA** —— 本地树 → `POST /git/trees`
+（`base_tree` = 父提交的树）⇒ 要求 API 回的 sha 与本地 `git rev-parse <c>^{tree}` 相同；提交元数据
+（tree/parents/author/committer/message）→ `POST /git/commits` ⇒ 要求 sha 与本地提交 sha 相同。
+全过 ⇒ 远端是**同一个提交对象**（不是「内容看起来一样」），后续 `git push` 也不会再造重复提交。
+所有对象**最后一步**才把 ref 指过去 ⇒ 中途失败远端不受影响（最多留游离对象）。
+
+> ⚠️ 2026-10-17 实测两点：① `AGENTS.md` 从前指向的
+> `~/.workbuddy/skills/github-push-via-api/push_via_api.py` **在本机不存在**（该技能没装），
+> 所以有了 `scripts/push-via-api.py`（只用标准库 + `gh auth token`，不引第三方依赖）；
+> ② 那次 39 个提交的推送重放后 **SHA 逐个相同**，`gh api .../git/ref/heads/main` 与
+> `git rev-parse HEAD` 一致，抽检文件 blob SHA 也一致。
+
+**空仓库的坑**：GitHub 的 Git Data API 在**完全空的仓库**上会拒绝 `POST /git/blobs`（409
+`Git Repository is empty`）。此时先用 Contents API 造一个引导提交使仓库非空，再推：
 
 ```sh
 gh api -X PUT repos/nobody0726/rust-go-compiler/contents/.gitkeep \
    -f message="chore: bootstrap" -f content="eA=="
-python3 ~/.workbuddy/skills/github-push-via-api/push_via_api.py \
-    --repo nobody0726/rust-go-compiler --cwd . --root --gh /opt/homebrew/bin/gh
+python3 scripts/push-via-api.py
 ```
 
 ---
