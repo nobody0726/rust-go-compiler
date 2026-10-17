@@ -546,7 +546,7 @@
       "item": "**约束接口的同一性**",
       "why": "D-M3-13",
       "planned_phase": "M4 必须解除",
-      "positive_evidence": "T-TY-81 正反两侧（拒面窄于本项措辞：**只**在两侧都是匿名接口且含项集/`comparable` 时拒，修订 R-32-1）"
+      "positive_evidence": "T-TY-81 正反两侧（拒面**窄于**本项措辞：只在**两侧都是匿名接口**、且**至少一侧**含项集或 `comparable` 时拒；具名约束接口走具名分支按名字判，修订 R-32-1）"
     },
     {
       "id": "U-M3-06",
@@ -615,7 +615,8 @@
     "milestone_wall_s_max": 1800,
     "per_file_bytes_max": "64 MiB（沿用 M1 D-M1-4）",
     "measured": {
-      "workspace_tests_passed": 1280,
+      "workspace_tests_passed": 1282,
+      "workspace_tests_note": "M3 验收时刻（2026-10-17）实测值，含本 manifest 的对账测试本身；后续里程碑新增测试**不**回填此处（`manifest_m3.rs` 断言它与 phase_summary 一致且不小于**1282**）",
       "workspace_tests_failed": 0,
       "oracle_go_tests": "go test ./...（GOPROXY=off）ok",
       "collide_dump_fixtures": 8,
@@ -662,9 +663,15 @@
       },
       {
         "id": "reject 范围窄于 `U-M3-05` 措辞",
-        "item": "只拒「两侧都是匿名接口 + 含项集/`comparable`」；具名约束接口按名字判、混合形状按 `T-TY-81` 的反例走",
-        "status": "有意为之（修订 R-32-1），非缺口；写明是因为下一棒容易误读成「都拒」",
+        "item": "只拒「**两侧都是匿名接口** + **至少一侧**含项集/`comparable`」（具名约束接口是 `Named` ⇒ 走具名分支按名字判，判定正确、不是缺口）",
+        "status": "有意为之（修订 R-32-1，与 `M3-tests.md` §4 的措辞逐字对齐），非缺口；写明是因为下一棒容易误读成「都拒」或「都判」",
         "owner": "M4 解除 U-M3-05 时一并重审"
+      },
+      {
+        "id": "`-I` 根指错与「不支持的 import 形式」同码",
+        "item": "`ImportResolver` 在 `roots` 里找不到同名目录时与「标准库/模块路径」一样落 `TYP-UNSUPPORTED-IMPORT-FORM`（`T-TY-85` 的反向对照正是钉这条）",
+        "status": "已登记：两种成因暂不细分（下游诊断可区分性下降）",
+        "owner": "M4（真正的模块/标准库解析进来时必须拆开）"
       },
       {
         "id": "`T-TY-37` 移位上界 1074/1075",
@@ -715,7 +722,7 @@
       "Phase 5（Task 36–38）：`rgoc types` 端到端双向断言 + 变异反向验证（7 条）+ 本 manifest 收口"
     ],
     "workspace_tests": {
-      "passed": 1280,
+      "passed": 1282,
       "failed": 0
     },
     "gate_commands": "cargo fmt --all --check && cargo check --workspace --all-targets && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace --no-fail-fast",

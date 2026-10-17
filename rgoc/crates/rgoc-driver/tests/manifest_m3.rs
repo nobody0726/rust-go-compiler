@@ -11,10 +11,10 @@
 //! | `test_ids` | 与 `M3-tests.md` §3 九节表**第一列**声明的 ID **集合相等**（68 条） |
 //! | `unsupported` | 与 §6 白名单的 `U-M3-xx` **集合相等**（13 条）；每条有证据指针，「被显式拒绝」那几条还必须是 `T-TY-8x` |
 //! | `gate` | 键**恰好**是 `TY-1..TY-8`，全 `pass`，证据非空且带指针 |
-//! | `budget` | §7.4 的冻结值（深度 1000 / import 100 / smoke 300 / milestone 1800） |
+//! | `budget` | §7.4 的冻结值（深度 1000 / import 100 / smoke 300 / milestone 1800）；实测测试数**两处一致**且不小于验收时刻的 **1282**（见 [`check`] ⑤ 的说明：这是称重不是不变量） |
 //! | `coverage` | 自洽：计数器 == 实际条数 |
 //! | `phase_summary` | `status == done`、0 失败、四条门禁命令齐 |
-//! | §6 纪律 | **每一条**白名单项都要有 `T-TY-8x` 的**正向**断言指针 |
+//! | §6 纪律 | **每一条**白名单项都要有证据指针；「被显式拒绝」那几条必须是**存在**的 `T-TY-8x`（按完整词 + 在声明集里比，不用子串） |
 //!
 //! # 断言自己也要能被证伪
 //!
@@ -64,6 +64,10 @@ fn section<'a>(doc: &'a str, from: &str, to: &str) -> &'a str {
 ///
 /// 只认行首形态：ID 出现在**别的列**里（例如 3.8 的反向列引用 `T-TY-28`）不算声明
 /// —— 那些是**引用**，声明集合比它小且必须精确。
+///
+/// ⚠️ 这个解析器是**行首形态**的：若有人把冻结表折行／改成别的写法，`declared` 会**变小**。
+/// 那不会静默削弱断言 —— 调用方有 `test_ids` 条数的显式断言（68），集合不等会立刻报出
+/// 「只在 manifest」的那一批，等于把「解析器瞎了」与「manifest 漏了」一起顶到台面上。
 fn declared_ids(doc: &str) -> BTreeSet<String> {
     let sec = section(doc, "\n## 3", "\n## 4");
     let mut out = BTreeSet::new();
@@ -107,9 +111,37 @@ fn strs(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-/// 证据/理由必须**指得到落点**：要么是 `T-TY-*`，要么含 `/`（文件路径）。
+/// 证据/理由必须**指得到落点**：要么是一条 `T-TY-*` 的**完整词**，要么含 `/`（文件路径）。
+///
+/// **按完整词比，不用 `contains("T-TY-")`**：子串匹配会让 `T-TY-8` 也命中 `T-TY-80..89`，
+/// 于是「必须指向拒绝侧」这条判据会被一个不相干的 ID 满足（测试自己骗自己）。
 fn points_at_something(s: &str) -> bool {
-    s.contains("T-TY-") || s.contains('/')
+    s.contains('/') || tokens(s).any(is_test_id)
+}
+
+/// 把文本切成「词」：`T-TY-` 后跟 `[0-9a-z]+` 才算一个 ID 词，
+/// 且**下一位不能再是 ID 字符**（否则 `T-TY-81x` 会被当成 `T-TY-81`）。
+fn tokens(s: &str) -> impl Iterator<Item = &str> {
+    s.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .filter(|t| !t.is_empty())
+}
+
+fn is_test_id(t: &str) -> bool {
+    let Some(rest) = t.strip_prefix("T-TY-") else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || b.is_ascii_lowercase())
+}
+
+/// 证据里是否**点名**了某条 `T-TY-8x`，且那条**真的在** `test_ids` 声明集里。
+///
+/// 要求「在集合里」是这条判据的关键：只按前缀匹配的话，`T-TY-80`（**不存在**的 ID）
+/// 也能满足「指向拒绝侧」——那就又变成一条能骗过自己的断言了。
+fn names_a_tty8(s: &str, declared: &BTreeSet<String>) -> bool {
+    tokens(s).any(|t| t.starts_with("T-TY-8") && declared.contains(t))
 }
 
 /// 白名单里**不**要求 `T-TY-8x` 的五条（见 [`check`] ② 的说明）。这张表是**判据**：
@@ -243,15 +275,15 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
             ));
         }
         // ② 「被显式拒绝」那几条还必须是 **T-TY-8x**（§6 纪律）。
-        //    四个例外是**有意**的：`U-M3-06` 的约定路径是「**不**筛文件」⇒ 证据在
-        //    `T-TY-65`（6x 的反向断言）；`U-M3-11..13` 是 M2 承继的「M3 未触发」。
-        //    硬给这四条要 8x，只会逼着人写一条假测试 —— 那不是纪律，是形式主义。
-        if !NO_8X_OK.contains(&id) && !pe.contains("T-TY-8") {
+        //    五条例外是**有意**的（见 NO_8X_OK）：`U-M3-06` 的约定路径是「**不**筛文件」⇒ 证据在
+        //    `T-TY-65`（6x 的反向断言）；`U-M3-10` 是「不承诺逐字」的纪律；`U-M3-11..13` 是 M2 承继的
+        //    「M3 未触发」。硬给这五条要 8x，只会逼着人写一条假测试 —— 那不是纪律，是形式主义。
+        if !NO_8X_OK.contains(&id) && !names_a_tty8(pe, &declared) {
             return Err(format!(
                 "unsupported: {id} 缺 T-TY-8x 的正向断言指针（§6 纪律）：{pe:?}"
             ));
         }
-        if NO_8X_OK.contains(&id) && pe.contains("T-TY-8") {
+        if NO_8X_OK.contains(&id) && names_a_tty8(pe, &declared) {
             return Err(format!(
                 "unsupported: {id} 在「例外表」里却也带了 8x 指针 —— 例外表该收窄：{pe:?}"
             ));
@@ -273,12 +305,27 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
     if b["measured"]["workspace_tests_failed"].as_u64() != Some(0) {
         return Err("budget: measured.workspace_tests_failed 应为 0".into());
     }
-    if b["measured"]["workspace_tests_passed"]
+    // 实测**测试总数**是「M3 验收时刻的一次称重」，不是活的不变量（后面每个里程碑都会加测试）。
+    // 所以这里钉两件能钉的事：
+    //   ① 两处记录**必须一致**（`budget.measured` 与 `phase_summary.workspace_tests` 同源）；
+    //   ② 不得**小于**验收时刻的 **1282**（缩水 = 有人改小了数字而没重跑）。
+    // 不能钉的（如实写在测试头）：它不会自己跑去数一遍 —— 谁把两处**同时**改成 1283，这条抓不到。
+    const WORKSPACE_TESTS_AT_M3_ACCEPTANCE: u64 = 1282;
+    let measured = b["measured"]["workspace_tests_passed"]
         .as_u64()
-        .unwrap_or(0)
-        == 0
-    {
-        return Err("budget: measured.workspace_tests_passed 应为正数".into());
+        .unwrap_or(0);
+    let summary = v["phase_summary"]["workspace_tests"]["passed"]
+        .as_u64()
+        .unwrap_or(0);
+    if measured != summary {
+        return Err(format!(
+            "budget: 两处实测数不一致（measured={measured} / phase_summary={summary}）"
+        ));
+    }
+    if measured < WORKSPACE_TESTS_AT_M3_ACCEPTANCE {
+        return Err(format!(
+            "budget: 实测测试数 {measured} 小于 M3 验收时刻的 {WORKSPACE_TESTS_AT_M3_ACCEPTANCE}"
+        ));
     }
 
     // ⑥ coverage：计数器自洽（手抄的数字不许和实际条数打架）
@@ -508,6 +555,39 @@ fn m3清单_合成反例逐条报错() {
                 v
             },
             "phase_summary".into(),
+        ),
+        (
+            "实测测试数两处不一致",
+            {
+                let mut v = base.clone();
+                v["phase_summary"]["workspace_tests"]["passed"] = json!(1300);
+                v
+            },
+            "budget".into(),
+        ),
+        (
+            "实测测试数缩水到 1000",
+            {
+                let mut v = base.clone();
+                v["budget"]["measured"]["workspace_tests_passed"] = json!(1000);
+                v["phase_summary"]["workspace_tests"]["passed"] = json!(1000);
+                v
+            },
+            "budget".into(),
+        ),
+        (
+            "8x 指针指向**不存在**的 ID（T-TY-80）",
+            {
+                let mut v = base.clone();
+                let a = v["unsupported"].as_array_mut().expect("array");
+                let it = a
+                    .iter_mut()
+                    .find(|u| u["id"] == json!("U-M3-07"))
+                    .expect("U-M3-07");
+                it["positive_evidence"] = json!("拒绝侧族（T-TY-80..89）的邻域");
+                v
+            },
+            "unsupported".into(),
         ),
         (
             "coverage 计数与实际条数打架",
