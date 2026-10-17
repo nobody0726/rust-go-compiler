@@ -26,10 +26,13 @@
 //! **Task 24 = [`decls`] + [`typeexpr`]**（类型/常量求值、前向引用、声明环、
 //! 版本表接线、dump 根）；**Task 25 = [`scope`]**（体内作用域：遮蔽 / 未定义 /
 //! 重复声明）；**Task 26 = [`exported`] + [`labels`]**（导出标识符判定 =
-//! `SCP-06` 缺口、标签命名空间与跳转校验、空标识符）。源码 import 归 Task 27，
-//! 显式文件列表的 CLI 侧归 Task 28，导出摘要归 Task 29。
+//! `SCP-06` 缺口、标签命名空间与跳转校验、空标识符）；**Task 27 = [`importer`]**
+//! （源码 import、import 环诊断、三类 import 诊断）；**Task 28** = 显式文件列表
+//! 不评估构建约束（`tests/file_selection.rs`）；**Task 29 = [`export_summary`]**
+//! （导出符号摘要的内存 API，`D-M3-18`）。
 
 pub mod decls;
+pub mod export_summary;
 pub mod exported;
 pub mod importer;
 mod labels;
@@ -38,6 +41,7 @@ pub mod scope;
 pub mod typeexpr;
 
 pub use decls::collect_decls;
+pub use export_summary::{ExportEntry, ExportSummary, export_summary};
 pub use exported::is_exported;
 pub use importer::{ImportDir, ImportResolver, MAX_IMPORT_DEPTH, load_with_imports};
 pub use package::{Package, Source, load_from_explicit_files, load_sources};
