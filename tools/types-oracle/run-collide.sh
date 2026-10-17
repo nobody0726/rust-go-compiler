@@ -8,13 +8,18 @@
 #
 #   --dump（缺省）：C7 中性类型 dump；fixture = 目录里所有 *.go
 #   --cmp         ：`//rgoc:cmp` 判定行；fixture = 目录里 cmp-*.go
+#   --corpus <dir>：**官方语料**模式（`T-TY-94`）。`<dir>` = `types/testdata` 的根；
+#                   文件清单来自 `corpus-selected.txt`（**唯一**清单 —— 脚本**不**自己
+#                   重算机械筛，免得口径在 bash 与 `collide_corpus.rs` 两边漂移）。
+#                   逐文件跑 dump 对撞（两侧非空 + stderr 空 + 重复运行确定，与上面同）。
 #
 #   全过 -> exit 0
 #   有差异 / 任一侧没产出 / 任一侧有 stderr / 重复运行不确定 -> 打印现场 -> exit 1
-#   用法错 -> exit 2
+#   用法错（含清单里的路径不在语料里）-> exit 2
 #
 # 用法：
 #   tools/types-oracle/run-collide.sh <fixture-dir> [--cmp] [--lang go1.N]
+#   tools/types-oracle/run-collide.sh --corpus <testdata-dir> [--lang go1.N]
 #
 # ⚠️ 本脚本**在容器内跑**（宿主侧用 scripts/in-container.sh 包一层）：
 #   scripts/in-container.sh bash tools/types-oracle/run-collide.sh tools/types-oracle/testdata
@@ -49,19 +54,26 @@ ROOT="$(cd "$ORACLE_DIR/../.." && pwd)"
 usage() {
     cat >&2 <<'EOF'
 用法：tools/types-oracle/run-collide.sh <fixture-dir> [--cmp] [--lang go1.N]
+      tools/types-oracle/run-collide.sh --corpus <testdata-dir> [--lang go1.N]
 
   <fixture-dir>  含 .go fixture 的目录（每个文件单独对撞）
+  --corpus <dir> 官方语料模式：<dir> = types/testdata 根，文件清单取
+                 corpus-selected.txt（与 --cmp 互斥）
   --cmp          对撞 `//rgoc:cmp` 判定行（缺省 = 对撞 C7 dump）
   --lang go1.N   显式版本门控，原样透传给两侧（缺省 = 各自按文件读）
 EOF
 }
 
 FIXDIR=""
+CORPUS=""
 MODE="dump"
 LANG_ARG=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --cmp) MODE="cmp"; shift ;;
+        --corpus)
+            [ $# -ge 2 ] || { echo "  --corpus 缺值" >&2; usage; exit 2; }
+            CORPUS="$2"; shift 2 ;;
         --lang)
             [ $# -ge 2 ] || { echo "  --lang 缺值" >&2; usage; exit 2; }
             LANG_ARG=(--lang "$2"); shift 2 ;;
@@ -74,8 +86,20 @@ while [ $# -gt 0 ]; do
             FIXDIR="$1"; shift ;;
     esac
 done
-if [ -z "$FIXDIR" ]; then echo "  缺少 fixture 目录" >&2; usage; exit 2; fi
-if [ ! -d "$FIXDIR" ]; then echo "  fixture 目录不存在：$FIXDIR" >&2; exit 2; fi
+# `--corpus` 与 `--cmp` 互斥：语料里没有 `//rgoc:cmp` 指令行，混着用会「什么都不查」
+# 而报成功 —— 静默失效正是本仓最防的那种红。
+if [ -n "$CORPUS" ] && [ "$MODE" = cmp ]; then
+    echo "  --corpus 与 --cmp 互斥（语料里没有 //rgoc:cmp 指令行）" >&2; usage; exit 2
+fi
+if [ -n "$CORPUS" ]; then
+    [ -z "$FIXDIR" ] || { echo "  --corpus 与 <fixture-dir> 互斥" >&2; usage; exit 2; }
+    [ -d "$CORPUS" ] || { echo "  语料目录不存在：$CORPUS" >&2; exit 2; }
+    FIXDIR="$(cd "$CORPUS" && pwd)"
+elif [ -z "$FIXDIR" ]; then
+    echo "  缺少 fixture 目录（或 --corpus <dir>）" >&2; usage; exit 2
+elif [ ! -d "$FIXDIR" ]; then
+    echo "  fixture 目录不存在：$FIXDIR" >&2; exit 2
+fi
 # 绝对化：下面两侧都要 `cd` 到别处（oracle 进 tools/、rgoc 进 rgoc/），
 # 相对路径会在 cd 之后指错地方 —— 症状是「oracle 侧没有产出」，很难猜。
 FIXDIR="$(cd "$FIXDIR" && pwd)"
@@ -91,6 +115,36 @@ else
     ORACLE_ARGS=()
     RGOC_ARGS=(--dump)
     GLOB="*.go"
+fi
+
+# ── 文件清单 ──────────────────────────────────────────────────────────
+# fixture 模式：目录里 `$GLOB` 匹配的文件。
+# 语料模式：`corpus-selected.txt`（**唯一**清单）。脚本不重算机械筛 —— 两份口径
+# 一旦漂移，就会出现「门禁少查了几个文件却报成功」这种静默失效；清单本身由
+# `collide_corpus.rs` 断言「恰好等于候选 − 排除」。
+FILES=()
+NAMES=()
+if [ -n "$CORPUS" ]; then
+    LIST="$ORACLE_DIR/corpus-selected.txt"
+    [ -f "$LIST" ] || { echo "  清单不存在：$LIST（Task 35 的产物）" >&2; exit 2; }
+    while IFS= read -r rel; do
+        case "$rel" in ''|'#'*) continue ;; esac
+        if [ ! -f "$FIXDIR/$rel" ]; then
+            echo "  清单里的路径不在语料里：$rel" >&2
+            echo "  （清单：$LIST；语料根：$FIXDIR）" >&2
+            exit 2
+        fi
+        FILES+=("$FIXDIR/$rel")
+        NAMES+=("$rel")
+    done < "$LIST"
+else
+    # ⚠️ `$GLOB` **不能加引号** —— 加了就没有通配展开，`[ -f ]` 全 false，
+    # 症状是「fixture 目录里没有 …」而目录里明明有（刚踩过）。
+    for f in "$FIXDIR"/$GLOB; do
+        [ -f "$f" ] || continue
+        FILES+=("$f")
+        NAMES+=("$(basename "$f")")
+    done
 fi
 
 # C7 §2 规则 1：以 `#` 开头的行是注释、空行忽略 —— 两侧都丢。
@@ -141,11 +195,12 @@ apply_exclusions() {
     mv "$tmp/r.excl" "$tmp/r.txt"
 }
 
-# ⚠️ `$GLOB` **不能加引号** —— 加了就没有通配展开，`[ -f ]` 全 false，
-# 症状是「fixture 目录里没有 …」而目录里明明有（刚踩过）。
-for f in "$FIXDIR"/$GLOB; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f")"
+# ⚠️ 迭代**数组**（不是 glob）：语料模式的清单是文件，见上面「文件清单」一节。
+i=0
+while [ "$i" -lt "${#FILES[@]}" ]; do
+    f="${FILES[$i]}"
+    b="${NAMES[$i]}"
+    i=$((i+1))
     n=$((n+1))
 
     oracle_run "$f" "$tmp/o.err" > "$tmp/o.raw"
@@ -218,12 +273,18 @@ for f in "$FIXDIR"/$GLOB; do
 done
 
 if [ "$n" -eq 0 ]; then
-    echo "  fixture 目录里没有 $GLOB 匹配的文件：$FIXDIR" >&2
+    if [ -n "$CORPUS" ]; then
+        echo "  入选清单是空的（$ORACLE_DIR/corpus-selected.txt）" >&2
+    else
+        echo "  fixture 目录里没有 $GLOB 匹配的文件：$FIXDIR" >&2
+    fi
     exit 2
 fi
 
+SRC="fixture=$FIXDIR"
+[ -n "$CORPUS" ] && SRC="语料=$FIXDIR"
 if [ "$fail" -ne 0 ]; then
-    echo "run-collide: FAIL（$n 个 fixture，模式 $MODE）"
+    echo "run-collide: FAIL（$n 个 fixture，模式 $MODE，$SRC）"
     exit 1
 fi
-echo "run-collide: OK（$n 个 fixture，模式 $MODE；逐字节一致 + stderr 空 + 重复运行确定）"
+echo "run-collide: OK（$n 个 fixture，模式 $MODE，$SRC；逐字节一致 + stderr 空 + 重复运行确定）"

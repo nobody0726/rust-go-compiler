@@ -1,0 +1,40 @@
+# `types/testdata` 精选的**入选**清单（M3/Task 35，`T-TY-94`）。
+#
+# 每行一个相对 `types/testdata/` 根的路径，**排序、去重**；`#` 注释与空行忽略。
+# 入选判据（与 `corpus-allowlist.txt` 互补，两向相等由 `collide_corpus.rs` 断言）：
+# 机械筛（`^package p$` + 无 `^import` + 无 `ERROR`）过、且两侧 dump 逐字节一致且非空。
+#
+# 谁消费它：`tools/types-oracle/run-collide.sh --corpus <testdata 根>` —— 逐文件
+# 对撞（dump 模式）+ 非空 + stderr 空 + 重复运行确定。候选与排除的口径见
+# `corpus-allowlist.txt` 头部。
+check/go1_19_20.go
+check/go1_20_19.go
+check/go1_21_19.go
+check/go1_21_22.go
+check/go1_xx_19.go
+fixedbugs/issue45548.go
+fixedbugs/issue49592.go
+fixedbugs/issue49705.go
+fixedbugs/issue50281.go
+fixedbugs/issue50450.go
+fixedbugs/issue50755.go
+fixedbugs/issue50833.go
+fixedbugs/issue51048.go
+fixedbugs/issue51158.go
+fixedbugs/issue51386.go
+fixedbugs/issue51437.go
+fixedbugs/issue51593.go
+fixedbugs/issue51616.go
+fixedbugs/issue54424.go
+fixedbugs/issue56425.go
+fixedbugs/issue57155.go
+fixedbugs/issue59953.go
+fixedbugs/issue59958.go
+fixedbugs/issue60346.go
+fixedbugs/issue61486.go
+fixedbugs/issue61822.go
+fixedbugs/issue66878.go
+fixedbugs/issue67872.go
+fixedbugs/issue68903.go
+fixedbugs/issue68935.go
+fixedbugs/issue76366.go

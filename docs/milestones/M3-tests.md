@@ -329,6 +329,29 @@ scripts/in-container.sh cargo test -p rgoc-driver --no-fail-fast      # 含 `rgo
 scripts/in-container.sh bash tools/types-oracle/run-collide.sh        # 对撞（M3-plan.md 落脚本）
 ```
 
+**修订 R-35-1（Task 35 执行期，2026-10-17；把 §7.2 的调用形态补全，判据不变）**
+
+上面第二行原来没写参数（`run-collide.sh` 那时还没落地）。落成三种**并列**形态：
+
+```sh
+# ① 自有 fixture（dump，C7）：T-TY-91/95
+scripts/in-container.sh bash tools/types-oracle/run-collide.sh tools/types-oracle/testdata
+# ② 自有 fixture（`//rgoc:cmp` 判定行）：T-TY-92/93
+scripts/in-container.sh bash tools/types-oracle/run-collide.sh --cmp tools/types-oracle/testdata
+# ③ **官方语料精选**：T-TY-94（Task 35 新增的 `--corpus <dir>`）
+scripts/in-container.sh bash tools/types-oracle/run-collide.sh --corpus go_source_code/src/internal/types/testdata
+```
+
+③ 的清单来自 `tools/types-oracle/corpus-selected.txt` —— **唯一**清单：脚本**不**自己重算
+机械筛，免得口径在 bash 与 `collide_corpus.rs` 两边漂移（那种漂移的形态是「门禁少查了
+几个文件却报成功」，最阴）。候选 / 入选 / 排除三者的口径与逐条理由见
+`tools/types-oracle/corpus-allowlist.txt` 头部；两者互补（每个候选恰出现一次）由
+`collide_corpus.rs` 断言。
+
+**语料缺失 ⇒ 响亮失败，不许静默跳过**：`--corpus` 的目录不存在 ⇒ 退出码 2；
+`collide_corpus.rs` 读不到语料 ⇒ panic 并指路 `RGOC_CORPUS_SRC_DIR`（与
+`rgoc-load/tests/smoke_corpus.rs` 同一条纪律）。
+
 ### 7.3 四条门禁命令（**判据不变，调用形态有规范**）
 
 ```sh

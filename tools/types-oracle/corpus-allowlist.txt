@@ -1,0 +1,46 @@
+# `types/testdata` 精选的**排除**清单（M3/Task 35，`T-TY-94`）。
+#
+# 格式：`<相对 testdata 根的路径>` + TAB + `<理由>`（`#` 整行注释与空行忽略）。
+#
+# 口径（三件一套，缺一就有静默漏检）：
+# * **候选** = 机械筛过的文件：有 `^package p$`、无 `^import`、无 `ERROR` 子串
+#   （前两条是 `D-M3-14`/单包前提，第三条是官方负例标注 ⇒ oracle 自己也报错）；
+# * **入选** = 候选里两侧 dump **逐字节一致且非空**的 ⇒ `corpus-selected.txt`
+#   （那是 `run-collide.sh --corpus` 的输入，唯一权威）；
+# * **排除** = 本文件：候选里没入选的**每一个**都要有一行理由。
+#
+# ⚠️ 理由不许是占位：`rgoc/crates/rgoc-driver/tests/collide_corpus.rs` 会断言
+# 理由非空、含指针（`U-M3-` / `D-M3-` / `C7` / `T-TY-` 之一）、且**两向集合相等**
+# （每个候选恰好在入选集或本文件中出现一次，不许有死行）。
+#
+# 汇总（2026-10-17 语料普查）：候选 57 = 入选 31 + 排除 26
+#   · 15 个 DIFF：同一个根因 —— M3 不建模**泛型实例化**（`U-M3-04`），症状各处不同
+#   · 4 个两侧都拒绝（oracle `C7` §5.1 panic / rgoc 退出码 2）
+#   · 6 个 oracle 单侧拒绝（实例环；rgoc 不建模实例 ⇒ 侧不成环）
+#   · 1 个两侧 dump 都空（空标识符声明）
+check/cycles1.go	oracle 按 `C7` §5.1 拒绝产出（类型图成环）；rgoc 侧同样拒绝（`DumpError::CyclicTypeGraph` ⇒ 退出码 2）⇒ 两侧都没有 dump，无可对撞内容
+fixedbugs/issue25838.go	oracle 按 `C7` §5.1 拒绝（别名环 `e = f = g = []h …` 的图成环）；rgoc 侧不成环 ⇒ 两侧无可比内容（M3 的类型图构造与 `go/types` 不同，`U-M3-04` 邻域）
+fixedbugs/issue39711.go	文件里唯一的声明是空类型声明 `type _ interface{…}` —— 空标识符**不是声明**（`C7` §3）⇒ 两侧根集都空、dump 无内容可对撞（能证明的只有「两侧都空」）
+fixedbugs/issue39755.go	接收者 `*PathParams[T]` 是**实例**（oracle 为它造独立 `named` 条目）：M3 不建模实例化（`U-M3-04`），`Expr::Index` 退化为基类型（`T-TY-29`）
+fixedbugs/issue39982.go	字段与复合字面量里的 `T[*T[int]]` 是实例：oracle 造 `named` 实例，M3 退化为基类型（`U-M3-04`）
+fixedbugs/issue40038.go	`func (A[T]) m(A[T])` 与 `f[A[int]]`：接收者/实参处的实例（`U-M3-04`）
+fixedbugs/issue41176.go	参数类型 `I[T]`（接口实例）：oracle 造实例，M3 退化为 `I`（`U-M3-04`）
+fixedbugs/issue43056.go	oracle 按 `C7` §5.1 拒绝（`interface{ Equal(T) bool }` 的匿名环）；rgoc 侧退出码 2（同因）⇒ 无可对撞内容
+fixedbugs/issue45550.go	嵌入字段 `Builder[myBuilder]` 是实例（`U-M3-04`）
+fixedbugs/issue46461.go	oracle 按 `C7` §5.1 拒绝（`T[U interface{ M() T[U] }]` 的实例环）；M3 不建模实例化（`U-M3-04`）⇒ rgoc 侧不成环，无对照
+fixedbugs/issue47887.go	oracle 按 `C7` §5.1 拒绝（`Fooer`/`Barer`/`Bazer` 的实例互相成环）；`U-M3-04` ⇒ rgoc 侧不成环，无对照
+fixedbugs/issue48695.go	oracle 按 `C7` §5.1 拒绝（`func g[P ~func(T) P, T any]` 的匿名环）；rgoc 侧退出码 2（同因）⇒ 无可对撞内容
+fixedbugs/issue50259.go	`var x T[B]` / `type A T[B]`：用实例做**底层类型**（`U-M3-04`）
+fixedbugs/issue50276.go	`transform[step]` / `Transform[Step]`：实例作字段与变量类型（`U-M3-04`）
+fixedbugs/issue50426.go	oracle 按 `C7` §5.1 拒绝（约束接口里 `m() T` 自引用成环）；rgoc 侧退出码 2（同因）⇒ 无可对撞内容
+fixedbugs/issue50729.go	`T1[B1]` / `T2[B2]`（别名与实例互指）：`U-M3-04`
+fixedbugs/issue50729b.go	`type b d[a]`：**实例的 underlying** 口径（oracle 走实例的本体，M3 退化到基类型 `U-M3-04`）
+fixedbugs/issue50779.go	别名 `SR = R[SS, ST]` 指向实例：`U-M3-04`
+fixedbugs/issue52529.go	oracle 按 `C7` §5.1 拒绝（`Foo[P]`/`Bar[Q]` 与接收者 `*Bar[R]` 的实例环）；`U-M3-04` ⇒ rgoc 侧不成环，无对照
+fixedbugs/issue57192.go	`I1[int]` / `I2[int]` 与 `g[T](I1[T])`：实例作变量与参数类型（`U-M3-04`）
+fixedbugs/issue59338b.go	`h[int]` 是**函数实例**：oracle 造实例化后的签名，M3 只有泛型声明那一份签名（`U-M3-04`）
+fixedbugs/issue60460.go	oracle 按 `C7` §5.1 拒绝（`R[T interface{ m(R[T]) }]` 的实例环）；`U-M3-04` ⇒ rgoc 侧不成环，无对照
+fixedbugs/issue60556.go	oracle 按 `C7` §5.1 拒绝（`I[T interface{ m(I[T]) }]` 的实例环）；`U-M3-04` ⇒ rgoc 侧不成环，无对照
+fixedbugs/issue65854.go	`var _ T[int]` 的根是实例：oracle 造 `named` 实例，M3 落到 `T` 自己（`U-M3-04`）
+fixedbugs/issue66751.go	`f[*S]` 的类型推断 + 接收者 `*fooer[A]` 是实例（`U-M3-04`）
+fixedbugs/issue77905.go	`f(S{})` / `g(S{})`：约束接口 `M[T]` 的实例与实参实例化（`U-M3-04`）
