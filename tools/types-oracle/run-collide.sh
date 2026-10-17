@@ -3,10 +3,10 @@
 #
 # 判据：对 fixture 目录里每个 .go，**oracle 侧**（tools/types-oracle，
 # 标准库 go/types）与 **rgoc 侧**（`rgoc-driver types --dump`）各出一份
-# 中性类型 dump，两边**逐字节一致**（C6/C7 的注释行与空行按 C7 §2 规则 1 忽略）。
+# 中性类型 dump，两边**逐字节一致**（C7 的注释行与空行按 C7 §2 规则 1 忽略）。
 #
 #   全过 -> exit 0
-#   有差异 / 任一侧没产出 -> 打印首个不一致行 -> exit 1
+#   有差异 / 任一侧没产出 / 任一侧有 stderr / 重复运行不确定 -> 打印现场 -> exit 1
 #   用法错 -> exit 2
 #
 # 用法：
@@ -22,6 +22,14 @@
 # ② 注释/空行两侧都忽略（C7 §2 规则 1）。oracle 写 `# source: oracle`，
 #    rgoc 写 `# source: rgoc` —— 来源如实标注，正是**刻意保留**的那一处不同。
 # ③ `--lang` 原样透传给两侧（`D-M3-15`：版本门控按文件；这里是显式覆盖）。
+# ④ **两侧的 stderr 都要空**（`T-TY-91` 配套）：脚本从前的写法是 `2>/dev/null`，
+#    那会把「fixture 有类型错」「工具报内部错」一律吞掉 —— 症状是 diff 报
+#    「不一致」，而真因在没人看的 stderr 里。现在 stderr 进临时文件并在
+#    **任何一侧非空**时报失败（fixture 必须合法，`M3-tests.md` §5.1）。
+# ⑤ **确定性**（`T-TY-95`）：同一个 fixture **重复跑两次**，两侧各自的 sha256
+#    必须一致。map 迭代序、类型编号缓存之类的非确定性一旦出现，逐字节对撞会
+#    变成间歇性失败 —— 那种红比没有红更糟。oracle 与 rgoc **两侧都查**
+#    （计划只点了 oracle 侧；rgoc 是我们自己新写的，非确定性风险只高不低）。
 
 set -uo pipefail
 
@@ -62,35 +70,57 @@ FIXDIR="$(cd "$FIXDIR" && pwd)"
 # C7 §2 规则 1：以 `#` 开头的行是注释、空行忽略 —— 两侧都丢。
 strip() { grep -v -e '^#' -e '^[[:space:]]*$' || true; }
 
+# 两侧的驱动。**stdout 进调用方的重定向，stderr 进第二个参数给的文件**
+# （不再 `2>/dev/null`，见设计注 ④）。
 oracle_dump() {
-    ( cd "$ORACLE_DIR" && go run . "$1" "${LANG_ARG[@]+"${LANG_ARG[@]}"}" ) 2>/dev/null | strip
+    ( cd "$ORACLE_DIR" && go run . "$1" "${LANG_ARG[@]+"${LANG_ARG[@]}"}" ) 2>"$2" | strip
 }
 rgoc_dump() {
     ( cd "$ROOT/rgoc" && cargo run -q -p rgoc-driver -- types --dump "$1" \
-        "${LANG_ARG[@]+"${LANG_ARG[@]}"}" ) 2>/dev/null | strip
+        "${LANG_ARG[@]+"${LANG_ARG[@]}"}" ) 2>"$2" | strip
 }
+sha() { sha256sum "$1" | cut -d' ' -f1; }
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 n=0
 fail=0
+
+# 报出某一侧的 stderr（截前 10 行，太长的话没人看）
+show_stderr() {
+    printf '     %s 的 stderr（前 10 行）：\n' "$1"
+    sed -n '1,10p' "$2" | sed 's/^/       /'
+}
+
 for f in "$FIXDIR"/*.go; do
     [ -f "$f" ] || continue
     b="$(basename "$f")"
     n=$((n+1))
 
-    oracle_dump "$f" > "$tmp/o.txt"
-    rgoc_dump   "$f" > "$tmp/r.txt"
+    oracle_dump "$f" "$tmp/o.err" > "$tmp/o.txt"
+    rgoc_dump   "$f" "$tmp/r.err" > "$tmp/r.txt"
 
     # ① 两侧都必须非空（见设计注 ①）
     if [ ! -s "$tmp/o.txt" ]; then
-        printf '  !! %s：oracle 侧没有产出 dump\n' "$b"; fail=1; continue
+        printf '  !! %s：oracle 侧没有产出 dump\n' "$b"
+        [ -s "$tmp/o.err" ] && show_stderr oracle "$tmp/o.err"
+        fail=1; continue
     fi
     if [ ! -s "$tmp/r.txt" ]; then
-        printf '  !! %s：**rgoc 侧**没有产出 dump' "$b"
-        printf '（`rgoc types --dump` 尚未实现 —— M3-plan.md Task 32 才接线）\n'
+        printf '  !! %s：**rgoc 侧**没有产出 dump（真因常在 stderr，见下）\n' "$b"
+        [ -s "$tmp/r.err" ] && show_stderr rgoc "$tmp/r.err"
         fail=1; continue
+    fi
+
+    # ④ stderr 必须空（fixture 合法 + 工具无内部错）
+    if [ -s "$tmp/o.err" ]; then
+        printf '  !! %s：oracle 侧有 stderr（fixture 必须**合法**，M3-tests.md §5.1）\n' "$b"
+        show_stderr oracle "$tmp/o.err"; fail=1; continue
+    fi
+    if [ -s "$tmp/r.err" ]; then
+        printf '  !! %s：rgoc 侧有 stderr（fixture 必须**合法**）\n' "$b"
+        show_stderr rgoc "$tmp/r.err"; fail=1; continue
     fi
 
     # ② 逐字节比对，首个不一致行即判据
@@ -99,6 +129,19 @@ for f in "$FIXDIR"/*.go; do
         sed -n '1,12p' "$tmp/d.txt" | sed 's/^/     /'
         fail=1; continue
     fi
+
+    # ⑤ 确定性：两侧各自再跑一次，sha256 必须一样（T-TY-95）
+    oracle_dump "$f" "$tmp/o2.err" > "$tmp/o2.txt"
+    rgoc_dump   "$f" "$tmp/r2.err" > "$tmp/r2.txt"
+    for side in o r; do
+        if [ "$(sha "$tmp/$side.txt")" != "$(sha "$tmp/${side}2.txt")" ]; then
+            printf '  !! %s：%s 侧**重复运行不一致**（非确定性，T-TY-95）\n' \
+                "$b" "$([ "$side" = o ] && echo oracle || echo rgoc)"
+            diff -u "$tmp/$side.txt" "$tmp/${side}2.txt" | sed -n '1,12p' | sed 's/^/     /'
+            fail=1; continue 2
+        fi
+    done
+
     printf '  ✓ %s\n' "$b"
 done
 
@@ -111,4 +154,4 @@ if [ "$fail" -ne 0 ]; then
     echo "run-collide: FAIL（$n 个 fixture）"
     exit 1
 fi
-echo "run-collide: OK（$n 个 fixture，两侧逐字节一致）"
+echo "run-collide: OK（$n 个 fixture，两侧逐字节一致 + stderr 空 + 重复运行确定）"
