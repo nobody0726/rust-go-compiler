@@ -213,6 +213,51 @@ fn t_ty_53_接收者参数与类型参数都是名字() {
     assert!(ds.is_empty(), "全都有声明：{:?}", brief(&ds));
 }
 
+/// 接收者**自己声明**的类型参数（`TYP-22`）：`func (b *Box[T]) M()` 里的 `T`
+/// 由**接收者的实参列表**声明（官方 `recv.TypeParams()`），不是从别处借的。
+///
+/// # 谁发现的
+///
+/// `Task 35` 的语料普查：`types/testdata/fixedbugs/issue39755.go`、`issue40038.go`、
+/// `issue66751.go` 三个文件在 rgoc 侧退出码 1（`undefined: T`），而 oracle 侧 0。
+/// 三例同一个形状：`func (pp *PathParams[T]) IsNil()` / `func (A[T]) m(A[T])` /
+/// `func (f *fooer[A]) foo(A)`。
+///
+/// # 两处都要可见（体里也常引用它）
+///
+/// 签名（接收者类型 / 参数 / 结果）由**包级**那一趟解析，体由**体内**那一趟走；
+/// 两趟各建各的作用域 ⇒ 只修一处会留下「签名好了、体里还是 `undefined: T`」
+/// 的半修状态。所以这条用例把 `var x T` 放进体里。
+///
+/// # 约束按**位置**取
+///
+/// `func (n *NBox[U]) Alt() U` —— 实参名可以与声明处**不同**（`U` vs `T`），
+/// 约束取类型声明里**同位置**那个（`Num`）。官方就是这么做的（实测 oracle exit 0）。
+#[test]
+fn t_ty_53_接收者声明的类型参数在签名与体内可见() {
+    let a = "package p\n\ntype Box[T any] struct{ v T }\n\nfunc (b *Box[T]) Get() T {\n\tvar x T\n\treturn x\n}\n\ntype Num interface{ ~int }\n\ntype NBox[T Num] struct{ v T }\n\nfunc (n *NBox[U]) Alt() U {\n\treturn n.v\n}\n";
+    let (_pkg, ds) = load(&[("a.go", a)]);
+    assert!(
+        ds.is_empty(),
+        "接收者的类型参数该在签名与体内都可见：{:?}",
+        brief(&ds)
+    );
+}
+
+/// 反向：基类型**不是泛型**（`Box` 没有 `[T]`）⇒ 实参里的 `T` 仍然未定义。
+///
+/// 没有这条，「凡接收者带实参就不报」的实现也会让上一条通过。
+#[test]
+fn t_ty_53_非泛型接收者的实参仍是未定义() {
+    let a = "package p\n\ntype Box struct{}\n\nfunc (b *Box[T]) M() {}\n";
+    let (_pkg, ds) = load(&[("a.go", a)]);
+    let col = col_of(a, 5, "T");
+    assert_eq!(
+        brief(&ds),
+        vec![(DiagCode::TypUndeclaredName, 5, col, "undefined: T")]
+    );
+}
+
 // ── `T-TY-54` 未定义 ──────────────────────────────────────────────────────
 
 /// 值位置的未定义：**每一次出现各一条**（官方 `undef.go` 实测两条）。

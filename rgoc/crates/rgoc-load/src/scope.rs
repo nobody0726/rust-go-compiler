@@ -199,6 +199,7 @@ impl Checker<'_> {
     }
 
     /// 类型参数层 ⇒ 函数层（接收者 / 参数 / 结果）。
+    #[allow(clippy::too_many_arguments)]
     fn func_scope(
         &mut self,
         parent: ScopeId,
@@ -207,10 +208,23 @@ impl Checker<'_> {
         recv: Option<&AstField>,
         resolve_types: bool,
     ) -> ScopeId {
+        // 接收者**自己声明**的类型参数（`TYP-22`）：`func (b *Box[T]) M()` 的 `T`。
+        // 条目由包级那一趟（`resolve_func_sig`）建好，这里只把**名字**补进作用域
+        // —— 体内那一趟 `resolve_types == false`，类型不参与，名字必须在。
+        // ⚠️ 不能在这里 `declare_tparams`：那会**再建一套**类型参数条目，
+        // 编号随之后移（`C7` §3 的号是遍历序，多一个条目就全错位）。
+        let recv_names: Vec<&Name> = recv
+            .and_then(crate::decls::recv_type_args)
+            .map(|(_, ns)| ns)
+            .unwrap_or_default();
         let mut outer = parent;
-        if !tparams.is_empty() {
+        if !tparams.is_empty() || !recv_names.is_empty() {
             outer = self.scopes.child(ScopeKind::Func, parent);
             // 先只声明名字：约束的类型解析归包级（`resolve_types == false` 时）
+            for n in &recv_names {
+                let inv = self.tt.invalid();
+                self.declare_in(outer, ObjKind::TypeName, n, inv);
+            }
             for f in tparams {
                 if let Some(n) = &f.name {
                     let inv = self.tt.invalid();

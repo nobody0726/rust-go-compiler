@@ -265,6 +265,42 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
     pkg.asts = asts;
 }
 
+/// 接收者写出的**类型实参名**（`func (b *Box[T])` / `func (Box[T, U])`）。
+///
+/// 返回 `(基类型名, 实参名)`。只有「基是**裸标识符**、实参**全是标识符**」才返回
+/// `Some` —— 那正是 Go 允许出现在接收者位置的形状（规范的 receiver 语法：
+/// `"(" [ identifier ] [ "*" ] BaseTypeName [ "[" identifier_list "]" ] ")"`）。
+/// 别的形状（`*pkg.T[A]`、`Box[[]int]`…）⇒ `None`：不是接收者声明的类型参数。
+///
+/// 指针与括号都可以有（`func (b (*Box[T])) M()` 合法）⇒ 先一层层剥掉再判。
+pub(crate) fn recv_type_args(recv: &AstField) -> Option<(&str, Vec<&rgoc_ast::Name>)> {
+    let mut e = &recv.type_;
+    loop {
+        e = match e {
+            Expr::Paren(p) => &p.x,
+            Expr::Unary(u) if u.op == Op::Mul && u.y.is_none() => &u.x,
+            _ => break,
+        };
+    }
+    let Expr::Index(ix) = e else { return None };
+    let Expr::Name(base) = &*ix.x else {
+        return None;
+    };
+    let names = match &*ix.index {
+        Expr::Name(n) => vec![n],
+        Expr::List(l) => l
+            .elems
+            .iter()
+            .map(|e| match e {
+                Expr::Name(n) => Some(n),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()?,
+        _ => return None,
+    };
+    Some((base.value.as_str(), names))
+}
+
 impl Checker<'_> {
     // ── 第一遍：收条目 ────────────────────────────────────────────────────
 
@@ -417,21 +453,58 @@ impl Checker<'_> {
     }
 
     /// 一个 `func` 声明的签名（方法带接收者）。类型参数作用域只在这里建。
+    ///
+    /// **接收者声明的类型参数**（`TYP-22`）：`func (b *Box[T]) M()` 里的 `T` 由
+    /// **接收者**声明（官方 `recv.TypeParams()`），约束取类型声明里**同一位置**
+    /// 那一个。它必须在解析**接收者类型**之前进作用域 —— `*Box[T]` 里的 `T`
+    /// 正是它（`Task 35` 的语料普查抓到过这条漏声明：三例 `undefined: T`）。
     fn resolve_func_sig(&mut self, d: &rgoc_ast::FuncDecl) -> TypeId {
-        // 接收者类型在**包作用域**解析：它不能引用方法自己的类型参数
-        let recv = d
-            .recv
-            .as_ref()
-            .map(|r| self.resolve_type(self.pkg_scope, &r.type_));
+        let base = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
+            Some(fs) => self.declare_tparams(self.pkg_scope, &fs),
+            None => self.pkg_scope,
+        };
+        // 接收者类型在**方法自己的**类型参数之外解析（官方：接收者不能引用方法
+        // 自己的 `[P any]`）—— 但**能**引用接收者声明的类型参数 ⇒ 用 `base`。
+        let recv = d.recv.as_ref().map(|r| self.resolve_type(base, &r.type_));
         let scope = if d.tparams.is_empty() {
-            self.pkg_scope
+            base
         } else {
-            self.declare_tparams(self.pkg_scope, &d.tparams)
+            self.declare_tparams(base, &d.tparams)
         };
         match &d.type_ {
             Expr::FuncType(ft) => self.resolve_signature(scope, ft, recv),
             _ => self.tt.invalid(),
         }
+    }
+
+    /// 把接收者声明的类型参数**还原成声明处的形状**：名字用接收者写的（`U`），
+    /// 约束用类型声明里**同位置**那一个（官方按位置替换，实测
+    /// `func (n *NBox[U]) Alt() U` 合法且 `U` 取 `NBox` 的约束）。
+    ///
+    /// ⚠️ 条目是**新建**的（不复用类型声明里那个）：实测 oracle 给方法造了自己的
+    /// `typeparam` 条目（`named Box[T]` 实例的字段类型指向**方法**那一个）。
+    /// 复制约束表达式是安全的：具名 / universe 约束解出来还是同一个 `TypeId`。
+    fn recv_tparam_fields(&self, recv: &AstField) -> Option<Vec<AstField>> {
+        let (base, names) = recv_type_args(recv)?;
+        let Some(Item::Type { tparams, .. }) = self.items.get(base) else {
+            return None; // 基类型不是本包的类型声明 ⇒ 没有类型参数
+        };
+        // 个数不对 ⇒ 那是另一种写法（`Box[T]` 而 `Box` 非泛型）⇒ 交给 `undefined` 报
+        if tparams.len() != names.len() {
+            return None;
+        }
+        Some(
+            names
+                .into_iter()
+                .zip(tparams.iter())
+                .map(|(n, f)| AstField {
+                    name: Some(n.clone()),
+                    type_: f.type_.clone(),
+                    tag: None,
+                    pos: n.pos,
+                })
+                .collect(),
+        )
     }
 
     /// 求一个包级条目（幂等；环检测在 [`Checker::hit_cycle`]）。
