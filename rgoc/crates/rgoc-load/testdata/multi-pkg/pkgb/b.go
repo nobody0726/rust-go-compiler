@@ -1,0 +1,3 @@
+package pkgb
+
+import "pkga"

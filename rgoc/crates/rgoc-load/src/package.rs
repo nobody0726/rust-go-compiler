@@ -26,6 +26,7 @@
 //! 这样切的好处是 `T-TY-61`（同包跨文件可见）在**只有名字**时就已经成立，
 //! 而「前向引用」的正确性由 Task 24 的求值顺序单独证明 —— 两件事各有测试。
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -48,7 +49,7 @@ use crate::decls::collect_decls;
 /// - **类型表不归本结构**：universe 必须声明进 dump 编号用的那张表
 ///   （Task 3 实测：oracle 把 universe 的 `error` 也编号），而多包还要共享它
 ///   ⇒ 由调用方持有、以 `&mut` 传入（Ruling 23-2）。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Package {
     /// 包名 —— 取**第一个**非 `_` 文件的 `package` 子句（官方 `initFiles`）。
     ///
@@ -89,6 +90,17 @@ pub struct Package {
     /// 由调用方（Task 36 的 CLI，它本来要先探可读性）决定怎么报。
     /// 静默跳过是不行的：那正是本仓反复记的「静默失败」形状。
     pub skipped: Vec<(String, String)>,
+    /// **直接**被依赖的包：`import` 路径 → 已装载的包（Task 27）。
+    ///
+    /// 键是**源码里写的路径**（`import "a/b"` ⇒ `"a/b"`），值是装载结果 ——
+    /// 它和入口包一样自带作用域树，但**类型住在同一个 [`TypeTable`] 里**
+    /// （`D-M3-1` 的「跨包同一性」靠的就是这一点）。
+    ///
+    /// 只有 [`crate::load_with_imports`] 会填；[`load_sources`] 与
+    /// [`load_from_explicit_files`] 留空（**没有 roots 就没有 import 解析**）。
+    /// ⚠️ 环**不会**进这里：环上那条 import 没有装载结果（见 `importer` 的模块文档），
+    /// 所以这棵树在结构上无环。
+    pub imports: BTreeMap<String, Package>,
 }
 
 impl Package {
@@ -139,16 +151,7 @@ pub fn load_from_explicit_files(
     files: &[PathBuf],
     lang: Option<&str>,
 ) -> (Package, DiagBag) {
-    let mut sources: Vec<(String, Vec<u8>)> = Vec::with_capacity(files.len());
-    let mut skipped: Vec<(String, String)> = Vec::new();
-    for p in files {
-        let name = p.to_string_lossy().into_owned();
-        match fs::read(p) {
-            Ok(bytes) => sources.push((name, bytes)),
-            // 读不到 ⇒ 记下来（`Package::skipped`），不猜也不伪造诊断
-            Err(e) => skipped.push((name, e.to_string())),
-        }
-    }
+    let (sources, skipped) = read_sources(files);
     let borrowed: Vec<Source<'_>> = sources
         .iter()
         .map(|(n, b)| (n.as_str(), b.as_slice()))
@@ -158,7 +161,25 @@ pub fn load_from_explicit_files(
     (pkg, bag)
 }
 
-/// 从内存里的源文件装载一个包。
+/// 读到的源文件：`(名字, 字节)`。
+pub(crate) type RawSource = (String, Vec<u8>);
+
+/// 读文件：`(源文件, 读不到的)` —— 读不到**不报诊断**（见 [`Package::skipped`]）。
+pub(crate) fn read_sources(files: &[PathBuf]) -> (Vec<RawSource>, Vec<(String, String)>) {
+    let mut sources: Vec<RawSource> = Vec::with_capacity(files.len());
+    let mut skipped: Vec<(String, String)> = Vec::new();
+    for p in files {
+        let name = p.to_string_lossy().into_owned();
+        match fs::read(p) {
+            Ok(bytes) => sources.push((name, bytes)),
+            // 读不到 ⇒ 记下来（`Package::skipped`），不猜也不伪造诊断
+            Err(e) => skipped.push((name, e.to_string())),
+        }
+    }
+    (sources, skipped)
+}
+
+/// 从内存里的源文件装载一个包（自建文件表 —— 单包入口都走这条）。
 ///
 /// `sources` 的顺序就是 `Package::files` 的顺序（**确定性**从这里开始：
 /// 包名取第一个、dump 的根按声明序、诊断排序的第一键是 `FileId`）。
@@ -167,8 +188,22 @@ pub fn load_sources(
     sources: &[Source<'_>],
     lang: Option<&str>,
 ) -> (Package, DiagBag) {
-    let mut bag = DiagBag::new();
     let mut file_table = FileTable::new();
+    load_sources_into(tt, &mut file_table, sources, lang)
+}
+
+/// 同 [`load_sources`]，但**用调用方的文件表**（Task 27 的装载会话走这条）。
+///
+/// 为什么需要它：会话里入口包与被依赖包**必须共用一张 [`FileTable`]**，
+/// 否则每个包都从 `FileId(0)` 起编号，诊断位置（`Pos.file`）就会指错文件。
+/// `Package::file_table` 在会话末尾会被回填成**最终**那张表（见 [`crate::importer`]）。
+pub fn load_sources_into(
+    tt: &mut TypeTable,
+    file_table: &mut FileTable,
+    sources: &[Source<'_>],
+    lang: Option<&str>,
+) -> (Package, DiagBag) {
+    let mut bag = DiagBag::new();
     let mut scopes = ScopeTable::new();
     let universe = declare_universe(tt, &mut scopes);
     let pkg_scope = scopes.child(ScopeKind::Package, universe);
@@ -184,11 +219,12 @@ pub fn load_sources(
         versions: Versions::default(),
         type_roots: Vec::new(),
         skipped: Vec::new(),
+        imports: BTreeMap::new(),
     };
 
     for (name, src) in sources {
         // ① 解析（**共享文件表** —— 否则每个文件都是 `FileId(0)`，Ruling 23-4）
-        let r = parse_file_in(&mut file_table, src, name);
+        let r = parse_file_in(file_table, src, name);
         for d in r.diags.into_sorted() {
             bag.push(d);
         }
@@ -261,7 +297,7 @@ pub fn load_sources(
         pkg.asts.push(ast);
     }
 
-    pkg.file_table = file_table;
+    pkg.file_table = file_table.clone();
 
     // ⑤ 版本表（`D-M3-15`）：每个文件的生效版本 + 两处 `TooNew` 诊断
     let refs: Vec<&AstFile> = pkg.asts.iter().collect();

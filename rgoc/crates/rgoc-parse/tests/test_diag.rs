@@ -593,10 +593,12 @@ fn t_a_66_diagcode_总数已更新() {
     //   TypUndeclaredName = `UndeclaredName`；TypRepeatedDecl = `RepeatedDecl`）
     // + M3/Task 26 新增 7 个（TypBlankPkgName / TypDuplicateLabel / TypInvalidBlank /
     //   TypJumpIntoBlock / TypMisplacedLabel / TypUndeclaredLabel / TypUnusedLabel）
-    //   ⇒ 共 63。
+    // + M3/Task 27 新增 3 个（TypBrokenImport = 官方 `BrokenImport`；
+    //   TypImportCycle / TypUnsupportedImportForm 官方**无**代号，我方命名）
+    //   ⇒ 共 66。
     assert_eq!(
         DiagCode::ALL.len(),
-        63,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 28 个（TYP-）"
+        66,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）"
     );
 }

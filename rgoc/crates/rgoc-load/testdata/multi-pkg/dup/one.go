@@ -1,0 +1,3 @@
+package dup
+
+import "empty"

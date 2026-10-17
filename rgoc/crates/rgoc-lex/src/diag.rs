@@ -171,6 +171,19 @@ pub enum DiagCode {
     /// 触发面与官方 `initFiles` 的 switch 同形：**在 `pkg.name` 还是空串时**遇到
     /// `package _` 才报（此后再遇到 `package _` 落进 `MismatchedPkgName`）。
     TypBlankPkgName,
+    /// 被依赖包**装不上**（源码目录里没有可用的 `.go` 文件）—— 官方 `BrokenImport`
+    /// （消息 `could not import %s (%s)`，`go/types/resolver.go:305`）
+    ///
+    /// 官方把**一切** import 失败都归到这条（`go/types` 只负责把 importer 的错误
+    /// 包起来，真正的探测在 importer 一侧）——它的注释里举的例子正是
+    /// `import "amissingpackage"`。
+    ///
+    /// ⚠️ 计划稿点名的是 `ImportNotFound`，官方**没有**这个代号（全表只有
+    /// `BadImportPath` / `BrokenImport` / `ImportCRenamed` / `UnusedImport` /
+    /// `UndeclaredImportedName`）⇒ 按「代号照官方」改用实名（同 `TypDuplicateDecl` 那次）。
+    /// 这里只承载**「目录在、但没有 `.go`」**这一种（触发者 `T-TY-85` 的反向用例）；
+    /// 「roots 里根本没有这个路径」落 [`Self::TypUnsupportedImportForm`]。
+    TypBrokenImport,
     /// 常量**除数为零**（`/` 与 `%`，整数与浮点都算）—— 官方 `DivByZero`
     ///
     /// 实测官方四条都报它：`1/0`、`1%0`、`1.0/0`、`1/0.0`（消息是
@@ -208,6 +221,16 @@ pub enum DiagCode {
     /// 位置取该文件的 `package` **名字**（官方 `check.go:346` 的原话是
     /// 「Use position of 'package [p]'」，为与 types/types2 对齐）。
     TypFileRequiresNewerGo,
+    /// **import 环**（`a → b → a`）—— **官方没有对应代号**
+    ///
+    /// 官方 `go/types` **不做**源码 import：它把这件事交给 `Config.Importer`，
+    /// 而环检测在 importer 一侧且只报纯文本（`go/internal/srcimporter/srcimporter.go:85`
+    /// 的 `import cycle through package %q`）。所以这条是**我方命名**，消息照官方原话。
+    ///
+    /// 口径（`M3-design.md` §2 的 D-M3-5 注）：**环上每个包一条**，位置取
+    /// 「把这个包拉进环的那条 `import`」；入口包不是被 import 进来的 ⇒ 借用
+    /// **闭合边**（发现环的那条 `import`）的位置。触发者 `T-TY-63`。
+    TypImportCycle,
     /// 空标识符 `_` 被当**值或类型**用 —— 官方 `InvalidBlank`（消息 `cannot use _ as value or type`）
     ///
     /// 官方唯一触发点：`go/types/typexpr.go:28`（`check.error(e, InvalidBlank, …)`）。
@@ -356,6 +379,18 @@ pub enum DiagCode {
     /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
     /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）落在检查器里，届时**复用**本码。
     TypUnsupportedConstraintIdentity,
+    /// 用了 **M3 不支持的 import 形式** —— **官方没有对应代号**
+    ///
+    /// 触发面（`D-M3-5`）：M3 的 import 只认「在调用方给的 roots 下能找到**源码目录**」
+    /// 这一种形式 ⇒ 二进制 export data（标准库那种只有归档的包）、模块路径
+    /// （`example.com/x`，要 `go.mod`/下载）、相对路径全部落到这条。
+    ///
+    /// 为什么**不**复用 [`Self::TypBrokenImport`]：那条的语义是「我们要装的包装不上」，
+    /// 而这里是「**我们不支持这种 import**」——`D-M3-11` 要的是**稳定拒绝码**，
+    /// 混进官方的「用户写错了」族会把能力边界伪装成用户的错（与
+    /// [`Self::TypUnsupportedConstraintIdentity`] 同一个理由）。
+    /// ⚠️ 计划稿点名 `UnsupportedImportForm`，官方无此名 ⇒ 我方命名（`D-M3-11` 允许）。
+    TypUnsupportedImportForm,
     /// 标签**声明了却没被用** —— 官方 `UnusedLabel`（消息 `label %s declared and not used`）
     ///
     /// 位置取**标签声明**处（官方 `labels.go:51` 的 `check.softErrorf(lbl, …)`）。
@@ -381,7 +416,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 63] = [
+    pub const ALL: [DiagCode; 66] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -418,11 +453,13 @@ impl DiagCode {
         DiagCode::SynNestingTooDeep,
         DiagCode::SynUnexpectedToken,
         DiagCode::TypBlankPkgName,
+        DiagCode::TypBrokenImport,
         DiagCode::TypDivByZero,
         DiagCode::TypDuplicateDecl,
         DiagCode::TypDuplicateLabel,
         DiagCode::TypFeatureRequiresGoVersion,
         DiagCode::TypFileRequiresNewerGo,
+        DiagCode::TypImportCycle,
         DiagCode::TypInvalidBlank,
         DiagCode::TypInvalidConstInit,
         DiagCode::TypInvalidConstVal,
@@ -443,6 +480,7 @@ impl DiagCode {
         DiagCode::TypUndeclaredLabel,
         DiagCode::TypUndeclaredName,
         DiagCode::TypUnsupportedConstraintIdentity,
+        DiagCode::TypUnsupportedImportForm,
         DiagCode::TypUnusedLabel,
         DiagCode::TypWrongAssignCount,
     ];
@@ -486,11 +524,13 @@ impl DiagCode {
             DiagCode::SynNestingTooDeep => "SYN-NESTING-TOO-DEEP",
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
             DiagCode::TypBlankPkgName => "TYP-BLANK-PKG-NAME",
+            DiagCode::TypBrokenImport => "TYP-BROKEN-IMPORT",
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypDuplicateDecl => "TYP-DUPLICATE-DECL",
             DiagCode::TypDuplicateLabel => "TYP-DUPLICATE-LABEL",
             DiagCode::TypFeatureRequiresGoVersion => "TYP-FEATURE-REQUIRES-GO-VERSION",
             DiagCode::TypFileRequiresNewerGo => "TYP-FILE-REQUIRES-NEWER-GO",
+            DiagCode::TypImportCycle => "TYP-IMPORT-CYCLE",
             DiagCode::TypInvalidBlank => "TYP-INVALID-BLANK",
             DiagCode::TypInvalidConstInit => "TYP-INVALID-CONST-INIT",
             DiagCode::TypInvalidConstVal => "TYP-INVALID-CONST-VAL",
@@ -511,6 +551,7 @@ impl DiagCode {
             DiagCode::TypUndeclaredLabel => "TYP-UNDECLARED-LABEL",
             DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
+            DiagCode::TypUnsupportedImportForm => "TYP-UNSUPPORTED-IMPORT-FORM",
             DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",
             DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",
         }

@@ -67,9 +67,13 @@ fn 代号表恰为冻结总数且无重复() {
     // `TypDuplicateLabel`、`TypInvalidBlank`、`TypJumpIntoBlock`、`TypMisplacedLabel`、
     // `TypUndeclaredLabel`、`TypUnusedLabel`（**全部**照官方名，见枚举注释）
     // ⇒ 共 **63**。
+    // Task 27 再 +3（源码 import）：`TypBrokenImport`（**官方名**，替代计划稿点名的
+    // `ImportNotFound`）、`TypImportCycle` 与 `TypUnsupportedImportForm`
+    // （后两条官方无代号 —— 环检测在官方 importer 一侧且只有纯文本；见枚举注释）
+    // ⇒ 共 **66**。
     //
     // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 63);
+    assert_eq!(DiagCode::ALL.len(), 66);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

@@ -31,6 +31,7 @@
 
 pub mod decls;
 pub mod exported;
+pub mod importer;
 mod labels;
 pub mod package;
 pub mod scope;
@@ -38,4 +39,5 @@ pub mod typeexpr;
 
 pub use decls::collect_decls;
 pub use exported::is_exported;
+pub use importer::{ImportDir, ImportResolver, MAX_IMPORT_DEPTH, load_with_imports};
 pub use package::{Package, Source, load_from_explicit_files, load_sources};

@@ -99,7 +99,7 @@ impl ScopeId {
 ///
 /// 节点只做**本层**的事（插名字、查本层）。**沿父链**的查询在
 /// [`ScopeRef`] / [`ScopeTable`] 上 —— 因为那条链要走表，节点自己没有表。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Scope {
     /// 这一层是什么。
     kind: ScopeKind,
@@ -158,7 +158,12 @@ impl Scope {
 ///
 /// 只增层、只作子层（[`child`](ScopeTable::child) 指向**已存在**的父）——
 /// 环在结构上不可能。
-#[derive(Debug, Default)]
+///
+/// `Clone` 的触发者：`rgoc-load` 的**源码 import**（Task 27）—— 一个被依赖包可能被
+/// 同一批文件 import 多次，而 `rgoc-load` 的 `Package` 是**按值**持有作用域树的，
+/// 于是「第二次 import」只能克隆（装载会话里缓存了首次结果）。M3 的 fixture 很小，
+/// 克隆代价可忽略；等 M4 需要按引用共享时再换形态。
+#[derive(Debug, Default, Clone)]
 pub struct ScopeTable {
     scopes: Vec<Scope>,
 }
