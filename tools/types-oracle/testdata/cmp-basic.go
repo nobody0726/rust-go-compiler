@@ -59,8 +59,17 @@ type Stringer interface {
 // ── 匿名约束接口：M3 **显式拒绝**（`result = reject`，`U-M3-05` / R-32-1 ②）──
 // 只有「本来就非做类型集推理不可」时才拒绝。具名约束接口（Num）走具名分支，
 // 上面的 `Num => Num` / `Num => Stringer` 都是**判得出的** true / false。
+//
+// ⚠️ 下面每条指令**前面一行**是给对撞读的标记（`// rgoc:expect-reject <单元>`）：
+// 它是**注释**（oracle 侧只认 `//rgoc:cmp`，看不懂它；rgoc 侧同理），但
+// `collide_cmp.rs` 用它断言「**排除集 == 声明的集合**」—— 标记了却没 reject、
+// 或 reject 了却没标记，都报错。⇒ 排除集不是「跑出来什么样就是什么样」，
+// 而是**写在样本旁边的一句承诺**（`M3-tests.md` §6 的 `U-M3-05`）。
+// rgoc:expect-reject U-M3-05
 //rgoc:cmp identical interface{ ~int } => interface{ ~int }
+// rgoc:expect-reject U-M3-05
 //rgoc:cmp identical interface{ ~int } => interface{ ~float64 }
+// rgoc:expect-reject U-M3-05
 //rgoc:cmp identical interface{ comparable } => interface{ comparable }
 
 // ── 空白拼写（§5.2 的示意形态；与 `=>` 同一条判据）────────────────────────

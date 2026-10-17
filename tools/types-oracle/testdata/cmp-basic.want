@@ -27,9 +27,9 @@
 55	identical	true
 56	identical	true
 57	identical	false
-62	identical	true
-63	identical	false
-64	identical	true
-68	identical	true
-69	identical	false
-70	representable	false
+69	identical	true
+71	identical	false
+73	identical	true
+77	identical	true
+78	identical	false
+79	representable	false

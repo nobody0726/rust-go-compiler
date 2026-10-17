@@ -60,7 +60,10 @@ fn first_diff(want: &str, got: &str) -> String {
         let wl = w.get(i).copied().unwrap_or("<无此行>");
         let gl = g.get(i).copied().unwrap_or("<无此行>");
         if wl != gl {
-            let mut s = format!("首个差异在第 {} 行：\n  oracle: {wl}\n  rgoc  : {gl}\n", i + 1);
+            let mut s = format!(
+                "首个差异在第 {} 行：\n  oracle: {wl}\n  rgoc  : {gl}\n",
+                i + 1
+            );
             for j in i.saturating_sub(2)..(i + 3).min(w.len().max(g.len())) {
                 s.push_str(&format!(
                     "  [{}] oracle={:?} rgoc={:?}\n",
@@ -104,7 +107,11 @@ fn dump_对撞_全部_type_dump_fixture() {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| {
-            let n = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let n = p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             n.starts_with("type-dump-") && n.ends_with(".go")
         })
         .collect();
@@ -116,7 +123,11 @@ fn dump_对撞_全部_type_dump_fixture() {
     );
 
     for f in &fixtures {
-        let name = f.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = f
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let want_path = f.with_extension("want");
         let want_raw = std::fs::read_to_string(&want_path).unwrap_or_else(|e| {
             panic!(
@@ -156,7 +167,11 @@ fn dump_golden_都在且非空() {
     let mut n = 0;
     for e in std::fs::read_dir(&dir).expect("读 testdata") {
         let p = e.expect("目录项").path();
-        let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let name = p
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         if !(name.starts_with("type-dump-") && name.ends_with(".go")) {
             continue;
         }

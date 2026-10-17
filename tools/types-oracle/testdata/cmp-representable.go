@@ -36,6 +36,19 @@ type MyInt int
 //rgoc:cmp representable 0x1p128 => float32
 //rgoc:cmp representable 1.5 => int
 //rgoc:cmp representable 2.0 => int
+// ⚠️ 浮点目标的判据**不是**「精确表示」，而是「可舍入且**不溢出**」
+// （官方 `representableConst`）：`0.1`、`2^24+1` 都丢精度，但都算**可表示**。
+// ⇒ 浮点目标下 `false` 只有一种成因：**溢出**。这一对里只有 3.5e38 是 false。
+// 尾数中点（`float32` 尾数 24 位）
+//rgoc:cmp representable 16777216 => float32
+//rgoc:cmp representable 16777217 => float32
+//rgoc:cmp representable -16777217 => float32
+// 溢出分界（float32 最大约 3.4028235e38）
+//rgoc:cmp representable 3.4e38 => float32
+//rgoc:cmp representable 3.5e38 => float32
+// float64 的同一对（尾数 53 位）
+//rgoc:cmp representable 9007199254740992 => float64
+//rgoc:cmp representable 9007199254740993 => float64
 
 // ── 复常量（`T-TY-34` 邻域）──────────────────────────────────────────────
 //rgoc:cmp representable 1i => complex64
