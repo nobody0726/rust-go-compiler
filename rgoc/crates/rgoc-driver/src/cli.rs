@@ -50,6 +50,10 @@ pub struct TypesCommand {
     /// 不给时只报诊断与摘要 —— 「检查通过没有」是门禁要读的信号，
     /// dump 是给对撞看的中间产物，两者刻意分开。
     pub dump: bool,
+    /// `--cmp`：输出 `//rgoc:cmp` 指令的判定行（`T-TY-92/93` 的对撞入口）。
+    ///
+    /// 与 `--dump` 互斥（两种比对面，输出形状不同）。
+    pub cmp: bool,
     /// `-I <root>`：import 解析根（可给多次）。
     ///
     /// 有了它才有 import 解析（`Ruling 27-1`：`load_with_imports`）；
@@ -141,6 +145,8 @@ pub enum CliError {
     AstNeedsFile,
     /// `types` 一个文件参数都没给（M3/Task 2）
     TypesNeedsFile,
+    /// `types` 同时给了 `--dump` 与 `--cmp`（两种比对面，输出形状不同）
+    DumpCmpConflict,
 }
 
 impl fmt::Display for CliError {
@@ -155,7 +161,7 @@ impl fmt::Display for CliError {
              rgoc-driver harness report [--out <路径>]\n  \
              rgoc-driver lex <file> [--mode comments|directives]\n  \
              rgoc-driver ast <file>\n  \
-             rgoc-driver types [--dump] [--lang go1.N] [-I <root>]... <file>...";
+             rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
@@ -183,6 +189,10 @@ impl fmt::Display for CliError {
             }
             Self::AstNeedsFile => write!(f, "ast 需要一个文件参数。{USAGE}"),
             Self::TypesNeedsFile => write!(f, "types 至少需要一个文件参数。{USAGE}"),
+            Self::DumpCmpConflict => write!(
+                f,
+                "--dump 与 --cmp 不能同时给（C7 的 dump 与 `//rgoc:cmp` 的判定行是两个比对面）。{USAGE}"
+            ),
         }
     }
 }
@@ -207,21 +217,27 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
     }
 }
 
-/// `types [--dump] [--lang go1.N] [-I <root>]... <file>...` —— 与 `lex`/`ast` 同族，
-/// 但**收多个文件**（M3 的包模型是单包多文件）。
+/// `types [--dump] [--cmp] [--lang go1.N] [-I <root>]... <file>...` —— 与 `lex`/`ast`
+/// 同族，但**收多个文件**（M3 的包模型是单包多文件）。
 ///
-/// 选项与文件参数的先后无关。**没实现的长选项一律报错**（T37 的纪律）：
-/// `--cmp` 在 Task 32 才接线，所以此刻它还不是合法选项。
+/// 选项与文件参数的先后无关。**没实现的长选项一律报错**（T37 的纪律）。
+/// `--dump` 与 `--cmp` **互斥**：分别是 C7 的 dump 与 `//rgoc:cmp` 的判定行，
+/// 两种输出的形状不同，同时给只会产生一份谁也读不懂的混合文本。
 fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut roots: Vec<PathBuf> = Vec::new();
     let mut dump = false;
+    let mut cmp = false;
     let mut lang: Option<String> = None;
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
             "--dump" => {
                 dump = true;
+                i += 1;
+            }
+            "--cmp" => {
+                cmp = true;
                 i += 1;
             }
             "--lang" => {
@@ -249,9 +265,13 @@ fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
     if files.is_empty() {
         return Err(CliError::TypesNeedsFile);
     }
+    if dump && cmp {
+        return Err(CliError::DumpCmpConflict);
+    }
     Ok(TypesCommand {
         files,
         dump,
+        cmp,
         roots,
         lang,
     })

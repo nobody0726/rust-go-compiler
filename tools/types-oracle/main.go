@@ -14,7 +14,8 @@
 //
 // 用法：
 //
-//	go run . <file.go>... [--lang go1.N]     ← C7 dump（stdout）
+//	go run . <file.go>... [--lang go1.N]          ← C7 dump（stdout）
+//	go run . --cmp <file.go>... [--lang go1.N]    ← `//rgoc:cmp` 判定（cmp.go）
 //
 // 退出码：0 = 检查无错；1 = 有类型错误（dump 照常输出）；2 = 用法/致命错误。
 //
@@ -57,6 +58,7 @@ import (
 
 func main() {
 	lang := ""
+	mode := "dump"
 	var files []string
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -67,6 +69,8 @@ func main() {
 			}
 			i++
 			lang = args[i]
+		case args[i] == "--cmp":
+			mode = "cmp"
 		case strings.HasPrefix(args[i], "--"):
 			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
 			os.Exit(2)
@@ -78,7 +82,7 @@ func main() {
 		usage(os.Stderr)
 	}
 
-	dump, errs, fatal := checkFiles(lang, files)
+	dump, errs, fatal := checkFiles(lang, files, mode)
 	if fatal != nil {
 		fmt.Fprintln(os.Stderr, fatal)
 		os.Exit(1)
@@ -92,12 +96,15 @@ func main() {
 	}
 }
 
-// checkFiles 解析 + 检查 + 渲染。`main` 与 `dump_test.go` 共用**同一条**管线 ——
-// 测试另写一份的话，测的就不是这条了。
+// checkFiles 解析 + 检查 + 渲染。`main` 与 `dump_test.go` / `cmp_test.go`
+// 共用**同一条**管线 —— 测试另写一份的话，测的就不是这条了。
+//
+// `mode` 选比对面：`"dump"` ⇒ C7 的中性类型 dump（第一类）；`"cmp"` ⇒
+// `//rgoc:cmp` 的 identity / representable 判定（第二类，见 cmp.go）。
 //
 // 返回：要写 stdout 的文本、检查器报的错（`conf.Error` 逐条收）、致命错
-// （解析失败 / 读不到文件 ⇒ 调用方退出 1）。
-func checkFiles(lang string, files []string) (string, []error, error) {
+// （解析失败 / 读不到文件 / 指令格式错 ⇒ 调用方退出 1）。
+func checkFiles(lang string, files []string, mode string) (string, []error, error) {
 	fset := token.NewFileSet()
 	var astFiles []*ast.File
 	for _, f := range files {
@@ -106,6 +113,9 @@ func checkFiles(lang string, files []string) (string, []error, error) {
 			return "", nil, err
 		}
 		astFiles = append(astFiles, af)
+	}
+	if mode == "cmp" {
+		return runCmp(lang, fset, files, astFiles)
 	}
 
 	info := &types.Info{Types: map[ast.Expr]types.TypeAndValue{}, Defs: map[*ast.Ident]types.Object{}}
@@ -128,7 +138,7 @@ func checkFiles(lang string, files []string) (string, []error, error) {
 }
 
 func usage(w *os.File) {
-	fmt.Fprintln(w, "usage: go run . <file.go>... [--lang go1.N]")
+	fmt.Fprintln(w, "usage: go run . [--cmp] <file.go>... [--lang go1.N]")
 	os.Exit(2)
 }
 

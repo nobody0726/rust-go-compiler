@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 rgoc-ast = { path = "../rgoc-ast" }
+rgoc-const = { path = "../rgoc-const" }
 rgoc-harness = { path = "../rgoc-harness" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }

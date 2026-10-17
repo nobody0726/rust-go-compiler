@@ -21,17 +21,17 @@ var update = flag.Bool("update", false, "重写 testdata/*.want（有意的 dump
 //     那种「对撞」没有意义（`M3-tests.md` §5.1 的「不进对撞」一条同理）；
 //  3. 每个 .go 都要有 .want：缺了就是漏写，不是「新 fixture 待生成」（用 -update）。
 func TestDumpGolden(t *testing.T) {
-	fixtures, err := filepath.Glob("testdata/*.go")
+	fixtures, err := filepath.Glob("testdata/type-dump-*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fixtures) == 0 {
-		t.Fatal("testdata 里没有 .go —— golden 测试什么都没测")
+		t.Fatal("testdata 里没有 type-dump-*.go —— golden 测试什么都没测")
 	}
 	for _, fx := range fixtures {
 		fx := fx
 		t.Run(filepath.Base(fx), func(t *testing.T) {
-			got, errs, fatal := checkFiles("", []string{fx})
+			got, errs, fatal := checkFiles("", []string{fx}, "dump")
 			if fatal != nil {
 				t.Fatalf("解析/读取失败：%v", fatal)
 			}
@@ -77,7 +77,7 @@ func fNamed[T C](x T)                    {}
 	if err := os.WriteFile(f, []byte(src), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, errs, fatal := checkFiles("", []string{f})
+	got, errs, fatal := checkFiles("", []string{f}, "dump")
 	if fatal != nil {
 		t.Fatalf("检查失败：%v", fatal)
 	}

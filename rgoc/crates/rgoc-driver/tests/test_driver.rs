@@ -790,6 +790,7 @@ fn 解析_types_子命令_一个或多个文件() {
             Command::Types(TypesCommand {
                 files: want,
                 dump: false,
+                cmp: false,
                 roots: Vec::new(),
                 lang: None,
             }),
@@ -804,6 +805,7 @@ fn 解析_types_选项() {
     let want = Command::Types(TypesCommand {
         files: vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
         dump: true,
+        cmp: false,
         roots: vec![PathBuf::from("r1"), PathBuf::from("r2")],
         lang: Some("go1.24".to_string()),
     });
@@ -819,6 +821,29 @@ fn 解析_types_选项() {
         let got = parse_args(&argv).unwrap_or_else(|e| panic!("{argv:?} 应可解析：{e}"));
         assert_eq!(got, want, "argv = {argv:?}");
     }
+}
+
+/// `--cmp` 是**另一个比对面**（`T-TY-92/93`）：与 `--dump` 互斥。
+///
+/// 两者输出形状不同（C7 的类型编号 vs `<行号>\t<kind>\t<结果>`），同时给只会
+/// 产生一份谁也读不懂的混合文本 ⇒ 解析期直接拒绝。
+#[test]
+fn 解析_types_cmp_与_dump_互斥() {
+    let got = parse_args(&["types", "--cmp", "a.go"]).expect("--cmp 是合法选项");
+    assert_eq!(
+        got,
+        Command::Types(TypesCommand {
+            files: vec![PathBuf::from("a.go")],
+            dump: false,
+            cmp: true,
+            roots: Vec::new(),
+            lang: None,
+        })
+    );
+    assert!(matches!(
+        parse_args(&["types", "--dump", "--cmp", "a.go"]),
+        Err(CliError::DumpCmpConflict)
+    ));
 }
 
 #[test]
@@ -913,4 +938,137 @@ fn types_文件读不到_退出码二() {
         !err.contains("panicked"),
         "必须是显式报错，不是 panic：{err}"
     );
+}
+
+/// `types --cmp`：出**规范行** `<行号>\t<kind>\t<result>`，`reject` 带理由行。
+///
+/// 这里钉的四件事（`T-TY-92/93` 的输入侧 + `D-M3-13` 的拒绝侧）：
+///
+/// 1. **行号是 fixture 里的物理行号**（不套 `//line`、不从合成文件抄）；
+/// 2. `identical` 判得出时给 `true`/`false`；
+/// 3. 约束接口（含项集）⇒ `reject`，且**理由行**写着稳定代号 —— 对撞要按
+///    白名单排除它，没有代号就没法断言「排除的是哪一条」；
+/// 4. `representable` 给 `true`/`false`（**不是** reject：不可表示是判定结果）。
+#[test]
+fn types_cmp_出规范行_拒绝带代号() {
+    let src = "package p\n\
+               \n\
+               type Num interface{ ~int | ~float64 }\n\
+               \n\
+               //rgoc:cmp identical int => int\n\
+               //rgoc:cmp identical int Num\n\
+               //rgoc:cmp identical interface{ ~int } => interface{ ~int }\n\
+               //rgoc:cmp representable 127 => int8\n\
+               //rgoc:cmp representable 128 => int8\n";
+    let f = 临时_go("cmp", src);
+    // 期望行号从**源码本身**扫出来（不是抄一份常量：抄的话两边一起错就查不出）
+    let line_of = |needle: &str| -> u32 {
+        src.lines()
+            .position(|l| l == needle)
+            .map(|i| i as u32 + 1)
+            .unwrap_or_else(|| panic!("fixture 里没有 {needle:?}"))
+    };
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "--cmp"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(0), "拒绝**不是**错误，退出码仍是 0");
+    let s = String::from_utf8_lossy(&out.stdout);
+    assert!(s.starts_with("# source: rgoc\n"), "来源必须如实标注：{s}");
+    let body: Vec<&str> = s.lines().filter(|l| !l.starts_with('#')).collect();
+    assert_eq!(
+        body,
+        vec![
+            format!(
+                "{}\tidentical\ttrue",
+                line_of("//rgoc:cmp identical int => int")
+            ),
+            // 空白拼写与 `=>` 拼写**同一条判据**（`M3-tests.md` §5.2 的示意形态）
+            format!(
+                "{}\tidentical\tfalse",
+                line_of("//rgoc:cmp identical int Num")
+            ),
+            format!(
+                "{}\tidentical\treject",
+                line_of("//rgoc:cmp identical interface{ ~int } => interface{ ~int }")
+            ),
+            format!(
+                "{}\trepresentable\ttrue",
+                line_of("//rgoc:cmp representable 127 => int8")
+            ),
+            format!(
+                "{}\trepresentable\tfalse",
+                line_of("//rgoc:cmp representable 128 => int8")
+            ),
+        ],
+        "规范行（正文，剥掉 `#` 头）：{s}"
+    );
+    let reject_line = format!(
+        "# reject {} TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
+        line_of("//rgoc:cmp identical interface{ ~int } => interface{ ~int }")
+    );
+    assert!(s.contains(&reject_line), "拒绝必须写理由：{s}");
+}
+
+/// `--cmp` 的**样本违规**要响亮报错（退出码 2），不能伪装成 `reject`。
+///
+/// `representable` 的目标必须是基本类型（或其本体的具名类型）：M3 对别的目标
+/// 没有任何承诺，把它算成 `reject` 会把「我们的边界」与「样本写错了」混成一件
+/// （`Ruling 27-1` 的同一条纪律）。
+#[test]
+fn types_cmp_目标不是基本类型_响亮报错() {
+    let src = "package p\n\
+               \n\
+               type Num interface{ ~int }\n\
+               \n\
+               //rgoc:cmp representable 1 => Num\n";
+    let f = 临时_go("cmp-bad", src);
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["types", "--cmp"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "样本违规 ⇒ 2（不是 1，也不是 0）"
+    );
+    assert!(out.stdout.is_empty(), "报错时不出半份判定表");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("不是基本类型"), "说清为什么：{err}");
+    assert!(!err.contains("panicked"), "必须是显式报错：{err}");
+}
+
+/// `--cmp` 的**指令格式错**也响亮报错（静默跳过 = 样本悄悄消失）。
+#[test]
+fn types_cmp_指令格式错_响亮报错() {
+    for (tag, line, want) in [
+        // 没有 `=>` 时按空白切，段数**必须恰好两个**（一个操作数就说不清谁是谁）
+        ("cmp-one-operand", "//rgoc:cmp identical int", "恰好两个"),
+        (
+            "cmp-three-operand",
+            "//rgoc:cmp identical int int int",
+            "恰好两个",
+        ),
+        (
+            "cmp-kind",
+            "//rgoc:cmp assignable int => int",
+            "未知的 cmp kind",
+        ),
+    ] {
+        let src = format!("package p\n\n{line}\n");
+        let f = 临时_go(tag, &src);
+        let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+        let out = std::process::Command::new(bin)
+            .args(["types", "--cmp"])
+            .arg(&f)
+            .output()
+            .expect("起进程");
+        assert_eq!(out.status.code(), Some(2), "{tag}：格式错 ⇒ 2");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.contains(want), "{tag}：报错里要出现 {want:?}：{err}");
+    }
 }

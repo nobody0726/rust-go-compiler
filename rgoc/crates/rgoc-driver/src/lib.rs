@@ -33,6 +33,7 @@
 
 pub mod ast_cmd;
 pub mod cli;
+pub mod cmp_cmd;
 pub mod lex_cmd;
 pub mod report;
 pub mod samples;
@@ -153,7 +154,12 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
             Ok(ExitCode::SUCCESS)
         }
         Command::Types(t) => {
-            let out = types_cmd::run_types(&t)?;
+            // 两个比对面各有一条入口（`--cmp` 走 `cmp_cmd`，其余走 `types_cmd`）。
+            let out = if t.cmp {
+                cmp_cmd::run_cmp(&t)?
+            } else {
+                types_cmd::run_types(&t)?
+            };
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             Ok(if out.errors > 0 {

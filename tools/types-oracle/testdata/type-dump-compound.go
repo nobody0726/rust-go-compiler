@@ -7,8 +7,8 @@ type Point struct {
 }
 
 type Tagged struct {
-	A     int `json:"a"`
-	b     string
+	A int `json:"a"`
+	b string
 	Point
 	_ byte
 }
