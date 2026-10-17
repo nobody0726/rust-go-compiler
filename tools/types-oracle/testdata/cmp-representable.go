@@ -54,3 +54,25 @@ type MyInt int
 //rgoc:cmp representable 1i => complex64
 //rgoc:cmp representable 1i => float64
 //rgoc:cmp representable 1+2i => complex64
+
+// ── 补记（Task 38 收口审计）：`T-TY-3a` 字符串拼接 / 复常量 **128 位** ────────
+//
+// 这一节是**事后补的**。收口审计发现：`M3-tests.md` §3 把 `T-TY-3a`（字符串常量
+// 拼接）与 `T-TY-34`（复数常量，**含 128 位**）标成 `O`（oracle 对撞），但夹具
+// 此前只有 64 位复数、**没有**字符串目标 —— 声明有、证据没有，正是 `AGENTS.md`
+// §6.1 点名的「已检查的错觉」。补法沿用既有形态，且**追加在文件末尾** ⇒ 既有
+// `.want` 的行号一律不变（只多出末尾这几行）。
+//
+// `Bool` 目标也一并钉住：官方 `representableConst` 判的**不止数值**种类
+// （`Bool`/`String` 也在内），而此前没有任何一条夹具走过这两支。
+type MyStr string
+
+//rgoc:cmp representable "a"+"b" => string
+//rgoc:cmp representable "a"+"b" => MyStr
+//rgoc:cmp representable "a"+"c" => MyStr
+//rgoc:cmp representable true => bool
+//rgoc:cmp representable 1 => bool
+//rgoc:cmp representable true => int
+//rgoc:cmp representable 1i => complex128
+//rgoc:cmp representable 1+2i => complex128
+//rgoc:cmp representable 1e400i => complex128

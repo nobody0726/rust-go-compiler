@@ -101,6 +101,9 @@
   ⑤ `coverage` 计数器自洽；⑥ §6 纪律：拒绝侧那几条必须有 `T-TY-8x` 正向指针。
   **五条例外**单列成判据表（`U-M3-06/10/11/12/13`：约定路径 / 不承诺逐字 / M2 承继未触发）——
   硬要 8x 会逼人写假测试。另有 **15 条合成反例**（13 改 manifest + 2 改**文档**）证明它真在读文档
+- **对撞夹具不标注测试 ID**（收口审计：68 个 ID 里 17 个无字面引用 —— 12 个靠区间注释、
+  5 个靠夹具内容）⇒ 「文档 §3 的 ID → 夹具」只能**手查**；`T-TY-3a`/`T-TY-34` 的夹具
+  已补（`cmp-representable.go` 末尾 9 条 + `-update` bless 的 `.want`）。机制化见 `open_gaps` 第 14 条
 - **语料口径（Task 35 普查，可重放 `probe/corpus-survey.sh`）**：**57 候选** = 入选 **31**
   （`tools/types-oracle/corpus-selected.txt`）/ DIFF **15**（根因同一 ⇒ `U-M3-04` 实例化）/
   两侧都拒绝 4 / oracle 单侧拒绝 6 / 两侧都空 1；排除集逐行理由在 `corpus-allowlist.txt`
