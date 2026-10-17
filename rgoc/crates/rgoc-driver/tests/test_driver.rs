@@ -924,7 +924,8 @@ fn types_有诊断_退出码一_且两条通道分得开() {
 
 /// 文件读不到 ⇒ 退出码 **2**（不是 1）：它不是语言错，官方也没有对应代号。
 #[test]
-fn types_文件读不到_退出码二() {    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+fn types_文件读不到_退出码二() {
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
     let out = std::process::Command::new(bin)
         .args(["types", "/definitely/not/exist/m3.go"])
         .output()
