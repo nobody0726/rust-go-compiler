@@ -365,7 +365,7 @@ fn identical_cmp(
 /// * `None` = 长度**未定**（`[...]T`）——比错了会冤枉合法代码，故视为「同」；
 /// * `Const::Unknown` = 求值失败（官方此时长度也是负值）——同样宽容；
 /// * 其余按**常量值**比（所以 `[1+1]int` 与 `[2]int` 同）。
-fn array_len_same(
+pub(crate) fn array_len_same(
     tt: &TypeTable,
     x: Option<rgoc_const::ConstId>,
     y: Option<rgoc_const::ConstId>,

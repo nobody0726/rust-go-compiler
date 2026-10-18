@@ -28,7 +28,9 @@
 //! Task 7 = [`methodset`]（方法集；生产者 = `rgoc-load` 的接收者挂载），
 //! Task 8 = [`typeset`]（语义类型集四态）/ [`comparable`]（可比性）/
 //! [`implements`]（接口实现与约束满足），
-//! Task 12 = [`instantiate`]（显式实例化）/ [`subst`]（类型参数替换）。
+//! Task 12 = [`instantiate`]（显式实例化）/ [`subst`]（类型参数替换），
+//! Task 13 = [`unify`]（统一：`Unifier` 句柄机制 + 官方 `nify` 结构 +
+//! `commonUnder` 核心类型；三模式见该模块文档）。
 //!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
@@ -39,6 +41,7 @@
 //! [`identical`]: crate::identical
 //! [`assignable`]: crate::assignable
 //! [`methodset`]: crate::methodset
+//! [`unify`]: crate::unify
 //! [`validtype`]: crate::validtype
 //! [`version`]: crate::version
 
@@ -58,6 +61,7 @@ pub mod subst;
 pub mod table;
 pub mod typ;
 pub mod typeset;
+pub mod unify;
 pub mod universe;
 pub mod validtype;
 pub mod version;
@@ -82,6 +86,7 @@ pub use typ::{
     Type, TypeId, TypeParamId, UnionId,
 };
 pub use typeset::IfaceTSet;
+pub use unify::{Unifier, UnifyMode, unify};
 pub use universe::{declare_universe, declared_names, universe};
 pub use validtype::{MAX_TYPE_NEST_DEPTH, valid_type};
 pub use version::{GO_CURRENT, GO1_21, GoVersion, Versions, pkg_versions};
