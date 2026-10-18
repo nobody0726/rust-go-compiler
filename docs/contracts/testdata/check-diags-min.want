@@ -1,0 +1,5 @@
+# source: oracle
+# file: testdata/check-diags-min.go
+3:9	undef
+4:9	undef
+4:20	undef

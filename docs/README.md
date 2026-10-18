@@ -33,6 +33,7 @@
 | M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 完整 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） |
 | M2 | [`contracts/C6-ast-dump.md`](./contracts/C6-ast-dump.md) | **AST 中立 dump 格式**（五条格式规则 + 三条规范化 + 转义语义） | ✅ **已冻结**（T-AP21，2026-10-15） |
 | M3 | [`contracts/C7-type-dump.md`](./contracts/C7-type-dump.md) | **中性类型 dump 格式**（七条格式规则 + 15 个标签 + **编号顺序** + 逐标签行语法） | ✅ **已冻结**（M3/Task 1 新建，2026-10-16） |
+| M4 | [`contracts/C8-check-diags.md`](./contracts/C8-check-diags.md) | **检查诊断对撞格式**（渲染字节格式 + **类别枚举 26 类** + 两侧映射纪律 + 过滤规则〔`F2` 摘录〕+ 比较算法 + 最小对撞目标 `check-diags-min`） | ✅ **已冻结**（M4/Task 1 新建，2026-10-18） |
 | M1 | [`milestones/M1-design.md`](./milestones/M1-design.md) | **怎么建 M1** —— 九个决策 D-M1-1~9（五字段）、**20 条实测事实基线**、六切面测试组、诊断代号表、oracle adapter 组成 | **已确认**（2026-10-11） |
 | M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | **已冻结**（T-L21，2026-10-12） |
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |
@@ -118,7 +119,7 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **7 份已产出**（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **8 份已产出**（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕） |
 | `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M3 三件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M1–M3 的 `design/tests/plan/manifest` 均已完成或填实）<br>🟡 **M4 三件套与 manifest 骨架已产出**（2026-10-18，含 builder-check 复审修订；执行未开始）——§1 表的 M2/M3 里程碑行等全量清理随 **M4 Task 44** 一并做 |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
