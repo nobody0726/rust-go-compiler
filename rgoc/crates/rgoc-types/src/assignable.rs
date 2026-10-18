@@ -124,9 +124,11 @@ pub fn assignable(tt: &TypeTable, v: TypeId, tgt: TypeId) -> Result<bool, DiagCo
 
     // ⑤ V is an interface：官方此面只为 cause（「需要类型断言」提示）——
     // implements(T, V) 真 ⇒ 返回 false；假 ⇒ 继续。而 V 是接口时通道面不会命中、
-    // 收尾也必假 ⇒ **结果恒为 false**。Tp != nil 时官方会落入按 specific type 的
-    // 递归 ⇒ 拒绝。
-    if matches!(tt.type_of(vu), Type::Interface(_)) {
+    // 收尾也必假 ⇒ **结果恒为 false**。V 是**类型参数**时官方**不进**此面
+    //（守卫 `Vp == nil`，`operand.go:394`）⇒ 落收尾的类型参数面（⑦）。
+    //（今天到不了这里：规则 ① 的 `identical` 会先在类型参数上回拒；Task 10
+    // 升级 `identical` 后本守卫才起效。）
+    if !vp && matches!(tt.type_of(vu), Type::Interface(_)) {
         if tp {
             return Err(DiagCode::TypUnsupportedAssignability);
         }

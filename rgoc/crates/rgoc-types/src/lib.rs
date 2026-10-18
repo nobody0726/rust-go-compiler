@@ -45,6 +45,7 @@ pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
 pub mod assignable;
 pub mod comparable;
+pub mod convertible;
 pub mod dump;
 pub mod identical;
 pub mod implements;
@@ -60,8 +61,9 @@ pub mod version;
 
 pub use assignable::assignable;
 pub use comparable::{comparable, strictly_comparable};
+pub use convertible::convertible;
 pub use dump::{DumpError, dump_types, try_dump_types};
-pub use identical::{identical, unalias, underlying};
+pub use identical::{identical, identical_ignore_tags, unalias, underlying};
 pub use implements::implements;
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};

@@ -12,7 +12,9 @@
 //! 3. **数组长度**：官方是 `len < 0 || x.len == y.len` —— 长度**未定**时**不当**不等
 //!    （错误恢复的宽容面）。本层 `len == None`（`[...]T`）与 `Const::Unknown`
 //!    （求值失败）都按「未定」处理。
-//! 4. **结构体**：字段数 + 逐字段（**嵌入标记 / Tag / 名字 / 类型**）。
+//! 4. **结构体**：字段数 + 逐字段（**嵌入标记 / 名字 / 类型**；**Tag** 只在严格面
+//!    参与 —— [`identical_ignore_tags`] 是官方 `IdenticalIgnoreTags`
+//!    （`comparer{ignoreTags: true}`），标签不参与）。
 //!    名字也要比 —— 嵌入字段的名字是**被嵌入类型的名字**，
 //!    `struct{ Z }` 与 `struct{ W }` 即使 `Z`/`W` 底层相同也**不等**。
 //! 5. **元组**：只比元素类型，**名字不参与**（spec：「Parameter and result names
@@ -122,6 +124,27 @@ pub fn underlying(tt: &TypeTable, t: TypeId) -> TypeId {
 ///
 /// 只在「形态属于 M3 明确不判的类型集」时出错；其余一律 `Ok(true/false)`。
 pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode> {
+    identical_cmp(tt, x, y, false)
+}
+
+/// 官方 `types.IdenticalIgnoreTags`（`comparer{ignoreTags: true}`）：
+/// 结构体字段的**标签原文不参与**，其余与 [`identical`] 逐字相同。
+///
+/// 消费点：`convertible` 的规则 3/4（官方 `conversions.go` 直调这一面）。
+///
+/// # Errors
+///
+/// 与 [`identical`] 同。
+pub fn identical_ignore_tags(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode> {
+    identical_cmp(tt, x, y, true)
+}
+
+fn identical_cmp(
+    tt: &TypeTable,
+    x: TypeId,
+    y: TypeId,
+    ignore_tags: bool,
+) -> Result<bool, DiagCode> {
     let x = unalias(tt, x);
     let y = unalias(tt, y);
     if x == y {
@@ -136,11 +159,11 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
         // `unalias` 之后不可能还有别名
         Type::Alias(_) => unreachable!("unalias 之后不该还有 alias"),
         Type::Pointer(px) => match tt.type_of(y) {
-            Type::Pointer(py) => identical(tt, *px, *py),
+            Type::Pointer(py) => identical_cmp(tt, *px, *py, ignore_tags),
             _ => Ok(false),
         },
         Type::Slice(ex) => match tt.type_of(y) {
-            Type::Slice(ey) => identical(tt, *ex, *ey),
+            Type::Slice(ey) => identical_cmp(tt, *ex, *ey, ignore_tags),
             _ => Ok(false),
         },
         Type::Array { len: lx, elem: ex } => match tt.type_of(y) {
@@ -148,16 +171,16 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                 if !array_len_same(tt, *lx, *ly) {
                     return Ok(false);
                 }
-                identical(tt, *ex, *ey)
+                identical_cmp(tt, *ex, *ey, ignore_tags)
             }
             _ => Ok(false),
         },
         Type::Map { key: kx, elem: ex } => match tt.type_of(y) {
             Type::Map { key: ky, elem: ey } => {
-                if !identical(tt, *kx, *ky)? {
+                if !identical_cmp(tt, *kx, *ky, ignore_tags)? {
                     return Ok(false);
                 }
-                identical(tt, *ex, *ey)
+                identical_cmp(tt, *ex, *ey, ignore_tags)
             }
             _ => Ok(false),
         },
@@ -167,7 +190,7 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                 if dx != dy {
                     return Ok(false);
                 }
-                identical(tt, *ex, *ey)
+                identical_cmp(tt, *ex, *ey, ignore_tags)
             }
             _ => Ok(false),
         },
@@ -179,11 +202,15 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                     return Ok(false);
                 }
                 for (f, g) in a.fields.iter().zip(&b.fields) {
-                    // 嵌入标记 / Tag / 名字（嵌入字段的名字 = 被嵌入类型的名字）
-                    if f.embedded != g.embedded || f.tag != g.tag || f.name != g.name {
+                    // 嵌入标记 / 名字（嵌入字段的名字 = 被嵌入类型的名字）；
+                    // Tag 只在**严格面**参与（`ignore_tags` 见函数文档）
+                    if f.embedded != g.embedded
+                        || (!ignore_tags && f.tag != g.tag)
+                        || f.name != g.name
+                    {
                         return Ok(false);
                     }
-                    if !identical(tt, f.typ, g.typ)? {
+                    if !identical_cmp(tt, f.typ, g.typ, ignore_tags)? {
                         return Ok(false);
                     }
                 }
@@ -200,7 +227,7 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                 }
                 // **名字不参与**（spec：参数/结果名不必相同）
                 for ((_, p), (_, q)) in a.vars.iter().zip(&b.vars) {
-                    if !identical(tt, *p, *q)? {
+                    if !identical_cmp(tt, *p, *q, ignore_tags)? {
                         return Ok(false);
                     }
                 }
@@ -218,10 +245,10 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                 }
                 // `SignatureDef` 里的 params/results 已经是 `TypeId`（表内从
                 // `TupleId` 转过来了）⇒ 直接递归
-                if !identical(tt, a.params, b.params)? {
+                if !identical_cmp(tt, a.params, b.params, ignore_tags)? {
                     return Ok(false);
                 }
-                identical(tt, a.results, b.results)
+                identical_cmp(tt, a.results, b.results, ignore_tags)
             }
             _ => Ok(false),
         },
@@ -252,7 +279,7 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
                     if n1 != n2 {
                         return Ok(false);
                     }
-                    if !identical(tt, s1, s2)? {
+                    if !identical_cmp(tt, s1, s2, ignore_tags)? {
                         return Ok(false);
                     }
                 }
