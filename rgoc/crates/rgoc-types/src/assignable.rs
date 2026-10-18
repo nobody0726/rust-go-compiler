@@ -13,14 +13,14 @@
 //! * `types.AssignableTo` 的实机探针复核（Task 6 记录见
 //!   `.superpowers/sdd/M4-plan/progress.md`）。
 //!
-//! # Task 6 的窄面（`Ruling 6-2`）
+//! # 窄面（`Ruling 6-2` 的 M4 收窄）
 //!
-//! 需要**方法集**（Task 7）或**类型集枚举**（Task 8/10/12）才能判的形态**显式拒绝**
+//! 需要**类型集枚举**（Task 10/12）才能判的形态**显式拒绝**
 //! `Err(DiagCode::TypUnsupportedAssignability)`，绝不猜答案：
 //!
 //! | 形态 | 现行为 | 谁翻成判定 |
 //! |---|---|---|
-//! | 非空接口作 `T`（`V` 非「可证无方法」） | 拒绝 | Task 8（`implements`） |
+//! | 非空接口作 `T` | **判定**（Task 8：`implements`） | —（本层透传其 `Err` 边界） |
 //! | `V` 为类型参数（除 `V == T` 同一条目） | 拒绝\* | Task 10（`identical` 升级）→ Task 12 |
 //! | `T` 为类型参数（除已被前面规则判出的面） | 拒绝 | Task 12（类型集枚举） |
 //! | 含项集 / `comparable` 的接口参与 `identical` | 拒绝\*\* | Task 10 |
@@ -29,9 +29,9 @@
 //! （`TypUnsupportedConstraintIdentity`，`U-M3-05`）——本层透传该码。
 //! \*\* 同上：`identical` 的拒点先于本层的一切窄面。
 //!
-//! 「**可证无方法**」= 空接口字面量 / 基本型 / 无名字面量（`slice` / `map` / `chan` /
-//! `func` / `array`）/ 指向它们的指针。官方 `hasAllMethods` 检查先于可比性检查，
-//! 所以这类 `V` 碰上「带方法的 `T`」**恒假**；Task 8 会删掉这份白名单，改走真方法集。
+//! 非空接口面（Task 8 起）：`implements(tt, v, t, false)` 直接给答案；
+//! 只有方法签名 / 严格可比触到 M3 遗留约束面时透传其能力边界码。
+//! `V` 是类型参数且 `implements` 假 ⇒ 官方继续走类型参数面（Task 12/13）⇒ 本层拒绝。
 //!
 //! # invalid 面
 //!
@@ -45,6 +45,7 @@ use rgoc_const::BasicId;
 use rgoc_lex::diag::DiagCode;
 
 use crate::identical::{identical, unalias, underlying};
+use crate::implements::implements;
 use crate::table::TypeTable;
 use crate::typ::{ChanDir, Type, TypeId};
 
@@ -96,19 +97,20 @@ pub fn assignable(tt: &TypeTable, v: TypeId, tgt: TypeId) -> Result<bool, DiagCo
     }
 
     // ④ T 是接口（且非类型参数），或 T 是指向接口的指针（官方为了拿 implements 的 cause）。
+    //
+    // Task 8 起接口面**真判**（`implements`）：空接口恒真、方法集 / 约束集给答案；
+    // 只有能力边界（签名同一性 / 严格可比触到约束面）才透传 `Err`。
     if !tp {
-        if let Type::Interface(ti) = tt.type_of(tu) {
-            let td = tt.interface_def(*ti);
-            if td.methods.is_empty() && td.terms.is_none() && !td.comparable {
-                // 官方 implements：Ti.Empty() ⇒ 恒真（任意 V，含类型参数）
+        if let Type::Interface(_) = tt.type_of(tu) {
+            if implements(tt, v, t, false)? {
                 return Ok(true);
             }
-            if !vp && !td.methods.is_empty() && provably_no_methods(tt, v) {
-                // 官方 hasAllMethods 先于可比性检查：V 可证没有任何方法 ⇒ 缺方法 ⇒ 假
-                return Ok(false);
+            if vp {
+                // 官方：implements 假而 V 是类型参数时**继续**后面的面
+                //（特定类型递归 / 收尾报错）—— 那是 Task 12/13 的类型参数面。
+                return Err(DiagCode::TypUnsupportedAssignability);
             }
-            // 其余非空接口面要方法集（Task 7/8）。
-            return Err(DiagCode::TypUnsupportedAssignability);
+            return Ok(false);
         }
         if is_interface_ptr(tt, tu) {
             // 官方 implements(V, *I)：Ti == nil ⇒ 恒 false。
@@ -182,7 +184,7 @@ fn untyped_to(tt: &TypeTable, vk: BasicId, t: TypeId, tu: TypeId) -> Result<bool
             }
             // 非 nil untyped 只能进**空**接口（官方：cannot assign untyped to non-empty iface）
             let d = tt.interface_def(*i);
-            d.methods.is_empty() && d.terms.is_none() && !d.comparable
+            d.methods.is_empty() && d.tset.is_all()
         }
         // pointer / func / slice / map / chan：只有 nil 进得去
         Type::Pointer(_)
@@ -220,47 +222,6 @@ fn is_interface_ptr(tt: &TypeTable, t: TypeId) -> bool {
         return false;
     }
     matches!(tt.type_of(underlying(tt, e)), Type::Interface(_))
-}
-
-/// 「可证没有任何方法」的**保守**白名单（`Ruling 6-2`）。
-///
-/// 方法只会挂在**定义型**上（官方：接收者基类型必须是本包定义的类型，且不是指针 /
-/// 接口）。因此下列形态不可能有方法：
-///
-/// * 基本型（含 `unsafe.Pointer`）；
-/// * 无名字面量：`slice` / `map` / `chan` / `func` / `array`（以及指向它们的指针）；
-/// * 空接口字面量（方法列表为空且无项集、非 `comparable` —— 本层的接口方法列表是
-///   **拍平**的）。
-///
-/// 具名类型**不**入白名单（Task 7 起可能带方法）；结构体也不入
-/// （嵌入字段会提升方法）。
-fn provably_no_methods(tt: &TypeTable, v: TypeId) -> bool {
-    /// 无名字面量族：法不许在其上声明方法。
-    fn unnamed(tt: &TypeTable, t: TypeId) -> bool {
-        matches!(
-            tt.type_of(t),
-            Type::Basic(_)
-                | Type::Slice(_)
-                | Type::Map { .. }
-                | Type::Chan { .. }
-                | Type::Signature(_)
-                | Type::Array { .. }
-        )
-    }
-    match tt.type_of(v) {
-        Type::Basic(_)
-        | Type::Slice(_)
-        | Type::Map { .. }
-        | Type::Chan { .. }
-        | Type::Signature(_)
-        | Type::Array { .. } => true,
-        Type::Pointer(e) => unnamed(tt, unalias(tt, *e)),
-        Type::Interface(i) => {
-            let d = tt.interface_def(*i);
-            d.methods.is_empty() && d.terms.is_none() && !d.comparable
-        }
-        _ => false,
-    }
 }
 
 /// 官方 `isUntyped`（含全部 untyped 种类，`UntypedNil` 在内）。

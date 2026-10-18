@@ -23,7 +23,7 @@
 use rgoc_const::BasicId;
 use rgoc_lex::diag::DiagCode;
 use rgoc_types::table::Field;
-use rgoc_types::{ChanDir, TypeId, TypeTable, assignable};
+use rgoc_types::{ChanDir, IfaceTSet, TypeId, TypeTable, assignable};
 
 /// 判得出且为真。
 fn yes(tt: &TypeTable, v: TypeId, t: TypeId) {
@@ -62,7 +62,7 @@ fn iface(tt: &mut TypeTable, methods: Vec<(&str, TypeId)>) -> TypeId {
             .map(|(n, s)| (n.to_string(), s))
             .collect(),
         None,
-        false,
+        IfaceTSet::All,
     );
     tt.interface_type(iid)
 }
@@ -230,11 +230,24 @@ fn t_ck_11_接口面_窄实现与拒绝() {
     let sl = tt.add_slice(int_);
     no(&tt, int_, mi);
     no(&tt, sl, mi);
-    // V 是**具名**类型（Task 7 起可能带方法）⇒ 不判，显式拒绝
-    //（Task 8 落地真方法集后翻成判定）
-    assert_eq!(refused(&tt, n, mi), DiagCode::TypUnsupportedAssignability);
-    // 两个非空接口之间的包含关系：要方法集（Task 7/8）⇒ 拒绝
-    assert_eq!(refused(&tt, mi, mj), DiagCode::TypUnsupportedAssignability);
+    // V 是**具名**类型：Task 8 起走真方法集 —— N 没有方法 ⇒ 缺 M ⇒ 假
+    no(&tt, n, mi);
+    // 两个非空接口：方法名不同（M vs J）⇒ 缺 J ⇒ 假
+    no(&tt, mi, mj);
+    // 具名类型**带**方法 M ⇒ 真（签名与 T 的同一条目）
+    let k_n = tt.add_named("K");
+    tt.set_named_underlying(k_n, int_);
+    tt.add_named_method(k_n, "M", m_sig);
+    yes(&tt, tt.named_type(k_n), mi);
+    // 同名但签名不同 ⇒ 假（`identical` 判签名：func() ≠ func() int）
+    let p0 = tt.add_tuple(vec![]);
+    let r1 = tt.add_tuple(vec![(None, int_)]);
+    let s1 = tt.add_signature(None, p0, r1, false);
+    let sig_ret_int = tt.signature_type(s1);
+    let l_n = tt.add_named("L");
+    tt.set_named_underlying(l_n, int_);
+    tt.add_named_method(l_n, "M", sig_ret_int);
+    no(&tt, tt.named_type(l_n), mi);
     // 指向接口的指针作**目标**：官方 `implements(V, *I)` 恒假 ⇒ `Vp == nil` 时直接定假
     let pmi = tt.add_pointer(mi);
     no(&tt, int_, pmi);
@@ -327,7 +340,11 @@ fn t_ck_11_untyped_到具体与接口() {
     // 含项集的接口同样「非空」⇒ 假（untyped 面直接回答，不依赖 Task 8）
     let u = tt.add_union(vec![(true, int_), (false, string)]);
     let uterms = tt.union_type(u);
-    let tid = tt.add_interface(vec![], Some(uterms), false);
+    let tid = tt.add_interface(
+        vec![],
+        Some(uterms),
+        IfaceTSet::Terms(vec![(true, int_), (false, string)]),
+    );
     let terms_iface = tt.interface_type(tid);
     no(&tt, ui, terms_iface);
 }

@@ -12,7 +12,7 @@
 
 use rgoc_const::{BasicId, BigInt, Const};
 use rgoc_types::table::Field;
-use rgoc_types::{ChanDir, Type, TypeTable, declare_universe, dump_types, universe};
+use rgoc_types::{ChanDir, IfaceTSet, Type, TypeTable, declare_universe, dump_types, universe};
 
 /// 去掉 `#` 注释行与空行（`C7` §2 规则 1：**两侧都忽略**）。
 fn strip(s: &str) -> String {
@@ -193,8 +193,8 @@ fn 空元组是单例_结构型不是() {
     let s2 = tt.add_signature(None, p2, r2, false);
     let st1 = tt.add_struct(Vec::new());
     let st2 = tt.add_struct(Vec::new());
-    let if1 = tt.add_interface(Vec::new(), None, false);
-    let if2 = tt.add_interface(Vec::new(), None, false);
+    let if1 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
+    let if2 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
 
     let got = strip(&dump_types(
         &tt,
@@ -285,7 +285,7 @@ fn t_ty_17_interface_方法集与项集() {
     let iface = tt.add_interface(
         vec![("Z".to_string(), sig_z), ("A".to_string(), sig_a)],
         None,
-        false,
+        IfaceTSet::All,
     );
 
     let got = strip(&dump_types(&tt, &[tt.interface_type(iface)]));
@@ -311,7 +311,11 @@ fn t_ty_17_interface_方法集与项集() {
     let int = tt.add_basic(BasicId::Int);
     let string = tt.add_basic(BasicId::String);
     let u = tt.add_union(vec![(true, int), (false, string)]);
-    let iface = tt.add_interface(Vec::new(), Some(tt.union_type(u)), false);
+    let iface = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, int), (false, string)]),
+    );
     let got = strip(&dump_types(&tt, &[tt.interface_type(iface)]));
     assert_eq!(
         got,
@@ -333,7 +337,7 @@ fn t_ty_17_interface_方法集与项集() {
     //      `*types.Named`（Task 33 对撞：少了壳 ⇒ `[T comparable]` 少一行）；
     //    * **`comparable` 标记在 dump 里看不见**（C7 §4.2：它与 `interface{}`
     //      的**本体**同形）—— 这正是「表示做宽」要留住的那一点，
-    //      所以用 `interface_def().comparable` 断言它，而不是看 dump。
+    //      所以用 `interface_def().tset` 断言它，而不是看 dump。
     let (u_st, u, u_tt) = universe();
     let u_scope = u_st.scope(u);
     let cmp_ty = u_scope.lookup("comparable").and_then(|o| o.typ).unwrap();
@@ -348,7 +352,11 @@ fn t_ty_17_interface_方法集与项集() {
     let Type::Interface(i) = u_tt.type_of(u_tt.named_underlying(*n)) else {
         panic!("comparable 的本体该是接口");
     };
-    assert!(u_tt.interface_def(*i).comparable, "comparable 标记必须留住");
+    assert_eq!(
+        u_tt.interface_def(*i).tset,
+        IfaceTSet::Comparable,
+        "comparable 的类型集必须留住"
+    );
     assert!(u_tt.interface_def(*i).terms.is_none(), "它不是项集");
     // `any` 是 alias ⇒ 先占号 0，右侧空接口 1
     assert_eq!(
@@ -379,7 +387,7 @@ fn t_ty_18_typeparam_与_union_与_tilde() {
     let int = tt.add_basic(BasicId::Int);
     let c = tt.add_named("C");
     tt.set_named_underlying(c, int);
-    let iface = tt.add_interface(Vec::new(), None, false);
+    let iface = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     let iface_ty = tt.interface_type(iface);
     tt.set_named_underlying(c, iface_ty);
     // 索引不为 0 也要如实写出来（官方 `TypeParam.Index()` 是它在**自身列表**里的下标）
@@ -398,7 +406,11 @@ fn t_ty_19_dump_确定性与幂等() {
     let int = tt.add_basic(BasicId::Int);
     let string = tt.add_basic(BasicId::String);
     let u = tt.add_union(vec![(true, int), (false, string)]);
-    let iface = tt.add_interface(Vec::new(), Some(tt.union_type(u)), false);
+    let iface = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, int), (false, string)]),
+    );
     let st = tt.add_struct(vec![Field {
         name: Some("f".to_string()),
         typ: iface_type(&tt, iface),
@@ -499,9 +511,9 @@ fn 与_oracle_的_emptytup_fixture_逐字节一致() {
     let w = tt.struct_type(w_st);
     let v_st = tt.add_struct(Vec::new());
     let v = tt.struct_type(v_st);
-    let u_if = tt.add_interface(Vec::new(), None, false);
+    let u_if = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     let u = tt.interface_type(u_if);
-    let t_if = tt.add_interface(Vec::new(), None, false);
+    let t_if = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     let t = tt.interface_type(t_if);
 
     let got = strip(&dump_types(&tt, &[x, y, z, s_ty, w, v, u, t]));
@@ -562,7 +574,11 @@ fn cyclic_tt() -> (TypeTable, rgoc_types::TypeId) {
     let params = tt.add_tuple(vec![(None, tp_ty)]);
     let results = tt.add_tuple(Vec::new());
     let sig = tt.add_signature(None, params, results, false);
-    let iface = tt.add_interface(vec![("M".to_string(), tt.signature_type(sig))], None, false);
+    let iface = tt.add_interface(
+        vec![("M".to_string(), tt.signature_type(sig))],
+        None,
+        IfaceTSet::All,
+    );
     let iface_ty = tt.interface_type(iface);
     tt.set_type_param_constraint(tp, iface_ty);
     (tt, iface_ty)
@@ -577,14 +593,18 @@ fn c7_匿名环拒绝产出() {
     // 反向：同一张图上**摘掉环**（约束换成空接口）⇒ 正常产出（否则上一条
     // 可能只是「凡类型参数就拒绝」）
     let mut tt = TypeTable::new();
-    let any = tt.add_interface(Vec::new(), None, false);
+    let any = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     let any_ty = tt.interface_type(any);
     let tp = tt.add_type_param(0, any_ty);
     let tp_ty = tt.type_param_type(tp);
     let params = tt.add_tuple(vec![(None, tp_ty)]);
     let results = tt.add_tuple(Vec::new());
     let sig = tt.add_signature(None, params, results, false);
-    let iface = tt.add_interface(vec![("M".to_string(), tt.signature_type(sig))], None, false);
+    let iface = tt.add_interface(
+        vec![("M".to_string(), tt.signature_type(sig))],
+        None,
+        IfaceTSet::All,
+    );
     let iface_ty = tt.interface_type(iface);
     assert!(
         rgoc_types::try_dump_types(&tt, &[iface_ty]).is_ok(),

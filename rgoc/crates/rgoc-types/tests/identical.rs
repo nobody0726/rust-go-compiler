@@ -7,7 +7,7 @@
 use rgoc_const::{BasicId, BigInt, Const};
 use rgoc_lex::diag::DiagCode;
 use rgoc_types::table::Field;
-use rgoc_types::{ChanDir, Type, TypeId, TypeTable, identical, unalias};
+use rgoc_types::{ChanDir, IfaceTSet, Type, TypeId, TypeTable, identical, unalias};
 
 /// 判定并断言「判得出」（M3 支持面内）。
 fn same(tt: &TypeTable, x: TypeId, y: TypeId) -> bool {
@@ -313,7 +313,7 @@ fn t_ty_28_接口方法集_与顺序无关() {
     let i1 = tt.add_interface(
         vec![("A".to_string(), sa), ("B".to_string(), sb)],
         None,
-        false,
+        IfaceTSet::All,
     );
     let i2 = tt.add_interface(
         vec![
@@ -321,7 +321,7 @@ fn t_ty_28_接口方法集_与顺序无关() {
             ("A".to_string(), tt.signature_type(sig_a2)),
         ],
         None,
-        false,
+        IfaceTSet::All,
     );
     // 官方：`The order of the methods is irrelevant`
     assert!(same(&tt, tt.interface_type(i1), tt.interface_type(i2)));
@@ -330,12 +330,12 @@ fn t_ty_28_接口方法集_与顺序无关() {
     let i3 = tt.add_interface(
         vec![("A".to_string(), sa), ("C".to_string(), sb)],
         None,
-        false,
+        IfaceTSet::All,
     );
     assert!(!same(&tt, tt.interface_type(i1), tt.interface_type(i3)));
 
     // 方法数不同 ⇒ 不等
-    let i4 = tt.add_interface(vec![("A".to_string(), sa)], None, false);
+    let i4 = tt.add_interface(vec![("A".to_string(), sa)], None, IfaceTSet::All);
     assert!(!same(&tt, tt.interface_type(i1), tt.interface_type(i4)));
 
     // 签名不同 ⇒ 不等（`B() string` vs `B() int`）
@@ -347,13 +347,13 @@ fn t_ty_28_接口方法集_与顺序无关() {
             ("B".to_string(), tt.signature_type(sig_b3)),
         ],
         None,
-        false,
+        IfaceTSet::All,
     );
     assert!(!same(&tt, tt.interface_type(i1), tt.interface_type(i5)));
 
     // 空接口 vs 空接口（两个条目）⇒ 相等
-    let e1 = tt.add_interface(Vec::new(), None, false);
-    let e2 = tt.add_interface(Vec::new(), None, false);
+    let e1 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
+    let e2 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     assert!(same(&tt, tt.interface_type(e1), tt.interface_type(e2)));
 }
 
@@ -388,10 +388,18 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
 
     // ① 含**项集**的接口（`interface{ ~int | ~string }`）⇒ 显式拒绝
     let u = tt.add_union(vec![(true, int), (true, string)]);
-    let c1 = tt.add_interface(Vec::new(), Some(tt.union_type(u)), false);
+    let c1 = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, int), (true, string)]),
+    );
     let c1_ty = tt.interface_type(c1);
     let u2 = tt.add_union(vec![(true, int)]);
-    let c2 = tt.add_interface(Vec::new(), Some(tt.union_type(u2)), false);
+    let c2 = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u2)),
+        IfaceTSet::Terms(vec![(true, int)]),
+    );
     let c2_ty = tt.interface_type(c2);
     assert_eq!(
         refused(&tt, c1_ty, c2_ty),
@@ -401,9 +409,9 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
     // ② `comparable` 标记 ⇒ 同样拒绝（它也是类型集语义，`F8`）
     //    —— 与**另一个**接口类型比（拿自己比会先命中 `x == y` 的短路，
     //    那是「定义对自己恒等」，本来就对，不需要类型集推理）
-    let cmp = tt.add_interface(Vec::new(), None, true);
-    let cmp2 = tt.add_interface(Vec::new(), None, true);
-    let plain0 = tt.add_interface(Vec::new(), None, false);
+    let cmp = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
+    let cmp2 = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
+    let plain0 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     assert_eq!(
         refused(&tt, tt.interface_type(cmp), tt.interface_type(cmp2)),
         DiagCode::TypUnsupportedConstraintIdentity
@@ -432,14 +440,14 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
     );
 
     // ④ **反向**（`T-TY-81` 要求成对）：普通**方法集**接口 ⇒ `Ok`，不报错
-    let plain = tt.add_interface(vec![("M".to_string(), sig_ty)], None, false);
-    let plain2 = tt.add_interface(vec![("M".to_string(), sig_ty)], None, false);
+    let plain = tt.add_interface(vec![("M".to_string(), sig_ty)], None, IfaceTSet::All);
+    let plain2 = tt.add_interface(vec![("M".to_string(), sig_ty)], None, IfaceTSet::All);
     assert_eq!(
         identical(&tt, tt.interface_type(plain), tt.interface_type(plain2)),
         Ok(true)
     );
     // 而且「不相等」也是**判得出来的**（不是拒绝）
-    let other = tt.add_interface(vec![("N".to_string(), sig_ty)], None, false);
+    let other = tt.add_interface(vec![("N".to_string(), sig_ty)], None, IfaceTSet::All);
     assert_eq!(
         identical(&tt, tt.interface_type(plain), tt.interface_type(other)),
         Ok(false)

@@ -34,6 +34,7 @@ use rgoc_const::{BasicId, Const};
 use crate::object::{ObjKind, Object};
 use crate::scope::{ScopeId, ScopeKind, ScopeTable};
 use crate::table::TypeTable;
+use crate::typeset::IfaceTSet;
 
 /// 预声明**类型名**（22 个：18 个基本名 + `byte`/`rune` 两个别名拼写
 /// + `error`/`any`/`comparable`）。
@@ -129,7 +130,7 @@ pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
     let results = tt.add_tuple(vec![(None, str_ty)]);
     let sig = tt.add_signature(None, no_params, results, false);
     let sig_ty = tt.signature_type(sig);
-    let err_iface = tt.add_interface(vec![("Error".to_string(), sig_ty)], None, false);
+    let err_iface = tt.add_interface(vec![("Error".to_string(), sig_ty)], None, IfaceTSet::All);
     let err_iface_ty = tt.interface_type(err_iface);
     tt.set_named_underlying(error_ty, err_iface_ty);
     st.insert(u, Object::with_type(ObjKind::TypeName, "error", error_self));
@@ -137,7 +138,7 @@ pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
     // ③ `any`：**alias**，右侧 `interface{}`
     let any_ty = tt.add_alias("any");
     let any_self = tt.alias_type(any_ty);
-    let empty_iface = tt.add_interface(Vec::new(), None, false);
+    let empty_iface = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     let empty_iface_ty = tt.interface_type(empty_iface);
     tt.set_alias_rhs(any_ty, empty_iface_ty);
     st.insert(u, Object::with_type(ObjKind::TypeName, "any", any_self));
@@ -150,7 +151,7 @@ pub fn declare_universe(tt: &mut TypeTable, st: &mut ScopeTable) -> ScopeId {
     //    ⚠️ 「有 `comparable` 标记」这件事**不进 dump**（C7 §4.2）：`interface 0 0`。
     let cmp_ty = tt.add_named("comparable");
     let cmp_self = tt.named_type(cmp_ty);
-    let cmp_iface = tt.add_interface(Vec::new(), None, true);
+    let cmp_iface = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
     let cmp_iface_ty = tt.interface_type(cmp_iface);
     tt.set_named_underlying(cmp_ty, cmp_iface_ty);
     st.insert(

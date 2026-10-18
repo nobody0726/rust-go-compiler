@@ -16,7 +16,7 @@
 use rgoc_const::Const;
 use rgoc_lex::{Diag, DiagCode};
 use rgoc_load::{Package, load_sources};
-use rgoc_types::{BasicId, Type, TypeId, TypeTable};
+use rgoc_types::{BasicId, IfaceTSet, Type, TypeId, TypeTable};
 
 /// `(文件名, 源码)` 对。
 fn src(pairs: &[(&str, &str)]) -> Vec<(String, Vec<u8>)> {
@@ -605,7 +605,13 @@ fn interface_项集与_comparable() {
     };
     let d = tt.interface_def(*num);
     assert!(d.methods.is_empty(), "约束接口没有方法");
-    assert!(!d.comparable);
+    let IfaceTSet::Terms(ts) = &d.tset else {
+        panic!("`~int; ~int32` 的语义类型集该是 Terms，实际 {:?}", d.tset);
+    };
+    assert_eq!(ts.len(), 2);
+    assert!(ts.iter().all(|(tilde, _)| *tilde), "两个项都带 `~`");
+    assert_eq!(basic_of(&tt, ts[0].1), BasicId::Int);
+    assert_eq!(basic_of(&tt, ts[1].1), BasicId::Int32);
     let terms = d.terms.expect("`~int | ~int32` 必须落成项集");
     let Type::Union(uid) = tt.type_of(terms) else {
         panic!("项集该是 union，实际 {:?}", tt.type_of(terms));
@@ -620,8 +626,17 @@ fn interface_项集与_comparable() {
         panic!("Cmp 该是接口");
     };
     let d = tt.interface_def(*cmp);
-    assert!(d.comparable, "`comparable` 必须落到 comparable 位");
-    assert!(d.terms.is_none(), "它不是项集");
+    assert_eq!(d.tset, IfaceTSet::Comparable, "`comparable` 必须落到类型集");
+    // 语法面（Task 8 起）：嵌入 `comparable` 落 **exact 项** —— oracle
+    // `synthUnion` 实测口径（`interface{ comparable }` ⇒ `interface 0 1` +
+    // `term exact`，不是「无项线」）。
+    let terms = d.terms.expect("`comparable` 嵌入必须落成语法项");
+    let Type::Union(uid) = tt.type_of(terms) else {
+        panic!("项集该是 union，实际 {:?}", tt.type_of(terms));
+    };
+    let ct = &tt.union_def(*uid).terms;
+    assert_eq!(ct.len(), 1);
+    assert!(!ct[0].0, "exact 项（不带 `~`）");
     assert!(d.methods.is_empty());
 }
 

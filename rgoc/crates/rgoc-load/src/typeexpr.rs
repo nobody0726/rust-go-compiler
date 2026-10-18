@@ -30,25 +30,40 @@
 //!   参数化具名的 `origin + targs` 表示不在 M3）；类型实参**照样解析**，
 //!   因为它们是真实的名字引用（前向引用必须能被触发）。
 //!
-//! # 接口的简化（`D-M3-13` 的直接后果）
+//! # 接口的**两面**（M4/Task 8 起）
 //!
-//! 项集（`~T` / 并集）与嵌入**照样表示**（`Type::Union` + `InterfaceDef::terms`），
-//! 但**不判定**它们的同一性。嵌入式接口的合并按「**当时**已求出的本体」：
-//! 具名接口嵌入先触发一次惰性解析，所以前向引用也能合并到 —— 除非那个名字
-//! 本身就解析失败（那时合并为空集，与官方「不产生后续错误」的口径一致）。
+//! [`IfaceTSet`] 是**语义**面（交集 / `comparable` 过滤 / ∅ 可达 —— 判定吃它），
+//! `InterfaceDef::terms` 是**语法**面（`~T` / `A | B` 拍平 + 嵌入元素 as-written
+//! —— `C7` 渲染与 oracle 对撞吃它）。两面**不必同形**
+//! （`interface{ comparable; ~[]byte }`：语法两条、语义 ∅）。
+//!
+//! 嵌入的合并序**对齐官方** `computeInterfaceTypeSet`：显式方法全部先行、
+//! 再按源码序处理无名元素；方法按名去重**首见保留**（官方 `objset` 键是
+//! `Id(pkg, name)`；v1 不带包 —— 已知差异，台账 `Ruling 8-4`）。环上成员
+//!（本体未填）按官方 `!ityp.complete` ⇒ `topTypeSet` 的宽容口径处理：
+//! **合并空**、照记语法项，不 panic、不产生后续错误。
 
 use rgoc_ast::{
     ArrayType, ChanType, Expr, Field as AstField, FuncType, InterfaceType, MapType, Op, StructType,
 };
 use rgoc_const::Const;
 use rgoc_lex::{Diag, DiagCode};
-use rgoc_types::{ChanDir, Field as TField, ObjKind, Object, ScopeId, Type, TypeId, unalias};
+use rgoc_types::{
+    ChanDir, Field as TField, IfaceTSet, InterfaceId, ObjKind, Object, ScopeId, Type, TypeId,
+    identical, typeset, unalias, underlying,
+};
 
 use crate::decls::Checker;
 
-/// 接口的三个**部件**：方法集（名字已排序）、项集（`Type::Union` 的 `TypeId`）、
-/// `comparable` 位。抽成别名只是因为它在签名里出现三次。
-type IfaceParts = (Vec<(String, TypeId)>, Option<TypeId>, bool);
+/// [`Checker::drill_iface`] 的分类结果。
+enum Drill {
+    /// 本体是接口（可嵌入合并）。
+    Iface(InterfaceId),
+    /// 本体**未填**（正在解析的环成员 —— 官方 `!ityp.complete` 面）。
+    Unresolved,
+    /// 确定不是接口。
+    NotIface,
+}
 
 impl Checker<'_> {
     /// 解析一个类型表达式。
@@ -182,34 +197,40 @@ impl Checker<'_> {
         self.tt.add_chan(dir, elem)
     }
 
-    /// `interface{...}`：方法集 + 项集 + `comparable` 位。
+    /// `interface{...}`：方法集 + **两面**项集（语法 `terms` / 语义 `tset`）。
     ///
-    /// 三类元素（官方 `interfaceType` 的 `embedded` 分支）：
-    /// 1. 有名字 ⇒ **方法**，其类型是签名；
-    /// 2. 无名且是**接口**（含具名接口 / 别名）⇒ **嵌入合并**（方法 + 项集 + comparable 位）；
-    /// 3. 其余无名 ⇒ **项**（`~T`、`A | B`、单个非接口类型名都归这里）。
+    /// 官方 `computeInterfaceTypeSet` 的两段式（`typeset.go:240+`）：
+    ///
+    /// 1. **显式方法全部先行**（`ityp.methods` 序，`addMethod(..., true)`），
+    ///    按名去重**首见保留**；
+    /// 2. 再按源码序处理**无名元素**（`addMethod(..., false)` 做方法合并 +
+    ///    `intersectTermLists` 做项面与 `comparable` 位求交）。
+    ///
+    /// 语法面（`terms`，oracle `synthUnion` 口径）：无名元素**逐条拍平** ——
+    /// 嵌入具名 / 别名 ⇒ 一条 **as-written 的 exact 项**；`~T` / `A | B` ⇒
+    /// 原始操作数逐条 splice；非接口字面量 ⇒ 一条 exact 项。
     fn resolve_interface(&mut self, scope: ScopeId, i: &InterfaceType) -> TypeId {
         let mut methods: Vec<(String, TypeId)> = Vec::new();
         let mut terms: Vec<(bool, TypeId)> = Vec::new();
-        let mut comparable = false;
+        let mut tset = IfaceTSet::All;
 
+        // ① 显式方法先行（官方 `for _, m := range ityp.methods { addMethod(m, true) }`）
         for f in &i.methods {
-            match &f.name {
-                Some(n) => {
-                    let sig = self.resolve_type(scope, &f.type_);
+            if let Some(n) = &f.name {
+                let sig = self.resolve_type(scope, &f.type_);
+                if !methods.iter().any(|(m, _)| m == &n.value) {
                     methods.push((n.value.clone(), sig));
                 }
-                None => self.collect_iface_elem(
-                    scope,
-                    &f.type_,
-                    &mut methods,
-                    &mut terms,
-                    &mut comparable,
-                ),
+            }
+        }
+        // ② 无名元素按源码序
+        for f in &i.methods {
+            if f.name.is_none() {
+                self.collect_iface_elem(scope, &f.type_, &mut methods, &mut terms, &mut tset);
             }
         }
 
-        self.build_iface(methods, terms, comparable)
+        self.build_iface(methods, terms, tset)
     }
 
     /// 把三样部件落成表里的一条 `interface` —— 显式接口与**隐式约束接口**
@@ -218,11 +239,14 @@ impl Checker<'_> {
     /// 方法排序放在**这里**而不是渲染层：`C7` §4 把它写成契约位
     /// （`interface` 行的 `method` 子行按名字升序），渲染层排序会漏掉
     /// 「同一条接口被两处引用时顺序也要一致」这条。
+    ///
+    /// `tset` 是 [`IfaceTSet`]（**语义**面）；语法面 `terms` 为空 ⇒
+    /// `InterfaceDef::terms = None`（「无项线」）。
     fn build_iface(
         &mut self,
         mut methods: Vec<(String, TypeId)>,
         terms: Vec<(bool, TypeId)>,
-        comparable: bool,
+        tset: IfaceTSet,
     ) -> TypeId {
         methods.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -232,83 +256,221 @@ impl Checker<'_> {
             let id = self.tt.add_union(terms);
             Some(self.tt.union_type(id))
         };
-        let id = self.tt.add_interface(methods, terms, comparable);
+        let id = self.tt.add_interface(methods, terms, tset);
         self.tt.interface_type(id)
     }
 
-    /// 接口里的一个**无名元素**：并入方法 / 项集 / `comparable`。
+    /// 接口里的一个**无名元素**：方法拍平 + 语法项 + 语义类型集求交。
     fn collect_iface_elem(
         &mut self,
         scope: ScopeId,
         e: &Expr,
         methods: &mut Vec<(String, TypeId)>,
         terms: &mut Vec<(bool, TypeId)>,
-        comparable: &mut bool,
+        tset: &mut IfaceTSet,
     ) {
         match e {
-            Expr::Paren(p) => self.collect_iface_elem(scope, &p.x, methods, terms, comparable),
-            // `~T`：近似项
+            Expr::Paren(p) => self.collect_iface_elem(scope, &p.x, methods, terms, tset),
+            // `~T`：一个**单元素 union**（官方 `case *Union`）
             Expr::Unary(op) if op.op == Op::Tilde => {
                 let t = self.resolve_type(scope, &op.x);
-                terms.push((true, t));
+                let items = vec![(true, t)];
+                terms.extend(items.iter().copied());
+                let elem = self.union_elem_tset(&items);
+                self.merge_tset(tset, elem);
             }
             // `A | B`：并集（逐层展平，项的**声明序**就是遍历序）
             Expr::Binary(op) if op.op == Op::Or => {
                 if let Some(y) = &op.y {
-                    self.collect_iface_elem(scope, &op.x, methods, terms, comparable);
-                    self.collect_iface_elem(scope, y, methods, terms, comparable);
+                    let mut items: Vec<(bool, TypeId)> = Vec::new();
+                    self.collect_union_operands(scope, &op.x, &mut items);
+                    self.collect_union_operands(scope, y, &mut items);
+                    terms.extend(items.iter().copied());
+                    let elem = self.union_elem_tset(&items);
+                    self.merge_tset(tset, elem);
                 }
             }
             // 单个类型名：是接口就**嵌入合并**，否则是「恰好这一个类型」的项
             Expr::Name(n) => {
                 let t = self.lookup_type(scope, &n.value);
-                if let Some((m, ts, cmp)) = self.iface_parts(t) {
-                    methods.extend(m);
-                    if let Some(u) = ts {
-                        terms.extend(self.union_terms(u));
-                    }
-                    *comparable |= cmp;
-                } else {
-                    terms.push((false, t));
-                }
+                self.merge_embedded(t, methods, terms, tset);
             }
-            // 其余（`[]byte`、`map[K]V` …）按「非接口类型」的项处理
+            // 其余（`[]byte`、`map[K]V` …）按「非接口类型」的元素处理
             _ => {
                 let t = self.resolve_type(scope, e);
+                self.merge_embedded(t, methods, terms, tset);
+            }
+        }
+    }
+
+    /// union 元素的**操作数**（`~T` / `A | B` 展平）。
+    ///
+    /// 与 [`Self::collect_iface_elem`] 的区别：**不并入方法** —— 官方
+    /// `computeUnionTypeSet` 断言 union 无方法（并集操作数只贡献项）。
+    fn collect_union_operands(
+        &mut self,
+        scope: ScopeId,
+        e: &Expr,
+        items: &mut Vec<(bool, TypeId)>,
+    ) {
+        match e {
+            Expr::Paren(p) => self.collect_union_operands(scope, &p.x, items),
+            Expr::Unary(op) if op.op == Op::Tilde => {
+                let t = self.resolve_type(scope, &op.x);
+                items.push((true, t));
+            }
+            Expr::Binary(op) if op.op == Op::Or => {
+                if let Some(y) = &op.y {
+                    self.collect_union_operands(scope, &op.x, items);
+                    self.collect_union_operands(scope, y, items);
+                }
+            }
+            Expr::Name(n) => {
+                let t = self.lookup_type(scope, &n.value);
+                items.push((false, t));
+            }
+            _ => {
+                let t = self.resolve_type(scope, e);
+                items.push((false, t));
+            }
+        }
+    }
+
+    /// 一个**普通元素**：本体是接口 ⇒ 嵌入合并；其余 ⇒ 单类型项。
+    ///
+    /// 四档（官方 `computeInterfaceTypeSet` 的嵌入分派）：
+    /// * 本体是接口（穿透别名 / 具名）⇒ 方法逐条合并（按名去重首见）
+    ///   + 项面 / `comparable` 位求交；语法面 = **as-written exact 项**；
+    /// * 本体**未填**（正在解析的环成员）⇒ 官方 `!ityp.complete` ⇒ `topTypeSet`：
+    ///   合并空，**照记语法项**，不 panic、不产生后续错误；
+    /// * 无效类型 ⇒ **两面都跳过**（官方 `if !isValid(u) { continue }`）；
+    /// * 其余有效的非接口类型 ⇒ 单类型项 `(false, t)`（as-written）。
+    fn merge_embedded(
+        &mut self,
+        t: TypeId,
+        methods: &mut Vec<(String, TypeId)>,
+        terms: &mut Vec<(bool, TypeId)>,
+        tset: &mut IfaceTSet,
+    ) {
+        match self.drill_iface(t) {
+            Drill::Iface(iid) => {
+                let (their_methods, their_tset) = {
+                    let d = self.tt.interface_def(iid);
+                    (d.methods.clone(), d.tset.clone())
+                };
+                for (name, sig) in their_methods {
+                    if !methods.iter().any(|(m, _)| m == &name) {
+                        methods.push((name, sig));
+                    }
+                }
+                terms.push((false, t));
+                self.merge_tset(tset, their_tset);
+            }
+            Drill::Unresolved => {
                 terms.push((false, t));
             }
+            Drill::NotIface => {
+                // 穿透后底层无效 —— 两态同一个码面：① **解析中的环成员**占位是
+                // `Some(invalid)`（官方 `!ityp.complete` ⇒ `topTypeSet`：合并空）；
+                // ② 真·无效名（官方 `if !isValid(u) { continue }`：语义面也不加）。
+                // 两种都**只留语法项**（与旧 M3 行为一致；对撞面不含非法码）。
+                if matches!(self.tt.type_of(underlying(self.tt, t)), Type::Invalid) {
+                    terms.push((false, t));
+                    return;
+                }
+                terms.push((false, t));
+                self.merge_tset(tset, IfaceTSet::Terms(vec![(false, t)]));
+            }
         }
     }
 
-    /// 取一个类型的**接口部件**（沿别名/具名下钻到 `Type::Interface`）。
+    /// 沿别名 / 具名下钻分类（带双环卫；环成员报 `Unresolved`，不 panic）。
+    fn drill_iface(&self, t: TypeId) -> Drill {
+        let mut seen_n: Vec<rgoc_types::NamedId> = Vec::new();
+        let mut seen_a: Vec<rgoc_types::AliasId> = Vec::new();
+        let mut cur = t;
+        loop {
+            match self.tt.type_of(cur) {
+                Type::Interface(id) => return Drill::Iface(*id),
+                Type::Named(n) => {
+                    if seen_n.contains(n) {
+                        return Drill::Unresolved;
+                    }
+                    seen_n.push(*n);
+                    match self.tt.named_def(*n).underlying {
+                        Some(u) => cur = u,
+                        None => return Drill::Unresolved,
+                    }
+                }
+                Type::Alias(a) => {
+                    if seen_a.contains(a) {
+                        return Drill::Unresolved;
+                    }
+                    seen_a.push(*a);
+                    match self.tt.alias_def(*a).rhs {
+                        Some(r) => cur = r,
+                        None => return Drill::Unresolved,
+                    }
+                }
+                _ => return Drill::NotIface,
+            }
+        }
+    }
+
+    /// 一个 **union 元素**的语义类型集（官方 `computeUnionTypeSet`）。
     ///
-    /// `None` ⇒ 它不是接口类型（⇒ 在项集语境里是「恰好这一个类型」的项）。
-    /// 具名接口的**本体未填**时也返回 `None` —— 调用方（`Expr::Name` 分支）
-    /// 已经先触发过惰性解析，所以那只可能是「解析失败」，合并成空集正合
-    /// 官方「不产生后续错误」的口径。
-    fn iface_parts(&self, t: TypeId) -> Option<IfaceParts> {
-        match self.tt.type_of(t) {
-            Type::Interface(id) => {
-                let d = self.tt.interface_def(*id);
-                Some((d.methods.clone(), d.terms, d.comparable))
+    /// 逐操作数：
+    /// * 本体是接口（穿透别名 / 具名）⇒ 并入该接口的**项面**
+    ///   （方法不并入；`All` / `Comparable` 的项面是 𝓤 ⇒ 整元素 𝓤）；
+    /// * 底层无效 ⇒ 跳过；
+    /// * `~T` 而 `T` 与 `underlying(T)` 不同一（`~MyInt`）⇒ ∅ 项（跳过）；
+    /// * 其余 ⇒ 保项 `(tilde, T)`（**as-written**，与语法面同项）。
+    ///
+    /// 结果**不归一**（`norm`）—— 消费面是集合语义（见 `typeset` 模块文档）。
+    fn union_elem_tset(&self, items: &[(bool, TypeId)]) -> IfaceTSet {
+        let mut out: Vec<(bool, TypeId)> = Vec::new();
+        let mut any_all = false;
+        for (tilde, t) in items {
+            if let Drill::Iface(iid) = self.drill_iface(*t) {
+                match &self.tt.interface_def(iid).tset {
+                    IfaceTSet::All | IfaceTSet::Comparable => any_all = true,
+                    IfaceTSet::Empty => {}
+                    IfaceTSet::Terms(ts) => out.extend(ts.iter().copied()),
+                }
+                continue;
             }
-            Type::Named(n) => {
-                let u = self.tt.named_def(*n).underlying?;
-                self.iface_parts(u)
+            let u = underlying(self.tt, *t);
+            if matches!(self.tt.type_of(u), Type::Invalid) {
+                continue;
             }
-            Type::Alias(a) => {
-                let r = self.tt.alias_def(*a).rhs?;
-                self.iface_parts(r)
+            if *tilde {
+                match identical(self.tt, *t, u) {
+                    Ok(true) => {}
+                    // `~MyInt`：不存在以 MyInt 为底层的类型 ⇒ ∅ 项
+                    Ok(false) => continue,
+                    // 能力边界：按漂移跳过（保守；Task 10 起可判）
+                    Err(_) => continue,
+                }
             }
-            _ => None,
+            out.push((*tilde, *t));
+        }
+        if any_all {
+            IfaceTSet::All
+        } else if out.is_empty() {
+            IfaceTSet::Empty
+        } else {
+            IfaceTSet::Terms(out)
         }
     }
 
-    /// 并集条目 → 它的项（嵌入一个并集时把项并进来）。
-    fn union_terms(&self, u: TypeId) -> Vec<(bool, TypeId)> {
-        match self.tt.type_of(u) {
-            Type::Union(id) => self.tt.union_def(*id).terms.clone(),
-            _ => Vec::new(),
+    /// 项面 / `comparable` 位求交（官方 `intersectTermLists`）。
+    ///
+    /// `Err`（能力边界）⇒ 降级为 𝓤 并继续（官方对 incomplete 的 `topTypeSet`
+    /// 同款宽容；记录在台账 Task 8 行）。
+    fn merge_tset(&self, acc: &mut IfaceTSet, elem: IfaceTSet) {
+        match typeset::intersect(self.tt, acc, &elem) {
+            Ok(v) => *acc = v,
+            Err(_) => *acc = IfaceTSet::All,
         }
     }
 
@@ -397,15 +559,22 @@ impl Checker<'_> {
             let c = if is_type_set(&f.type_) {
                 let mut methods = Vec::new();
                 let mut terms = Vec::new();
-                let mut comparable = false;
-                self.collect_iface_elem(scope, &f.type_, &mut methods, &mut terms, &mut comparable);
-                self.build_iface(methods, terms, comparable)
+                let mut tset = IfaceTSet::All;
+                self.collect_iface_elem(scope, &f.type_, &mut methods, &mut terms, &mut tset);
+                self.build_iface(methods, terms, tset)
             } else {
                 let t = self.resolve_type(scope, &f.type_);
                 if self.is_interface_type(t) {
                     t
                 } else {
-                    self.build_iface(Vec::new(), vec![(false, t)], false)
+                    // 隐式 `interface{ T }`（官方 `[T int]` 的包法）：语义 = 单类型项；
+                    // T 无效时语义退化为 𝓤（官方对无效嵌入跳过 ⇒ 全集），语法面照记。
+                    let elem_tset = if matches!(self.tt.type_of(t), Type::Invalid) {
+                        IfaceTSet::All
+                    } else {
+                        IfaceTSet::Terms(vec![(false, t)])
+                    };
+                    self.build_iface(Vec::new(), vec![(false, t)], elem_tset)
                 }
             };
             self.tt.set_type_param_constraint(*tp, c);

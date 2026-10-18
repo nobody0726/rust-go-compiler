@@ -25,7 +25,9 @@
 //! 见该模块文档的 Ruling 23-1）。
 //!
 //! M4 逐任务落地：Task 6 = [`assignable`]（可赋值性；窄面与拒绝码见该模块文档），
-//! Task 7 = [`methodset`]（方法集；生产者 = `rgoc-load` 的接收者挂载）。
+//! Task 7 = [`methodset`]（方法集；生产者 = `rgoc-load` 的接收者挂载），
+//! Task 8 = [`typeset`]（语义类型集四态）/ [`comparable`]（可比性）/
+//! [`implements`]（接口实现与约束满足）。
 //!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
@@ -42,20 +44,25 @@
 pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
 pub mod assignable;
+pub mod comparable;
 pub mod dump;
 pub mod identical;
+pub mod implements;
 pub mod methodset;
 pub mod object;
 pub mod scope;
 pub mod table;
 pub mod typ;
+pub mod typeset;
 pub mod universe;
 pub mod validtype;
 pub mod version;
 
 pub use assignable::assignable;
+pub use comparable::{comparable, strictly_comparable};
 pub use dump::{DumpError, dump_types, try_dump_types};
 pub use identical::{identical, unalias, underlying};
+pub use implements::implements;
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};
@@ -67,6 +74,7 @@ pub use typ::{
     AliasId, ChanDir, InterfaceId, NamedId, SignatureId, StructId, TYPE_VARIANT_COUNT, TupleId,
     Type, TypeId, TypeParamId, UnionId,
 };
+pub use typeset::IfaceTSet;
 pub use universe::{declare_universe, declared_names, universe};
 pub use validtype::{MAX_TYPE_NEST_DEPTH, valid_type};
 pub use version::{GO_CURRENT, GO1_21, GoVersion, Versions, pkg_versions};

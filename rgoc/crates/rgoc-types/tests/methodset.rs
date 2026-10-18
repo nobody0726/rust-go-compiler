@@ -15,7 +15,7 @@
 //! `rgoc-load` 侧的挂载（真源码 → 表）由 `rgoc-load/tests/method_attach.rs` 管。
 
 use rgoc_types::table::Field;
-use rgoc_types::{NamedId, TypeId, TypeTable, methodset};
+use rgoc_types::{IfaceTSet, NamedId, TypeId, TypeTable, methodset};
 
 /// `type Name Underlying` —— 先占号再填底层。
 fn named(tt: &mut TypeTable, name: &str, under: TypeId) -> NamedId {
@@ -200,7 +200,7 @@ fn t_ck_14_字段遮蔽与深度最小者() {
 fn t_ck_14_接口方法集与指针接口() {
     let mut tt = TypeTable::new();
     let m = msig(&mut tt, None);
-    let iid = tt.add_interface(vec![("M".to_string(), m)], None, false);
+    let iid = tt.add_interface(vec![("M".to_string(), m)], None, IfaceTSet::All);
     let j_ty = tt.interface_type(iid);
     // 接口字面量本身
     assert_eq!(entries(&tt, j_ty), vec![("M".to_string(), m)]);
@@ -217,7 +217,7 @@ fn t_ck_14_接口方法集与指针接口() {
 fn t_ck_14_嵌入接口提升() {
     let mut tt = TypeTable::new();
     let m = msig(&mut tt, None);
-    let iid = tt.add_interface(vec![("M".to_string(), m)], None, false);
+    let iid = tt.add_interface(vec![("M".to_string(), m)], None, IfaceTSet::All);
     let j_ty = tt.interface_type(iid);
     // struct{ J }：接口方法在**下一层**加入（`indirect=true`）
     let (_e, e_ty) = struct_named(&mut tt, "E", vec![embed(j_ty)]);

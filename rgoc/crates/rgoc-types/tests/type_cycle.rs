@@ -8,7 +8,7 @@ use rgoc_const::BasicId;
 use rgoc_lex::diag::{Diag, DiagBag, DiagCode};
 use rgoc_lex::{FileId, Pos};
 use rgoc_types::table::Field;
-use rgoc_types::{MAX_TYPE_NEST_DEPTH, TypeId, TypeTable, valid_type};
+use rgoc_types::{IfaceTSet, MAX_TYPE_NEST_DEPTH, TypeId, TypeTable, valid_type};
 
 /// 跑一次判定，返回（是否合法，排序后的诊断）。
 fn judge(tt: &TypeTable, t: TypeId) -> (bool, Vec<Diag>) {
@@ -93,7 +93,11 @@ fn t_ty_76_非法递归_按值包含才成环() {
     let empty = tt.add_tuple(Vec::new());
     let r = tt.add_tuple(vec![(None, tt.named_type(a))]);
     let sig = tt.add_signature(None, empty, r, false);
-    let i = tt.add_interface(vec![("M".to_string(), tt.signature_type(sig))], None, false);
+    let i = tt.add_interface(
+        vec![("M".to_string(), tt.signature_type(sig))],
+        None,
+        IfaceTSet::All,
+    );
     tt.set_named_underlying(a, tt.interface_type(i));
     assert!(judge(&tt, tt.named_type(a)).1.is_empty());
 

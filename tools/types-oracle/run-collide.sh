@@ -6,7 +6,8 @@
 # go/types）与 **rgoc 侧**（`rgoc-driver types …`）各出一份规范文本，两边**逐字节
 # 一致**（`#` 开头的注释行与空行按 C7 §2 规则 1 忽略）。
 #
-#   --dump（缺省）：C7 中性类型 dump；fixture = 目录里所有 *.go
+#   --dump（缺省）：C7 中性类型 dump；fixture = 目录里所有 *.go（**响亮跳过
+#                   `check-*` 族** —— 那些夹具按契约故意含类型错误，不是 dump 夹具）
 #   --cmp         ：`//rgoc:cmp` 判定行；fixture = 目录里 cmp-*.go
 #   --corpus <dir>：**官方语料**模式（`T-TY-94`）。`<dir>` = `types/testdata` 的根；
 #                   文件清单来自 `corpus-selected.txt`（**唯一**清单 —— 脚本**不**自己
@@ -186,8 +187,18 @@ if [ -n "$CORPUS" ] || [ "$MODE" = check ]; then
 else
     # ⚠️ `$GLOB` **不能加引号** —— 加了就没有通配展开，`[ -f ]` 全 false，
     # 症状是「fixture 目录里没有 …」而目录里明明有（刚踩过）。
+    #
+    # ⚠️ dump 模式的 `*.go` 要**响亮跳过 `check-*` 族**：check 夹具按 `C8` §8
+    # 契约故意含类型错误（dump 会是半个 `invalid`，对撞没有意义 ——
+    # `M3-tests.md` §5.1 同款理由）。静默不选是另一头的错：新族混进来时会
+    # 「门禁少查了文件却报成功」。所以这里**打印跳过行**。
     for f in "$FIXDIR"/$GLOB; do
         [ -f "$f" ] || continue
+        case "$MODE:$(basename "$f")" in
+            dump:check-*)
+                printf '  - %s（check 面夹具，dump 腿不适用，跳过）\n' "$(basename "$f")"
+                continue ;;
+        esac
         FILES+=("$f")
         NAMES+=("$(basename "$f")")
     done
@@ -517,6 +528,8 @@ done
 if [ "$n" -eq 0 ]; then
     if [ -n "$CORPUS" ]; then
         echo "  入选清单是空的（$ORACLE_DIR/corpus-selected.txt）" >&2
+    elif [ "$MODE" = dump ]; then
+        echo "  fixture 目录里没有可对撞的 dump fixture（$GLOB，不含 check-* 族）：$FIXDIR" >&2
     else
         echo "  fixture 目录里没有 $GLOB 匹配的文件：$FIXDIR" >&2
     fi

@@ -17,7 +17,7 @@
 
 use rgoc_const::{BasicId, Const};
 use rgoc_types::object::ObjKind;
-use rgoc_types::{Type, TypeTable, declared_names, universe};
+use rgoc_types::{IfaceTSet, Type, TypeTable, declared_names, universe};
 
 #[test]
 fn 名字全集恰好是那_44_个() {
@@ -128,7 +128,7 @@ fn error_是_named_且本体是_error_方法集() {
     let def = tt.interface_def(*iid);
     assert_eq!(def.methods.len(), 1, "只有一个 Error 方法");
     assert_eq!(def.methods[0].0, "Error");
-    assert!(!def.comparable, "error 不是带 comparable 的类型集");
+    assert_eq!(def.tset, IfaceTSet::All, "error 不是带 comparable 的类型集");
     assert!(def.terms.is_none(), "error 没有项集");
     // 方法的 recv 是 **None**：接口方法没有接收者。
     // ⚠️ 这里订正过一次口径（M3/Task 33 对撞）：**旧**写法给接口方法也设了
@@ -174,7 +174,11 @@ fn any_是_alias_且右侧是空接口() {
     let def = tt.interface_def(*iid);
     assert!(def.methods.is_empty());
     assert!(def.terms.is_none());
-    assert!(!def.comparable, "any 的右侧是**空接口**，不是 comparable");
+    assert_eq!(
+        def.tset,
+        IfaceTSet::All,
+        "any 的右侧是**空接口**，不是 comparable"
+    );
 }
 
 #[test]
@@ -196,7 +200,11 @@ fn comparable_是特殊约束而不是普通类型名() {
     };
     let def = tt.interface_def(*iid);
     // `F8`：它是**带 comparable 的类型集**，但方法集为空、无项集
-    assert!(def.comparable, "comparable 标记必须为真");
+    assert_eq!(
+        def.tset,
+        IfaceTSet::Comparable,
+        "comparable 的类型集必须为真"
+    );
     assert!(def.methods.is_empty());
     assert!(def.terms.is_none());
     // 与 `any` 的右侧**同形但不同标记** —— 这正是「表示做宽」要留住的那一点
@@ -207,13 +215,14 @@ fn comparable_是特殊约束而不是普通类型名() {
         },
     );
     assert_ne!(tt.named_underlying(*nid), any_rhs, "两者是不同的条目");
-    assert!(
-        !tt.interface_def(match tt.type_of(any_rhs) {
+    assert_eq!(
+        tt.interface_def(match tt.type_of(any_rhs) {
             Type::Interface(i) => *i,
             other => panic!("any 的右侧应当是 interface，得到 {other:?}"),
         })
-        .comparable,
-        "空接口的 comparable 是假"
+        .tset,
+        IfaceTSet::All,
+        "空接口的类型集是 𝓤"
     );
 }
 

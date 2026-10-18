@@ -229,8 +229,11 @@ pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode>
             Type::Interface(iy) => {
                 let a = tt.interface_def(*ix);
                 let b = tt.interface_def(*iy);
-                // M3 只判**方法集版**（`D-M3-13`）
-                if a.terms.is_some() || b.terms.is_some() || a.comparable || b.comparable {
+                // `D-M3-13` 的 M4 收窄（Task 8）：只拒**约束语义**的类型集
+                //（项集 / `comparable` / ∅ —— 即 `tset != All`）。语法面有 `terms`
+                // 但语义仍是 𝓤 的（`interface{ J }` 这类纯嵌入）**可以判** ——
+                // 官方 `identicalTypeSets` 对它们走「集合相等」面；Task 10 整体解除。
+                if !a.tset.is_all() || !b.tset.is_all() {
                     return Err(DiagCode::TypUnsupportedConstraintIdentity);
                 }
                 if a.methods.len() != b.methods.len() {

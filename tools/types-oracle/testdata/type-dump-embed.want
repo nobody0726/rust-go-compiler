@@ -1,0 +1,68 @@
+# source: oracle
+# files: testdata/type-dump-embed.go
+# package: p
+0	named 3
+1	tuple 0
+2	signature - 1 1 false
+3	interface 1 0
+  method "M" 2
+4	named 6
+5	union 1
+  term exact #0
+6	interface 1 1
+  method "M" 2
+  term 5
+7	named 11
+8	basic int
+9	basic string
+10	union 2
+  term tilde 8
+  term tilde 9
+11	interface 0 1
+  term 10
+12	named 14
+13	union 1
+  term exact #7
+14	interface 0 1
+  term 13
+15	named 19
+16	named 17
+17	interface 0 0
+18	union 1
+  term exact #16
+19	interface 0 1
+  term 18
+20	alias #0
+21	named 23
+22	union 1
+  term exact #20
+23	interface 1 1
+  method "M" 2
+  term 22
+24	alias 8
+25	named 27
+26	union 1
+  term exact #24
+27	interface 0 1
+  term 26
+28	named 31
+29	signature - 1 1 false
+30	union 1
+  term exact #0
+31	interface 2 1
+  method "Extra2" 29
+  method "M" 2
+  term 30
+32	named 34
+33	union 1
+  term exact #4
+34	interface 1 1
+  method "M" 2
+  term 33
+35	named 37
+36	union 2
+  term exact #0
+  term exact #21
+37	interface 1 1
+  method "M" 2
+  term 36
