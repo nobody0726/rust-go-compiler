@@ -209,3 +209,4 @@ var _ = y; var _ = y
 | 日期 | 变更 |
 |---|---|
 | 2026-10-18 | **新建并冻结**（M4 / `Task 1`）：渲染字节格式、类别枚举 v1（26 类，含 `parse`）、两侧映射纪律、过滤规则（`F2` 摘录）、比较算法（剥列多重集 + 升格条款）、退出码、最小对撞目标 `check-diags-min`（官方实跑 3 条，探针复刻 §5 口径）。 |
+| 2026-10-19 | **修订（`R-4-1`，Task 11）**：§4 表「`Other` 不出现在投影表」按**「（除修订）」**口 —— rgoc 侧 `Other` 值域 = 恰 **4 个无官方语义码**（`ChkUnimplemented` / `ExceedsFileLimit` / `SynNestingTooDeep` / `TypNestingTooDeep`），由 `T-CK-16`（`rgoc/crates/rgoc-check/tests/category.rs`）钉死值域（第 5 码入 `Other` 即红）；其余码全落真实类别。`T-CK-94`（入选语料 `other` 即红）与 26 类枚举不变。 |
