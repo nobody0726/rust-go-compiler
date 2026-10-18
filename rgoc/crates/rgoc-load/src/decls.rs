@@ -54,7 +54,7 @@ use rgoc_const::{
 };
 use rgoc_lex::{Diag, DiagBag, DiagCode, Pos};
 use rgoc_types::{
-    BasicId, ObjKind, Object, ScopeId, ScopeTable, Type, TypeId, TypeTable, valid_type,
+    BasicId, NamedId, ObjKind, Object, ScopeId, ScopeTable, Type, TypeId, TypeTable, valid_type,
 };
 
 use crate::package::Package;
@@ -439,9 +439,24 @@ impl Checker<'_> {
                         }
                     }
                     Decl::Func(d) => {
-                        let t = self.resolve_func_sig(d);
-                        if d.recv.is_none() && d.name.value != "_" {
-                            self.write_object(&d.name.value, t, None);
+                        let (recv, t) = self.resolve_func_sig(d);
+                        match recv {
+                            // 方法：挂到接收者基类型上（Task 7 的**唯一**生产者，
+                            // 消费者是 `rgoc-types::methodset`）。空名（`func (t T) _()`）
+                            // 不挂；接收者不是本包具名基底（产权 / 别名 —— 非法 Go，
+                            // 或错误恢复的 `invalid`）也不挂 —— 诊断归检查器。
+                            Some(r) => {
+                                if d.name.value != "_"
+                                    && let Some(nid) = self.recv_named(r)
+                                {
+                                    self.tt.add_named_method(nid, d.name.value.clone(), t);
+                                }
+                            }
+                            None => {
+                                if d.name.value != "_" {
+                                    self.write_object(&d.name.value, t, None);
+                                }
+                            }
                         }
                         if t != self.tt.invalid() {
                             self.roots.push(t);
@@ -458,7 +473,11 @@ impl Checker<'_> {
     /// **接收者**声明（官方 `recv.TypeParams()`），约束取类型声明里**同一位置**
     /// 那一个。它必须在解析**接收者类型**之前进作用域 —— `*Box[T]` 里的 `T`
     /// 正是它（`Task 35` 的语料普查抓到过这条漏声明：三例 `undefined: T`）。
-    fn resolve_func_sig(&mut self, d: &rgoc_ast::FuncDecl) -> TypeId {
+    ///
+    /// 返回 `(接收者类型, 签名)`：接收者回给调用方做**方法挂载**（M4/Task 7）；
+    /// 普通函数为 `None`。接收者只在这里解析**一次**（复解析会在表里多造
+    /// 结构型条目，`C7` 的号是全表遍历序）。
+    fn resolve_func_sig(&mut self, d: &rgoc_ast::FuncDecl) -> (Option<TypeId>, TypeId) {
         let base = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
             Some(fs) => self.declare_tparams(self.pkg_scope, &fs),
             None => self.pkg_scope,
@@ -471,9 +490,36 @@ impl Checker<'_> {
         } else {
             self.declare_tparams(base, &d.tparams)
         };
-        match &d.type_ {
+        let sig = match &d.type_ {
             Expr::FuncType(ft) => self.resolve_signature(scope, ft, recv),
             _ => self.tt.invalid(),
+        };
+        (recv, sig)
+    }
+
+    /// 接收者类型 → 本包具名基底（`T` / `*T`；泛型 `Box[T]` / `*Box[T]` 在
+    /// M3 的表示里解析成的就是 `named Box`，同路命中）。
+    ///
+    /// **别名透明**：`type A = T; func (a A) M()` 是合法 Go 且 M 属于 T
+    /// （官方探针实测，见 `.superpowers/sdd/M4-plan/probe/aliasrecv-main.go`）。
+    /// 拆不出（`invalid` / 错误恢复 / 别名环的残缺 rhs）⇒ `None`：不挂，
+    /// 诊断交给检查器。**不走 `unalias`** —— 加载期对残缺表要能容忍
+    /// （链环靠步数上限兜底，不能 panic）。
+    fn recv_named(&self, recv: TypeId) -> Option<NamedId> {
+        let mut base = match self.tt.type_of(recv) {
+            Type::Pointer(e) => *e,
+            _ => recv,
+        };
+        for _ in 0..64 {
+            match self.tt.type_of(base) {
+                // 别名环的残缺 rhs（`None`）⇒ 拆不出基底
+                Type::Alias(a) => base = self.tt.alias_def(*a).rhs?,
+                _ => break,
+            }
+        }
+        match self.tt.type_of(base) {
+            Type::Named(n) => Some(*n),
+            _ => None,
         }
     }
 

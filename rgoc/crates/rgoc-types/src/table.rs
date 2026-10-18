@@ -79,6 +79,19 @@ pub struct NamedDef {
     /// 而那个对象是类型名声明 —— 所以位置挂在**定义**上，而不是判定入口的参数上
     /// （Task 22 的 `valid_type` 签名因此没有 `Pos` 参数）。
     pub pos: Option<Pos>,
+    /// 挂在**接收者基类型**上的方法：`(方法名, 签名)`，按**声明序**追加
+    /// （跨文件按文件的处理序；不排序 —— 排序是消费者的事）。
+    ///
+    /// * 与 [`InterfaceDef::methods`] 同形；那份在构造期排序（`C7` §4 的
+    ///   `interface` 行规约），这份**不**排 —— 方法集（`methodset`）与选择器
+    ///   （`rgoc-check`）各自决定顺序。
+    /// * 只收**本包定义型**的接收者（官方：接收者基类型必须是本包定义、非指针、
+    ///   非接口）；接收者的**指针性**不在这里存 —— 判据是签名 `recv` 是不是
+    ///   指针类型（官方 `hasPtrRecv` 同口径），一个数据一份真相。
+    /// * `C7` 的 dump **不渲染**它（named 行的渲染面与 M3 冻结版一致）；
+    ///   消费者是 M4 的方法集 / 接口实现 / 选择器。
+    /// * 生产者：`rgoc-load` 的 `Decl::Func` 臂（Task 7 的唯一生产者）。
+    pub methods: Vec<(String, TypeId)>,
 }
 
 /// `alias` 定义（`type D = T`）。
@@ -320,6 +333,7 @@ impl TypeTable {
             name: name.into(),
             underlying: None,
             pos: None,
+            methods: Vec::new(),
         });
         id
     }
@@ -335,6 +349,15 @@ impl TypeTable {
     /// 所以把位置挂在**定义**上 —— 见 [`NamedDef::pos`]。
     pub fn set_named_pos(&mut self, id: NamedId, pos: Pos) {
         self.named[id.index()].pos = Some(pos);
+    }
+
+    /// 给 `named` 挂一个方法（`(方法名, 签名类型)`）。
+    ///
+    /// 追加式（声明序）；同名重复**不**在这里裁决（那属于检查器的诊断面），
+    /// 方法集对同名的处理与官方 `methodSet.addOne` 一致（碰撞 ⇒ 排除）。
+    /// 接收者的指针性由调用方保证体现在签名的 `recv` 里（见 [`NamedDef::methods`]）。
+    pub fn add_named_method(&mut self, id: NamedId, name: impl Into<String>, sig: TypeId) {
+        self.named[id.index()].methods.push((name.into(), sig));
     }
 
     /// `named` 定义 → 它在 `types` 里的条目（**同一个定义恒等** ⇒ 引用要复用它）。
