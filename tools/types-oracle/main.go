@@ -16,8 +16,10 @@
 //
 //	go run . <file.go>... [--lang go1.N]          ← C7 dump（stdout）
 //	go run . --cmp <file.go>... [--lang go1.N]    ← `//rgoc:cmp` 判定（cmp.go）
+//	go run . --check [--test-hooks] <file.go>...  ← C8 诊断流（check.go；TestCheck 语义）
 //
 // 退出码：0 = 检查无错；1 = 有类型错误（dump 照常输出）；2 = 用法/致命错误。
+// `--check` 的旗标与退出码语义见 check.go 头部。
 //
 // 输出以 `#` 开头的注释行开头（`# source: oracle` / `# files:` / `# package:`）：
 // C7 §2 规则 1 说两侧都忽略 `#` 行，所以它们**不进对撞**，只为失败时能一眼看出
@@ -59,6 +61,7 @@ import (
 func main() {
 	lang := ""
 	mode := "dump"
+	testHooks := false
 	var files []string
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
@@ -71,6 +74,10 @@ func main() {
 			lang = args[i]
 		case args[i] == "--cmp":
 			mode = "cmp"
+		case args[i] == "--check":
+			mode = "check"
+		case args[i] == "--test-hooks":
+			testHooks = true
 		case strings.HasPrefix(args[i], "--"):
 			fmt.Fprintf(os.Stderr, "unknown flag: %s\n", args[i])
 			os.Exit(2)
@@ -80,6 +87,28 @@ func main() {
 	}
 	if len(files) == 0 {
 		usage(os.Stderr)
+	}
+
+	if mode == "check" {
+		if lang != "" {
+			// `--check` 的语言版本只来自首行指令（官方同款）；显式 --lang 会互相打架。
+			fmt.Fprintln(os.Stderr, "--lang is not supported with --check: the language version comes from the first line of the first file")
+			os.Exit(2)
+		}
+		out, hasDiags, fatal := runCheckMode(files, testHooks)
+		if fatal != nil {
+			fmt.Fprintln(os.Stderr, fatal)
+			os.Exit(2)
+		}
+		os.Stdout.WriteString(out)
+		if hasDiags {
+			os.Exit(1)
+		}
+		return
+	}
+	if testHooks {
+		fmt.Fprintln(os.Stderr, "--test-hooks requires --check")
+		os.Exit(2)
 	}
 
 	dump, errs, fatal := checkFiles(lang, files, mode)
@@ -139,6 +168,7 @@ func checkFiles(lang string, files []string, mode string) (string, []error, erro
 
 func usage(w *os.File) {
 	fmt.Fprintln(w, "usage: go run . [--cmp] <file.go>... [--lang go1.N]")
+	fmt.Fprintln(w, "       go run . --check [--test-hooks] <file.go>...")
 	os.Exit(2)
 }
 

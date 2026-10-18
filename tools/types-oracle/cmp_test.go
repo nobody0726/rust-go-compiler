@@ -48,10 +48,10 @@ func TestCmpGolden(t *testing.T) {
 	}
 }
 
-// testdata 里的每个 .go 都必须属于某一族（`type-dump-*.go` 或 `cmp-*.go`）。
+// testdata 里的每个 .go 都必须属于某一族（`type-dump-*.go` / `cmp-*.go` / `check-*.go`）。
 //
-// 两个 golden 测试各自只 glob 自己那一族 ⇒ 一个命名不合规矩的 fixture
-// **两边都不测**，却安安静静躺在那里。这条把它顶出来。
+// 各族 golden 测试只 glob 自己那一族 ⇒ 一个命名不合规矩的 fixture
+// **哪边都不测**，却安安静静躺在那里。这条把它顶出来。
 func TestTestdataNaming(t *testing.T) {
 	all, err := filepath.Glob("testdata/*.go")
 	if err != nil {
@@ -62,10 +62,10 @@ func TestTestdataNaming(t *testing.T) {
 	}
 	for _, fx := range all {
 		base := filepath.Base(fx)
-		if strings.HasPrefix(base, "type-dump-") || strings.HasPrefix(base, "cmp-") {
+		if strings.HasPrefix(base, "type-dump-") || strings.HasPrefix(base, "cmp-") || strings.HasPrefix(base, "check-") {
 			continue
 		}
-		t.Errorf("%s 不属于任何一族（要以 `type-dump-` 或 `cmp-` 开头），两个 golden 都不会跑到它", base)
+		t.Errorf("%s 不属于任何一族（要以 `type-dump-`、`cmp-` 或 `check-` 开头），对应的 golden 不会跑到它", base)
 	}
 }
 
