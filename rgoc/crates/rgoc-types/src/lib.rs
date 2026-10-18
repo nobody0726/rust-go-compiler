@@ -53,6 +53,7 @@ pub mod convertible;
 pub mod dump;
 pub mod identical;
 pub mod implements;
+pub mod infer;
 pub mod instantiate;
 pub mod methodset;
 pub mod object;
@@ -72,6 +73,9 @@ pub use convertible::convertible;
 pub use dump::{DumpError, dump_types, try_dump_types};
 pub use identical::{identical, identical_ignore_tags, unalias, underlying};
 pub use implements::implements;
+pub use infer::{
+    GenericArgSite, infer_for_call, infer_from_args, infer_from_assignment, rename_tparams,
+};
 pub use instantiate::instantiate;
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};

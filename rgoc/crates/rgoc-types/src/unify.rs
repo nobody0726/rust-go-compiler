@@ -174,7 +174,7 @@ impl<'a> Unifier<'a> {
 
     // ── 句柄机制（官方 join / setHandle / at / set）────────────────
 
-    fn set(&mut self, tp: TypeParamId, t: TypeId) {
+    pub(crate) fn set(&mut self, tp: TypeParamId, t: TypeId) {
         let h = self.handles[&tp];
         self.vals[h] = Some(t);
     }
@@ -742,7 +742,7 @@ fn iface_pair_seen(p: &[(InterfaceId, InterfaceId)], x: InterfaceId, y: Interfac
 ///
 /// 返回 `Ok(None)` ⇔ 官方里的「无具体类型 / 无共同本体 / 冲突」三态合一
 /// （调用面 `cx != nil` 只关心有与没有）。
-fn common_under(tt: &TypeTable, t: TypeId) -> Result<Option<TypeId>, DiagCode> {
+pub(crate) fn common_under(tt: &TypeTable, t: TypeId) -> Result<Option<TypeId>, DiagCode> {
     let t = unalias(tt, t);
     let Type::TypeParam(tp) = tt.type_of(t) else {
         // 非形参：视作单项集 ⇒ 本体（官方 77-78 行）

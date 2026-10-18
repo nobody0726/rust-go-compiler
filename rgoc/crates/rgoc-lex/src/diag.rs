@@ -193,6 +193,15 @@ pub enum DiagCode {
     /// 这里只承载**「目录在、但没有 `.go`」**这一种（触发者 `T-TY-85` 的反向用例）；
     /// 「roots 里根本没有这个路径」落 [`Self::TypUnsupportedImportForm`]。
     TypBrokenImport,
+    /// 类型实参**推断失败**（无法确定全部缺失的实参）—— 官方 `CannotInferTypeArgs`
+    ///
+    /// 官方 `go/types/infer.go:141-144` 的注释把口径钉死：用户所给实参的毛病
+    /// 也可能更该归 `InvalidTypeArg`，但**无法分辨** ⇒ 统一落这条更泛的码。
+    /// 本仓用法（M4/Task 14 的 `rgoc-types::infer` 三入口）：实参统一失败 /
+    /// 约束核心项失败 / 约束方法集统一失败 / 终检仍有未绑定或仍含形参 ⇒ 这条。
+    /// 与 `TypInvalidTypeArg` 的分工：**推断不出**（`cannot infer`）走这条；
+    /// **推断出了但不满足**（verify 面，`does not satisfy`）走那条。
+    TypCannotInferTypeArgs,
     /// 常量**除数为零**（`/` 与 `%`，整数与浮点都算）—— 官方 `DivByZero`
     ///
     /// 实测官方四条都报它：`1/0`、`1%0`、`1.0/0`、`1/0.0`（消息是
@@ -449,7 +458,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 69] = [
+    pub const ALL: [DiagCode; 70] = [
         DiagCode::ChkUnimplemented,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -488,6 +497,7 @@ impl DiagCode {
         DiagCode::SynUnexpectedToken,
         DiagCode::TypBlankPkgName,
         DiagCode::TypBrokenImport,
+        DiagCode::TypCannotInferTypeArgs,
         DiagCode::TypDivByZero,
         DiagCode::TypDuplicateDecl,
         DiagCode::TypDuplicateLabel,
@@ -562,6 +572,7 @@ impl DiagCode {
             DiagCode::SynUnexpectedToken => "SYN-UNEXPECTED-TOKEN",
             DiagCode::TypBlankPkgName => "TYP-BLANK-PKG-NAME",
             DiagCode::TypBrokenImport => "TYP-BROKEN-IMPORT",
+            DiagCode::TypCannotInferTypeArgs => "TYP-CANNOT-INFER-TYPE-ARGS",
             DiagCode::TypDivByZero => "TYP-DIV-BY-ZERO",
             DiagCode::TypDuplicateDecl => "TYP-DUPLICATE-DECL",
             DiagCode::TypDuplicateLabel => "TYP-DUPLICATE-LABEL",

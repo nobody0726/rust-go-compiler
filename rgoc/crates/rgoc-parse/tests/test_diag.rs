@@ -605,9 +605,11 @@ fn t_a_66_diagcode_总数已更新() {
     //   升级为类型集版、`U-M3-05` 解除）⇒ 共 67。
     // + M4/Task 12 新增 2 个（TypInvalidTypeArg / TypWrongTypeArgCount —— 实例化
     //   的约束与数量拒绝；官方 `InvalidTypeArg` / `WrongTypeArgCount`）⇒ 共 69。
+    // + M4/Task 14 新增 1 个（TypCannotInferTypeArgs —— 推断失败；官方
+    //   `CannotInferTypeArgs`）⇒ 共 70。
     assert_eq!(
         DiagCode::ALL.len(),
-        69,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）"
+        70,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）"
     );
 }
