@@ -10,7 +10,7 @@
 
 ## 状态
 - **M0–M3 四个里程碑全部完成**：M1 = T-L01..21（**L1–L7**，151 条 golden）；M2 = T-AP01..21（**A1–A8**，oracle 对撞 31/31、stdlib 6670 文件零错、深度上限 1000）；M3 = T-TY-01..38（**TY-1–TY-8**，对撞 dump 8 / cmp 2 / 语料 31 三条腿逐字节一致、7 条变异全红、`M3-manifest.json` 已填实并由 `rgoc-driver/tests/manifest_m3.rs` 与冻结文档对账）。workspace **1282 passed / 0 failed**
-- **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）尚未开工**：开工前读 `M3-manifest.json` 的 `open_gaps` + `unsupported`（`U-M3-05` 是 M4 **必须**解除的那条）与 `M3-tests.md` §6。若把某条 `U-M3-xx` 翻成「做」，**必须同步改 manifest 与 `M3-tests.md`**，否则 `manifest_m3.rs` 会红（设计意图）
+- **M4 已开工（2026-10-18）：设计初稿完成、待用户确认**。口径 = 用户裁定 **以 `docs/03-roadmap.md` §M4 全量为完成要求**（「静态检查闭环」九大项：表达式/语句检查、方法集/字段提升、接口实现/断言、内建签名、泛型实例化/推断、版本门控、main 约束、初始化依赖/循环、导出与多包可见性；`AGENTS.md` §7.1 三样是**最小子集**不是全部）。设计 = `docs/milestones/M4-design.md`（D-M4-1..15 / F1–F18 实测事实基线 / CH-1..9 门禁草案）；台账 = `.superpowers/sdd/M4-design/progress.md`（**改设计前先读它**）。开工前必读（`M3-manifest.json` 的 `open_gaps`+`unsupported`、`M3-tests.md` §6）已完成；`U-M3-05` 是 M4 必须解除的那条。若把某条 `U-M3-xx` 翻成「做」，**必须同步改 manifest 与 `M3-tests.md`**（修订入档），否则 `manifest_m3.rs` 会红（设计意图）
 - **M3 的执行台账**（历史用）：`.superpowers/sdd/M3-plan/progress.md`（**改代码前先读它**），门禁唯一入口 =
   `.superpowers/sdd/M3-plan/gates.sh`（容器内 `bash /work/.superpowers/sdd/M3-plan/gates.sh`）。
   三 crate = `rgoc-const` / `rgoc-types` / `rgoc-load` + `tools/types-oracle`。
