@@ -1175,7 +1175,10 @@ fn check_未实现期_稳定失败且可判读() {
         "有诊断 ⇒ 1（不是 0 的假通过，也不是 2 的用法错）"
     );
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("CHK-UNIMPLEMENTED"), "stderr 带稳定代号：{err}");
+    assert!(
+        err.contains("CHK-UNIMPLEMENTED"),
+        "stderr 带稳定代号：{err}"
+    );
     assert!(!err.contains("panicked"), "必须是显式诊断而非 panic：{err}");
 }
 

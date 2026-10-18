@@ -146,7 +146,10 @@ fn parse_allowlist(src: &str) -> Result<Vec<(String, String)>, String> {
             if l.contains(char::is_whitespace) {
                 return Err(format!("第 {} 行：分隔符必须是 TAB（空格不算）", i + 1));
             }
-            return Err(format!("第 {} 行：排除行缺理由（`<路径>\\t<理由>`）", i + 1));
+            return Err(format!(
+                "第 {} 行：排除行缺理由（`<路径>\\t<理由>`）",
+                i + 1
+            ));
         };
         out.push((p.trim().to_string(), r.trim().to_string()));
     }
@@ -183,7 +186,9 @@ fn check_split(cands: &[String], allowlist_src: &str, selected: &[String]) -> Re
     }
     for p in selected {
         if !cand_set.contains(p) {
-            return Err(format!("{p}：入选了，但它不是候选（三目录顶层 .go 口径漂了？）"));
+            return Err(format!(
+                "{p}：入选了，但它不是候选（三目录顶层 .go 口径漂了？）"
+            ));
         }
         if allowed_set.contains(p) {
             return Err(format!("{p}：既入选又排除"));
@@ -274,7 +279,11 @@ fn check_清单_两向集合相等且理由具体() {
     }
     assert_eq!(per_dir.get("check").copied(), Some(70), "check/ 顶层数变了");
     assert_eq!(per_dir.get("spec").copied(), Some(13), "spec/ 顶层数变了");
-    assert_eq!(per_dir.get("examples").copied(), Some(8), "examples/ 顶层数变了");
+    assert_eq!(
+        per_dir.get("examples").copied(),
+        Some(8),
+        "examples/ 顶层数变了"
+    );
 
     // ② 每行存在（语料被 sha256 锁死 ⇒ 不存在就是清单写错了，不许含糊过去）。
     let allowed = parse_allowlist(&allowlist).expect("排除清单可解析");
@@ -318,7 +327,12 @@ fn check_清单_合成反例逐条报错() {
     assert!(e.contains("既入选又排除"), "{e}");
 
     // ⑥ 入选清单未排序 / 重复
-    let e = check_split(&cands, ok_allow, &["check/a.go".into(), "check/a.go".into()]).unwrap_err();
+    let e = check_split(
+        &cands,
+        ok_allow,
+        &["check/a.go".into(), "check/a.go".into()],
+    )
+    .unwrap_err();
     assert!(e.contains("排序"), "{e}");
 
     // ⑦ 入选了非候选
