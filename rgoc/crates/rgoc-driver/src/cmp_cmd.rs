@@ -25,9 +25,11 @@
 //!
 //! # 判定与拒绝
 //!
-//! - `identical` ⇒ [`rgoc_types::identical`]（内部先 `unalias`）。`Err(code)` ⇒
-//!   **`reject`**：这是 `D-M3-13` 划出的边界（约束接口 / 类型参数 / 并集），
-//!   对撞时必须按白名单排除（`M3-tests.md` §6），**排除集本身也要被断言**。
+//! - `identical` ⇒ [`rgoc_types::identical`]（内部先 `unalias`）。M4/Task 10
+//!   起它**没有拒绝面**（`U-M3-05` 解除，`TypUnsupportedConstraintIdentity`
+//!   已移除）。`Err(code)` ⇒ **`reject`**：渲染面保留给后续 kind 的拒面
+//!   （现存的语言层边界如 `TYP-UNSUPPORTED-ASSIGNABILITY`）—— 对撞时按白名单
+//!   排除（`M3-tests.md` §6），**排除集本身也要被断言**（`collide_cmp.rs`）。
 //! - `representable` ⇒ [`rgoc_const::representable`]，取常量对象的**值**与目标的
 //!   基本类型（目标是具名类型时取其**本体**，官方判据就是 `Underlying()` 的
 //!   `*Basic`）。`Err(code)` ⇒ `false`（不可表示就是不可表示，**不是**拒绝）；
@@ -57,9 +59,10 @@ const SYN_NAME: &str = "<rgoc:cmp>";
 /// `//rgoc:cmp` 的 kind 不是 M3 支持的两个之一时的**稳定拒绝码**（`T-TY-82`）。
 ///
 /// 为什么是驱动层的码、而不是 [`rgoc_lex::DiagCode`]：它说的是「这个**请求**
-/// 我们不判」——没有官方对应代号，也不来自某个源码位置。它与 `T-TY-81` 的
-/// `TYP-UNSUPPORTED-CONSTRAINT-IDENTITY` 同理不同层：那条是**语言层**的能力边界
-/// （判同一性时撞上类型集），这条是**请求层**的能力边界（连问都没法问）。
+/// 我们不判」——没有官方对应代号，也不来自某个源码位置。它与语言层的能力边界
+/// （如 `TYP-UNSUPPORTED-ASSIGNABILITY`：可赋值性的类型参数面）同理不同层：
+/// 那条是**语言层**的能力边界（判可赋值性时撞上没做完的推理），这条是
+/// **请求层**的能力边界（连问都没法问）。
 ///
 /// 为什么「拼错的 kind」与「M3 不判的判定」共用一个码：语法上不可分
 /// （`assignable` / `implements` / `instance` 都只是没见过的名字）。kind 集合

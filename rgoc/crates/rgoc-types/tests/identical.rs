@@ -1,22 +1,17 @@
-//! `T-TY-21..28` + `T-TY-81`：同一性判定的验收（M3/Task 17+18）。
+//! `T-TY-21..28` + `T-TY-81`：同一性判定的验收（M3/Task 17+18；
+//! `T-TY-81` 的拒面由 M4/Task 10 改写为**判定面**，`U-M3-05` 解除）。
 //!
 //! 期望值来自 `go/types/predicates.go` 的 `identical` **逐条读出来的语义**
 //! （不是抄 oracle 输出）：每条测试的注释都写明对齐的是官方哪一条。
 //! `T-TY-92` 的 oracle 对撞由 `tools/types-oracle` 驱动（Task 31/34 接线）。
 
 use rgoc_const::{BasicId, BigInt, Const};
-use rgoc_lex::diag::DiagCode;
 use rgoc_types::table::Field;
 use rgoc_types::{ChanDir, IfaceTSet, Type, TypeId, TypeTable, identical, unalias};
 
-/// 判定并断言「判得出」（M3 支持面内）。
+/// 判定并断言「判得出」（M4/Task 10 起全部形态都判得出）。
 fn same(tt: &TypeTable, x: TypeId, y: TypeId) -> bool {
-    identical(tt, x, y).expect("M3 支持面内应判得出")
-}
-
-/// 判定并断言「显式拒绝」，返回拒绝码。
-fn refused(tt: &TypeTable, x: TypeId, y: TypeId) -> DiagCode {
-    identical(tt, x, y).expect_err("属于 D-M3-13 的边界，应显式拒绝")
+    identical(tt, x, y).expect("M4/Task 10 起同一性无拒面，应判得出")
 }
 
 /// 具名 + 非嵌入字段。
@@ -377,7 +372,10 @@ fn t_ty_29_实例化在_m3_退化为同一_id() {
 }
 
 #[test]
-fn t_ty_81_约束接口显式拒绝_与反向不报错() {
+fn t_ty_81_类型集版接口同一性_两侧都作答() {
+    // M3 的拒面（`U-M3-05`）由 M4/Task 10 解除：**两侧都作答**。判据逐条对齐
+    // 官方 `predicates.go` 的接口分支：
+    //   comparable 位 → 项集 `termlist.equal`（双向 `subsetOf`）→ 方法集（顺序无关）。
     let mut tt = TypeTable::new();
     let int = tt.add_basic(BasicId::Int);
     let string = tt.add_basic(BasicId::String);
@@ -386,60 +384,135 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
     let sig = tt.add_signature(None, empty, r_int, false);
     let sig_ty = tt.signature_type(sig);
 
-    // ① 含**项集**的接口（`interface{ ~int | ~string }`）⇒ 显式拒绝
+    // ① 项集：集合语义（含**置换序**相等），异项集不等。
     let u = tt.add_union(vec![(true, int), (true, string)]);
     let c1 = tt.add_interface(
         Vec::new(),
         Some(tt.union_type(u)),
         IfaceTSet::Terms(vec![(true, int), (true, string)]),
     );
-    let c1_ty = tt.interface_type(c1);
+    let c1b = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, int), (true, string)]),
+    );
+    let c1r = tt.add_interface(
+        Vec::new(),
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, string), (true, int)]), // 置换序
+    );
     let u2 = tt.add_union(vec![(true, int)]);
     let c2 = tt.add_interface(
         Vec::new(),
         Some(tt.union_type(u2)),
         IfaceTSet::Terms(vec![(true, int)]),
     );
-    let c2_ty = tt.interface_type(c2);
-    assert_eq!(
-        refused(&tt, c1_ty, c2_ty),
-        DiagCode::TypUnsupportedConstraintIdentity
-    );
-
-    // ② `comparable` 标记 ⇒ 同样拒绝（它也是类型集语义，`F8`）
-    //    —— 与**另一个**接口类型比（拿自己比会先命中 `x == y` 的短路，
-    //    那是「定义对自己恒等」，本来就对，不需要类型集推理）
-    let cmp = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
-    let cmp2 = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
     let plain0 = tt.add_interface(Vec::new(), None, IfaceTSet::All);
     assert_eq!(
-        refused(&tt, tt.interface_type(cmp), tt.interface_type(cmp2)),
-        DiagCode::TypUnsupportedConstraintIdentity
+        identical(&tt, tt.interface_type(c1), tt.interface_type(c1b)),
+        Ok(true)
     );
-    // `comparable` vs `interface{}`（**同形但语义不同**）⇒ 只能拒绝，不能瞎判
     assert_eq!(
-        refused(&tt, tt.interface_type(cmp), tt.interface_type(plain0)),
-        DiagCode::TypUnsupportedConstraintIdentity
+        identical(&tt, tt.interface_type(c1), tt.interface_type(c1r)),
+        Ok(true),
+        "置换序是同一集合（`termlist.equal` 不看列表形状）"
     );
-    // 而**同一条目**对自己 ⇒ 短路为真（不做类型集推理也能答）
+    assert_eq!(
+        identical(&tt, tt.interface_type(c1), tt.interface_type(c2)),
+        Ok(false),
+        "合成反例①：异项集 ⇒ 不等"
+    );
+    // 与 𝓤（`interface{}`）比：项面不同 ⇒ false（`[~int] ⊆ 𝓤` 真但反向假）
+    assert_eq!(
+        identical(&tt, tt.interface_type(c2), tt.interface_type(plain0)),
+        Ok(false)
+    );
+
+    // ② `comparable` 位：位相同 ⇒ 判对；与 `interface{}` **同形但语义不同** ⇒ false。
+    let cmp = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
+    let cmp2 = tt.add_interface(Vec::new(), None, IfaceTSet::Comparable);
+    assert_eq!(
+        identical(&tt, tt.interface_type(cmp), tt.interface_type(cmp2)),
+        Ok(true)
+    );
+    // 合成反例②：`comparable` vs `interface{}` —— 不变量 `!comparable || terms.isAll()`
+    // 下这就是 comparable 位差（官方 `xset.comparable != yset.comparable`）
+    assert_eq!(
+        identical(&tt, tt.interface_type(cmp), tt.interface_type(plain0)),
+        Ok(false)
+    );
+    // 同一条目短路（早退 `x == y`）
     assert_eq!(
         identical(&tt, tt.interface_type(cmp), tt.interface_type(cmp)),
         Ok(true)
     );
 
-    // ③ `union` / `typeparam` 直接拿来判 ⇒ 拒绝
+    // ③ `union` / `typeparam` 独立形态（官方 `case *Union` / `case *TypeParam`）：
+    //    - 并集比**项表相等**（集合语义）；
+    //    - 类型参数**只有同一条目**才真（官方注释：nothing to do）。
+    let u_r = tt.add_union(vec![(true, string), (true, int)]);
+    assert_eq!(
+        identical(&tt, tt.union_type(u), tt.union_type(u_r)),
+        Ok(true),
+        "并集置换序"
+    );
+    assert_eq!(
+        identical(&tt, tt.union_type(u2), tt.union_type(u)),
+        Ok(false)
+    );
     let tp = tt.add_type_param(0, tt.union_type(u2));
     let tp_ty = tt.type_param_type(tp);
+    let tp2 = tt.add_type_param(1, tt.union_type(u2));
+    let tp2_ty = tt.type_param_type(tp2);
     assert_eq!(
-        refused(&tt, tp_ty, tt.union_type(u2)),
-        DiagCode::TypUnsupportedConstraintIdentity
+        identical(&tt, tp_ty, tt.union_type(u2)),
+        Ok(false),
+        "类型参数 vs 并集：形态不同 ⇒ 不等"
     );
     assert_eq!(
-        refused(&tt, tt.union_type(u2), tt.union_type(u)),
-        DiagCode::TypUnsupportedConstraintIdentity
+        identical(&tt, tp_ty, tp2_ty),
+        Ok(false),
+        "不同条目 ⇒ 不等（哪怕约束同形）"
+    );
+    assert_eq!(identical(&tt, tp_ty, tp_ty), Ok(true), "同一条目短路");
+
+    // ④ 方法与项集**混合**：两面都参与判定。
+    let mx1 = tt.add_interface(
+        vec![("M".to_string(), sig_ty)],
+        Some(tt.union_type(u2)),
+        IfaceTSet::Terms(vec![(true, int)]),
+    );
+    let mx2 = tt.add_interface(
+        vec![("M".to_string(), sig_ty)],
+        Some(tt.union_type(u2)),
+        IfaceTSet::Terms(vec![(true, int)]),
+    );
+    let mx3 = tt.add_interface(
+        vec![("M".to_string(), sig_ty)],
+        Some(tt.union_type(u)),
+        IfaceTSet::Terms(vec![(true, int), (true, string)]),
+    );
+    let mx4 = tt.add_interface(
+        vec![("N".to_string(), sig_ty)],
+        Some(tt.union_type(u2)),
+        IfaceTSet::Terms(vec![(true, int)]),
+    );
+    assert_eq!(
+        identical(&tt, tt.interface_type(mx1), tt.interface_type(mx2)),
+        Ok(true)
+    );
+    assert_eq!(
+        identical(&tt, tt.interface_type(mx1), tt.interface_type(mx3)),
+        Ok(false),
+        "方法同、项集异 ⇒ 不等"
+    );
+    assert_eq!(
+        identical(&tt, tt.interface_type(mx1), tt.interface_type(mx4)),
+        Ok(false),
+        "项集同、方法名异 ⇒ 不等"
     );
 
-    // ④ **反向**（`T-TY-81` 要求成对）：普通**方法集**接口 ⇒ `Ok`，不报错
+    // ⑤ 反向（`T-TY-81` 要求成对）：纯**方法集**接口照旧判得出。
     let plain = tt.add_interface(vec![("M".to_string(), sig_ty)], None, IfaceTSet::All);
     let plain2 = tt.add_interface(vec![("M".to_string(), sig_ty)], None, IfaceTSet::All);
     assert_eq!(
@@ -453,11 +526,11 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
         Ok(false)
     );
 
-    // ⑤ universe 里的 `comparable`：**壳是 `named`**，落进拒绝侧的是它的**本体**
-    //    —— 把「表示里有位置」与「判定会拒绝」两端接上。
+    // ⑥ universe 里的 `comparable`：**壳是 `named`**，本体是 `Comparable` 语义。
+    //    M3 时「本体 vs any」是拒点；现在**判得出来**（comparable 位不同 ⇒ false）。
     //
     //    ⚠️ 别拿 `comparable` 直接和 `any` 比：壳不同（`named` vs `alias`）⇒
-    //    那就是「两个不同的类型」（`Ok(false)`），**走不到**类型集推理。
+    //    那就是「两个不同的类型」（`Ok(false)`），**走不到**类型集判定。
     //    官方表示同理（go1.27.1 实测 `Universe.Lookup("comparable").Type()`
     //    是 `*types.Named`，Task 33 对撞订正了此处口径）。
     let mut u_tt = TypeTable::new();
@@ -470,9 +543,9 @@ fn t_ty_81_约束接口显式拒绝_与反向不报错() {
     };
     let cmp_body = u_tt.named_underlying(*cmp_n);
     assert_eq!(
-        refused(&u_tt, cmp_body, any_obj),
-        DiagCode::TypUnsupportedConstraintIdentity,
-        "带 comparable 标记的**本体**必须落在拒绝侧"
+        identical(&u_tt, cmp_body, any_obj),
+        Ok(false),
+        "comparable 本体 vs any：位不同 ⇒ 判 false（不再是拒）"
     );
     // 壳对自己：定义恒等（与 ② 的短路同一条）
     assert_eq!(identical(&u_tt, cmp_obj, cmp_obj), Ok(true));

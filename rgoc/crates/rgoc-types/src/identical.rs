@@ -21,19 +21,31 @@
 //!    are not required to match」）。
 //! 6. **签名**：`variadic` + params + results；**接收者不参与**（官方也没比）。
 //!    M3 没有泛型签名 ⇒ 无类型参数替换那一段（`D-M3-2` 的划界）。
-//! 7. **接口**：只判**方法集版**（名 + 签名，**与顺序无关**）。
+//! 7. **接口**：比官方**完整形式**（`predicates.go:401`）：`comparable` 位 →
+//!    项集（`termlist.equal` = 双向 `subsetOf`；term 间是官方 `term.subsetOf`
+//!    里的 **plain** `Identical` —— `ignore_tags` **不穿透**到这一层）→
+//!    方法集（名 + 签名，**与顺序无关**）。
+//!    M4/Task 10 起不再有「只判方法集版」的窄面 —— `U-M3-05` 已解除。
+//! 8. **类型参数 / 并集**（官方独立形态）：类型参数只有**同一条目**才真
+//!    （官方 `case *TypeParam:` 注释：nothing to do）；并集比项表相等
+//!    （`computeUnionTypeSet(...).terms.equal(...)`，`predicates.go:383`）。
 //!
 //! # 为什么返回 `Result` 而不是 `bool`
 //!
-//! `D-M3-13`：**约束接口**（含项集 `~T`/并集，或 `comparable`）的同一性 M3
-//! **不判**（`U-M3-05`）。「不判」与「不等」是两回事：
+//! **M3 的历史**：`D-M3-13` 对**约束接口**（含项集 `~T`/并集，或 `comparable`）
+//! 的同一性 M3 **不判**（`U-M3-05`）。「不判」与「不等」是两回事：
 //!
 //! * 返回 `Ok(false)` 会在上游造出一条**假的不匹配诊断**；
 //! * 返回 `Ok(true)` 更糟 —— 把「没查」伪装成「查过且相等」。
 //!
-//! 所以走显式拒绝码 [`DiagCode::TypUnsupportedConstraintIdentity`]（`T-TY-81`）。
-//! 计划里写的 `-> bool` 表达不了 `T-TY-81` 要求的「稳定拒绝码」，这是**刻意的
-//! 接口偏离**（记在 `.superpowers/sdd/M3-plan/progress.md`）。
+//! 所以当时走显式拒绝码 `TypUnsupportedConstraintIdentity`（`T-TY-81`），
+//! 计划里写的 `-> bool` 表达不了那个「稳定拒绝码」——这是**刻意的接口偏离**
+//! （记在 `.superpowers/sdd/M3-plan/progress.md`）。
+//!
+//! **M4 的现状（Task 10）**：类型集版判定已落地（上一节 7/8 的口径），本函数
+//! **不再产出 `Err`** —— 拒点已删、码已从 `DiagCode` 移除。`Result` 形态**保留**：
+//! 调用面（`assignable` / `convertible` / `implements` / `methodset` / `typeset`）
+//! 全以 `?` 串接，没有真实的 `Err` 用例为一次签名 churn 买单。
 //!
 //! # 为什么不需要官方的 `ifacePair`
 //!
@@ -41,13 +53,16 @@
 //! 本层**结构上不可能**成环：`Type` 里唯一能自引用的入口是 `named`/`alias`，
 //! 而 `alias` 被 [`unalias`] 剥掉、`named` **按定义身份比**、**不下钻本体**
 //! ⇒ 接口只有在「两侧都是具名接口」时才不会被比到本体，匿名递归接口写不出来。
-//! （`dump` 侧曾踩过 oracle 的成环坑，见 `C7` §5.1；那条路是**非法程序**才有的。）
+//! 方法签名与类型集（[`crate::typeset::subset_of`]）两条递归路都走本函数，
+//! 同一条论证对它们同样成立。（`dump` 侧曾踩过 oracle 的成环坑，见 `C7` §5.1；
+//! 那条路是**非法程序**才有的。）
 
 use rgoc_const::Const;
 use rgoc_lex::diag::DiagCode;
 
 use crate::table::TypeTable;
 use crate::typ::{Type, TypeId};
+use crate::typeset::{IfaceTSet, subset_of, terms_equal};
 
 /// 剥掉**别名链**（官方 `types.Unalias`）。
 ///
@@ -115,14 +130,14 @@ pub fn underlying(tt: &TypeTable, t: TypeId) -> TypeId {
     }
 }
 
-/// 类型同一性（官方 `types.Identical` 在 M3 支持面上的子集）。
-///
-/// 返回 `Err(DiagCode::TypUnsupportedConstraintIdentity)` 的情形是 `D-M3-13`
-/// 划出的边界：**含项集或 `comparable` 的接口**、`typeparam`、`union`。
+/// 类型同一性（官方 `types.Identical` 的完整支持面；M4/Task 10 起含
+/// **类型集版 interface** —— `comparable` 位 + 项集 + 方法集，`U-M3-05` 解除）。
 ///
 /// # Errors
 ///
-/// 只在「形态属于 M3 明确不判的类型集」时出错；其余一律 `Ok(true/false)`。
+/// **不再有**：M3 的能力边界 `U-M3-05`（`TypUnsupportedConstraintIdentity`）
+/// 由 M4/Task 10 解除，该码已从 `DiagCode` 移除；`Result` 形态为调用面稳定保留
+/// （模块头「为什么返回 `Result`」）。
 pub fn identical(tt: &TypeTable, x: TypeId, y: TypeId) -> Result<bool, DiagCode> {
     identical_cmp(tt, x, y, false)
 }
@@ -256,13 +271,25 @@ fn identical_cmp(
             Type::Interface(iy) => {
                 let a = tt.interface_def(*ix);
                 let b = tt.interface_def(*iy);
-                // `D-M3-13` 的 M4 收窄（Task 8）：只拒**约束语义**的类型集
-                //（项集 / `comparable` / ∅ —— 即 `tset != All`）。语法面有 `terms`
-                // 但语义仍是 𝓤 的（`interface{ J }` 这类纯嵌入）**可以判** ——
-                // 官方 `identicalTypeSets` 对它们走「集合相等」面；Task 10 整体解除。
-                if !a.tset.is_all() || !b.tset.is_all() {
-                    return Err(DiagCode::TypUnsupportedConstraintIdentity);
+                // 判据逐条对齐官方（`predicates.go:401` 的 `case *Interface`）：
+                // ① `comparable` 位必须相同。官方的不变量是
+                //    `!comparable || terms.isAll()`（`typeset.go:32` 的 `_TypeSet`）
+                //    ⇒ 四态投影里 `Comparable` 就是「位为真」的**唯一**形态。
+                if matches!(a.tset, IfaceTSet::Comparable)
+                    != matches!(b.tset, IfaceTSet::Comparable)
+                {
+                    return Ok(false);
                 }
+                // ② 项集相等：官方 `termlist.equal` = **双向** `subsetOf`
+                //    （集合语义，不看列表形状 —— 置换序 / 未归一都判对）。
+                //    `subset_of` 是官方原函数；term 间用 **plain** `Identical`，
+                //    `ignore_tags` 不穿透（官方 `term.subsetOf` 就是这么写的）。
+                if !subset_of(tt, &a.tset, &b.tset)? || !subset_of(tt, &b.tset, &a.tset)? {
+                    return Ok(false);
+                }
+                // ③ 方法集（官方比 `xset.methods`，**已展开**；本层
+                //    `InterfaceDef::methods` 在装载期展开 + 按名去重（Task 8），
+                //    这里按名排序后逐位比；「Id 无包名前缀」是 v1 已知差异，Ruling 8-4）。
                 if a.methods.len() != b.methods.len() {
                     return Ok(false);
                 }
@@ -287,8 +314,22 @@ fn identical_cmp(
             }
             _ => Ok(false),
         },
-        // `D-M3-13`：类型参数与并集属于「类型集」世界，M3 只表示不判定
-        Type::TypeParam(_) | Type::Union(_) => Err(DiagCode::TypUnsupportedConstraintIdentity),
+        // 类型参数：官方 `case *TypeParam:` —— **nothing to do**（同一条目在开头的
+        // `x == y` 就短路了）⇒ 不同条目**不等**（哪怕约束同形）。
+        Type::TypeParam(_) => Ok(false),
+        // 并集：官方 `case *Union:` 比两个**类型集**的项表
+        //（`computeUnionTypeSet(...).terms.equal(...)`，集合语义双向包含）。
+        // v1 口径（Ruling 8-2）：`UnionDef.terms` 是 **as-written** 项，官方则
+        // 逐项展开（接口成员展开成它的项表；非法的 `~T ∧ under(T) ≠ T` 变 ∅）——
+        // 只在**非法 / 极端**形态上分叉，那些形态先由检查器诊断。
+        Type::Union(ux) => match tt.type_of(y) {
+            Type::Union(uy) => {
+                let a = tt.union_def(*ux);
+                let b = tt.union_def(*uy);
+                terms_equal(tt, &a.terms, &b.terms)
+            }
+            _ => Ok(false),
+        },
     }
 }
 

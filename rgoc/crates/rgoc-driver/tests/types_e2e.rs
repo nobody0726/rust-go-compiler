@@ -30,8 +30,9 @@
 //! # `T-TY-82` 的码为什么是驱动层的
 //!
 //! `TYP-CMP-KIND-UNSUPPORTED` **不是** [`rgoc_lex::DiagCode`]：它说的是「这个
-//! **请求**我们不判」，没有官方对应代号、也不来自某个源码位置 —— 与 `T-TY-81` 的
-//! `TYP-UNSUPPORTED-CONSTRAINT-IDENTITY`（那条**是**语言层的能力边界）同理不同层。
+//! **请求**我们不判」，没有官方对应代号、也不来自某个源码位置 —— 与**语言层**
+//! 的能力边界（如 `TYP-UNSUPPORTED-ASSIGNABILITY`：可赋值性的类型参数面，
+//! `U-M3-01..04`）同理不同层。
 //!
 //! `//rgoc:cmp` 的 kind 集合**与 oracle 侧共用且封闭**（都只认 `identical` /
 //! `representable`）：fixture 由两侧读**同一份**文件，输入语言分叉比「少支持一个
@@ -94,30 +95,50 @@ fn line_with<'a>(s: &'a str, needle: &str) -> &'a str {
 
 // ─────────────────────────── T-TY-81 ───────────────────────────
 
-/// `T-TY-81`：约束接口的同一性 —— 正向 `reject`，反向（方法集 / 具名）**不**拒。
+/// `T-TY-81`：约束接口的同一性 —— **两侧都作答**（`U-M3-05` 由 M4/Task 10
+/// 解除：拒面改写为解除断言 + 反向合成反例）。
 #[test]
-fn ty81_约束接口同一性_正向reject_反向不拒() {
+fn ty81_约束接口同一性_两侧都作答() {
     let d = tmp_root("ty81");
 
-    // 正向：两侧都是匿名接口 + 至少一侧含项集 ⇒ 判不了 ⇒ `reject`（带稳定码）。
+    // 正向：两侧都是匿名约束接口（含项集 / `comparable`）⇒ 按类型集判对，
+    // **没有** reject。三条覆盖：异项集 ⇒ false、置换序 ⇒ true、
+    // `comparable` vs 项集 ⇒ false（合成反例 ①/② + 一个正例）。
     let fwd = write(
         &d,
         "fwd.go",
-        "package p\n\n//rgoc:cmp identical interface{ ~int } => interface{ ~int | ~string }\n",
+        "package p\n\n\
+         //rgoc:cmp identical interface{ ~int } => interface{ ~int | ~string }\n\
+         //rgoc:cmp identical interface{ ~int | ~string } => interface{ ~string | ~int }\n\
+         //rgoc:cmp identical interface{ comparable } => interface{ comparable }\n\
+         //rgoc:cmp identical interface{ comparable } => interface{ ~int }\n",
     );
     let (code, out, err) = run(&["types", "--cmp", &fwd.to_string_lossy()]);
+    assert_eq!(code, 0, "解除后照常作答 ⇒ 退出码 0；stderr={err}");
+    assert!(err.is_empty(), "判定走 stdout，stderr 该空：{err}");
     assert_eq!(
-        code, 0,
-        "reject **不是**错误（D-M3-13）⇒ 退出码仍 0；stderr={err}"
+        line_with(&out, "3\tidentical"),
+        "3\tidentical\tfalse",
+        "合成反例①：异项集 ⇒ false：{out}"
     );
-    assert!(err.is_empty(), "reject 走 stdout，stderr 该空：{err}");
-    assert!(
-        line_with(&out, "identical").ends_with("\treject"),
-        "正向该 reject：{out}"
+    assert_eq!(
+        line_with(&out, "4\tidentical"),
+        "4\tidentical\ttrue",
+        "置换序相等（`termlist.equal` 不看列表形状）：{out}"
+    );
+    assert_eq!(
+        line_with(&out, "5\tidentical"),
+        "5\tidentical\ttrue",
+        "{out}"
+    );
+    assert_eq!(
+        line_with(&out, "6\tidentical"),
+        "6\tidentical\tfalse",
+        "合成反例②：`comparable` 位差 ⇒ false：{out}"
     );
     assert!(
-        out.contains("# reject 3 TYP-UNSUPPORTED-CONSTRAINT-IDENTITY"),
-        "reject 要带**稳定码**（物理行号 3）：{out}"
+        !out.contains("reject"),
+        "`U-M3-05` 已解除（M4/Task 10），此处不该再有 reject：{out}"
     );
 
     // 反向甲：纯方法集接口 ⇒ 判得了，**不**出现 reject。
@@ -140,10 +161,7 @@ fn ty81_约束接口同一性_正向reject_反向不拒() {
         "4\tidentical\tfalse",
         "{out}"
     );
-    assert!(
-        !out.contains("reject"),
-        "方法集接口**不该**被拒（拒面窄于 U-M3-05 的措辞，R-32-1）：{out}"
-    );
+    assert!(!out.contains("reject"), "方法集接口也不该被拒：{out}");
 
     // 反向乙：**具名**约束接口 ⇒ 按名字 / 同一份声明判，也不拒。
     let rev_b = write(

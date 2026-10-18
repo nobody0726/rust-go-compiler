@@ -41,9 +41,10 @@ fn 代号表恰为冻结总数且无重复() {
     // `InvalidConversion` / `TruncatedFloat` / `NumericOverflow` 一一对应**
     // （不拆细，否则「按代号比对」时与 oracle 的类别对不上）。
     //
-    // 第 8 个 `TypUnsupportedConstraintIdentity`（M3/Task 17）**刻意相反**：
-    // 官方判得了约束接口的同一性（它有完整类型集），M3 只表示不判定
-    // （`D-M3-13`）⇒ 这是我方**能力边界**的代号，没有官方对应物。
+    // 曾有的是 `TypUnsupportedConstraintIdentity`（M3/Task 17）**刻意相反**：
+    // 官方判得了约束接口的同一性（它有完整类型集），M3 只表示不判定 ——
+    // M4/Task 10 升级 `identical` 后**已移除**（`U-M3-05` 解除）；现存的
+    // TYP- 能力边界码是 `TypUnsupportedAssignability` / `TypUnsupportedImportForm`。
     // Task 22 再 +2：`TypInvalidRecursiveType`（官方 `InvalidRecursiveType`，
     // `go/types/validtype.go`）与 `TypNestingTooDeep`（**H 判据**，与
     // `SynNestingTooDeep` 同理由：官方有可增长栈，我们落在固定宿主栈上 ⇒ 自设上限）。
@@ -74,11 +75,13 @@ fn 代号表恰为冻结总数且无重复() {
     // M4/Task 2 再 +1（`ChkUnimplemented` —— `CHK-` 前缀首码，`rgoc-check` 骨架期的
     // 占位诊断；官方无对应物，**不**进任何 Go 侧镜像表）⇒ 共 **67**。
     // M4/Task 6 再 +1（`TypUnsupportedAssignability` —— 可赋值性窄面的稳定拒绝码；
-    // 官方无对应物）⇒ 共 **68**。
+    // 官方无对应物）⇒ 共 **68**；M4/Task 10 再 **-1**（移除
+    // `TypUnsupportedConstraintIdentity` —— `identical` 升级、`U-M3-05` 解除）
+    // ⇒ 共 **67**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 68);
+    assert_eq!(DiagCode::ALL.len(), 67);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

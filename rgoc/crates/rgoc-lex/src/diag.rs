@@ -375,39 +375,20 @@ pub enum DiagCode {
     TypUndeclaredName,
     /// 请求了**本阶段尚不可判**的可赋值性形态 —— **官方没有对应代号**
     ///
-    /// 触发者：`assignable`（M4/Task 6）的窄面（`Ruling 6-2`）—— 要**方法集**
-    /// （Task 7/8）或**类型集枚举**（Task 12）才能判的形态（非空接口的 implements 面、
-    /// 类型参数面），以及 `identical` 在其**前一步**拒掉后透传的边界
-    /// （`TypUnsupportedConstraintIdentity` 那条）。
+    /// 触发者：`assignable`（M4/Task 6）的窄面（`Ruling 6-2`）—— 要**类型集
+    /// 枚举**（Task 12/13）才能判的形态（类型参数面等）。`identical` 原本也在这条
+    /// 码的上游透传能力边界（`TypUnsupportedConstraintIdentity`），已由
+    /// M4/Task 10 整体解除（先例见下）。
     ///
-    /// 与 [`Self::TypUnsupportedConstraintIdentity`] 同一条纪律：**「不判」与「答错」
-    /// 是两件事** —— 静默给 `false` 会在上游造出「类型不匹配」的假诊断。
-    /// 「可证无方法」的常见形态（基本型 / 无名字面量 / 空接口值）**照答** false，
-    /// 不走这条码（见 `assignable.rs` 的 `provably_no_methods`）。
+    /// 纪律：**「不判」与「答错」是两件事** —— 静默给 `false` 会在上游造出
+    /// 「类型不匹配」的假诊断。「可证无方法」的常见形态（基本型 / 无名字面量 /
+    /// 空接口值）**照答** false，不走这条码（见 `assignable.rs` 的
+    /// `provably_no_methods`）。
     ///
-    /// 预期寿命：Task 8（`implements`）与 Task 12（类型集）落地后逐条消失；
-    /// 收尾时若已无触发者，随 Task 42 复核是否移除（先例：同族的
-    /// [`Self::TypUnsupportedConstraintIdentity`] 由 M4/Task 10 移除）。
+    /// 预期寿命：Task 12/13（类型集枚举）落地后逐条消失；收尾时若已无触发者，
+    /// 随 Task 42 复核是否移除（先例：同族的 `TypUnsupportedConstraintIdentity`
+    /// 由 M4/Task 10 移除 —— 解除过程见 `M4-design.md` §8.1 的处置表）。
     TypUnsupportedAssignability,
-    /// 请求了**约束接口的同一性**（含项集 `~T`/并集，或 `comparable`）——
-    /// **官方没有对应代号**：`go/types` 有完整类型集，判得了；M3 只表示不判定
-    /// （`D-M3-13`，`U-M3-05`）
-    ///
-    /// 它**刻意偏离**上面几条「与官方代号一一对应」的纪律：那几条是「官方也报，
-    /// 我们按同一类别报」；这条是「官方**不**报（它判得出来），我们明确说
-    /// 「M3 不判」」。混用官方 `Code` 会把「我方能力边界」伪装成「用户写错了」。
-    ///
-    /// 为什么不静默返回 `false`：**「不判」与「不等」是两件事**。静默 `false`
-    /// 会在上游造出一个「类型不匹配」的假诊断，把一条能力边界变成一条假报错
-    /// （`M3-tests.md` §4：`T-TY-81` 要的是**稳定拒绝码**）。
-    ///
-    /// 触发者：`T-TY-81`（`identical` 的约束接口路径）。
-    /// `T-TY-82`（`TYP-13/18/19/23..26` 的判定请求）在 M3 的**唯一入口**是
-    /// `//rgoc:cmp` 的 kind 名 ⇒ 由驱动层用 `TYP-CMP-KIND-UNSUPPORTED` 拒绝
-    /// （`rgoc-driver/src/cmp_cmd.rs` 的 `KIND_UNSUPPORTED`）—— 那条是「**请求**层」
-    /// 的边界，与本码（**语言层**边界）不同层。本码留给 M4：等真检查器开始问
-    /// 「约束接口同一性」时复用。参见 `M3-tests.md` §4 的 `T-TY-82` 行。
-    TypUnsupportedConstraintIdentity,
     /// 用了 **M3 不支持的 import 形式** —— **官方没有对应代号**
     ///
     /// 触发面（`D-M3-5`）：M3 的 import 只认「在调用方给的 roots 下能找到**源码目录**」
@@ -417,7 +398,7 @@ pub enum DiagCode {
     /// 为什么**不**复用 [`Self::TypBrokenImport`]：那条的语义是「我们要装的包装不上」，
     /// 而这里是「**我们不支持这种 import**」——`D-M3-11` 要的是**稳定拒绝码**，
     /// 混进官方的「用户写错了」族会把能力边界伪装成用户的错（与
-    /// [`Self::TypUnsupportedConstraintIdentity`] 同一个理由）。
+    /// `TypUnsupportedAssignability` 同一个理由）。
     /// ⚠️ 计划稿点名 `UnsupportedImportForm`，官方无此名 ⇒ 我方命名（`D-M3-11` 允许）。
     TypUnsupportedImportForm,
     /// 标签**声明了却没被用** —— 官方 `UnusedLabel`（消息 `label %s declared and not used`）
@@ -445,7 +426,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 68] = [
+    pub const ALL: [DiagCode; 67] = [
         DiagCode::ChkUnimplemented,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -510,7 +491,6 @@ impl DiagCode {
         DiagCode::TypUndeclaredLabel,
         DiagCode::TypUndeclaredName,
         DiagCode::TypUnsupportedAssignability,
-        DiagCode::TypUnsupportedConstraintIdentity,
         DiagCode::TypUnsupportedImportForm,
         DiagCode::TypUnusedLabel,
         DiagCode::TypWrongAssignCount,
@@ -583,7 +563,6 @@ impl DiagCode {
             DiagCode::TypUndeclaredLabel => "TYP-UNDECLARED-LABEL",
             DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
             DiagCode::TypUnsupportedAssignability => "TYP-UNSUPPORTED-ASSIGNABILITY",
-            DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
             DiagCode::TypUnsupportedImportForm => "TYP-UNSUPPORTED-IMPORT-FORM",
             DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",
             DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",

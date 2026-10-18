@@ -971,17 +971,18 @@ fn types_匿名环_退出码二且不崩() {
     );
 }
 
-/// `types --cmp`：出**规范行** `<行号>\t<kind>\t<result>`，`reject` 带理由行。
+/// `types --cmp`：出**规范行** `<行号>\t<kind>\t<result>`。
 ///
-/// 这里钉的四件事（`T-TY-92/93` 的输入侧 + `D-M3-13` 的拒绝侧）：
+/// 这里钉的四件事（`T-TY-92/93` 的输入侧 + M4/Task 10 的解除面）：
 ///
 /// 1. **行号是 fixture 里的物理行号**（不套 `//line`、不从合成文件抄）；
 /// 2. `identical` 判得出时给 `true`/`false`；
-/// 3. 约束接口（含项集）⇒ `reject`，且**理由行**写着稳定代号 —— 对撞要按
-///    白名单排除它，没有代号就没法断言「排除的是哪一条」；
+/// 3. **约束接口（含项集）也判得出来**（`U-M3-05` 由 M4/Task 10 解除）——
+///    输出里**没有** `# reject` 行；`reject` 渲染面保留给后续 kind 的拒面
+///    （`cmp_cmd.rs` 模块头；台账 Task 10 行）；
 /// 4. `representable` 给 `true`/`false`（**不是** reject：不可表示是判定结果）。
 #[test]
-fn types_cmp_出规范行_拒绝带代号() {
+fn types_cmp_出规范行_两侧都作答() {
     let src = "package p\n\
                \n\
                type Num interface{ ~int | ~float64 }\n\
@@ -1005,7 +1006,7 @@ fn types_cmp_出规范行_拒绝带代号() {
         .arg(&f)
         .output()
         .expect("起进程");
-    assert_eq!(out.status.code(), Some(0), "拒绝**不是**错误，退出码仍是 0");
+    assert_eq!(out.status.code(), Some(0), "判定不是错误，退出码仍是 0");
     let s = String::from_utf8_lossy(&out.stdout);
     assert!(s.starts_with("# source: rgoc\n"), "来源必须如实标注：{s}");
     let body: Vec<&str> = s.lines().filter(|l| !l.starts_with('#')).collect();
@@ -1022,7 +1023,7 @@ fn types_cmp_出规范行_拒绝带代号() {
                 line_of("//rgoc:cmp identical int Num")
             ),
             format!(
-                "{}\tidentical\treject",
+                "{}\tidentical\ttrue",
                 line_of("//rgoc:cmp identical interface{ ~int } => interface{ ~int }")
             ),
             format!(
@@ -1036,11 +1037,10 @@ fn types_cmp_出规范行_拒绝带代号() {
         ],
         "规范行（正文，剥掉 `#` 头）：{s}"
     );
-    let reject_line = format!(
-        "# reject {} TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
-        line_of("//rgoc:cmp identical interface{ ~int } => interface{ ~int }")
+    assert!(
+        !s.contains("# reject"),
+        "`U-M3-05` 解除后本 fixture 不该有拒绝（`# reject` 渲染面留给后续 kind）：{s}"
     );
-    assert!(s.contains(&reject_line), "拒绝必须写理由：{s}");
 }
 
 /// `--cmp` 的**样本违规**要响亮报错（退出码 2），不能伪装成 `reject`。

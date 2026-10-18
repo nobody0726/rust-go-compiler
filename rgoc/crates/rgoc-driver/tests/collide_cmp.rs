@@ -1,5 +1,5 @@
 //! identity / representable 对撞（`T-TY-92` / `T-TY-93`）—— `testdata/cmp-*.go`
-//! 的判定行必须与 oracle golden 一致，**除了** `D-M3-13` 划出的那一小块。
+//! 的判定行必须与 oracle golden 逐条一致，**除了**声明为排除的条目。
 //!
 //! # 与 `collide_dump.rs` 同一套传递
 //!
@@ -10,19 +10,15 @@
 //!
 //! 「两侧现跑」的形态在 `tools/types-oracle/run-collide.sh --cmp`（门禁里跑）。
 //!
-//! # 排除集不是「跑出来什么样就是什么样」
+//! # 排除集：声明式，且不是「跑出来什么样就是什么样」
 //!
-//! M3 对**一部分** identity 请求明确不判（`D-M3-13` / `U-M3-05`：两侧都是
-//! **匿名接口**、且至少一侧含项集或 `comparable` —— 那才非做类型集推理不可）。
-//! 这种条目 rgoc 输出 `result = reject` + `# reject <行> <代号>`。
-//!
-//! 难点在于**怎么断言这个集合**：如果只是「rgoc 拒了就跳过」，那实现
-//! 悄悄多拒几条也没人管 —— 排除集会变成一块**可以随意生长的遮羞布**。
-//! 所以把排除集写成**样本旁边的一句承诺**：fixture 里每条预期被拒的指令
-//! **前面一行**写
+//! 判定面原则上**不应该**出现 `reject`（oracle 侧永远给 true/false）；
+//! `reject` 是 **rgoc 能力边界**的显式出口（`D-M3-13` 起的纪律：「不判」
+//! 与「答错」是两件事）。若某个 kind 暂时判不了某形态，fixture 里必须
+//! **当场声明**：每条预期被拒的指令**前面一行**写
 //!
 //! ```go
-//! // rgoc:expect-reject U-M3-05
+//! // rgoc:expect-reject TYP-UNSUPPORTED-ASSIGNABILITY
 //! //rgoc:cmp identical interface{ ~int } => interface{ ~int }
 //! ```
 //!
@@ -30,7 +26,14 @@
 //!
 //! - 标记了却没 reject（说明实现突然判得出了，或标记写错了）⇒ 失败；
 //! - reject 了却没标记（说明排除集**长出了**没申报的一条）⇒ 失败；
-//! - 代号必须正是 `TYP-UNSUPPORTED-CONSTRAINT-IDENTITY`（`U-M3-05` 的实现侧）。
+//! - 代号必须与标记里写的**逐字一致**（说不出「拒绝的是哪一条」不算数）。
+//!
+//! **历史与现状**：M3 时 `identical` 对「两侧都是匿名约束接口、且至少一侧含
+//! 项集或 `comparable`」显式拒绝（`U-M3-05`，当时标记绑死一个代号
+//! `TYP-UNSUPPORTED-CONSTRAINT-IDENTITY`）；M4/Task 10 升级 `identical` 后
+//! 该拒面**解除**（`cmp-basic.go` 的三条标记同批拆除），标记语法顺势改为
+//! **自带期望代号**（不再绑死某一个码）。机制保留：后续 kind 的拒面
+//! （`rgoc check` 接线的判定式）复用它。
 //!
 //! 另外钉一条**不变量**：`representable` **永远**不出 `reject`。非基本类型的目标
 //! 是**样本违规 ⇒ 响亮报错**（退出码 2），不是「拒绝」——`rgoc types --cmp`
@@ -120,7 +123,7 @@ fn parse_rejects(text: &str) -> Result<BTreeMap<u32, String>, String> {
     Ok(m)
 }
 
-/// 读 fixture 里的 `// rgoc:expect-reject <单元>` 标记（排除集的**声明**）。
+/// 读 fixture 里的 `// rgoc:expect-reject <代号>` 标记（排除集的**声明**）。
 ///
 /// 标记的**下一非空行**必须是一条 `//rgoc:cmp` 指令 —— 这条形状约束是故意的：
 /// 标记写错位置（例如后面跟着普通代码）会当场报错，而不是静静地什么也没标记。
@@ -128,11 +131,14 @@ fn declared_rejects(text: &str) -> Result<BTreeMap<u32, String>, String> {
     let lines: Vec<&str> = text.lines().collect();
     let mut m = BTreeMap::new();
     for (i, raw) in lines.iter().enumerate() {
-        let Some(unit) = raw.trim().strip_prefix("// rgoc:expect-reject ") else {
+        let Some(code) = raw.trim().strip_prefix("// rgoc:expect-reject ") else {
             continue;
         };
-        if unit.trim().is_empty() {
-            return Err(format!("第 {} 行的标记没写单元名（如 `U-M3-05`）", i + 1));
+        if code.trim().is_empty() {
+            return Err(format!(
+                "第 {} 行的标记没写期望代号（如 `TYP-UNSUPPORTED-ASSIGNABILITY`）",
+                i + 1
+            ));
         }
         let mut j = i + 1;
         while j < lines.len() && lines[j].trim().is_empty() {
@@ -149,7 +155,7 @@ fn declared_rejects(text: &str) -> Result<BTreeMap<u32, String>, String> {
                 next
             ));
         }
-        m.insert((j + 1) as u32, unit.trim().to_string());
+        m.insert((j + 1) as u32, code.trim().to_string());
     }
     Ok(m)
 }
@@ -230,18 +236,23 @@ fn check(fixture_text: &str, want: &str, rgoc_out: &str) -> Result<String, Strin
             actual.keys().collect::<Vec<_>>()
         ));
     }
-    let want_code = rgoc_lex::DiagCode::TypUnsupportedConstraintIdentity.as_str();
-    for (line, unit) in &declared {
+    for (line, want_code) in &declared {
         let code = &actual[line];
         if code != want_code {
             return Err(format!(
-                "第 {line} 行：reject 的理由是 {code:?}，但 `{unit}` 对应的应当是 {want_code:?}"
+                "第 {line} 行：reject 的理由是 {code:?}，但标记声明的应当是 {want_code:?}"
             ));
         }
     }
 
+    let codes: Vec<&str> = declared.values().map(String::as_str).collect();
+    let codes = if codes.is_empty() {
+        "-".to_string()
+    } else {
+        codes.join(", ")
+    };
     Ok(format!(
-        "{} 条（排除 {} 条，全部 {want_code}）",
+        "{} 条（排除 {} 条；代号：{codes}）",
         golden.len(),
         excluded.len()
     ))
@@ -315,11 +326,16 @@ fn cmp_对撞_全部_cmp_fixture() {
 
 /// 排除集机制本身的四种情形（**合成输入**，不用 fixture —— 这样它永远不会
 /// 因为样本变动而失效，也不会因为样本恰好没触发某条而静默失去覆盖）。
+///
+/// 代号用 `TYP-UNSUPPORTED-ASSIGNABILITY`（现存的真实代号；机制本身与具体
+/// 代号无关 —— 它只做「声明 == 实际」的逐字比较，这正是本条要证明的）。
 #[test]
 fn 排除集机制_四种情形() {
-    let code = rgoc_lex::DiagCode::TypUnsupportedConstraintIdentity.as_str();
-    let marked = "package p\n\n// rgoc:expect-reject U-M3-05\n\
-                  //rgoc:cmp identical interface{ ~int } => interface{ ~int }\n";
+    let code = rgoc_lex::DiagCode::TypUnsupportedAssignability.as_str();
+    let marked = format!(
+        "package p\n\n// rgoc:expect-reject {code}\n\
+         //rgoc:cmp identical interface{{ ~int }} => interface{{ ~int }}\n"
+    );
     let unmarked = "package p\n\n\
                     //rgoc:cmp identical interface{ ~int } => interface{ ~int }\n";
     // 合成 fixture 的行号：1=package、2=空行、3=标记、4=指令 ⇒ 判定的是第 4 行。
@@ -327,7 +343,7 @@ fn 排除集机制_四种情形() {
 
     // ① 标记 + reject + 代号对 ⇒ 过
     let ok = format!("4\tidentical\treject\n# reject 4 {code}\n");
-    let s = check(marked, want, &ok).expect("标记与实现一致时必须通过");
+    let s = check(&marked, want, &ok).expect("标记与实现一致时必须通过");
     assert!(s.contains("排除 1 条"), "{s}");
 
     // ② reject 了但**没标记** ⇒ 排除集不能偷偷生长
@@ -335,20 +351,20 @@ fn 排除集机制_四种情形() {
     assert!(e.contains("排除集与声明的集合不同"), "{e}");
 
     // ③ 标记了但**没 reject**（rgoc 给出了 true）⇒ 标记成了空头支票
-    let e = check(marked, want, "4\tidentical\ttrue\n").expect_err("标记却没 reject 必须报错");
+    let e = check(&marked, want, "4\tidentical\ttrue\n").expect_err("标记却没 reject 必须报错");
     assert!(e.contains("排除集与声明的集合不同"), "{e}");
 
-    // ④ 一致但**代号不对** ⇒ 说不出「拒绝的是哪一条」
+    // ④ 一致但**代号不对**（与标记所写不同）⇒ 说不出「拒绝的是哪一条」
     let e = check(
-        marked,
+        &marked,
         want,
         "4\tidentical\treject\n# reject 4 SOME-OTHER-CODE\n",
     )
     .expect_err("代号不对必须报错");
-    assert!(e.contains("对应的应当是"), "{e}");
+    assert!(e.contains("标记声明的应当是"), "{e}");
 
     // ⑤ 普通的**不一致**（既不是 reject 也不是相等）⇒ 报「不是声明的排除」
-    let e = check(marked, want, "4\tidentical\tfalse\n").expect_err("不一致必须报错");
+    let e = check(&marked, want, "4\tidentical\tfalse\n").expect_err("不一致必须报错");
     assert!(e.contains("**不是**声明的排除"), "{e}");
 
     // ⑥ `representable` 出 reject ⇒ 违反「边界只在 identity」
@@ -365,7 +381,7 @@ fn 排除集机制_四种情形() {
 /// 标记写错位置要**当场报错**（不然后面就是「静静地什么也没标记」）。
 #[test]
 fn 标记位置错_当场报错() {
-    let fx = "package p\n\n// rgoc:expect-reject U-M3-05\nvar x int\n";
+    let fx = "package p\n\n// rgoc:expect-reject TYP-UNSUPPORTED-ASSIGNABILITY\nvar x int\n";
     let e = declared_rejects(fx).expect_err("标记后面不是指令 ⇒ 必须报错");
     assert!(e.contains("不是 `//rgoc:cmp` 指令"), "{e}");
 }

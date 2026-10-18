@@ -579,7 +579,8 @@ fn t_a_66_diagcode_总数已更新() {
     //   TypInvalidShiftCount / TypInvalidShiftOperand / TypNumericOverflow /
     //   TypTruncatedFloat）
     // + M3/Task 17 新增 1 个（TypUnsupportedConstraintIdentity —— 这条**没有**
-    //   官方对应物：官方判得了约束接口同一性，M3 形似显式拒绝，见 D-M3-13）
+    //   官方对应物：官方判得了约束接口同一性，M3 形似显式拒绝，见 D-M3-13；
+    //   该码由 M4/Task 10 升级 `identical` 后**移除** —— 见本函数末尾的净额）
     // + M3/Task 22 新增 2 个（TypInvalidRecursiveType 对官方 `InvalidRecursiveType`；
     //   TypNestingTooDeep 是 **H 判据**，与 SynNestingTooDeep 同理）
     // + M3/Task 21 新增 3 个（版本门控：FeatureRequiresGoVersion 对官方
@@ -600,9 +601,11 @@ fn t_a_66_diagcode_总数已更新() {
     //   骨架期的占位诊断；官方无对应物）⇒ 共 67。
     // + M4/Task 6 新增 1 个（TypUnsupportedAssignability —— 可赋值性窄面的稳定
     //   拒绝码；官方无对应物）⇒ 共 68。
+    // + M4/Task 10 **移除** 1 个（TypUnsupportedConstraintIdentity —— `identical`
+    //   升级为类型集版、`U-M3-05` 解除）⇒ 共 67。
     assert_eq!(
         DiagCode::ALL.len(),
-        68,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 2 个（CHK- 与 TYP- 各 1）"
+        67,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 2 个（CHK- 与 TYP- 各 1）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）"
     );
 }

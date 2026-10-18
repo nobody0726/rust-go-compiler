@@ -413,24 +413,17 @@ fn t_ck_11_类型参数_边界与拒绝() {
     let t2 = tt.type_param_type(t2id);
     // 同一条目 ⇒ 规则 1（官方的「同一对象」）
     yes(&tt, t1, t1);
-    // 类型参数出现在**左侧**（除同一条目）：`identical` 的 M3 边界先拒
-    //（`U-M3-05`；Task 10 升级 `identical` 后改判 —— 届时本组断言要同步改写）
-    assert_eq!(
-        refused(&tt, t1, any),
-        DiagCode::TypUnsupportedConstraintIdentity
-    );
-    assert_eq!(
-        refused(&tt, t1, mi),
-        DiagCode::TypUnsupportedConstraintIdentity
-    );
+    // 类型参数出现在**左侧**：`identical` 升级后（M4/Task 10）不再拒 ——
+    // `t1 → any` 走官方 implements 快路径（空接口恒真 ⇒ **真**）；其余三例
+    // 落入本层的类型参数面（官方按 specific type 递归 / 收尾判假，我们要
+    // 类型集枚举 ⇒ 仍显式拒绝，Task 12/13 收编）。
+    yes(&tt, t1, any);
+    assert_eq!(refused(&tt, t1, mi), DiagCode::TypUnsupportedAssignability);
     assert_eq!(
         refused(&tt, t1, int_),
-        DiagCode::TypUnsupportedConstraintIdentity
+        DiagCode::TypUnsupportedAssignability
     );
-    assert_eq!(
-        refused(&tt, t1, t2),
-        DiagCode::TypUnsupportedConstraintIdentity
-    );
+    assert_eq!(refused(&tt, t1, t2), DiagCode::TypUnsupportedAssignability);
     // 类型参数出现在**右侧**：`identical` 给 Ok(false)（x 是具体形态），
     // 随后落入本任务的类型参数面（官方按「每个 specific type」递归 ⇒ 要类型集枚举）
     assert_eq!(

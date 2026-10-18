@@ -15,22 +15,17 @@
 //!
 //! # 窄面（`Ruling 6-2` 的 M4 收窄）
 //!
-//! 需要**类型集枚举**（Task 10/12）才能判的形态**显式拒绝**
+//! 需要**类型集枚举**（Task 12/13）才能判的形态**显式拒绝**
 //! `Err(DiagCode::TypUnsupportedAssignability)`，绝不猜答案：
 //!
 //! | 形态 | 现行为 | 谁翻成判定 |
 //! |---|---|---|
-//! | 非空接口作 `T` | **判定**（Task 8：`implements`） | —（本层透传其 `Err` 边界） |
-//! | `V` 为类型参数（除 `V == T` 同一条目） | 拒绝\* | Task 10（`identical` 升级）→ Task 12 |
-//! | `T` 为类型参数（除已被前面规则判出的面） | 拒绝 | Task 12（类型集枚举） |
-//! | 含项集 / `comparable` 的接口参与 `identical` | 拒绝\*\* | Task 10 |
+//! | 非空接口作 `T` | **判定**（Task 8：`implements`） | — |
+//! | `V` 为类型参数（除 `V == T` 同一条目） | 部分判定（Task 10：空接口面走 `implements` 快路径 ⇒ 真）；其余拒绝 | Task 12/13（类型集枚举） |
+//! | `T` 为类型参数（除已被前面规则判出的面） | 拒绝 | Task 12/13（类型集枚举） |
+//! | 含项集 / `comparable` 的接口参与 `identical` | **判定**（Task 10 解除 `U-M3-05`） | —（已收编） |
 //!
-//! \* `V` 为类型参数时，规则 ① 的 `identical` 会先在它的 M3 边界上拒
-//! （`TypUnsupportedConstraintIdentity`，`U-M3-05`）——本层透传该码。
-//! \*\* 同上：`identical` 的拒点先于本层的一切窄面。
-//!
-//! 非空接口面（Task 8 起）：`implements(tt, v, t, false)` 直接给答案；
-//! 只有方法签名 / 严格可比触到 M3 遗留约束面时透传其能力边界码。
+//! 非空接口面（Task 8 起）：`implements(tt, v, t, false)` 直接给答案。
 //! `V` 是类型参数且 `implements` 假 ⇒ 官方继续走类型参数面（Task 12/13）⇒ 本层拒绝。
 //!
 //! # invalid 面
@@ -52,13 +47,12 @@ use crate::typ::{ChanDir, Type, TypeId};
 /// 可赋值性（官方 `assignableTo` 的静态面）。
 ///
 /// * `Ok(true)` / `Ok(false)` —— 判得出；
-/// * `Err(DiagCode::TypUnsupportedAssignability)` —— Task 6 窄面（见模块文档）；
-/// * `Err(DiagCode::TypUnsupportedConstraintIdentity)` —— `identical` 的 M3 边界
-///   在规则 ① 处透传（`U-M3-05`；Task 10 解除）。
+/// * `Err(DiagCode::TypUnsupportedAssignability)` —— 类型参数面窄面（见模块文档；
+///   `identical` 的 M3 边界 `U-M3-05` 已由 M4/Task 10 解除，不再有第二条码）。
 ///
 /// # Errors
 ///
-/// 只在「需要方法集 / 类型集枚举」的形态上出错；其余一律 `Ok`。
+/// 只在「需要类型集枚举」的形态上出错；其余一律 `Ok`。
 pub fn assignable(tt: &TypeTable, v: TypeId, tgt: TypeId) -> Result<bool, DiagCode> {
     // 「避免连锁错误」的类型面：`!isValid(T)`（官方在 unalias 之后比较 Invalid 单例）。
     let t = unalias(tt, tgt);
@@ -67,7 +61,7 @@ pub fn assignable(tt: &TypeTable, v: TypeId, tgt: TypeId) -> Result<bool, DiagCo
     }
     let v = unalias(tt, v);
 
-    // ① V is identical to T（同一条目直接命中，绕过 identical 的类型参数边界）。
+    // ① V is identical to T（同一条目直接命中早退）。
     if v == t || identical(tt, v, t)? {
         return Ok(true);
     }

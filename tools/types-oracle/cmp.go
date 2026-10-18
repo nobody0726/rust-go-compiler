@@ -45,9 +45,10 @@
 //
 // # oracle **不拒绝**
 //
-// M3 的「显式拒绝」（含项集 / `comparable` 的约束接口，`U-M3-05`）是 **rgoc 侧**
-// 的边界：官方 `go/types` 判得出，所以这边一律 true/false。rgoc 输出的 `reject`
-// 条目在对撞里**按白名单排除**（`M3-tests.md` §6），排除集本身也要被断言。
+// 语言层的「显式拒绝」（`U-M3-05` 已由 M4/Task 10 解除；现存面如可赋值性的
+// 类型参数边界）是 **rgoc 侧**的能力边界：官方 `go/types` 判得出，所以这边
+// 一律 true/false。rgoc 输出的 `reject` 条目在对撞里**按白名单排除**
+//（`M3-tests.md` §6），排除集本身也要被断言。
 package main
 
 import (

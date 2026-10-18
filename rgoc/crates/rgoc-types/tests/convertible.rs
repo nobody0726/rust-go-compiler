@@ -15,11 +15,12 @@
 //!    （Task 22）按文件版本另行门控（与 `Ruling 8-3` 的 comparable 门同款）；
 //! 2. **第 1 条（可赋值）的 `Err` 吞掉继续**：官方此步只是快路径；类型参数
 //!    形态的正确性由第 13 条**逐项展开**独立给出（官方 `Vp.is`/`Tp.is`），
-//!    所以「答不出可赋值」不等于「答不出可转换」。只有第 3/4/11 条的
-//!    `identical` 边界（v1 对非 All 类型集拒）才会**透传** `Err`。
+//!    所以「答不出可赋值」不等于「答不出可转换」。**M4/Task 10 后**：
+//!    `identical` 完整作答（`U-M3-05` 解除）⇒ 第 3/4/11 条不再有可透传的界；
+//!    本函数剩下的 `Err` 来源只有第 1 条**被吞掉**的 `assignable` 边界
+//!    （`TypUnsupportedAssignability`，不外泄）。`Result` 形态保留（调用面稳定）。
 
 use rgoc_const::BasicId;
-use rgoc_lex::diag::DiagCode;
 use rgoc_types::table::Field;
 use rgoc_types::{
     ChanDir, IfaceTSet, TypeId, TypeTable, convertible, identical, identical_ignore_tags,
@@ -332,17 +333,16 @@ fn t_ck_33_类型参数面_单项展开() {
 }
 
 #[test]
-fn t_ck_33_v1能力边界_接口类型集面() {
+fn t_ck_33_接口类型集面_按集合判对() {
+    // M4/Task 10（`identical` 升级）前：v1 对「两侧任一类型集 != 𝓤」的接口拒判
+    //（`U-M3-05`）⇒ 可转换性第 3 条透传 `Err`。升级后：同集合 ⇒
+    // `identical_ignore_tags` 真（第 3 条）⇒ 可转换；异集合 ⇒ 判 false。
     let mut tt = TypeTable::new();
     let int_ = basic(&mut tt, BasicId::Int);
     let i1 = iface_tset(&mut tt, IfaceTSet::Terms(vec![(true, int_)]));
     let i2 = iface_tset(&mut tt, IfaceTSet::Terms(vec![(true, int_)]));
-
-    // v1：`identical` 对「两侧任一类型集 != 𝓤」的接口**拒判**（`U-M3-05`），
-    // 第 3 条透传 ⇒ 可转换性也跟拒。Task 10 升级 `identical` 后此断言
-    // 将翻成 `Ok(true)`（同集合 ⇒ 官方 `IdenticalIgnoreTags` 真 ⇒ 可赋值 ⇒ 可转换）。
-    assert_eq!(
-        convertible(&tt, i1, i2),
-        Err(DiagCode::TypUnsupportedConstraintIdentity)
-    );
+    yes(&tt, i1, i2);
+    let float_ = basic(&mut tt, BasicId::Float64);
+    let i3 = iface_tset(&mut tt, IfaceTSet::Terms(vec![(true, float_)]));
+    no(&tt, i1, i3);
 }

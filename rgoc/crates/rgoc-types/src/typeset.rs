@@ -133,23 +133,47 @@ pub fn subset_of(tt: &TypeTable, x: &IfaceTSet, y: &IfaceTSet) -> Result<bool, D
         (Empty, Empty) => Ok(true),
         (Empty, Terms(_)) => Ok(true),
         (Terms(_), Empty) => Ok(false),
-        (Terms(xs), Terms(ys)) => {
-            // 每个 x 都必须被 ys 里某个 y 包含（官方 `supersetOf`）
-            for x in xs {
-                let mut ok = false;
-                for y in ys {
-                    if term_subset(tt, x, y)? {
-                        ok = true;
-                        break;
-                    }
-                }
-                if !ok {
-                    return Ok(false);
-                }
+        (Terms(xs), Terms(ys)) => terms_subset(tt, xs, ys),
+    }
+}
+
+/// 官方 `termlist.subsetOf`（`termlist.go:152`）的**裸项表**形态：
+/// `yl.isEmpty() ⇒ xl.isEmpty()`，否则 `xl` 每项都要被 `yl` 里某项包含
+///（两个空表分支的语义与空循环的自然结果一致，故不再特判）。
+fn terms_subset(
+    tt: &TypeTable,
+    x: &[(bool, TypeId)],
+    y: &[(bool, TypeId)],
+) -> Result<bool, DiagCode> {
+    for x in x {
+        let mut ok = false;
+        for y in y {
+            if term_subset(tt, x, y)? {
+                ok = true;
+                break;
             }
-            Ok(true)
+        }
+        if !ok {
+            return Ok(false);
         }
     }
+    Ok(true)
+}
+
+/// 官方 `termlist.equal`（`termlist.go:126`）：双向 `subsetOf`。
+///
+/// 消费点：`identical` 的 `union` 面（官方
+/// `computeUnionTypeSet(...).terms.equal(...)`，`predicates.go:383`）。
+///
+/// # Errors
+///
+/// 项间 `identical` 透传能力边界码（M4/Task 10 后不再可达）。
+pub(crate) fn terms_equal(
+    tt: &TypeTable,
+    x: &[(bool, TypeId)],
+    y: &[(bool, TypeId)],
+) -> Result<bool, DiagCode> {
+    Ok(terms_subset(tt, x, y)? && terms_subset(tt, y, x)?)
 }
 
 /// 官方 `termlist.includes`（`termlist.go:100`）：`t ∈ x`。

@@ -30,19 +30,21 @@
 //!   检查器（Task 22）按文件版本另行门控。与 `Ruling 8-3` 的 `comparable`
 //!   门同款。
 //! * **第 1 条的 `Err` 吞掉继续**：`assignable` 对类型参数形态会回能力边界
-//!   （`TypUnsupportedAssignability` / `TypUnsupportedConstraintIdentity`，
-//!   Task 10/12 收窄）。官方此步只是**快路径**；类型参数形态的正确性由第 13
-//!   条**逐项展开**独立给出。论证：「答不出可赋值」不蕴含「答不出可转换」——
-//!   `assignable` 的 `Err` 只出现在含类型参数的分支（其规则 ②④⑤⑦），而那些
-//!   形态**必然**落进第 13 条的三支之一并给出结论；第 13 条内部的递归若再
-//!   答不出，会**透传 `Err`**（响亮，不静默）。所以吞掉第 1 条的 `Err` 不会
-//!   让「官方为真」的答案落成 `Ok(false)`。
+//!   （`TypUnsupportedAssignability`，Task 12/13 收窄 —— 同族的
+//!   `TypUnsupportedConstraintIdentity` 已由 M4/Task 10 移除）。官方此步只是
+//!   **快路径**；类型参数形态的正确性由第 13 条**逐项展开**独立给出。论证：
+//!   「答不出可赋值」不蕴含「答不出可转换」——`assignable` 的 `Err` 只出现在
+//!   含类型参数的分支（其规则 ②④⑤⑦），而那些形态**必然**落进第 13 条的
+//!   三支之一并给出结论；第 13 条内部的递归若再答不出，会**透传 `Err`**
+//!   （响亮，不静默）。所以吞掉第 1 条的 `Err` 不会让「官方为真」的答案
+//!   落成 `Ok(false)`。
 //!
 //! # `Err` 透传的点
 //!
-//! 第 3/4/11 条的 `identical` / `identical_ignore_tags` 形态边界（v1 对
-//! 非 `All` 类型集的接口、裸类型参数拒，`U-M3-05`）会透传；Task 10 升级
-//! `identical` 后自然收窄。
+//! **M4/Task 10 后没有透传点**：第 3/4/11 条的 `identical` /
+//! `identical_ignore_tags` 完整作答（`U-M3-05` 解除），第 1 条被吞掉的
+//! `assignable` 边界也**不外泄** ⇒ 本函数不再产出 `Err`。`Result` 形态保留
+//! （调用面稳定；与 `identical` 同一处置）。
 
 use rgoc_const::BasicId;
 use rgoc_lex::diag::DiagCode;
