@@ -74,6 +74,45 @@ pub fn unalias(tt: &TypeTable, t: TypeId) -> TypeId {
     cur
 }
 
+/// 剥到**底层类型**（官方 `types.Type.Underlying`）。
+///
+/// * `named` 沿 [`TypeTable::named_underlying`] 逐层剥 —— 构造协议存的是**规约过**
+///   的底层，但表是开放的（测试可以塞链条），递归循环仍要防：环是上游缺陷 ⇒
+///   响亮 panic，与 [`unalias`] 同规；
+/// * `typeparam` 取**约束**（官方 `TypeParam.underlying()` 返回类型集的接口形态，
+///   本层取约束本身；约束若为具名接口，下一圈再剥到接口本体）；
+/// * `Alias` 每圈都剥（构造协议不该在链上留别名，留了也透明处理）；
+/// * 其余形态（基本型 / 结构型 / 接口 / 通道 / …）就是自身。
+///
+/// # Panics
+///
+/// `named` / `typeparam` 的底层链成环（非法 Go）时 panic —— 与 [`unalias`] 同理。
+#[must_use]
+pub fn underlying(tt: &TypeTable, t: TypeId) -> TypeId {
+    let mut cur = unalias(tt, t);
+    let mut seen: Vec<TypeId> = Vec::new();
+    loop {
+        let next = match tt.type_of(cur) {
+            Type::Named(n) => tt.named_underlying(*n),
+            Type::TypeParam(p) => tt.type_param_def(*p).constraint,
+            // 不该出现（`unalias` 与本表构造协议都会先处理），留作透明兜底
+            Type::Alias(_) => {
+                cur = unalias(tt, cur);
+                continue;
+            }
+            _ => return cur,
+        };
+        if seen.contains(&cur) {
+            panic!(
+                "底层链成环（`named`/`typeparam` 自引用）—— 非法 Go，\
+                 应在检查器里诊断；判定层不接受这种表"
+            );
+        }
+        seen.push(cur);
+        cur = next;
+    }
+}
+
 /// 类型同一性（官方 `types.Identical` 在 M3 支持面上的子集）。
 ///
 /// 返回 `Err(DiagCode::TypUnsupportedConstraintIdentity)` 的情形是 `D-M3-13`

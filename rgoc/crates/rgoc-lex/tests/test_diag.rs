@@ -73,10 +73,12 @@ fn 代号表恰为冻结总数且无重复() {
     // ⇒ 共 **66**。
     // M4/Task 2 再 +1（`ChkUnimplemented` —— `CHK-` 前缀首码，`rgoc-check` 骨架期的
     // 占位诊断；官方无对应物，**不**进任何 Go 侧镜像表）⇒ 共 **67**。
+    // M4/Task 6 再 +1（`TypUnsupportedAssignability` —— 可赋值性窄面的稳定拒绝码；
+    // 官方无对应物）⇒ 共 **68**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 67);
+    assert_eq!(DiagCode::ALL.len(), 68);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

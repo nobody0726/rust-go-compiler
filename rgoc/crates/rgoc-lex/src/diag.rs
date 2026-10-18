@@ -373,6 +373,22 @@ pub enum DiagCode {
     /// ⚠️ `M3-plan.md` Task 25 写的 `UndefinedIdent` 在官方**不存在** ⇒ 用官方名。
     /// 位置取**该标识符**处；每次**出现**都报（实测 `y = 1; _ = y` 报两条）。
     TypUndeclaredName,
+    /// 请求了**本阶段尚不可判**的可赋值性形态 —— **官方没有对应代号**
+    ///
+    /// 触发者：`assignable`（M4/Task 6）的窄面（`Ruling 6-2`）—— 要**方法集**
+    /// （Task 7/8）或**类型集枚举**（Task 12）才能判的形态（非空接口的 implements 面、
+    /// 类型参数面），以及 `identical` 在其**前一步**拒掉后透传的边界
+    /// （`TypUnsupportedConstraintIdentity` 那条）。
+    ///
+    /// 与 [`Self::TypUnsupportedConstraintIdentity`] 同一条纪律：**「不判」与「答错」
+    /// 是两件事** —— 静默给 `false` 会在上游造出「类型不匹配」的假诊断。
+    /// 「可证无方法」的常见形态（基本型 / 无名字面量 / 空接口值）**照答** false，
+    /// 不走这条码（见 `assignable.rs` 的 `provably_no_methods`）。
+    ///
+    /// 预期寿命：Task 8（`implements`）与 Task 12（类型集）落地后逐条消失；
+    /// 收尾时若已无触发者，随 Task 42 复核是否移除（先例：同族的
+    /// [`Self::TypUnsupportedConstraintIdentity`] 由 M4/Task 10 移除）。
+    TypUnsupportedAssignability,
     /// 请求了**约束接口的同一性**（含项集 `~T`/并集，或 `comparable`）——
     /// **官方没有对应代号**：`go/types` 有完整类型集，判得了；M3 只表示不判定
     /// （`D-M3-13`，`U-M3-05`）
@@ -429,7 +445,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 67] = [
+    pub const ALL: [DiagCode; 68] = [
         DiagCode::ChkUnimplemented,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -493,6 +509,7 @@ impl DiagCode {
         DiagCode::TypTruncatedFloat,
         DiagCode::TypUndeclaredLabel,
         DiagCode::TypUndeclaredName,
+        DiagCode::TypUnsupportedAssignability,
         DiagCode::TypUnsupportedConstraintIdentity,
         DiagCode::TypUnsupportedImportForm,
         DiagCode::TypUnusedLabel,
@@ -565,6 +582,7 @@ impl DiagCode {
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
             DiagCode::TypUndeclaredLabel => "TYP-UNDECLARED-LABEL",
             DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
+            DiagCode::TypUnsupportedAssignability => "TYP-UNSUPPORTED-ASSIGNABILITY",
             DiagCode::TypUnsupportedConstraintIdentity => "TYP-UNSUPPORTED-CONSTRAINT-IDENTITY",
             DiagCode::TypUnsupportedImportForm => "TYP-UNSUPPORTED-IMPORT-FORM",
             DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",

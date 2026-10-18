@@ -24,6 +24,8 @@
 //! **Task 23 = [`scope`] 改竞技场**（`ScopeId` / `ScopeTable` / `ScopeRef`，
 //! 见该模块文档的 Ruling 23-1）。
 //!
+//! M4 逐任务落地：Task 6 = [`assignable`]（可赋值性；窄面与拒绝码见该模块文档）。
+//!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
 //! [`universe`]: crate::universe
@@ -31,11 +33,13 @@
 //! [`scope`]: crate::scope
 //! [`dump`]: crate::dump
 //! [`identical`]: crate::identical
+//! [`assignable`]: crate::assignable
 //! [`validtype`]: crate::validtype
 //! [`version`]: crate::version
 
 pub use rgoc_const::{BasicId, ConstId, ConstTable, Sizes};
 
+pub mod assignable;
 pub mod dump;
 pub mod identical;
 pub mod object;
@@ -46,8 +50,9 @@ pub mod universe;
 pub mod validtype;
 pub mod version;
 
+pub use assignable::assignable;
 pub use dump::{DumpError, dump_types, try_dump_types};
-pub use identical::{identical, unalias};
+pub use identical::{identical, unalias, underlying};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};
 pub use table::{
