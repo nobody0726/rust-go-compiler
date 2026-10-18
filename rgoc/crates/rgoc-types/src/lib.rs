@@ -27,7 +27,8 @@
 //! M4 逐任务落地：Task 6 = [`assignable`]（可赋值性；窄面与拒绝码见该模块文档），
 //! Task 7 = [`methodset`]（方法集；生产者 = `rgoc-load` 的接收者挂载），
 //! Task 8 = [`typeset`]（语义类型集四态）/ [`comparable`]（可比性）/
-//! [`implements`]（接口实现与约束满足）。
+//! [`implements`]（接口实现与约束满足），
+//! Task 12 = [`instantiate`]（显式实例化）/ [`subst`]（类型参数替换）。
 //!
 //! [`typ`]: crate::typ
 //! [`table`]: crate::table
@@ -49,9 +50,11 @@ pub mod convertible;
 pub mod dump;
 pub mod identical;
 pub mod implements;
+pub mod instantiate;
 pub mod methodset;
 pub mod object;
 pub mod scope;
+pub mod subst;
 pub mod table;
 pub mod typ;
 pub mod typeset;
@@ -65,9 +68,11 @@ pub use convertible::convertible;
 pub use dump::{DumpError, dump_types, try_dump_types};
 pub use identical::{identical, identical_ignore_tags, unalias, underlying};
 pub use implements::implements;
+pub use instantiate::instantiate;
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};
+pub use subst::{SubstMap, substitute};
 pub use table::{
     AliasDef, Field, InterfaceDef, NamedDef, SignatureDef, StructDef, TupleDef, TypeParamDef,
     TypeTable, UnionDef,

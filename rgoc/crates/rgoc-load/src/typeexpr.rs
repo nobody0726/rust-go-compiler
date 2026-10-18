@@ -50,7 +50,7 @@ use rgoc_const::Const;
 use rgoc_lex::{Diag, DiagCode};
 use rgoc_types::{
     ChanDir, Field as TField, IfaceTSet, InterfaceId, ObjKind, Object, ScopeId, Type, TypeId,
-    identical, typeset, unalias, underlying,
+    TypeParamId, identical, typeset, unalias, underlying,
 };
 
 use crate::decls::Checker;
@@ -515,12 +515,20 @@ impl Checker<'_> {
         self.tt.signature_type(id)
     }
 
-    /// 声明类型参数，返回**类型参数作用域**（`[]`为空时调用方不该调它）。
+    /// 声明类型参数，返回（**类型参数作用域**，**条目表** —— 与形参表同序）。
     ///
     /// 两遍是**必须**的：`[T any, U ~[]T]` 里 `U` 的约束引用了 `T`，
     /// 而 `T` 必须先成为对象；同时也支持 `[T U, U any]` 这种互引（官方同样允许）。
     /// 先占号后回填（`set_type_param_constraint`）是递归约束的唯一手段。
-    pub(crate) fn declare_tparams(&mut self, parent: ScopeId, tparams: &[AstField]) -> ScopeId {
+    ///
+    /// 条目表是 **M4/Task 12** 加的：`resolve_type_item` 把类型声明的形参表
+    /// 挂到 `NamedDef::type_params`、`resolve_func_sig` 把接收者的挂到
+    /// `SignatureDef::recv_tparams`（`instantiate` 的两个消费者）。
+    pub(crate) fn declare_tparams(
+        &mut self,
+        parent: ScopeId,
+        tparams: &[AstField],
+    ) -> (ScopeId, Vec<TypeParamId>) {
         let scope = self.scopes.child(rgoc_types::ScopeKind::Block, parent);
         let mut ids = Vec::with_capacity(tparams.len());
         for (i, f) in tparams.iter().enumerate() {
@@ -579,7 +587,7 @@ impl Checker<'_> {
             };
             self.tt.set_type_param_constraint(*tp, c);
         }
-        scope
+        (scope, ids.iter().map(|(tp, _)| *tp).collect())
     }
 
     /// 这个类型**是不是接口类型**（官方 `Underlying().(*Interface)` 的对应物）。

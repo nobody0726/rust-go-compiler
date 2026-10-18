@@ -8,7 +8,9 @@
 //! 1. **第一步就是 `Unalias`**（两侧）—— 别名在判定里**完全透明**。
 //!    所以 [`unalias`] 是公开的（`T-TY-23` 直接断言它）。
 //! 2. **定义型按定义身份**（`*Named` 比 `obj`）：`type A int` 与 `int` **不等**，
-//!    两个同名但不同定义的 `A` 也**不等**。
+//!    两个同名但不同定义的 `A` 也**不等**。**实例**另有官方口径（M4/Task 12）：
+//!    同来源 + 实参**逐对同一** ⇒ 同一（`predicates.go` 的 `*Named` 臂）；
+//!    实例与其**原点**（实参数不同）⇒ 不等。
 //! 3. **数组长度**：官方是 `len < 0 || x.len == y.len` —— 长度**未定**时**不当**不等
 //!    （错误恢复的宽容面）。本层 `len == None`（`[...]T`）与 `Const::Unknown`
 //!    （求值失败）都按「未定」处理。
@@ -170,7 +172,32 @@ fn identical_cmp(
         // 本层有多个 `invalid` 条目会落到这里，按种类判才对得上）。
         Type::Invalid => Ok(matches!(tt.type_of(y), Type::Invalid)),
         Type::Basic(a) => Ok(matches!(tt.type_of(y), Type::Basic(b) if b == a)),
-        Type::Named(a) => Ok(matches!(tt.type_of(y), Type::Named(b) if a == b)),
+        // 定义型：`a == b`（同一条目）⇒ 真；否则看**实例**口径 ——
+        // 官方 `predicates.go` 的 `*Named` 臂：同来源（本层 = 同 origin）
+        // 且实参逐对同一才对。memo 保证正常路径下同 (origin, 实参组)
+        // 只有一个实例条目，这里主要守「实例 vs 原点」（实参数不同 ⇒ 假）。
+        Type::Named(a) => {
+            let Type::Named(b) = tt.type_of(y) else {
+                return Ok(false);
+            };
+            if a == b {
+                return Ok(true);
+            }
+            let da = tt.named_def(*a);
+            let db = tt.named_def(*b);
+            let (Some(oa), Some(ob)) = (da.origin, db.origin) else {
+                return Ok(false);
+            };
+            if oa != ob || da.targs.len() != db.targs.len() {
+                return Ok(false);
+            }
+            for (ta, tb) in da.targs.iter().zip(&db.targs) {
+                if !identical_cmp(tt, *ta, *tb, ignore_tags)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         // `unalias` 之后不可能还有别名
         Type::Alias(_) => unreachable!("unalias 之后不该还有 alias"),
         Type::Pointer(px) => match tt.type_of(y) {

@@ -295,6 +295,18 @@ pub enum DiagCode {
     TypInvalidShiftCount,
     /// 移位左操作数不是整数 —— 官方 `InvalidShiftOperand`
     TypInvalidShiftOperand,
+    /// 实例化的实参**不满足约束** —— 官方 `InvalidTypeArg`（`softError`）
+    ///
+    /// 官方 `go/types/instantiate.go::verify`（`:219-241`）：逐形参先把
+    /// `bound` 按实参替换（`makeSubstMap(tparams, targs)`），再走
+    /// `implements(targ, bound, constraint=true)`；判假即上报
+    /// （`typexpr.go:449` 的 `check.softErrorf(atPos(pos), InvalidTypeArg, …)`，
+    /// 消息是 `implements` 的 cause，形如 `float64 does not satisfy I0 …`）。
+    /// 分类投影 ⇒ **`implements`**（oracle 适配表同族：`does not satisfy`）。
+    ///
+    /// 触发面（M4/Task 12）：`instantiate` 的约束校验；call 面推断
+    /// （Task 16+）同族复用。
+    TypInvalidTypeArg,
     /// 前向 `goto` 跳进了**嵌套块内部**的标签 —— 官方 `JumpIntoBlock`
     /// （消息 `goto %s jumps into block`）
     ///
@@ -419,6 +431,17 @@ pub enum DiagCode {
     /// 而 M3 不求值（`open_gaps`）；本任务只在 **`const`** 的「名字 ↔ 值」配对处
     /// 报它（那里本来就要配对，不报就会**静默**丢名字）。
     TypWrongAssignCount,
+    /// 实例化的**实参个数**与形参个数不符 —— 官方 `WrongTypeArgCount`
+    ///
+    /// 官方 `instantiate.go::validateTArgLen`（`:198-216`）两种消息：
+    /// `not enough type arguments for type %s: have %d, want %d` /
+    /// `too many type arguments for type %s: have %d, want %d`
+    /// （另有 `call.go:66/288` 的 `got %d type arguments but want %d` 变体）。
+    /// 分类投影 ⇒ **`type-arg`**。
+    ///
+    /// 触发面（M4/Task 12）：`instantiate` 的数量校验；类型位置的
+    /// `X[…]` 越界形态由检查器（Task 20+）复用本码。
+    TypWrongTypeArgCount,
 }
 
 impl DiagCode {
@@ -426,7 +449,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 67] = [
+    pub const ALL: [DiagCode; 69] = [
         DiagCode::ChkUnimplemented,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -480,6 +503,7 @@ impl DiagCode {
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
+        DiagCode::TypInvalidTypeArg,
         DiagCode::TypJumpIntoBlock,
         DiagCode::TypMismatchedPkgName,
         DiagCode::TypMisplacedLabel,
@@ -494,6 +518,7 @@ impl DiagCode {
         DiagCode::TypUnsupportedImportForm,
         DiagCode::TypUnusedLabel,
         DiagCode::TypWrongAssignCount,
+        DiagCode::TypWrongTypeArgCount,
     ];
 
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
@@ -552,6 +577,7 @@ impl DiagCode {
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",
+            DiagCode::TypInvalidTypeArg => "TYP-INVALID-TYPE-ARG",
             DiagCode::TypJumpIntoBlock => "TYP-JUMP-INTO-BLOCK",
             DiagCode::TypMismatchedPkgName => "TYP-MISMATCHED-PKG-NAME",
             DiagCode::TypMisplacedLabel => "TYP-MISPLACED-LABEL",
@@ -566,6 +592,7 @@ impl DiagCode {
             DiagCode::TypUnsupportedImportForm => "TYP-UNSUPPORTED-IMPORT-FORM",
             DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",
             DiagCode::TypWrongAssignCount => "TYP-WRONG-ASSIGN-COUNT",
+            DiagCode::TypWrongTypeArgCount => "TYP-WRONG-TYPE-ARG-COUNT",
         }
     }
 }

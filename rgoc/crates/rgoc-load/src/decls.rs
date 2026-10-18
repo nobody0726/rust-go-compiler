@@ -478,9 +478,9 @@ impl Checker<'_> {
     /// 普通函数为 `None`。接收者只在这里解析**一次**（复解析会在表里多造
     /// 结构型条目，`C7` 的号是全表遍历序）。
     fn resolve_func_sig(&mut self, d: &rgoc_ast::FuncDecl) -> (Option<TypeId>, TypeId) {
-        let base = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
+        let (base, recv_tps) = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
             Some(fs) => self.declare_tparams(self.pkg_scope, &fs),
-            None => self.pkg_scope,
+            None => (self.pkg_scope, Vec::new()),
         };
         // 接收者类型在**方法自己的**类型参数之外解析（官方：接收者不能引用方法
         // 自己的 `[P any]`）—— 但**能**引用接收者声明的类型参数 ⇒ 用 `base`。
@@ -488,12 +488,23 @@ impl Checker<'_> {
         let scope = if d.tparams.is_empty() {
             base
         } else {
-            self.declare_tparams(base, &d.tparams)
+            // 方法**自己**的类型参数（`func (b Box[T]) M[P any]()` 的 `[P any]`）：
+            // M3 起只作为对象活在作用域里，不进签名（`SignatureDef` 无同栏）。
+            self.declare_tparams(base, &d.tparams).0
         };
         let sig = match &d.type_ {
             Expr::FuncType(ft) => self.resolve_signature(scope, ft, recv),
             _ => self.tt.invalid(),
         };
+        // 接收者类型参数回写给签名（M4/Task 12）：`instantiate` 的逐方法替换按
+        // **位置**对齐实参（官方 `expandMethod` 的 `makeSubstMap(rtpars, rtargs)`）。
+        // `C7` dump 不渲染它；普通函数没有接收者 ⇒ 恒空。
+        if !recv_tps.is_empty()
+            && let Type::Signature(sid) = self.tt.type_of(sig)
+        {
+            let sid = *sid;
+            self.tt.set_signature_recv_tparams(sid, recv_tps);
+        }
         (recv, sig)
     }
 
@@ -601,8 +612,8 @@ impl Checker<'_> {
             unreachable!("resolve_type_item 只接 Item::Type")
         };
         // 类型参数作用域（`[T any]`）：本体与约束都在里面解析
-        let scope = if tparams.is_empty() {
-            self.pkg_scope
+        let (scope, tparam_ids) = if tparams.is_empty() {
+            (self.pkg_scope, Vec::new())
         } else {
             self.declare_tparams(self.pkg_scope, &tparams)
         };
@@ -619,6 +630,9 @@ impl Checker<'_> {
             self.tt.set_named_underlying(n, inv);
             // 位置挂在**定义**上：`validType` 的环诊断报在环起点的对象处
             self.tt.set_named_pos(n, pos);
+            // 形参表挂到定义（M4/Task 12）：`instantiate` 的数量 / 约束校验要用。
+            // 泛型**别名**没有同栏（`AliasDef` 不加字段；泛型别名实例化留后续任务）。
+            self.tt.set_named_type_params(n, tparam_ids);
             let self_ty = self.tt.named_type(n);
             self.write_object(name, self_ty, None);
             let u = self.resolve_type(scope, &rhs);

@@ -12,7 +12,7 @@
 
 use rgoc_lex::Diag;
 use rgoc_load::{Package, load_sources};
-use rgoc_types::{NamedId, Type, TypeId, TypeTable, unalias};
+use rgoc_types::{BasicId, NamedId, Type, TypeId, TypeTable, instantiate, unalias};
 
 fn load(files: &[(&str, &str)]) -> (TypeTable, Package, Vec<Diag>) {
     let srcs: Vec<(String, Vec<u8>)> = files
@@ -118,6 +118,64 @@ func (b *Box[T]) W() {}
     // M3 的表示：`Box[T]` 解析成的就是 `named Box`（探针实测 dump `signature #0 …`）
     let (nid, _) = named_of(&tt, &pkg, "Box");
     assert_eq!(methods_of(&tt, nid), vec!["V", "W"]);
+}
+
+#[test]
+fn t_ck_21_加载挂载_形参表与接收者条目回写() {
+    let (mut tt, pkg, diags) = load(&[(
+        "a.go",
+        r#"package p
+
+type Pair[K comparable, V any] struct {
+	k K
+	v V
+}
+
+func (p Pair[K, V]) Get() V { return p.v }
+"#,
+    )]);
+    assert!(diags.is_empty(), "不该有诊断：{diags:?}");
+    let (nid, _) = named_of(&tt, &pkg, "Pair");
+
+    // ① 定义拿到形参表（与声明同序：K, V）。
+    let tps = tt.named_def(nid).type_params.clone();
+    assert_eq!(tps.len(), 2, "形参表挂到定义上");
+    assert_eq!(tt.type_param_def(tps[0]).index, 0);
+    assert_eq!(tt.type_param_def(tps[1]).index, 1);
+
+    // ② 方法签名拿到**接收者**类型参数 —— 与形参表**不同批**条目（官方两套）。
+    let (_, sig) = tt.named_def(nid).methods[0].clone();
+    let Type::Signature(sid) = *tt.type_of(sig) else {
+        panic!("方法应是签名");
+    };
+    let rtps = tt.signature_def(sid).recv_tparams.clone();
+    assert_eq!(rtps.len(), 2, "接收者类型参数挂到签名上");
+    for rt in &rtps {
+        assert!(!tps.contains(rt), "接收者条目与形参表不是同一批");
+    }
+
+    // ③ 端到端：实例化 ⇒ 本体 K/V 落位 + 方法结果按**位置**替换（V → string）。
+    let int = tt.add_basic(BasicId::Int);
+    let string = tt.add_basic(BasicId::String);
+    let inst = instantiate(&mut tt, nid, &[int, string]).expect("实例化应成功");
+    let Type::Named(inid) = *tt.type_of(inst) else {
+        panic!("实例应是 named");
+    };
+    let d = tt.named_def(inid);
+    assert_eq!(d.targs, vec![int, string]);
+    let Type::Struct(bsid) = *tt.type_of(d.underlying.expect("实例本体已填")) else {
+        panic!("Pair 本体应是 struct");
+    };
+    assert_eq!(tt.struct_def(bsid).fields[0].typ, int, "K → int");
+    assert_eq!(tt.struct_def(bsid).fields[1].typ, string, "V → string");
+    let (_, msig) = tt.named_def(inid).methods[0].clone();
+    let Type::Signature(msid) = *tt.type_of(msig) else {
+        panic!("方法应是签名");
+    };
+    let Type::Tuple(tid) = *tt.type_of(tt.signature_def(msid).results) else {
+        panic!("结果应是元组");
+    };
+    assert_eq!(tt.tuple_def(tid).vars[0].1, string, "结果 V → string");
 }
 
 #[test]

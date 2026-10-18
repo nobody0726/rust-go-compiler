@@ -41,6 +41,8 @@
 //! 因此在「同一 `BasicId` 复用同一 `TypeId`」之外还**按 `BasicId` 去重**
 //! （`C7` §3 规则 1 明写「仅定义型/基本型去重」）—— 两处判据一致，不冲突。
 
+use std::collections::HashMap;
+
 use rgoc_const::{BasicId, ConstId, ConstTable};
 use rgoc_lex::Pos;
 
@@ -93,6 +95,21 @@ pub struct NamedDef {
     ///   消费者是 M4 的方法集 / 接口实现 / 选择器。
     /// * 生产者：`rgoc-load` 的 `Decl::Func` 臂（Task 7 的唯一生产者）。
     pub methods: Vec<(String, TypeId)>,
+    /// **形参表**（`type D[T any]` 的 `[T any]`；M4/Task 12）。
+    ///
+    /// 非泛型声明与实例都空。生产者：`rgoc-load` 的 `resolve_type_item`
+    /// （把 `declare_tparams` 建出的条目挂上来 —— M3 时它们只作为**对象**
+    /// 活在作用域里，没有回链）。消费者：[`crate::instantiate::instantiate`]
+    /// 的数量 / 约束校验。
+    pub type_params: Vec<TypeParamId>,
+    /// **实例来源**：`Some(origin)` ⇒ 本条目是 `origin` 按 `targs` 实例化的
+    /// 结果（M4/Task 12）；`origin.is_none()` ⇒ 本条目是**定义**（原型）。
+    ///
+    /// 同一 `(origin, 按同一性等价的一组实参)` 只会有一个实例条目 ——
+    /// memo 在 [`TypeTable`] 的 `instances` 上，`identical` 比实参。
+    pub origin: Option<NamedId>,
+    /// 实例实参（`origin.is_none()` ⇒ 恒空）。
+    pub targs: Vec<TypeId>,
 }
 
 /// `alias` 定义（`type D = T`）。
@@ -137,6 +154,14 @@ pub struct SignatureDef {
     pub results: TypeId,
     /// 是不是变参（`...T`）。
     pub variadic: bool,
+    /// 接收者**声明**的类型参数（官方 `Signature.RecvTypeParams()`；M4/Task 12）。
+    ///
+    /// 只对「泛型接收者基类型的方法」非空：`func (b *Box[T]) M()` 里的 `T`。
+    /// 与方法自己的 `[P any]` **不同批条目**（官方也是两套；`rgoc-load` 的
+    /// `resolve_func_sig` 分别声明，`recv_tparam_fields` 把约束按位置取自
+    /// 类型声明）。[`crate::instantiate::instantiate`] 替换方法签名时按
+    /// **位置**对齐实参（官方 `expandMethod` 的 `makeSubstMap(rtpars, rtargs)`）。
+    pub recv_tparams: Vec<TypeParamId>,
 }
 
 /// `interface` 条目。
@@ -208,6 +233,14 @@ pub struct TypeTable {
     unions: Vec<UnionDef>,
     /// `invalid` 的单例槽（懒创建）。实测 oracle 把 `invalid` 当基本型去重。
     invalid: Option<TypeId>,
+    /// **实例 memo**：`origin → [(实参, 实例)]`（M4/Task 12）。
+    ///
+    /// 一个 origin 的实例通常只有个位数；线性扫描 + 按
+    /// [`identical`](crate::identical::identical) 比对实参足够
+    /// （官方 `Context.lookup` 同语义，哈希只是加速）。查/登记分别走
+    /// [`TypeTable::lookup_instance`] / [`TypeTable::record_instance`]。
+    /// 注：**不**进 `C7` dump（实例按普通 `named` 行渲染）。
+    instances: HashMap<NamedId, Vec<(Vec<TypeId>, NamedId)>>,
 }
 
 impl TypeTable {
@@ -347,8 +380,61 @@ impl TypeTable {
             underlying: None,
             pos: None,
             methods: Vec::new(),
+            type_params: Vec::new(),
+            origin: None,
+            targs: Vec::new(),
         });
         id
+    }
+
+    /// 给泛型定义挂**形参表**（`type D[T any]` 的 `[T any]`；M4/Task 12）。
+    ///
+    /// 生产者：`rgoc-load` 的 `resolve_type_item`（`declare_tparams` 的返回值）。
+    pub fn set_named_type_params(&mut self, id: NamedId, tps: Vec<TypeParamId>) {
+        self.named[id.index()].type_params = tps;
+    }
+
+    /// 新建一个**实例**条目：`origin` 按 `targs` 实例化（M4/Task 12）。
+    ///
+    /// 协议与 `add_named` 同：先占号（本体 `None`），随后由
+    /// [`crate::instantiate::instantiate`] 填**替换后**的本体与方法。
+    /// 名字与位置随 `origin`（官方：实例没有自己的声明位置，诊断报在原点）。
+    pub fn add_named_instance(&mut self, origin: NamedId, targs: Vec<TypeId>) -> NamedId {
+        let (name, pos) = {
+            let o = &self.named[origin.index()];
+            (o.name.clone(), o.pos)
+        };
+        let self_ty = self.push(Type::Named(NamedId::from_index(self.named.len())));
+        let id = NamedId::from_index(self.named.len());
+        self.named.push(NamedDef {
+            self_ty,
+            name,
+            underlying: None,
+            pos,
+            methods: Vec::new(),
+            type_params: Vec::new(),
+            origin: Some(origin),
+            targs,
+        });
+        id
+    }
+
+    /// 实例 memo 查询：`(origin, args)` 命中的实例（实参按
+    /// [`identical`](crate::identical::identical) 比对 —— 等价写法也命中）。
+    pub(crate) fn lookup_instance(&self, origin: NamedId, args: &[TypeId]) -> Option<NamedId> {
+        let list = self.instances.get(&origin)?;
+        list.iter().find_map(|(targs, inst)| {
+            let hit = targs.len() == args.len()
+                && targs.iter().zip(args).all(|(a, b)| {
+                    a == b || matches!(crate::identical::identical(self, *a, *b), Ok(true))
+                });
+            hit.then_some(*inst)
+        })
+    }
+
+    /// 实例 memo 登记（[`crate::instantiate::instantiate`] 建实例后调用）。
+    pub(crate) fn record_instance(&mut self, origin: NamedId, args: Vec<TypeId>, inst: NamedId) {
+        self.instances.entry(origin).or_default().push((args, inst));
     }
 
     /// 填 `named` 的本体。
@@ -490,8 +576,17 @@ impl TypeTable {
             params: self.tuple_type(params),
             results: self.tuple_type(results),
             variadic,
+            recv_tparams: Vec::new(),
         });
         id
+    }
+
+    /// 填方法的**接收者类型参数**（`func (b *Box[T]) M()` 的 `T`；M4/Task 12）。
+    ///
+    /// 生产者：`rgoc-load` 的 `resolve_func_sig`（接收者路径的
+    /// `declare_tparams` 返回值）。消费者：[`crate::instantiate::instantiate`]。
+    pub fn set_signature_recv_tparams(&mut self, id: SignatureId, tps: Vec<TypeParamId>) {
+        self.signatures[id.index()].recv_tparams = tps;
     }
 
     /// `signature` 定义 → 它在 `types` 里的条目。

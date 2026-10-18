@@ -77,11 +77,13 @@ fn 代号表恰为冻结总数且无重复() {
     // M4/Task 6 再 +1（`TypUnsupportedAssignability` —— 可赋值性窄面的稳定拒绝码；
     // 官方无对应物）⇒ 共 **68**；M4/Task 10 再 **-1**（移除
     // `TypUnsupportedConstraintIdentity` —— `identical` 升级、`U-M3-05` 解除）
-    // ⇒ 共 **67**。
+    // ⇒ 共 **67**；M4/Task 12 再 +2（`TypInvalidTypeArg` / `TypWrongTypeArgCount`
+    // —— 实例化约束/数量拒绝，官方 `InvalidTypeArg` / `WrongTypeArgCount`）
+    // ⇒ 共 **69**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 67);
+    assert_eq!(DiagCode::ALL.len(), 69);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

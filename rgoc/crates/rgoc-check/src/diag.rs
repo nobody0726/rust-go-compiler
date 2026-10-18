@@ -199,6 +199,8 @@ pub fn category_of(code: DiagCode) -> Category {
         // ── 单码类别 ────────────────────────────────────────────────────
         TypDivByZero => Category::OpInvalid,
         TypInvalidBlank => Category::NotType,
+        TypInvalidTypeArg => Category::Implements,
+        TypWrongTypeArgCount => Category::TypeArg,
 
         // ── 跨语境近似（见函数文档；T-CK-94 收口校准）────────────────────
         TypInvalidConversion | TypTruncatedFloat => Category::Convert,
