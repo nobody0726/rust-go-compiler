@@ -1,0 +1,38 @@
+# `types/testdata` check 面精选的**排除**清单（M4，2026-10-18 冻结）。
+#
+# 格式：`<相对 testdata 根的路径>` + TAB + `<理由>`（`#` 整行注释与空行忽略）。
+#
+# 口径（三件一套，缺一就有静默漏检）：
+# * **候选** = `check/`、`spec/`、`examples/` 三个目录的**顶层** `.go` 文件 = **91** 个。
+#   目录包（decls2/ importdecl0/ importdecl1/ issue25008/）不在候选 —— 多文件包是
+#   另一条对撞腿（`testDir` 语义），wave 2 再议（见 `M4-tests.md` §6）。
+# * **入选** = 官方语义复扫 EQ（错误数 == 标记数）＋特例 `literals.go`
+#   ⇒ `check-selected.txt`（`run-collide.sh --check` 的唯一输入）。
+# * **排除** = 本文件：候选里没入选的**每一个**都要有一行理由。
+#
+# ⚠️ 理由不许是占位：`rgoc/crates/rgoc-driver/tests/check_corpus.rs` 会断言理由非空、
+# 含指针（`D-M4-` / `U-M3-` / `T-CK-` / `CH-` 之一）、且**两向集合相等**
+# （每个候选恰好在入选集或本文件中出现一次，不许有死行）。
+#
+# 汇总（2026-10-18 官方语义复扫）：候选 91 = 入选 75 + 排除 16
+#   · 14 个「计数不等」（末列括号内为 错误数 vs 标记数；4 个 errs<markers 的少数派：
+#     const1、decls1、lookup1、lookup2）
+#   · 1 个 `import "runtime"`（chans：官方 gc importer 解析成功、判 accept；我方走
+#     二进制 export data 面，U-M3-07）
+#   · 1 个 `-fakeImportC` / cgo（importC：去掉 could-not-import 后恰好 3=3）
+check/builtins0.go	计数不等（365 vs 286）；含 `assert` 注入依赖与 `unsafe`；wave 2（D-M4-10）
+check/builtins1.go	计数不等（66 vs 45）；含 `assert`；wave 2（D-M4-10）
+check/chans.go	`import "runtime"`：官方 gc importer 可解析、判 accept；我方不支持二进制 export data（U-M3-07）；wave 2
+check/const0.go	计数不等（108 vs 80）；含 `assert` + math/unsafe 依赖；wave 2（D-M4-10）
+check/const1.go	计数不等（67 vs 84，errs<markers）；math 依赖；wave 2（D-M4-10）
+check/constdecl.go	计数不等（43 vs 42）；math/unsafe 依赖；wave 2（D-M4-10）
+check/conversions0.go	计数不等（18 vs 14）；含 `assert`；wave 2（D-M4-10）
+check/cycles5.go	计数不等（过滤后 15 vs 13，原始 30）；含 `assert`；wave 2（D-M4-10）
+check/decls1.go	计数不等（44 vs 45，errs<markers）；wave 2（D-M4-10）
+check/decls3.go	计数不等（26 vs 25）；fmt/unsafe 依赖；wave 2（D-M4-10）
+check/expr3.go	计数不等（parse 7 + type 179 vs 184）；time/`assert` 依赖；wave 2（D-M4-10）
+check/funcinference.go	计数不等（2 vs 1）；strconv 依赖；wave 2（D-M4-10）
+check/importC.go	`-fakeImportC` / cgo `import "C"` 特殊面未建模（去掉 could-not-import 后 3=3）；wave 2（D-M4-10）
+check/issues1.go	计数不等（14 vs 12）；io/context 依赖；wave 2（D-M4-10）
+check/lookup1.go	计数不等（19 vs 25，errs<markers）；math/big 依赖；wave 2（D-M4-10）
+check/lookup2.go	计数不等（14 vs 26，errs<markers）；wave 2（D-M4-10）

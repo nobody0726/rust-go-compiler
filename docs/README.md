@@ -37,6 +37,10 @@
 | M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | **已冻结**（T-L21，2026-10-12） |
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |
 | M1 | [`milestones/M1-manifest.json`](./milestones/M1-manifest.json) | **机器可读事实** —— gate L1–L7 / 56 个测试 ID / unsupported / budget / GAP-01 | **已填实**（T-L21） |
+| M4 | [`milestones/M4-design.md`](./milestones/M4-design.md) | **怎么建 M4** —— 决策 D-M4-1~15、事实基线 F1–F18、**双腿判据**（marker verdict-only + 实跑位类对齐）、门禁 CH-1..9；含 builder-check 复审修订（B1/B2 + M1–M8/m1–m5） | **已确认**（2026-10-18；修订同日） |
+| M4 | [`milestones/M4-tests.md`](./milestones/M4-tests.md) | **怎么验 M4** —— 63 个 `T-CK-*`（甲37/乙5/丙8/丁5/反8）、类别枚举 26 类、语料三清单（入选 75 + 排除 16 + wave A 50）、修订 R-6-1/R-3-1/R-5-1/R-8-1 | **已冻结**（2026-10-18） |
+| M4 | [`milestones/M4-plan.md`](./milestones/M4-plan.md) | **怎么干 M4** —— **Task 1–44**（装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序） | ✅ **计划已产出**（执行未开始） |
+| M4 | [`milestones/M4-manifest.json`](./milestones/M4-manifest.json) | **机器可读事实（骨架）** —— gate CH-1..9（`pending`）/ 63 个 `test_ids` / `unsupported` 18（`U-M4-01..11` + M3 承接）/ 三清单 / `budget`（含 `effort_calendar`）/ `open_gaps` G-1..G-9 | 🟡 **骨架已产出**（Task 42 填实） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -115,7 +119,7 @@
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
 | `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **7 份已产出**（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套全部就位**：`M0-design.md`（已确认）、`M0-tests.md`（**已冻结** T29，§5.1 另有修订 R1）、`M0-plan.md`（**T01–T55 全部完成**）、`M0-benchmarks.md`（§1–§12）、`M0-report.md`（交接文档）、`M0-manifest.json`（**E1–E10 十条** + `test_ids` + `unsupported` + `budget` 已填实）<br>🟡 **M1 三件套开工中**：`M1-design.md`（**已确认** 2026-10-11；`tests` / `plan` 待产出） |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M3 三件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M1–M3 的 `design/tests/plan/manifest` 均已完成或填实）<br>🟡 **M4 三件套与 manifest 骨架已产出**（2026-10-18，含 builder-check 复审修订；执行未开始）——§1 表的 M2/M3 里程碑行等全量清理随 **M4 Task 44** 一并做 |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 

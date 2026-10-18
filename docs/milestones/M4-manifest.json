@@ -1,0 +1,281 @@
+{
+  "stage": "M4",
+  "name": "静态检查闭环",
+  "generated_at": "2026-10-18T00:00:00Z",
+  "filled_at": null,
+  "fill_task": "M4-plan.md Task 42（由 manifest_m4.rs 与冻结文档逐项对账后填实 gate/test_ids/evidence）",
+  "scope": "静态检查闭环：判定五件套（assignable/methodset/implements/satisfies/类型集同一性）+ 泛型实例化与推断 + 表达式/语句检查 + 内建与 unsafe 白名单 + 版本门控 + 包级规则（init 序/环、main/init、导出与 import 可见性）；验收 = 自有 fixture + `tools/types-oracle --check`（官方 harness 语义）双腿对撞 + 语料 75/wave A 50 精选对撞 + 变异反向验证 ≥8 条",
+  "docs": {
+    "design": "docs/milestones/M4-design.md（已确认；D-M4-1..15 / F1–F18 / §12 变更记录）",
+    "tests": "docs/milestones/M4-tests.md（已冻结；63 个 T-CK-*；修订 R-6-1 / R-3-1 / R-5-1 / R-8-1）",
+    "plan": "docs/milestones/M4-plan.md（Task 1–44；进度台账 .superpowers/sdd/M4-plan/progress.md，不入库）",
+    "contracts": ["docs/contracts/C8-check-diags.md（Task 1 冻结：渲染字节格式 + 类别 26 + 过滤规则）"]
+  },
+  "crates": [
+    "rgoc/crates/rgoc-types（扩：assignable/methodset/implements/comparable/convertible/unify/infer/instantiate/subst；identical 升级解除 U-M3-05）",
+    "rgoc/crates/rgoc-check（新：check/operand/expr/stmt/builtins/lookup/selection/initorder/main/version/unsafe_pkg/imports/diag/render）",
+    "rgoc/crates/rgoc-load（小扩：跨包对象比对、import 三形态名字规则、ExportSummary 补齐）",
+    "rgoc/crates/rgoc-driver（`check [--diag-dump] [--lang] [--test-hooks]` 子命令；`types --cmp` 新 kind ×5）",
+    "rgoc/crates/rgoc-lex（DiagCode：新增 CHK- 族；移除 TypUnsupportedConstraintIdentity）",
+    "tools/types-oracle（`--check` 形态 + 类别适配表；cmp.go 新 kind ×5）",
+    "scripts/（run-collide.sh --check [--list]；mutation-m4-notes.md）"
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/src/internal/types/testdata（只读；corpus-manifest.sha256 锁定）",
+    "candidate": {
+      "definition": "check/、spec/、examples/ 三目录顶层 .go（目录包不在候选，U-M4-11）",
+      "count": 91
+    },
+    "selected": {
+      "file": "tools/types-oracle/check-selected.txt",
+      "count": 75,
+      "note": "64 reject（标记 1376）+ 11 accept；literals.go 依赖测试内建注入；R-6-1：7/8 个含语法错误文件因 EQ 纳入（仅 expr3.go 排除）"
+    },
+    "allowlist": {
+      "file": "tools/types-oracle/check-allowlist.txt",
+      "count": 16,
+      "note": "14 计数不等 + chans（U-M3-07）+ importC（U-M4-05）；逐行理由带指针"
+    },
+    "wave_a": {
+      "file": "tools/types-oracle/check-fixedbugs-waveA.txt",
+      "count": 50,
+      "note": "G1 25 / G2 8 / G3 13 / G4 4；全 EQ、零 import、标记 132；先砍项（降级须登记）"
+    },
+    "complement_assert": "候选 91 == 入选 75 ∪ 排除 16（两向；由 check_corpus.rs / T-CK-93 断言）"
+  },
+  "gate": {
+    "CH-1": {
+      "name": "判定五件套全绿",
+      "status": "pending",
+      "definition": "T-CK-11..16、T-CK-81..85 全绿；U-M3-05 拒面被解除且反向合成反例存在",
+      "evidence": ""
+    },
+    "CH-2": {
+      "name": "检查器接受/拒绝闭环",
+      "status": "pending",
+      "definition": "T-CK-31..38、T-CK-51..54、T-CK-91..95 全绿；入选 75 全绿（双腿）；排除清单每行有理由；零容忍（多/少/错类均红）",
+      "evidence": ""
+    },
+    "CH-3": {
+      "name": "版本门控全绿",
+      "status": "pending",
+      "definition": "T-CK-61..64 全绿；全表 fixture + 语料 18+1 文件；-lang 与 //go:build 同源",
+      "evidence": ""
+    },
+    "CH-4": {
+      "name": "泛型闭环",
+      "status": "pending",
+      "definition": "T-CK-21..25、T-CK-85、T-CK-A3 全绿；自有 fixture（推断三形态）+ 语料 typeinst*/typeinference/inference* 在入选；15 例 DIFF 根因复核记录在",
+      "evidence": ""
+    },
+    "CH-5": {
+      "name": "包级静态规则",
+      "status": "pending",
+      "definition": "T-CK-71..76 全绿；四组点名 fixture（G4）齐",
+      "evidence": ""
+    },
+    "CH-6": {
+      "name": "M3 白名单翻转同步",
+      "status": "pending",
+      "definition": "T-CK-E5 全绿：修订入档 + M3-manifest 更新（resolved_by: M4）+ T-TY-81/82 改写 + T-TY-83 注记 + manifest_m3.rs 全绿",
+      "evidence": ""
+    },
+    "CH-7": {
+      "name": "四条 cargo + 全量回归",
+      "status": "pending",
+      "definition": "T-CK-E4 + M4-tests §9.1 四条命令：exit 0、无 warning；M0/M1/M2 自检不回退",
+      "evidence": ""
+    },
+    "CH-8": {
+      "name": "oracle 与对撞装置全绿",
+      "status": "pending",
+      "definition": "T-CK-91/92 全绿；run-collide.sh 五形态全绿；oracle 侧 gofmt/go vet 干净；两侧 stderr 空、重复运行确定",
+      "evidence": ""
+    },
+    "CH-9": {
+      "name": "反向验证 + 交付 A",
+      "status": "pending",
+      "definition": "T-CK-B1..B8、T-CK-A1/A2：变异 ≥8 条有实证；mutation-m4-notes.md 在；M4-report.md（前端子集矩阵 + 三条分别声明）在",
+      "evidence": ""
+    }
+  },
+  "coverage": {
+    "note": "roadmap §M4 九大项逐项映射见 M4-tests.md §2.1；roadmap 门禁 G1–G5 见 §2.2；无孤儿功能点（manifest_m4.rs 对账对象）",
+    "matrix_rows": 9,
+    "test_ids_total": 63,
+    "unsupported_total": 18,
+    "derived_gates": {
+      "note": "gate 字段=主要门禁；M4-tests §8 未逐列出的 ID 按语义派生：T-CK-41..44 → CH-2；T-CK-E1 → CH-2；T-CK-E2 → CH-7；T-CK-E3 → CH-9",
+      "items": ["T-CK-41", "T-CK-42", "T-CK-43", "T-CK-44", "T-CK-E1", "T-CK-E2", "T-CK-E3"]
+    },
+    "revisions": [
+      {
+        "id": "R-6-1",
+        "date": "2026-10-18",
+        "content": "设计 §10 #5 未决项落地：7/8 个含语法错误文件为 EQ ⇒ 纳入入选（仅 expr3.go 排除）；引入 parse 类别；登记解析面行对齐风险",
+        "trigger": "选料实测（不改任何 D-M4-*）"
+      },
+      {
+        "id": "R-3-1",
+        "date": "2026-10-18",
+        "content": "T-CK-62 出处引用勘误：F2⑦ ⇒ F11（文件版本语义）；判据不变",
+        "trigger": "设计复审（m3）"
+      },
+      {
+        "id": "R-5-1",
+        "date": "2026-10-18",
+        "content": "§5.1 判据收束：腿①操作口径 = verdict-only（官方全量消耗语义不采用）；过滤清单补 Cheap-trick 抑制（F2⑧）；T-CK-84/85 增输入语法指针（M3-tests §5.2 R-32-2）",
+        "trigger": "设计复审（B2/M1/M5 对齐）"
+      },
+      {
+        "id": "R-8-1",
+        "date": "2026-10-18",
+        "content": "§8 CH-8 形态计数勘误：四 ⇒ 五（与 §9.2 对齐）；判据不变",
+        "trigger": "设计复审（M4 对齐）"
+      }
+    ]
+  },
+  "test_ids": [
+    {"id": "T-CK-11", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-12", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-13", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-14", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-15", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-16", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-21", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-22", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-23", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-24", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-25", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-31", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-32", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-33", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-34", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-35", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-36", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-37", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-38", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-41", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-42", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-43", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-44", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-51", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-52", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-53", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-54", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-61", "gate": "CH-3", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-62", "gate": "CH-3", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-63", "gate": "CH-3", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-64", "gate": "CH-3", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-71", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-72", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-73", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-74", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-75", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-76", "gate": "CH-5", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-81", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-82", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-83", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-84", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-85", "gate": "CH-1", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-91", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-92", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-93", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-94", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-95", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-A1", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-A2", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-A3", "gate": "CH-4", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-E1", "gate": "CH-2", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-E2", "gate": "CH-7", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-E3", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-E4", "gate": "CH-7", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-E5", "gate": "CH-6", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B1", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B2", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B3", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B4", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B5", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B6", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B7", "gate": "CH-9", "verdict": "pending", "evidence": ""},
+    {"id": "T-CK-B8", "gate": "CH-9", "verdict": "pending", "evidence": ""}
+  ],
+  "unsupported": [
+    {"id": "U-M4-01", "item": "执行语义（求值、短路、defer LIFO、goroutine、range 随机起点；含 loopvar 与 range-over-func 的执行面）", "why": "D-M4-12", "planned_phase": "M5/M8", "positive_evidence": "静态面由 T-CK-36 覆盖；执行面不承诺"},
+    {"id": "U-M4-02", "item": "EXP-27 求值顺序（codegen 面）", "why": "M4 范围外", "planned_phase": "M6+", "positive_evidence": "9 缺测试项登记（M4-tests §2.3）"},
+    {"id": "U-M4-03", "item": "反射、并发、SYS-05 运行时错误集", "why": "M4 范围外", "planned_phase": "M8+", "positive_evidence": "同上"},
+    {"id": "U-M4-04", "item": "-goexperiment= 指令面", "why": "未建模", "planned_phase": "未排期", "positive_evidence": "装置遇非空 goexperiment ⇒ 响亮失败；守卫进 T-CK-E1"},
+    {"id": "U-M4-05", "item": "-fakeImportC / cgo import \"C\"", "why": "选料排除（importC.go 逐行理由）", "planned_phase": "wave 2", "positive_evidence": "oracle 侧响亮失败（check.go parseFlags 复刻）；check-allowlist.txt 行"},
+    {"id": "U-M4-06", "item": "unsafe 白名单外成员（Add/Slice/…、Pointer 转换、uintptr 往返、内存访问）", "why": "D-M4-8", "planned_phase": "M6+", "positive_evidence": "T-CK-44：白名单外显式拒绝"},
+    {"id": "U-M4-07", "item": "列号进硬判据", "why": "M4-tests §5.2（渲染携带、判据剥列）", "planned_phase": "RED 期实测稳定后修订升格", "positive_evidence": "T-CK-91 渲染含列 + 提示层差异计数"},
+    {"id": "U-M4-08", "item": "methodset 的签名渲染面", "why": "v1 冻结为名字序列", "planned_phase": "按需修订", "positive_evidence": "T-CK-84（cmp methodset = 名字序列）"},
+    {"id": "U-M4-09", "item": "泛型算法超出面的显式拒绝形态", "why": "D-M4-5", "planned_phase": "RED 期钉死", "positive_evidence": "T-CK-25：拒面对（不静默接受）"},
+    {"id": "U-M4-10", "item": "fixedbugs 全集（wave A 之外）", "why": "G5 逐批引入", "planned_phase": "wave B+（M4 后）", "positive_evidence": "T-CK-A1/A2：wave A 50 行冻结与对撞"},
+    {"id": "U-M4-11", "item": "check 目录包（decls2/importdecl0/importdecl1/issue25008）", "why": "多文件包不在 check 面候选", "planned_phase": "wave 2", "positive_evidence": "check_corpus.rs：四目录存在且不在候选（T-CK-93）"},
+    {"id": "U-M3-06", "item": "构建约束筛选、_test.go/cgo/汇编", "why": "M3 承接（M4-tests §7.1）", "planned_phase": "M4 之后", "positive_evidence": "白名单项不得记为 pass；无 M4 面触发"},
+    {"id": "U-M3-07", "item": "官方二进制 export data、模块、go.mod、标准库 import（unsafe 例外）", "why": "M3 承接；check 面 importer 只认 unsafe", "planned_phase": "M4 之后", "positive_evidence": "T-CK-91：map0.go could-not-import 两侧同判；chans.go 排除理由"},
+    {"id": "U-M3-09", "item": "//go: 未知指令的裁定", "why": "M3 承接", "planned_phase": "noder 等价阶段", "positive_evidence": "白名单项不得记为 pass"},
+    {"id": "U-M3-10", "item": "诊断消息逐字一致", "why": "M3 承接", "planned_phase": "不承诺", "positive_evidence": "双腿只判 verdict + 位类（C8 §5）"},
+    {"id": "U-M3-11", "item": "非法 UTF-8 dump 分叉", "why": "M3 承接", "planned_phase": "暴露时回填", "positive_evidence": "白名单项不得记为 pass"},
+    {"id": "U-M3-12", "item": "Pos::Ord 绝对坐标", "why": "M3 承接", "planned_phase": "暴露时回填", "positive_evidence": "同上"},
+    {"id": "U-M3-13", "item": "相对路径拼接", "why": "M3 承接", "planned_phase": "暴露时回填", "positive_evidence": "同上"}
+  ],
+  "m3_sync": [
+    {"item": "U-M3-01..04", "flip": "types --cmp 新 kind / 判定五件套", "action": "T-TY-82 改写（新 kind 作答 + 未知 kind 仍拒）；M3-tests.md §6 加修订指针；M3-manifest.json 追加 resolved_by: M4", "gate": "T-CK-E5 / CH-6"},
+    {"item": "U-M3-05", "flip": "identical（约束接口）", "action": "T-TY-81 改写为解除断言；合成反例；manifest 更新", "gate": "T-CK-E5 / CH-6"},
+    {"item": "U-M3-08", "flip": "rgoc check 面", "action": "T-TY-83 行为不改（rgoc types 口径保持）+ 注记", "gate": "T-CK-E5 / CH-6"},
+    {"item": "总闸", "flip": "——", "action": "cargo test -p rgoc-driver --test manifest_m3 全绿 + workspace 全绿", "gate": "T-CK-E5 / CH-6"},
+    {"item": "M3-tests.md §5.2（R-32-1）", "flip": "cmp 语法扩展（一元 kind / 实参列表 / 输出形态）", "action": "增修订 `R-32-2`（Task 15 执行期同批登记；Task 40 落档）", "gate": "T-CK-E5 / CH-6"}
+  ],
+  "budget": {
+    "recursion_depth_max": 1000,
+    "recursion_depth_note": "类型/表达式递归上限（沿 M2/M3）",
+    "import_depth_max": 100,
+    "import_depth_note": "超限出诊断，不栈溢出（M3）",
+    "per_file_check_timeout_s": 10,
+    "per_file_check_timeout_note": "M4-design §6.2（M4-tests §9.4 定稿）",
+    "per_file_bytes_max": "64 MiB（沿用 M1 D-M1-4）",
+    "smoke_wall_s_max": 300,
+    "milestone_wall_s_max": 1800,
+    "full_wall_s_max": 7200,
+    "effort_calendar": {
+      "start": "2026-10-18",
+      "max_weeks": 12,
+      "effort_note": "roadmap §6：6–12 人周 / 12 周日历；AI 代理形态不换算人周（沿 roadmap §6.1），以日历字段承载 roadmap §6.2 的「投入/日历期限」；止损切片见 M4-design §6.3"
+    },
+    "measured": null
+  },
+  "open_gaps": {
+    "note": "开工前冻结；收口时更新。每项要么在本阶段关闭，要么带去向。",
+    "items": [
+      {"id": "G-1", "item": "U-M4-07 列号升格未决", "note": "渲染携带列、硬判据剥列；RED 期实测稳定 ⇒ 修订升格（改判据不改格式）", "gate": "T-CK-91"},
+      {"id": "G-2", "item": "U-M4-08 methodset 签名渲染面（v1 名字序列）", "note": "按需修订", "gate": "T-CK-84"},
+      {"id": "G-3", "item": "U-M4-09 泛型超出面拒绝形态未钉死", "note": "D-M4-5；RED 期以实测钉死并登记", "gate": "T-CK-25"},
+      {"id": "G-4", "item": "R-6-1 解析错误行对齐风险（7 个含语法错误文件）", "note": "go/parser 与 rgoc-parse 恢复策略一致性；不一致 ⇒ 按移出纪律逐例处理，不许容差", "gate": "T-CK-91"},
+      {"id": "G-5", "item": "M3 open_gaps「值层没有类型接线」", "note": "落点 = Task 20（检查会话/操作数）；会挡 -uint32(5)/uint32(0)-1 类判定", "gate": "T-CK-31/33"},
+      {"id": "G-6", "item": "A3：M3 15 例 DIFF / 10 例拒绝根因复核", "note": "实例化落地后逐例给结论（已可提升 / 仍属 C7 渲染面 / 登记去向）；不要求 M4 内提升", "gate": "T-CK-A3 / CH-4"},
+      {"id": "G-7", "item": "U-M4-10 fixedbugs 全集（wave A 之外）", "note": "G5 逐批引入；wave A 50 为 M4 实际承诺", "gate": "T-CK-A1/A2"},
+      {"id": "G-8", "item": "U-M4-11 check 目录包（4 个多文件包）", "note": "wave 2；本阶段候选不含目录包（92 号候选/目录包不进两清单，check_corpus.rs 断言）", "gate": "T-CK-93"},
+      {"id": "G-9", "item": "Cheap-trick 抑制两侧同规则（F2⑧）", "note": "oracle 免费继承（go/types 内部）；rgoc 侧待实现（Task 20+ 上报层）——探针与反向验证在 Task 3/41", "gate": "T-CK-31/36"}
+    ]
+  },
+  "phase_summary": {
+    "tasks": 44,
+    "status": "pending",
+    "plan": "docs/milestones/M4-plan.md（Task 1–44；Phase 0 装置 → 1 判定 → 2 泛型/门控 → 3 rgoc-check → 4 收口）",
+    "progress_ledger": ".superpowers/sdd/M4-plan/progress.md（不入库）",
+    "gate_commands": [
+      "scripts/in-container.sh cargo fmt --all --check",
+      "scripts/in-container.sh cargo check --workspace --all-targets",
+      "scripts/in-container.sh cargo clippy --workspace --all-targets -- -D warnings",
+      "scripts/in-container.sh cargo test --workspace --no-fail-fast"
+    ],
+    "gate_scripts": [
+      "bash tools/types-oracle/run-collide.sh tools/types-oracle/testdata",
+      "bash tools/types-oracle/run-collide.sh --cmp tools/types-oracle/testdata",
+      "bash tools/types-oracle/run-collide.sh --corpus go_source_code/src/internal/types/testdata",
+      "bash tools/types-oracle/run-collide.sh --check go_source_code/src/internal/types/testdata",
+      "bash tools/types-oracle/run-collide.sh --check --list tools/types-oracle/check-fixedbugs-waveA.txt go_source_code/src/internal/types/testdata"
+    ]
+  }
+}

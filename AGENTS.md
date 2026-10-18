@@ -3,7 +3,7 @@
 > **本文件的作用**：任何 agent / 协作者在本工作区开始任务前，读这一份即可掌握 —— 工程是什么、文档在哪、各自什么状态、遵守什么纪律、下一步做什么。
 > **遇到细节一律跳转 `docs/`，本文件不复制细节。**
 >
-> **最后同步**：2026-10-17　|　**同步触发条件**：见 §5
+> **最后同步**：2026-10-18　|　**同步触发条件**：见 §5
 
 ---
 
@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（开工前就绪：design ✅ / tests ✅ 冻结 63 ID / plan ✅ Task 1–44 / manifest 骨架） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：**M0–M3 四个里程碑全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-driver`** 七条正式 crate（`rgoc-hir` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1282 条测试全绿**、M0 自检 **231 条断言**全过、M1 自检全过；`M1` / `M2` / `M3` 三份 manifest 均已填实。
@@ -27,6 +27,8 @@
 **M2（AST 与 parser）已收尾**（2026-10-15）：`rgoc-ast` / `rgoc-parse` 两 crate 落地（全产生式 + 错误恢复 + 消息复刻 + checkBranches），`tools/ast-oracle`（vendor 官方 syntax + 中立 dump），`rgoc-driver ast` 子命令；**oracle 对撞 31/31 逐字节全绿**、**双向 ERROR 匹配全过**、**标准库 6670 文件零错误**、递归深度上限 1000（H）；`C1` 增 §2.3、`C6-ast-dump.md` 新建冻结、`GAP-01` 填 AST/PIPE 53 项、`M2-manifest.json` 已填实（A1–A8 / 67 个测试 ID / open_gaps）。workspace **976 条测试全绿**。遗留缺口（`-lang` 版本门控的**特性**面、`//go:` 未知指令裁决、消息逐字对撞等）见 manifest `open_gaps`。
 
 **M3（符号与类型检查入口）已收尾**（2026-10-17）：三个正式 crate 落地 —— **`rgoc-const`**（任意精度 `BigInt`/`BigRat` + 折叠/转换/可表示性）、**`rgoc-types`**（类型表示 + dump C7 + `identical` + 作用域竞技场 + universe + 按文件版本门控）、**`rgoc-load`**（单包多文件装载 + 声明收集与求值顺序 + 作用域/对象/导出/标签 + 源码 import + `ExportSummary`）；新增 `rgoc-driver types [--dump|--cmp]` 子命令与 `tools/types-oracle`（`go/parser` + `go/types`，两侧读**同一份** fixture）。**验收 = 自有 fixture + oracle 对撞 + 语料精选对撞**：dump 8 / cmp 2 / 语料 31 三条腿逐字节一致，语料候选 57（入选 31 / 排除 26，逐行理由）；**7 条变异探针全红**（`scripts/mutation-m3-notes.md`）；`C7-type-dump.md` 冻结、`M3-manifest.json` 已填实（**TY-1–TY-8** / 68 个测试 ID / `U-M3-01..13` / `open_gaps`）；`M3-tests.md` §3.3 的**修订 R1**（移位只查**计数**非负）与 §4 的**修订 R-36-1** 均已入档。workspace **1282 条测试全绿**。下一阶段 **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）** 待开工 —— 开工前读 `M3-manifest.json` 的 `open_gaps` 与 `unsupported`。
+
+**M4（静态检查闭环）开工前就绪**（2026-10-18）：`M4-design.md` **已确认**（D-M4-1..15 / 事实基线 F1–F18 / 门禁 CH-1..9 定稿；提交 `460b04d`）；`M4-tests.md` **已冻结**（**63 个 `T-CK-*`** = 甲37/乙5/丙8/丁5/反8；类别枚举 **26 类** v1；语料三清单 **75 + 16 + 50**；修订 `R-6-1`）；`M4-plan.md` **已产出**（**Task 1–44**：装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序）；`M4-manifest.json` **骨架已产出**（`gate` CH-1..9 `pending`，Task 42 填实）。执行**未开始**。
 
 ---
 
@@ -45,7 +47,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   ├── 03-roadmap.md                 ←   计划：按什么顺序建
 │   ├── 04-development-environment.md ←   环境：在哪建
 │   ├── 05-m0-architecture-and-workflow.md ← 架构：M0各阶段作用与crates时序图
-│   ├── contracts/                    ←   跨阶段版本化契约（**6 份已产出**：C1 完整 / C2 完整初稿 / C3–C5 spike 级 / C6 冻结
+│   ├── contracts/                    ←   跨阶段版本化契约（**7 份已产出**：C1 完整 / C2 完整初稿 / C3–C5 spike 级 / C6 冻结
 │   │                                 ←     + **C7 冻结**（M3：类型中立 dump））
 │   └── milestones/                   ←   阶段文档：<ID>-{design,tests,plan}.md + manifest
 │       ├── M0-design.md              ←     M0 设计（**已确认**）
@@ -60,6 +62,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │       ├── M3-tests.md               ←     **M3 测试先行清单（已冻结；§3.3 修订 R1 / §4 修订 R-36-1 / §7.2 修订 R-35-1）**
 │       ├── M3-plan.md                ←     **M3 实施计划（T-TY-01–T-TY-38 全部完成）**
 │       ├── M3-manifest.json          ←     **机器可读事实（TY-1–TY-8 + 68 个测试 ID + U-M3-01..13 + open_gaps）**
+│       ├── M4-design.md              ←     **M4 设计（已确认 2026-10-18；D-M4-1~15 + 事实基线 F1–F18 + 门禁 CH-1..9；含复审修订）**
+│       ├── M4-tests.md               ←     **M4 测试先行清单（已冻结；63 个 `T-CK-*` = 甲37/乙5/丙8/丁5/反8；修订 R-6-1/R-3-1/R-5-1/R-8-1）**
+│       ├── M4-plan.md                ←     **M4 实施计划（Task 1–44 已产出；执行未开始）**
+│       ├── M4-manifest.json          ←     **机器可读事实（骨架已产出；gate CH-1..9 pending；Task 42 填实）**
 │       └── GAP-01.md                 ←     **LEX-01..13 四维归属**（Frontend，M1 先填 13 / 210；M2/M3 继续补）
 ├── go_source_code/                   ← Go 1.27.1 官方语料，**只读**，**不入库**（185 MB）
 ├── rust-toolchain.toml               ← Rust 版本唯一来源（1.98.1）
@@ -82,9 +88,12 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── mutation-m3-notes.md          ←     M3 反向验证记录（7 条变异；**人读**，不是脚本）
 ├── tools/                            ← oracles（vendor 官方实现 + 中立 dump；对撞装置，不入编译流水线）
 │   ├── ast-oracle/                   ←     M2：vendor 官方 syntax + 中立 AST dump
-│   └── types-oracle/                 ←     M3：`go/parser` + `go/types`；`run-collide.sh`（dump / --cmp / --corpus 三形态）
+│   └── types-oracle/                 ←     M3+M4：`go/parser` + `go/types`；`run-collide.sh`（dump / --cmp / --corpus / --check / --check --list 五形态）
 │       ├── corpus-allowlist.txt      ←       语料**排除**清单（26 行：`<路径>\t<理由>`，理由带指针）
-│       └── corpus-selected.txt       ←       语料**入选**清单（31 行，`run-collide.sh --corpus` 的唯一输入）
+│       ├── corpus-selected.txt       ←       语料**入选**清单（31 行，`run-collide.sh --corpus` 的唯一输入）
+│       ├── check-selected.txt        ←       M4 check 面**入选**清单（75 行：74 EQ + `literals.go` 特例；`--check` 唯一输入）
+│       ├── check-allowlist.txt       ←       M4 check 面**排除**清单（16 行：`<路径>\t<理由>`，理由带指针）
+│       └── check-fixedbugs-waveA.txt ←       M4 fixedbugs **wave A** 清单（50 行；`--check --list` 唯一输入）
 ├── rgoc/tests/ast/                   ←     M2 golden（31 副本 + 31 dump + 31 诊断参照，由 oracle 生成、不手改）
 ├── .devcontainer/devcontainer.json   ← VSCode 调试环境（与门禁同镜像，D-M0-10）
 ├── .vscode/launch.json               ← CodeLLDB 调试配置（2 个：当前测试 / 全部测试）
@@ -178,6 +187,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | — | [`docs/milestones/M3-tests.md`](./docs/milestones/M3-tests.md) | 测试 | **怎么验 M3** —— 九个切面 68 个测试 ID / `U-M3-01..13` 白名单 / 四条门禁命令 / 冻结资源上限 / **修订 R1、R-32-1、R-35-1、R-36-1/2** | **已冻结** | ≈24 KB |
 | — | [`docs/milestones/M3-plan.md`](./docs/milestones/M3-plan.md) | 计划 | **怎么干 M3** —— **T-TY-01–T-TY-38**（5 个 Phase；RED-GREEN + 变异反向验证） | ✅ **全部完成**（2026-10-17） | ≈50 KB |
 | — | [`docs/milestones/M3-manifest.json`](./docs/milestones/M3-manifest.json) | manifest | **机器可读事实** —— `gate` **TY-1–TY-8** + 68 个 `test_ids` + `U-M3-01..13` + `budget` + `open_gaps`（由 `rgoc-driver/tests/manifest_m3.rs` 与冻结文档对账） | ✅ **已填实** | ≈29 KB |
+| — | [`docs/milestones/M4-design.md`](./docs/milestones/M4-design.md) | 设计 | **怎么建 M4** —— 决策 D-M4-1~15 / 事实基线 F1–F18 / **双腿判据**（marker verdict-only + 实跑位类对齐）/ 门禁 CH-1..9；**已含 builder-check 复审修订**（B1/B2 + M1–M8/m1–m5 全部折入，§8.1 处置表） | **已确认**（2026-10-18；修订同日） | ≈55 KB |
+| — | [`docs/milestones/M4-tests.md`](./docs/milestones/M4-tests.md) | 测试 | **怎么验 M4** —— 63 个 `T-CK-*`（甲37/乙5/丙8/丁5/反8）/ 类别枚举 26 类 / 语料三清单（75+16+50）/ **修订 R-6-1、R-3-1、R-5-1、R-8-1** | **已冻结** | ≈30 KB |
+| — | [`docs/milestones/M4-plan.md`](./docs/milestones/M4-plan.md) | 计划 | **怎么干 M4** —— **Task 1–44**（装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序） | ✅ **计划已产出**（执行未开始） | ≈45 KB |
+| — | [`docs/milestones/M4-manifest.json`](./docs/milestones/M4-manifest.json) | manifest | **机器可读事实（骨架）** —— `gate` CH-1..9（`pending`）+ 63 个 `test_ids` + `unsupported` 18（`U-M4-01..11` + M3 承接 7）+ 语料三清单 + `budget`（含 `effort_calendar`）+ `open_gaps` G-1..G-9（由 Task 42 填实并与 `manifest_m4.rs` 对账） | 🟡 **骨架已产出** | ≈18 KB |
 
 **阅读顺序**：
 * **人类协作者首读**：优先阅读 [`docs/00-architecture-and-roadmap-guide.md`](./docs/00-architecture-and-roadmap-guide.md) 建立系统直觉与架构全景，再按需查阅各专项目录。
@@ -185,11 +198,11 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 **阶段文档**（`docs/milestones/`）——每阶段开工前须产出 **三件套**（`03` §6.2）：
 
-| 件 | 回答什么 | M0 | M1 | M2 | M3 |
-|---|---|---|---|---|---|
-| `<ID>-design.md` | **做什么、边界在哪** | ✅ 已确认 | ✅ **已确认**（2026-10-11） | ✅ **已确认**（2026-10-15） | ✅ **已确认**（2026-10-17） |
-| `<ID>-tests.md` | **怎么算通过** | ✅ **已冻结**（T29，2026-10-02；§5.1 另有**修订 R1**） | ✅ **已冻结**（T-L21，2026-10-12） | ✅ **已冻结** | ✅ **已冻结**（§3.3 修订 R1 / §4 修订 R-36-1） |
-| `<ID>-plan.md` + `manifest.json` | **按什么顺序动手** + 环境锁定值 | ✅ **计划全部完成**（T01–T55）；manifest **已填实**（`environment` + `gate` **十条** + `test_ids` + `unsupported` + `budget`） | ✅ **计划全部完成**（T-L01–T-L21）；manifest **已填实**（`gate` **七条** + `test_ids` + `unsupported` + `budget` + `GAP-01`） | ✅ **计划全部完成**（T-AP01–T-AP21 + PA-1）；manifest **已填实**（`gate` **八条** + 67 个 `test_ids` + `open_gaps`） | ✅ **计划全部完成**（T-TY-01–T-TY-38）；manifest **已填实**（`gate` **八条** + 68 个 `test_ids` + `U-M3-01..13` + `budget` + `open_gaps`） |
+| 件 | 回答什么 | M0 | M1 | M2 | M3 | M4 |
+|---|---|---|---|---|---|---|
+| `<ID>-design.md` | **做什么、边界在哪** | ✅ 已确认 | ✅ **已确认**（2026-10-11） | ✅ **已确认**（2026-10-15） | ✅ **已确认**（2026-10-17） | ✅ **已确认**（2026-10-18；同日复审修订） |
+| `<ID>-tests.md` | **怎么算通过** | ✅ **已冻结**（T29，2026-10-02；§5.1 另有**修订 R1**） | ✅ **已冻结**（T-L21，2026-10-12） | ✅ **已冻结** | ✅ **已冻结**（§3.3 修订 R1 / §4 修订 R-36-1） | ✅ **已冻结**（63 个 `T-CK-*`；修订 R-6-1/R-3-1/R-5-1/R-8-1） |
+| `<ID>-plan.md` + `manifest.json` | **按什么顺序动手** + 环境锁定值 | ✅ **计划全部完成**（T01–T55）；manifest **已填实**（`environment` + `gate` **十条** + `test_ids` + `unsupported` + `budget`） | ✅ **计划全部完成**（T-L01–T-L21）；manifest **已填实**（`gate` **七条** + `test_ids` + `unsupported` + `budget` + `GAP-01`） | ✅ **计划全部完成**（T-AP01–T-AP21 + PA-1）；manifest **已填实**（`gate` **八条** + 67 个 `test_ids` + `open_gaps`） | ✅ **计划全部完成**（T-TY-01–T-TY-38）；manifest **已填实**（`gate` **八条** + 68 个 `test_ids` + `U-M3-01..13` + `budget` + `open_gaps`） | 🟡 **计划已产出**（Task 1–44）；manifest **骨架已产出**（`gate` CH-1..9 `pending`；Task 42 填实） |
 
 ### 2.2 依赖方向
 
@@ -245,7 +258,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 | 已知环境约束 | ① 所有构建与测试**必须**在容器内（`scripts/in-container.sh`）；② `rgoc/target/` 在命名卷 `rgoc-target`，故 `cargo clean` 会 `EBUSY` —— 清空用 `find rgoc/target -mindepth 1 -delete`；③ 镜像 **不可位级复现**，钉子只有 `base.index_digest` + `src.*_sha256`，**image id 不得写进门禁**；④ **宿主 VSCode 的 `http.proxy` 会被下推进容器**（经 AHP `root/configChanged`），容器内 `127.0.0.1` 指向自己 → 一切走 VSCode 网络栈的下载都会失败。**远端 Machine settings 覆盖不了它**；CodeLLDB 平台包用 `scripts/install-codelldb.sh` 离线装（见 `M0-benchmarks.md` §7）；⑤ **每次升级宿主 VSCode 都可能让窗口连不上容器** —— commit 变了而持久卷 `/vscode` 里没有新 server，Dev Containers 便去宿主侧下载（`Path: /var/folders/…`）再被死代理挡住。**报错文字与 ④ 一模一样但层级不同**，按 `Path:` 辨异，修法是 `scripts/install-vscode-server.sh`（见 §9）；⑥ **容器重建后 CodeLLDB 平台包必丢**（`~/.vscode-server/extensions/` 不在任何卷里），重跑 `install-codelldb.sh`；⑦ **CodeLLDB 的 cargo 启动配置有两个静默陷阱**（`launch.json` 里写错不报错，只在按 F5 时以 `Cargo command did not complete successfully.` 出现）：`cargo` 的工作目录取自 **`cargo.cwd`（不读顶层 `cwd`）**，漏写就回退到 `/work`（无 `Cargo.toml`）→ cargo 退出 **101**；`filter.name` 比对的是 **cargo 的 target name（下划线）而非包名（连字符）**，写错会 0 匹配。真错在 **OUTPUT → LLDB** 通道的 `Cargo exited with code N`，**不在 VSCode 弹出的那个提示里**；且**不能用 shell 复现**那条命令（CodeLLDB 是无 `shell: true` 的 `spawn`，shell 会剥掉 `target.'cfg(all())'` 的单引号 → 假的 TOML 报错）。见 `M0-benchmarks.md` §10，回归由 `debug-smoke-test.sh` 第 2 节守住（该节按 `launch.json` 原样复刻 CodeLLDB 的 cargo 步骤） |
 | 9 项测试缺口 | 原 9 项：TYP-26、SCP-06、EXP-16、EXP-22、PKG-04、PKG-06、RT-SCH-02、RT-POLY-03、RT-POLY-05 —— 须在 rgoc 自有测试补齐。**进展**：`SCP-06`（Unicode 首字母大写的导出判定）已由 M3 的 `T-TY-56`（`rgoc-load/tests/exported_label.rs`）补齐；`TYP-26` 属 `U-M3-04`（泛型实例化）⇒ 随 **M4** 解决。其余 7 项仍在 |
 | 已知环境陷阱（产物） | **绑定挂载上 cargo 的 mtime 判据不可靠**：变异/复原源码后 `cargo test` 可能**仍用旧 rlib**（两个方向都踩过 —— 变异没生效 ⇒ 假绿；复原后变异还在 ⇒ 8 条 tests/test_directive.rs 假红）。**规矩**：每次变异前 `cargo clean -p <被变异 crate>`；**变异收尾后**若结果可疑，直接 `find rgoc/target -mindepth 1 -delete` 全量重建（约 4 min）再跑门禁。见 `scripts/mutation-m3-notes.md` §0 |
-| 阶段目录 | `docs/contracts/` **7 份契约已产出**（C1 完整 / C2 完整初稿 / C3–C5 spike 级 / C6 冻结 / **C7 冻结**）；`docs/milestones/` 含 **M0/M1/M2/M3 四套三件套** + `M0-benchmarks.md` + `M0-report.md` + `GAP-01.md` + 四份 `*-manifest.json` |
+| 阶段目录 | `docs/contracts/` **7 份契约已产出**（C1 完整 / C2 完整初稿 / C3–C5 spike 级 / C6 冻结 / **C7 冻结**；M4 将新建 C8）；`docs/milestones/` 含 **M0/M1/M2/M3 四套三件套 + M4 三件套与 manifest 骨架**（2026-10-18，含复审修订）+ `M0-benchmarks.md` + `M0-report.md` + `GAP-01.md` + 五份 `*-manifest.json` |
 | 事实修正 | 02 **§0.2** 记录了 **9 处**对既有表述的修正（如 `syntax/testdata/` 实为 **31** 个文件；驱动器是 `testdir_test.go` 而非 `test/run.go`）——**以该节为准** |
 
 ---
@@ -379,17 +392,17 @@ python3 scripts/push-via-api.py
 
 ## 7. 下一步
 
-**M0–M3 四个里程碑已全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8；workspace **1282 条测试全绿**）。**当前处于 M4 的开工前阶段。**
+**M0–M3 四个里程碑已全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8；workspace **1282 条测试全绿**）。**M4 三件套与 manifest 骨架已产出（2026-10-18，含 builder-check 复审修订）；执行即将开始**（`M4-plan.md` Task 1 起）。
 
 ### 7.1 M4 的下一步（按序）
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | 读 `docs/milestones/M3-manifest.json` 的 `open_gaps` 与 `unsupported`（13 条 `U-M3-01..13`；其中 `U-M3-05` 约束接口同一性 **M4 必须解除**） | ⬜ 开工前必读 |
-| 2 | 读 `M3-tests.md` §6（白名单纪律）与 §4（负例双向）—— M4 会把其中若干条从「显式拒绝」翻成「给答案」 | ⬜ 开工前必读 |
-| 3 | `docs/milestones/M4-design.md` —— 设计决策与边界（**至少**裁清：泛型实例化的表示、类型集版 interface 的同一性、可赋值性与方法集） | ⬜ 待产出 |
-| 4 | `docs/milestones/M4-tests.md` + `M4-plan.md` + `M4-manifest.json` —— 冻结测试 ID 与 RED-GREEN 分解 | ⬜ 待产出 |
-| 5 | 执行 + 门禁（四条 cargo 命令 + `run-collide.sh` 三形态 + 变异反向验证） | ⬜ 未开始 |
+| 1 | 读 `docs/milestones/M3-manifest.json` 的 `open_gaps` 与 `unsupported`（13 条 `U-M3-01..13`；其中 `U-M3-05` 约束接口同一性 **M4 必须解除**） | ✅ **已读**（2026-10-18；14 条 `open_gaps` 取全，处置表入 `M4-design.md` §8.1） |
+| 2 | 读 `M3-tests.md` §6（白名单纪律）与 §4（负例双向）—— M4 会把其中若干条从「显式拒绝」翻成「给答案」 | ✅ **已读**（2026-10-18；翻转清单与 `R-32-2` 已入设计/计划） |
+| 3 | `docs/milestones/M4-design.md` —— 设计决策与边界（**至少**裁清：泛型实例化的表示、类型集版 interface 的同一性、可赋值性与方法集） | ✅ **已确认**（2026-10-18；D-M4-1~15 / F1–F18 / CH-1..9；同日复审修订已折入） |
+| 4 | `docs/milestones/M4-tests.md` + `M4-plan.md` + `M4-manifest.json` —— 冻结测试 ID 与 RED-GREEN 分解 | ✅ **已冻结**（2026-10-18：63 个 `T-CK-*` / Task 1–44 / manifest 骨架含三清单与 `m3_sync`） |
+| 5 | 执行 + 门禁（四条 cargo 命令 + `run-collide.sh` 五形态 + 变异反向验证） | 🟡 **未开始**（复验通过后提交冻结检查点并开工） |
 
 > ⚠️ **M4 开工前的三处必读**：
 > ① `M3-manifest.json` 的 `open_gaps` —— 尤其「**值层没有类型接线**」这条，它会挡住 `-uint32(5)` / `uint32(0)-1` 一类判定；
@@ -455,9 +468,9 @@ python3 scripts/push-via-api.py
    ✅ T54 —— manifest 三节完整化（37 个测试 ID / U1–U14 / 预算三节）
    ✅ T55 —— **E9** 六条统一退出检查 + M0 全门禁复核（**E1–E10 十条全过**）
    👉 **下一个**：**M4 · 泛型实例化 / 类型集版 interface 同一性 / 可赋值性**（`03` 的 M4）——
-   开工前读 **`M3-manifest.json` 的 `open_gaps` + `unsupported`**（`U-M3-05` 是 M4 必须解除的那条）
-   与 **`M3-tests.md` §6**（白名单纪律；`rgoc-driver/tests/manifest_m3.rs` 会强制它与 manifest 对账）
-   与 **`scripts/mutation-m3-notes.md` §0**（产物陈旧陷阱）
+   三件套 + manifest 骨架已产出（2026-10-18，含复审修订）；开工前读 **`M4-tests.md` §6/R-6-1**
+   与 **`M3-manifest.json` 的 `open_gaps` + `unsupported`**（`U-M3-05` 是 M4 必须解除的那条；
+   `M4-design.md` §8.1 处置表逐条给了去向）与 **`scripts/mutation-m3-notes.md` §0**（产物陈旧陷阱）
 2. 基于**实测到的环境事实**拆 **Phase 2–4** 的计划（`M0-plan.md` §0.1 已说明为何此时才拆）
 3. 开工前跑一遍 §6.1 的自检，并把执行状态回写 `M0-manifest.json` / `M0-plan.md`
 
@@ -500,8 +513,10 @@ T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。
 
 > **M0–M3 四个里程碑全部完成**（T01–T55 / T-L01–T-L21 / T-AP01–T-AP21 / T-TY-01–T-TY-38），
 > **E1–E10 / L1–L7 / A1–A8 / TY-1–TY-8 全部门禁全过**；workspace **1282 条测试全绿**。
-> **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）尚未开工** ——
-> 开工前先读 [`M3-manifest.json`](./docs/milestones/M3-manifest.json) 的 `open_gaps` + `unsupported`
-> 与 [`M3-tests.md`](./docs/milestones/M3-tests.md) §6，并跑一遍 §6.1 的文档自检。
+> **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）三件套与 manifest 骨架已产出**
+> （2026-10-18；builder-check 复审修订已折入）—— **执行未开始** ——
+> 开工前读 [`M4-tests.md`](./docs/milestones/M4-tests.md) §6/R-6-1
+> 与 [`M3-manifest.json`](./docs/milestones/M3-manifest.json) 的 `open_gaps` + `unsupported`
+> （[`M4-design.md`](./docs/milestones/M4-design.md) §8.1 为全集处置表），并跑一遍 §6.1 的文档自检。
 
 **原则**：早期可行性验证、单平台首发、独立可退出的能力切片优先；完整 Go toolchain / runtime 是后续扩展，不是首发承诺。

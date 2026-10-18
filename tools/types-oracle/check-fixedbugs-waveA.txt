@@ -1,0 +1,73 @@
+# `types/testdata/fixedbugs` 面 wave A 清单（M4，2026-10-18 冻结）。
+#
+# 每行一个相对 `types/testdata/` 根的路径（与 `check-selected.txt` 同格式）；
+# 谁消费它：`run-collide.sh --check --list check-fixedbugs-waveA.txt <testdata 根>`
+# 与 `check_corpus.rs`（存在性 + 行数 + 分组注释保持）。
+#
+# 判据与 `check-selected.txt` 相同：官方语义复扫 EQ（2026-10-18）。
+# 本批 **50** 个全部 EQ（reject 标记总数 132；**零** import 依赖），分组来源：
+#   G1（25）M3 已逐行有理由的实例化/同一性文件（`corpus-allowlist.txt` 承继，
+#      U-M3-04/05 直系）—— M4 解除后定点复核；
+#   G2（8）版本门控（`requires go1` 标记）；
+#   G3（13）`cannot infer` 推断面（CH-4 主轴）；
+#   G4（4）`does not implement` 接口实现面。
+# 其余 274−50 留 wave B+（逐批引入，沿 G5）；非 EQ 的 18 个与
+# `issue78346.go`（SKIP-BUILDTAG，官方也不跑）不在任何 wave 的首批。
+#
+# ⚠️ wave A 的通过与否按 `M4-tests.md` §8（CH-9）与降级序记录：
+# 预算不足时 wave A 是**先砍**项；砍掉必须写进 `M4-report.md`，不许静默。
+#
+# ── G1 M3 已知实例化/同一性（25）
+fixedbugs/issue25838.go
+fixedbugs/issue39711.go
+fixedbugs/issue39755.go
+fixedbugs/issue39982.go
+fixedbugs/issue40038.go
+fixedbugs/issue41176.go
+fixedbugs/issue43056.go
+fixedbugs/issue45550.go
+fixedbugs/issue46461.go
+fixedbugs/issue47887.go
+fixedbugs/issue48695.go
+fixedbugs/issue50259.go
+fixedbugs/issue50276.go
+fixedbugs/issue50426.go
+fixedbugs/issue50729.go
+fixedbugs/issue50729b.go
+fixedbugs/issue50779.go
+fixedbugs/issue52529.go
+fixedbugs/issue57192.go
+fixedbugs/issue59338b.go
+fixedbugs/issue60460.go
+fixedbugs/issue60556.go
+fixedbugs/issue65854.go
+fixedbugs/issue66751.go
+fixedbugs/issue77905.go
+# ── G2 版本门控（8）
+fixedbugs/issue47818.go
+fixedbugs/issue50427a.go
+fixedbugs/issue52031.go
+fixedbugs/issue56351.go
+fixedbugs/issue59338a.go
+fixedbugs/issue59639.go
+fixedbugs/issue64704.go
+fixedbugs/issue79832.go
+# ── G3 cannot infer（13）
+fixedbugs/issue39634.go
+fixedbugs/issue39976.go
+fixedbugs/issue40056.go
+fixedbugs/issue48136.go
+fixedbugs/issue49541.go
+fixedbugs/issue51229.go
+fixedbugs/issue53692.go
+fixedbugs/issue58671.go
+fixedbugs/issue59740.go
+fixedbugs/issue59890.go
+fixedbugs/issue59956.go
+fixedbugs/issue60377.go
+fixedbugs/issue60562.go
+# ── G4 does not implement（4）
+fixedbugs/issue49005.go
+fixedbugs/issue49579.go
+fixedbugs/issue50427b.go
+fixedbugs/issue50816.go

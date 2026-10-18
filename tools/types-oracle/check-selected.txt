@@ -1,0 +1,102 @@
+# `types/testdata` check 面精选的**入选**清单（M4，2026-10-18 冻结）。
+#
+# 每行一个相对 `types/testdata/` 根的路径，**排序、去重**；`#` 注释与空行忽略。
+# 谁消费它：`tools/types-oracle/run-collide.sh --check <testdata 根>`（M4 对撞装置）
+# 与 `rgoc/crates/rgoc-driver/tests/check_corpus.rs` 的两向集合断言。
+#
+# 入选判据（2026-10-18 官方语义复扫；重放命令见 `M4-plan.md`）：
+# 在**官方检查语义**下 —— `parser.AllErrors|SkipObjectResolution`；**解析错误参与**
+# 错误清单；错误回调剔除 `: \t` 次级消息；首行 `// -lang=` 生效（无则缺省）；
+# `shouldTest` 构建约束过滤 —— 错误数 == `/* ERROR */` 标记数（「EQ」）。
+#
+# 三个目录的候选（顶层 `.go`，目录包不在候选）与结果：
+#   · check/    70 → 53 入选（+ `literals.go` 特例，见下）
+#   · spec/     13 → 13 全入选
+#   · examples/  8 →  8 全入选
+# 合计 **75**：64 个 reject（标记总数 **1376**）+ 11 个 accept
+# （accept：compliterals、cycles1、linalg、map1、typeinstcycles、
+#   go1_19_20、go1_20_19、go1_21_19、go1_21_22、go1_xx_19 + literals）。
+#
+# 特例（1 条）：
+#   · check/literals.go —— 官方侧依赖 `DefPredeclaredTestFuncs` 注入的 `assert` 内建：
+#     注入后 0 错 0 标记（官方判 accept）；不注入则 68 条 `undefined: assert`。
+#     两侧对撞**都开**测试内建（oracle `--check` 注入 / rgoc `--test-hooks`）。
+#
+# 排除行（16 条）在 `check-allowlist.txt`；两向互补（候选 == 入选 ∪ 排除，无死行）
+# 由 `check_corpus.rs` 断言。目录包（decls2/ importdecl0/ importdecl1/ issue25008/）
+# 不在顶层候选，口径见 `check-allowlist.txt` 头部。
+check/blank.go
+check/compliterals.go
+check/conversions1.go
+check/cycles0.go
+check/cycles1.go
+check/cycles2.go
+check/cycles3.go
+check/cycles4.go
+check/cycles6.go
+check/decls0.go
+check/decls4.go
+check/decls5.go
+check/doubled_labels.go
+check/errors.go
+check/expr0.go
+check/expr1.go
+check/expr2.go
+check/go1_12.go
+check/go1_13.go
+check/go1_16.go
+check/go1_19.go
+check/go1_19_20.go
+check/go1_20_19.go
+check/go1_21_19.go
+check/go1_21_22.go
+check/go1_22_21.go
+check/go1_25.go
+check/go1_8.go
+check/go1_xx_19.go
+check/gotos.go
+check/init0.go
+check/init1.go
+check/init2.go
+check/issue70974.go
+check/issues0.go
+check/labels.go
+check/linalg.go
+check/literals.go
+check/main0.go
+check/main1.go
+check/map0.go
+check/map1.go
+check/methodsets.go
+check/shifts.go
+check/slices.go
+check/stmt0.go
+check/stmt1.go
+check/typeinference.go
+check/typeinst0.go
+check/typeinst1.go
+check/typeinstcycles.go
+check/typeparams.go
+check/unions.go
+check/vardecl.go
+examples/constraints.go
+examples/functions.go
+examples/inference.go
+examples/inference2.go
+examples/methods.go
+examples/operations.go
+examples/types.go
+examples/typesets.go
+spec/assignability.go
+spec/comparable.go
+spec/comparable1.19.go
+spec/comparisons.go
+spec/conversions.go
+spec/methods.go
+spec/range.go
+spec/range_int.go
+spec/receivers.go
+spec/structLits.go
+spec/typeAliases1.22.go
+spec/typeAliases1.23.go
+spec/typeAliases1.8.go
