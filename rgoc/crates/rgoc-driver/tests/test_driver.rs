@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use rgoc_driver::cli::{
-    CliError, Command, HarnessCommand, LexCommand, LexMode, TypesCommand, parse_args,
+    CheckCommand, CliError, Command, HarnessCommand, LexCommand, LexMode, TypesCommand, parse_args,
 };
 use rgoc_driver::lex_cmd;
 use rgoc_driver::report::{RunSummary, render_text, summarize, to_json};
@@ -1102,4 +1102,108 @@ fn types_cmp_指令格式错_响亮报错() {
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(err.contains(want), "{tag}：报错里要出现 {want:?}：{err}");
     }
+}
+
+// ══ 7. check 子命令（M4；Task 2 起接线）═══════════════════════════════════════
+
+/// `check` 的旗标面：最小形态 / 全旗标 / 缺文件 / 未知旗标 / 缺值 —— 全部在
+/// **解析层**定稳。占位期的行为（稳定失败）以“解析先正确”为前提。
+#[test]
+fn 解析_check_子命令_旗标面() {
+    // ① 最小形态
+    let got = parse_args(&["check", "a.go"]).expect("应可解析");
+    assert_eq!(
+        got,
+        Command::Check(CheckCommand {
+            files: vec![PathBuf::from("a.go")],
+            diag_dump: false,
+            lang: None,
+            test_hooks: false,
+        })
+    );
+    // ② 全旗标 + 多文件（顺序无关：旗标在前、文件在后都吃）
+    let got = parse_args(&[
+        "check",
+        "--diag-dump",
+        "--lang",
+        "go1.22",
+        "--test-hooks",
+        "a.go",
+        "b.go",
+    ])
+    .expect("全旗标应可解析");
+    assert_eq!(
+        got,
+        Command::Check(CheckCommand {
+            files: vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
+            diag_dump: true,
+            lang: Some("go1.22".into()),
+            test_hooks: true,
+        })
+    );
+    // ③ 至少一个文件（静默跑 0 个 = 「全部通过」的假绿）
+    assert!(matches!(
+        parse_args(&["check"]),
+        Err(CliError::CheckNeedsFile)
+    ));
+    // ④ 未知旗标：未实现的选项一律报错（T37 纪律，check 也不例外）
+    assert!(matches!(
+        parse_args(&["check", "--not-yet", "a.go"]),
+        Err(CliError::UnknownFlag(_))
+    ));
+    // ⑤ `--lang` 缺值
+    assert!(matches!(
+        parse_args(&["check", "--lang"]),
+        Err(CliError::MissingValue("--lang"))
+    ));
+}
+
+/// 未实现期：`rgoc check` 必须**响亮失败** —— 退出码 1、stderr 带
+/// `CHK-UNIMPLEMENTED`、不 panic。静默通过（0）是本仓反复记录的最坏形状。
+#[test]
+fn check_未实现期_稳定失败且可判读() {
+    let f = 临时_go("chk-unimpl", "package p\n\nvar _ = x\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .arg("check")
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "有诊断 ⇒ 1（不是 0 的假通过，也不是 2 的用法错）"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("CHK-UNIMPLEMENTED"), "stderr 带稳定代号：{err}");
+    assert!(!err.contains("panicked"), "必须是显式诊断而非 panic：{err}");
+}
+
+/// 组合旗标**不得**被当成用法错；真正非法的旗标才给 2。
+#[test]
+fn check_组合旗标_不报用法错() {
+    let f = 临时_go("chk-flags", "package p\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    // ① 组合旗标：合法用法（占位期允许稳定失败，不允许“不认识”）
+    let out = std::process::Command::new(bin)
+        .args(["check", "--diag-dump", "--lang", "go1.22", "--test-hooks"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_ne!(out.status.code(), Some(2), "三个旗标组合必须是合法用法");
+    // ② 未知旗标 ⇒ 2，stderr 给出用法
+    let out2 = std::process::Command::new(bin)
+        .args(["check", "--bogus"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(out2.status.code(), Some(2), "未知旗标 ⇒ 用法错 2");
+    let err2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(err2.contains("--bogus"), "报错复述用户输入：{err2}");
+    // ③ 缺文件 ⇒ 2（CLI 层的判据在 `解析_check_子命令_旗标面` 已钉，这里补进程态）
+    let out3 = std::process::Command::new(bin)
+        .arg("check")
+        .output()
+        .expect("起进程");
+    assert_eq!(out3.status.code(), Some(2));
 }

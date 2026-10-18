@@ -32,6 +32,34 @@ pub enum Command {
     Ast(AstCommand),
     /// `types` 子命令（M3/Task 2 起登记；实现从 Task 28 起）
     Types(TypesCommand),
+    /// `check` 子命令（M4/Task 2 起登记；真身从 Task 20 起）
+    Check(CheckCommand),
+}
+
+/// `check` 子命令的参数（M4/Task 2）。
+///
+/// 与 `types` 的分工：`types` 是**装载面**（作用域/常量/导出），`check` 是
+/// **检查面**（诊断的行/类别对撞，`C8`）。旗标面按 `M4-plan.md` Task 2 冻结：
+/// 全部可解析，未实现的选项一律报错（T37 纪律）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckCommand {
+    /// 组成**同一个包**的文件（按用户给出的顺序）。
+    ///
+    /// 首轮对撞面是**逐文件单跑**（`C8` §2 装置前提），多文件包见 `U-M4-11`；
+    /// 装载器本身收多文件（单包多文件是 M3 的包模型），这里不额外设限。
+    pub files: Vec<PathBuf>,
+    /// `--diag-dump`：把诊断渲染成 dump（`C8` 的对撞入口；Task 20 起接 C8 类别行）。
+    ///
+    /// 不给时只报诊断（stderr）与摘要（stdout）—— 门禁读的是退出码与诊断流，
+    /// dump 是给对撞看的中间产物，两条通道刻意分开（与 `types` 同一条纪律）。
+    pub diag_dump: bool,
+    /// `--lang go1.N`：版本门控覆盖（`D-M3-15` 的显式覆盖路径，透传给装载器）。
+    pub lang: Option<String>,
+    /// `--test-hooks`：注入官方的测试内建（`assert`/`trace`，`F13`）。
+    ///
+    /// 对应官方 `types.DefPredeclaredTestFuncs()` 的装置级开关；
+    /// **Task 20 起生效**（骨架期只解析）。
+    pub test_hooks: bool,
 }
 
 /// `types` 子命令的参数（M3/Task 2）。
@@ -147,6 +175,8 @@ pub enum CliError {
     TypesNeedsFile,
     /// `types` 同时给了 `--dump` 与 `--cmp`（两种比对面，输出形状不同）
     DumpCmpConflict,
+    /// `check` 一个文件参数都没给（M4/Task 2）
+    CheckNeedsFile,
 }
 
 impl fmt::Display for CliError {
@@ -161,12 +191,13 @@ impl fmt::Display for CliError {
              rgoc-driver harness report [--out <路径>]\n  \
              rgoc-driver lex <file> [--mode comments|directives]\n  \
              rgoc-driver ast <file>\n  \
-             rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...";
+             rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
+             rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness、lex、ast 与 types 四个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex、ast、types 与 check 五个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -193,6 +224,7 @@ impl fmt::Display for CliError {
                 f,
                 "--dump 与 --cmp 不能同时给（C7 的 dump 与 `//rgoc:cmp` 的判定行是两个比对面）。{USAGE}"
             ),
+            Self::CheckNeedsFile => write!(f, "check 至少需要一个文件参数。{USAGE}"),
         }
     }
 }
@@ -213,6 +245,7 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
         "lex" => Ok(Command::Lex(parse_lex(rest)?)),
         "ast" => Ok(Command::Ast(parse_ast(rest)?)),
         "types" => Ok(Command::Types(parse_types(rest)?)),
+        "check" => Ok(Command::Check(parse_check(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -274,6 +307,53 @@ fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
         cmp,
         roots,
         lang,
+    })
+}
+
+/// `check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...` —— M4 的检查子命令。
+///
+/// 比 `types` **少** `-I` / `--dump` / `--cmp`：首轮对撞面逐文件单跑（`C8` §2），
+/// import 解析与 dump 形态的差异各自归位（`--diag-dump` 是 C8 入口，不是 C7 的）。
+/// 未知选项一律报错（T37 纪律，与 `types` 同一条）。
+fn parse_check(rest: &[&str]) -> Result<CheckCommand, CliError> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut diag_dump = false;
+    let mut lang: Option<String> = None;
+    let mut test_hooks = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--diag-dump" => {
+                diag_dump = true;
+                i += 1;
+            }
+            "--test-hooks" => {
+                test_hooks = true;
+                i += 1;
+            }
+            "--lang" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--lang"));
+                };
+                lang = Some((*v).to_string());
+                i += 2;
+            }
+            // `--help` 也走这里：报错文本里带 USAGE，等价于「列出用法」。
+            a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                files.push(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(CliError::CheckNeedsFile);
+    }
+    Ok(CheckCommand {
+        files,
+        diag_dump,
+        lang,
+        test_hooks,
     })
 }
 

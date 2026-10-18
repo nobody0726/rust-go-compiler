@@ -71,9 +71,12 @@ fn 代号表恰为冻结总数且无重复() {
     // `ImportNotFound`）、`TypImportCycle` 与 `TypUnsupportedImportForm`
     // （后两条官方无代号 —— 环检测在官方 importer 一侧且只有纯文本；见枚举注释）
     // ⇒ 共 **66**。
+    // M4/Task 2 再 +1（`ChkUnimplemented` —— `CHK-` 前缀首码，`rgoc-check` 骨架期的
+    // 占位诊断；官方无对应物，**不**进任何 Go 侧镜像表）⇒ 共 **67**。
     //
-    // ⚠️ 这个数字**同时**是 `tools/ast-oracle` 镜像表的依据 ⇒ 改它要同时改那边。
-    assert_eq!(DiagCode::ALL.len(), 66);
+    // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
+    // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
+    assert_eq!(DiagCode::ALL.len(), 67);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
@@ -126,13 +129,14 @@ fn 同位置的诊断按_code_排序_保证输出唯一() {
 /// | `LEX-` | `rgoc-lex` | `tools/token-oracle/diagmap.go` |
 /// | `SYN-` | `rgoc-parse` | `tools/ast-oracle/diagmap.go`（T-AP16 建立） |
 /// | `TYP-` | `rgoc-types` | `tools/types-oracle/diagmap.go`（M3/Task 31 建立） |
+/// | `CHK-` | `rgoc-check` | `tools/types-oracle` 的 **C8 类别适配表**（M4/Task 3 建立；类别面，非逐码消息面） |
 ///
 /// 后半段的反向断言比前半段更关键：只查「前缀合法」的话，一个前缀写错的新代号会
 /// 静默落进「没人管」的区 —— 那正是 `AGENTS.md` 记的「漏了不会报错」形状。
 /// 但白名单本身也不能恒真：留了个没人用的前缀，说明它对应的那一半镜像表**不存在**。
 #[test]
 fn diag_code_的_as_str_前缀落在阶段白名单内() {
-    const PHASES: [&str; 3] = ["LEX-", "SYN-", "TYP-"];
+    const PHASES: [&str; 4] = ["CHK-", "LEX-", "SYN-", "TYP-"];
 
     for c in DiagCode::ALL {
         let s = c.as_str();

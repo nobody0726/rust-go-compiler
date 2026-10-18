@@ -21,6 +21,8 @@
 //! rgoc-driver ast <file>                          AST dump（T-AP19）
 //! rgoc-driver types [--dump] [--lang go1.N] [-I <root>]... <file>...
 //!                                                类型检查入口（M3）
+//! rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...
+//!                                                静态检查面（M4）
 //! ```
 //!
 //! **不预留**未实现的子命令（见 [`cli`] 模块头的说明）。
@@ -32,6 +34,7 @@
 //! 把「检查通过没有」混进 dump 会让两侧的 diff 变得没法判。
 
 pub mod ast_cmd;
+pub mod check_cmd;
 pub mod cli;
 pub mod cmp_cmd;
 pub mod lex_cmd;
@@ -160,6 +163,16 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
             } else {
                 types_cmd::run_types(&t)?
             };
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            Ok(if out.errors > 0 {
+                ExitCode::FAILURE
+            } else {
+                ExitCode::SUCCESS
+            })
+        }
+        Command::Check(c) => {
+            let out = check_cmd::run_check(&c)?;
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             Ok(if out.errors > 0 {

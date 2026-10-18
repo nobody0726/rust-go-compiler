@@ -78,6 +78,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rgoc-check"
+version = "0.0.0"
+dependencies = [
+ "rgoc-lex",
+ "rgoc-load",
+]
+
+[[package]]
 name = "rgoc-const"
 version = "0.0.0"
 dependencies = [
@@ -90,6 +98,7 @@ name = "rgoc-driver"
 version = "0.0.0"
 dependencies = [
  "rgoc-ast",
+ "rgoc-check",
  "rgoc-const",
  "rgoc-harness",
  "rgoc-lex",

@@ -18,11 +18,15 @@
 #   rgoc-const —— 常量与大数（任意精度 + 可表示性）
 #   rgoc-types —— 类型表示 + universe + Identical + 按文件的版本门控
 #   rgoc-load  —— 单包多文件 + 源码 import + 导出摘要
+#
+# M4（静态检查闭环）起新增一个**正式** crate：
+#   rgoc-check —— 静态检查主体（操作数/表达式/语句/内建/初始化序/门控；C8 诊断渲染）
 
 [workspace]
 resolver = "3"
 members = [
     "crates/rgoc-ast",
+    "crates/rgoc-check",
     "crates/rgoc-const",
     "crates/rgoc-driver",
     "crates/rgoc-harness",

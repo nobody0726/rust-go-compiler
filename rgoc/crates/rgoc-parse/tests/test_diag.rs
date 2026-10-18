@@ -596,9 +596,11 @@ fn t_a_66_diagcode_总数已更新() {
     // + M3/Task 27 新增 3 个（TypBrokenImport = 官方 `BrokenImport`；
     //   TypImportCycle / TypUnsupportedImportForm 官方**无**代号，我方命名）
     //   ⇒ 共 66。
+    // + M4/Task 2 新增 1 个（ChkUnimplemented —— `CHK-` 前缀首码，rgoc-check
+    //   骨架期的占位诊断；官方无对应物）⇒ 共 67。
     assert_eq!(
         DiagCode::ALL.len(),
-        66,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）"
+        67,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 1 个（CHK-）"
     );
 }

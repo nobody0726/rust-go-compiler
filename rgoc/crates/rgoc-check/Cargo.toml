@@ -1,0 +1,15 @@
+# rgoc-check —— 静态检查主体（M4）。依赖 rgoc-lex（位置/诊断）与 rgoc-load（装载）。
+[package]
+name = "rgoc-check"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M4：静态检查闭环（操作数/表达式/语句/内建/初始化序/门控；C8 诊断渲染）。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-lex = { path = "../rgoc-lex" }
+rgoc-load = { path = "../rgoc-load" }
