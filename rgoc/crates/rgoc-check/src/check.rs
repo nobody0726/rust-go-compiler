@@ -30,6 +30,7 @@
 use rgoc_ast::AstFile;
 use rgoc_lex::{Diag, DiagBag};
 use rgoc_load::Package;
+use rgoc_types::TypeTable;
 use rgoc_types::version::{Versions, pkg_versions};
 
 use crate::diag::RawDiag;
@@ -226,6 +227,9 @@ impl CheckedPackage {
 pub struct Session<'a> {
     /// 被检查的包（作用域 / 对象 / 常量值都从这里读）。
     pub pkg: &'a Package,
+    /// 类型表（**调用方持有**：`Package` 不拥有类型 —— 装载的既定分工）。
+    /// Task 21 起表达式检查要在上面挂新类型（`*T` / untyped bool / 默认型）。
+    pub tt: &'a mut TypeTable,
     /// 装置选项。
     pub opts: &'a CheckOptions,
     diags: Vec<RawDiag>,
@@ -246,9 +250,10 @@ impl std::fmt::Debug for Session<'_> {
 impl<'a> Session<'a> {
     /// 开一个会话（空流）。
     #[must_use]
-    pub fn new(pkg: &'a Package, opts: &'a CheckOptions) -> Self {
+    pub fn new(pkg: &'a Package, tt: &'a mut TypeTable, opts: &'a CheckOptions) -> Self {
         Self {
             pkg,
+            tt,
             opts,
             diags: Vec::new(),
             reported_any: false,
@@ -310,11 +315,18 @@ impl<'a> Session<'a> {
 
 /// 检查一个**已装载**的包 —— 会话真身（Task 20 起）。
 ///
-/// 当前内容 = 「装载诊断入流」；表达式 / 语句 / 内建 / 门控点由 Task 21–36
+/// 当前内容 = 「装载诊断入流」+ Task 21 的**表达式运算符面**（包级 `var`
+/// 初始化式；`Decl::Var.values`）。语句 / 内建 / 门控点由 Task 22–36
 /// 逐个挂到会话上（每个判定走 [`Session::report`]）。
 #[must_use]
-pub fn check_package(pkg: &Package, load_diags: DiagBag, opts: &CheckOptions) -> CheckedPackage {
-    let mut session = Session::new(pkg, opts);
+pub fn check_package(
+    pkg: &Package,
+    tt: &mut TypeTable,
+    load_diags: DiagBag,
+    opts: &CheckOptions,
+) -> CheckedPackage {
+    let mut session = Session::new(pkg, tt, opts);
     session.seed(load_diags);
+    crate::expr::check_package_decls(&mut session);
     session.into_checked()
 }

@@ -84,12 +84,12 @@ pub fn run_check(cmd: &CheckCommand) -> Result<CheckOutcome, String> {
     let mut tt = TypeTable::new();
     let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
 
-    // ③ 检查（Task 20 起真身：装载诊断入流 + 会话骨架；表达式/语句/内建/门控
-    //    点由 Task 21–36 逐个挂上）。
+    // ③ 检查（Task 20 起真身：装载诊断入流 + 会话骨架；Task 21 起含表达式
+    //    运算符面；语句/内建/门控点由后续任务逐个挂上）。
     let opts = rgoc_check::CheckOptions {
         test_hooks: cmd.test_hooks,
     };
-    let checked = rgoc_check::check_package(&pkg, bag, &opts);
+    let checked = rgoc_check::check_package(&pkg, &mut tt, bag, &opts);
 
     // ④ 两条通道各自成形
     let display = cmd

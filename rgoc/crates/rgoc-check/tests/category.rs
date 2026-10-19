@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：71 个码各有恰好一个类别（M4/Task 20 后 71）
-    assert_eq!(DiagCode::ALL.len(), 71, "码表总数（M4/Task 20 后 71）");
+    // 总数守恒：72 个码各有恰好一个类别（M4/Task 21 后 72）
+    assert_eq!(DiagCode::ALL.len(), 72, "码表总数（M4/Task 21 后 72）");
 }
 
 #[test]
@@ -121,7 +121,8 @@ fn t_ck_16_other_值域恰好是三个实现限制码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 22] = [
+    let vectors: [(DiagCode, Category); 23] = [
+        (ChkInvalidOperation, Category::OpInvalid),
         (BadChar, Category::Parse),
         (SynExpectedSemicolon, Category::Parse),
         (SynBranchBreak, Category::Stmt),
@@ -157,7 +158,8 @@ fn t_ck_16_每类计数快照() {
         *counts.entry(category_of(code).as_str()).or_default() += 1;
     }
     // 定案快照（Ruling 11-1 / Ruling 20-1；Task 12 补 implements/type-arg 首码；
-    // M4/Task 14 给 type-arg 加推断失败码；M4/Task 20 other 4→3）：
+    // M4/Task 14 给 type-arg 加推断失败码；M4/Task 20 other 4→3；
+    // M4/Task 21 新增 `ChkInvalidOperation` ⇒ op-invalid 1→2、总数 71→72）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 1),
@@ -167,7 +169,7 @@ fn t_ck_16_每类计数快照() {
         ("implements", 1),
         ("import", 3),
         ("not-type", 1),
-        ("op-invalid", 1),
+        ("op-invalid", 2),
         ("other", 3),
         ("overflow", 2),
         ("parse", 25),

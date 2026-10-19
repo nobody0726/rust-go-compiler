@@ -249,7 +249,11 @@ pub fn category_of(code: DiagCode) -> Category {
         TypUnsupportedPendingInstanceArg => Category::TypeArg,
 
         // ── 单码类别 ────────────────────────────────────────────────────
-        TypDivByZero => Category::OpInvalid,
+        // `ChkInvalidOperation` 与 `TypDivByZero` 同族：官方 `UndefinedOp` /
+        // `MismatchedTypes` / `UnaddressableOperand` / `InvalidReceive` /
+        // `InvalidIndirect` / 不可比族消息经 C8 适配表全部落 `op-invalid`
+        // （Task 21 探针 `task21-reject.go` 53 行实证）。
+        TypDivByZero | ChkInvalidOperation => Category::OpInvalid,
         TypInvalidBlank => Category::NotType,
         TypInvalidTypeArg => Category::Implements,
         TypWrongTypeArgCount => Category::TypeArg,

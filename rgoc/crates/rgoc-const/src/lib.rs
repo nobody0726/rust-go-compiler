@@ -60,7 +60,10 @@ pub use bigrat::{BigRat, RoundOutcome, RoundResult};
 pub use value::{Const, const_from_literal};
 
 /// 常量折叠（定义在 [`fold`]）。
-pub use fold::{fold_binary, fold_compare, fold_unary};
+///
+/// `fold_unary_typed` 是 `^` 的按类型分岔面（M3/Task 30）—— 检查面（M4/Task 21）
+/// 的 `^cm` / `-cm` 一类一元折叠要用它。
+pub use fold::{fold_binary, fold_compare, fold_unary, fold_unary_typed};
 
 /// 常量表达式求值（定义在 [`eval`]）—— 只看值、不看类型。
 pub use eval::{ConstEnv, EvalOutcome, eval_const_expr};

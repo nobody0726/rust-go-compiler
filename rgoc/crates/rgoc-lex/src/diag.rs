@@ -28,9 +28,10 @@
 //!
 //! 现在是**枚举** `scanner.go` / `source.go` 里全部 `errorf`/`errorAtf`/`error` 调用点
 //! （26 处 ⇒ 去重 25 条消息模板）得到 22 个官方代号，再加 1 个本仓自己的限制，共 **23**（M1 冻结）。
-//! M2 增补 `SYN-`、M3 增补 `TYP-`、M4 继续增补 `TYP-`（`CHK-` 面的骨架占位码
-//! `ChkUnimplemented` 已随 Task 20 的检查会话真身落地移除 —— 五件套纪律
-//! 「没有触发者的码不许进枚举」）——
+//! M2 增补 `SYN-`、M3 增补 `TYP-`、M4 继续增补 `TYP-` 与 `CHK-`（`CHK-` 面的
+//! 骨架占位码 `ChkUnimplemented` 已随 Task 20 的检查会话真身落地移除；Task 21
+//! 起由真身码 `ChkInvalidOperation` 接管 —— 五件套纪律「没有触发者的码不许进
+//! 枚举」）——
 //! 逐里程碑的计数与沿革见 [`DiagCode::ALL`] 上下的注释与 `tests/test_diag.rs` 的计数断言。
 //!
 //! 两侧（Go 的 `tools/token-oracle/diagmap.go` 与这里）必须同步 ——
@@ -53,6 +54,13 @@ use crate::pos::Pos;
 /// 加新代号时：**插入到它字典序该在的位置**，然后让那条断言告诉你有没有放对。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum DiagCode {
+    /// 表达式的**运算符静态规则**拒绝（M4/Task 21）—— 官方
+    /// `UndefinedOp` / `MismatchedTypes` / `UnaddressableOperand` /
+    /// `InvalidIndirect` / `InvalidReceive` / 不可比（map/slice/func 只能与
+    /// `nil` 比）与 `nil` 比较族消息的**合并码**（类别面 `op-invalid`）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-32` 与
+    /// `.superpowers/sdd/M4-plan/probe/task21-*.go`（oracle 实测 53 拒绝位）。
+    ChkInvalidOperation,
     /// 不认识的字符
     BadChar,
     /// 进制字面量里出现了不属于该进制的数位（如 `0b12` 里的 `2`）
@@ -470,7 +478,8 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 71] = [
+    pub const ALL: [DiagCode; 72] = [
+        DiagCode::ChkInvalidOperation,
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -547,6 +556,7 @@ impl DiagCode {
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
             DiagCode::BadChar => "LEX-BAD-CHAR",
             DiagCode::BadDigit => "LEX-BAD-DIGIT",
             DiagCode::BadExponent => "LEX-BAD-EXPONENT",

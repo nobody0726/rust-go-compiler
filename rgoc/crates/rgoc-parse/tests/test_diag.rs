@@ -615,9 +615,11 @@ fn t_a_66_diagcode_总数已更新() {
     //   受约束实参，我方边界码）⇒ 共 72。
     // + M4/Task 20 **移除** 1 个（ChkUnimplemented —— 检查会话真身落地、骨架
     //   占位退出）⇒ 共 71。
+    // + M4/Task 21 新增 1 个（ChkInvalidOperation —— 表达式运算符静态规则的
+    //   合并码，`CHK-` 前缀真身首码）⇒ 共 72。
     assert_eq!(
         DiagCode::ALL.len(),
-        71,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）"
+        72,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）再 +1（Task 21 新增 ChkInvalidOperation）"
     );
 }

@@ -16,6 +16,7 @@
 //! |---|---|
 //! | [`check`] | 版本源（Task 18）+ **检查会话**与 [`check_package`]（Task 20 起真身） |
 //! | [`operand`] | 操作数：带类型值（`operand.go` 的 11 模式；值层接线） |
+//! | [`expr`] | 表达式运算符面（Task 21：一元 / 二元 / 比较 / 移位 / 常量溢出） |
 //! | [`render`] | `--diag-dump` 的 `C8` 渲染（过滤 / 排序 / 字节格式） |
 //! | [`diag`] | 原始诊断位（soft）+ 26 类类别投影（全量穷尽） |
 //! | [`version`] | 版本门控判定（Task 19） |
@@ -29,6 +30,7 @@
 
 pub mod check;
 pub mod diag;
+pub mod expr;
 pub mod operand;
 pub mod render;
 pub mod version;

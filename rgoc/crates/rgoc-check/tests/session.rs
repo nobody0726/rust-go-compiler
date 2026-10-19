@@ -58,8 +58,8 @@ fn rows(text: &str) -> Vec<&str> {
 /// 的**非 `#` 行**逐字节一致（`C8` §8）。
 #[test]
 fn t_ck_95_min_fixture_三条_undef_与_want_逐字节一致() {
-    let (_tt, pkg, bag) = load(MIN_SRC);
-    let checked = check_package(&pkg, bag, &CheckOptions::default());
+    let (mut tt, pkg, bag) = load(MIN_SRC);
+    let checked = check_package(&pkg, &mut tt, bag, &CheckOptions::default());
 
     assert_eq!(checked.diags.len(), 3, "每处使用各一条，不多不少");
     let positions: Vec<(u32, u32)> = checked
@@ -96,9 +96,9 @@ fn t_ck_91_装载诊断_先入流且为硬错误() {
         !bag.into_sorted().is_empty(),
         "min fixture 至少有一条装载诊断"
     );
-    let (_tt2, pkg2, bag2) = load(MIN_SRC);
+    let (mut tt2, pkg2, bag2) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg2, &opts);
+    let mut s = Session::new(&pkg2, &mut tt2, &opts);
     s.seed(bag2);
     s.report_hard(diag(9, 1, DiagCode::TypUndeclaredLabel, "label L not used"));
     let diags = s.into_diags();
@@ -114,9 +114,9 @@ fn t_ck_91_装载诊断_先入流且为硬错误() {
 /// 次级消息**留流**、渲染剔除（过滤点是渲染出口，不是上报层）。
 #[test]
 fn t_ck_91_次级消息_留流_渲染剔除() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     s.report_hard(diag(
         9,
         1,
@@ -138,9 +138,9 @@ fn t_ck_91_次级消息_留流_渲染剔除() {
 /// Cheap-trick 的边界一：**首错永不被吞**（`firstErr == nil` 时不检查）。
 #[test]
 fn cheap_trick_首错永不移除() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     // 这条消息**在首错位置也带电**——只要实现漏了「已有首错」条件，它就会丢。
     s.report_hard(diag(
         1,
@@ -154,9 +154,9 @@ fn cheap_trick_首错永不移除() {
 /// Cheap-trick 的边界二：已有首错时，「子串出现位置 > 0」才丢；位置 0 保留。
 #[test]
 fn cheap_trick_已有首错_且子串不在位置0_才丢() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     s.report_hard(diag(1, 1, DiagCode::TypUndeclaredName, "undefined: a")); // 首错
     s.report_hard(diag(
         2,
@@ -193,9 +193,9 @@ fn cheap_trick_已有首错_且子串不在位置0_才丢() {
 /// 澄清行（`"\n\t"` 之后）里出现关键词**不算** —— 只看主句。
 #[test]
 fn cheap_trick_只看首个子错误() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     s.report_hard(diag(1, 1, DiagCode::TypUndeclaredName, "undefined: a")); // 首错
     s.report_hard(diag(
         2,
@@ -209,9 +209,9 @@ fn cheap_trick_只看首个子错误() {
 /// Cheap-trick 的边界四：**软错也计入首错**（官方 `report` 不区分软硬）。
 #[test]
 fn cheap_trick_软错也计入首错() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     s.report_soft(diag(
         1,
         1,
@@ -237,9 +237,9 @@ fn cheap_trick_软错也计入首错() {
 /// `seed` 之后 `reported_any` 已立：装载诊断算「已有首错」。
 #[test]
 fn cheap_trick_装载诊断计入首错() {
-    let (_tt, pkg, bag) = load(MIN_SRC);
+    let (mut tt, pkg, bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     s.seed(bag);
     let before = s.diags().len();
     s.report_hard(diag(
@@ -258,9 +258,9 @@ fn cheap_trick_装载诊断计入首错() {
 /// `RawDiag` 的 soft 位由 `report_soft` 保住（`api.go:55` 的字段不许丢）。
 #[test]
 fn t_ck_91_report_soft_保留_soft_位() {
-    let (_tt, pkg, _bag) = load(MIN_SRC);
+    let (mut tt, pkg, _bag) = load(MIN_SRC);
     let opts = CheckOptions::default();
-    let mut s = Session::new(&pkg, &opts);
+    let mut s = Session::new(&pkg, &mut tt, &opts);
     let d = diag(
         5,
         6,
