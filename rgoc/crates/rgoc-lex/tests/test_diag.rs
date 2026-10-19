@@ -89,11 +89,15 @@ fn 代号表恰为冻结总数且无重复() {
     // 静态规则的合并码，`CHK-` 前缀真身首码）⇒ 共 **72**；M4/Task 23 再 +2
     // （`ChkInvalidIndex` / `ChkInvalidSlice` —— 索引 / 切片表达式面的合并码）
     // ⇒ 共 **74**；M4/Task 24 再 +1（`ChkInvalidSelector` —— 选择器面的合并码）
-    // ⇒ 共 **75**。
+    // ⇒ 共 **75**；M4/Task 25 再 +11（语句静态规则面的 11 个合并码：
+    // `ChkInvalidAssign` / `ChkInvalidCase` / `ChkInvalidCond` /
+    // `ChkInvalidGoDefer` / `ChkInvalidSelectCase` / `ChkMissingReturn` /
+    // `ChkNoNewVar` / `ChkNotAType` / `ChkSingleValueContext` / `ChkUnusedExpr` /
+    // `ChkWrongResultCount`）⇒ 共 **86**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 75);
+    assert_eq!(DiagCode::ALL.len(), 86);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

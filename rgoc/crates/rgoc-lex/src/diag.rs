@@ -54,6 +54,27 @@ use crate::pos::Pos;
 /// 加新代号时：**插入到它字典序该在的位置**，然后让那条断言告诉你有没有放对。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum DiagCode {
+    /// 赋值面拒绝（M4/Task 25）—— 官方 `IncompatibleAssign`（`cannot use ... as
+    /// ... value in <语境>`）/ `UnassignableOperand`（`cannot assign to ...`）/
+    /// `WrongAssignCount`（`assignment mismatch: N variables but M values`）/
+    /// `WrongArgCount`（`(not enough|too many) arguments in call to f`）的
+    /// **合并码**（类别面 `assign`）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-35` 与
+    /// `.superpowers/sdd/M4-plan/probe/task25-reject.go`（oracle 实测 36 拒绝位）。
+    ChkInvalidAssign,
+    /// `switch` 的 case 面拒绝（M4/Task 25）—— 官方 `InvalidCase`（`invalid case
+    /// x in switch on y (mismatched types ...)`）与 `DuplicateCase`
+    /// （`duplicate case x (constant of type T) in expression switch`）的
+    /// **合并码**（类别面 `stmt`）。
+    ChkInvalidCase,
+    /// 非布尔条件（M4/Task 25）—— 官方 `InvalidCond`
+    /// （`non-boolean condition in if/for statement`；类别面 `stmt`）。
+    ChkInvalidCond,
+    /// `go` / `defer` 的调用面拒绝（M4/Task 25）—— 官方 `InvalidGo`
+    /// （`go discards result of ...`）与 `InvalidDefer`
+    /// （`defer requires function call, not conversion ...`）的**合并码**
+    /// （类别面 `stmt`）。
+    ChkInvalidGoDefer,
     /// 索引表达式面拒绝（M4/Task 23）—— 官方 `NonIndexableOperand` 与
     /// `InvalidIndex` 三条（`must be integer` / `must not be negative` /
     /// `out of bounds [0:n]`）的**合并码**（类别面 `index`）。
@@ -66,7 +87,17 @@ pub enum DiagCode {
     /// `nil` 比）与 `nil` 比较族消息的**合并码**（类别面 `op-invalid`）。
     /// 逐向量对照见 `M4-tests.md` `T-CK-32` 与
     /// `.superpowers/sdd/M4-plan/probe/task21-*.go`（oracle 实测 53 拒绝位）。
+    ///
+    /// M4/Task 25 增补两个**同类别**成员：`select` 通信子句的
+    /// `invalid operation: cannot send to non-channel ...` 与类型 switch 守卫的
+    /// `x (variable of type int) is not an interface`（官方 `InvalidSend` /
+    /// `InvalidTypeSwitch`，经 C8 适配表同样落 `op-invalid`）。
     ChkInvalidOperation,
+    /// `select` 子句面拒绝（M4/Task 25）—— 官方 `InvalidSelectCase`
+    /// （`select case must be send or receive (possibly with assignment)`）与
+    /// `DuplicateDefault`（`multiple defaults (first at ...)`）的**合并码**
+    /// （类别面 `stmt`）。
+    ChkInvalidSelectCase,
     /// 选择器面拒绝（M4/Task 24）—— 官方 `MissingFieldOrMethod`（`... undefined
     /// (type ...)` 句式）/ `AmbiguousSelector` / `InvalidMethodExpr` /
     /// `NonFieldSelector`（`operand for field selector`）的**合并码**
@@ -78,6 +109,27 @@ pub enum DiagCode {
     /// `InvalidSliceExpr`（`3-index slice of string`）/ `SwappedSliceIndices`
     /// （`invalid slice indices: y < x`）的**合并码**（类别面 `slice`）。
     ChkInvalidSlice,
+    /// 缺 `return`（M4/Task 25）—— 官方 `MissingReturn`（`missing return`；
+    /// 类别面 `terminate`）。
+    ChkMissingReturn,
+    /// 短变量声明没有引入新变量（M4/Task 25）—— 官方 `NoNewVar`
+    /// （`no new variables on left side of :=`；类别面 `decl`）。
+    ChkNoNewVar,
+    /// 不是类型（M4/Task 25）—— 官方 `NotAType`（`1 is not a type`；
+    /// 类别面 `not-type`）。类型 switch 的 case 值必须能当类型用。
+    ChkNotAType,
+    /// 多值表达式落在单值语境（M4/Task 25）—— 官方 `SingleValueContext`
+    /// （`multiple-value f() (value of type (int, string)) in single-value
+    /// context`；类别面 `comma-ok`）。
+    ChkSingleValueContext,
+    /// 表达式语句的值没被使用（M4/Task 25）—— 官方 `UnusedExpr`
+    /// （`x + 1 (value of type int) is not used`；类别面 `unused`）。
+    ChkUnusedExpr,
+    /// 返回值的**个数**不符（M4/Task 25）—— 官方 `WrongResultCount`
+    /// （`not enough return values` / `too many return values`；类别面 `ret`）。
+    /// 注意与 [`DiagCode::TypWrongAssignCount`] 分工：后者是声明面
+    /// （`missing init expr` 一族，类别 `decl`），本码只用于 `return`。
+    ChkWrongResultCount,
     /// 不认识的字符
     BadChar,
     /// 进制字面量里出现了不属于该进制的数位（如 `0b12` 里的 `2`）
@@ -495,11 +547,22 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 75] = [
+    pub const ALL: [DiagCode; 86] = [
+        DiagCode::ChkInvalidAssign,
+        DiagCode::ChkInvalidCase,
+        DiagCode::ChkInvalidCond,
+        DiagCode::ChkInvalidGoDefer,
         DiagCode::ChkInvalidIndex,
         DiagCode::ChkInvalidOperation,
+        DiagCode::ChkInvalidSelectCase,
         DiagCode::ChkInvalidSelector,
         DiagCode::ChkInvalidSlice,
+        DiagCode::ChkMissingReturn,
+        DiagCode::ChkNoNewVar,
+        DiagCode::ChkNotAType,
+        DiagCode::ChkSingleValueContext,
+        DiagCode::ChkUnusedExpr,
+        DiagCode::ChkWrongResultCount,
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -576,10 +639,21 @@ impl DiagCode {
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagCode::ChkInvalidAssign => "CHK-INVALID-ASSIGN",
+            DiagCode::ChkInvalidCase => "CHK-INVALID-CASE",
+            DiagCode::ChkInvalidCond => "CHK-INVALID-COND",
+            DiagCode::ChkInvalidGoDefer => "CHK-INVALID-GO-DEFER",
             DiagCode::ChkInvalidIndex => "CHK-INVALID-INDEX",
             DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
+            DiagCode::ChkInvalidSelectCase => "CHK-INVALID-SELECT-CASE",
             DiagCode::ChkInvalidSelector => "CHK-INVALID-SELECTOR",
             DiagCode::ChkInvalidSlice => "CHK-INVALID-SLICE",
+            DiagCode::ChkMissingReturn => "CHK-MISSING-RETURN",
+            DiagCode::ChkNoNewVar => "CHK-NO-NEW-VAR",
+            DiagCode::ChkNotAType => "CHK-NOT-A-TYPE",
+            DiagCode::ChkSingleValueContext => "CHK-SINGLE-VALUE-CONTEXT",
+            DiagCode::ChkUnusedExpr => "CHK-UNUSED-EXPR",
+            DiagCode::ChkWrongResultCount => "CHK-WRONG-RESULT-COUNT",
             DiagCode::BadChar => "LEX-BAD-CHAR",
             DiagCode::BadDigit => "LEX-BAD-DIGIT",
             DiagCode::BadExponent => "LEX-BAD-EXPONENT",

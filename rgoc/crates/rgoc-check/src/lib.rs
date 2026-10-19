@@ -32,11 +32,13 @@
 
 pub mod check;
 pub mod diag;
+pub(crate) mod env;
 pub mod expr;
 pub mod lookup;
 pub mod operand;
 pub mod render;
 pub mod selection;
+pub mod stmt;
 pub mod version;
 
 pub use check::{CheckOptions, CheckedPackage, Session, check_package};

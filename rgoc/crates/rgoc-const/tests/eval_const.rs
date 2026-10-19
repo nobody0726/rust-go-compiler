@@ -84,6 +84,7 @@ fn call(fun: &str, args: Vec<Expr>) -> Expr {
         args,
         has_dots: false,
         pos: pos(),
+        rparen: pos(),
     })
 }
 

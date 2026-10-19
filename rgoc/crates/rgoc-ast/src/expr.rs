@@ -157,7 +157,18 @@ pub struct CallExpr {
     pub args: Vec<Expr>,
     /// 末参带 `...`。
     pub has_dots: bool,
+    /// `(` 的位置（官方 `nodes.go:257` 的 `expr` 基类位置，由 `pexpr` 传入）。
     pub pos: Pos,
+    /// `)` 的位置。
+    ///
+    /// # 为什么需要（`Task 25`）
+    ///
+    /// 官方 `syntax` 的 `CallExpr` 没有这个字段，但 `go/types`（我们的对撞
+    /// oracle）用的是 `go/ast`，它的 `CallExpr.Rparen` 是**实参不足**的报点
+    /// （`call.go:541` 的 `atPos(call.Rparen)`，实测 `argFn()` ⇒ `)` 那一列）。
+    /// 与 `BlockStmt.rbrace` / `SwitchStmt.rbrace` 同一条理由：**位置不参与
+    /// dump**（`C6` 规则 4），但对撞面需要它 ⇒ 用字段显式承载。
+    pub rparen: Pos,
 }
 
 /// 列表（`AST-23`）。多返回值/泛型类型实参列表载体。

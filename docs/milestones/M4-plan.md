@@ -68,11 +68,11 @@
 - Consumes: `M4-tests.md` §4（类别 26 类）/ §5（双腿判据与渲染骨架）
 - Produces: **字节格式**（对 Task 3/4/20 两侧共同约束）：头行 `# source: <rgoc|oracle>`、`# file: <相对路径>`（两侧）；`# markers: <N>`（oracle 侧独有，腿① 数据源）；渲染行 `<行号>:<列>\t<类别>`；排序（行号,列,类别）；重复行保留；列不进硬判据（提示层）；过滤规则（`": \t"` 次级剔除、解析错误参与、`AllErrors`）；确定性（重复运行逐字节同）
 
-- [ ] **Step 1: 写契约**，把 `M4-tests.md` §4/§5 的规则**原样**抽成独立契约（类别表 26 项、`other` 纪律、两侧映射机制、列-advisory 判据、退出码 0/1/2）
-- [ ] **Step 2: 写最小 fixture** `check-diags-min.want`（两行头 + 三条渲染行：同文件多错、同行同类别重复、含列字段），作为两侧实现的第一对撞目标
-- [ ] **Step 3: 登记** `docs/README.md` 契约清单（C8；「M4/Task 1 新建，已冻结」）；如既有自检断言契约**数量**，同步该断言
-- [ ] **Step 4: 校验** —— `python3 scripts/check-m0-consistency.py` / `check-m1-consistency.py` 期望 exit 0；文档链接自检无 BROKEN
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写契约**，把 `M4-tests.md` §4/§5 的规则**原样**抽成独立契约（类别表 26 项、`other` 纪律、两侧映射机制、列-advisory 判据、退出码 0/1/2）
+- [x] **Step 2: 写最小 fixture** `check-diags-min.want`（两行头 + 三条渲染行：同文件多错、同行同类别重复、含列字段），作为两侧实现的第一对撞目标
+- [x] **Step 3: 登记** `docs/README.md` 契约清单（C8；「M4/Task 1 新建，已冻结」）；如既有自检断言契约**数量**，同步该断言
+- [x] **Step 4: 校验** —— `python3 scripts/check-m0-consistency.py` / `check-m1-consistency.py` 期望 exit 0；文档链接自检无 BROKEN
+- [x] **Step 5: 提交**
 
 ```bash
 git add docs/contracts/C8-check-diags.md docs/contracts/testdata/check-diags-min.want docs/README.md
@@ -92,11 +92,11 @@ git commit -m "docs(m4): 新建并冻结 C8 检查诊断契约（T-CK-91..95 的
 - Produces: `rgoc_check::check_package(...) -> Result<CheckedPackage, DiagBag>`（占位：恒返回稳定诊断 `CHK-UNIMPLEMENTED`）；CLI `rgoc check [--diag-dump] [--lang go1.N] [--test-hooks] <files…>`（四个旗标**全部可解析**，行为=稳定失败退出码 1/2、**非 panic**）
 - Consumes: `rgoc-load::load_with_imports`、`rgoc-lex::{DiagBag, DiagCode}`
 
-- [ ] **Step 1: 写失败测试**（`test_driver.rs`）：① `rgoc check` 在未实现时**退出码非 0**、stderr 含稳定文案（断言 `CHK-UNIMPLEMENTED` 字符串在）；② 非法旗标 ⇒ 用法错退出码 2；③ `--diag-dump --lang go1.22 --test-hooks` 组合可解析（不报用法错）
-- [ ] **Step 2: 运行确认失败** —— `scripts/in-container.sh cargo test -p rgoc-driver check_ -v`；期望 FAIL（`check` 子命令不存在）
-- [ ] **Step 3: 实现骨架** —— crate 空壳（`pub fn check_package` 返回 `CHK-UNIMPLEMENTED`）；`DiagCode` 加 `ChkUnimplemented`（字典序落位 + `ALL` + `as_str` + 两个计数测试）；`cli.rs` 加分支与旗标解析
-- [ ] **Step 4: 全量不回归** —— `scripts/in-container.sh cargo test -p rgoc-driver --no-fail-fast`
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`test_driver.rs`）：① `rgoc check` 在未实现时**退出码非 0**、stderr 含稳定文案（断言 `CHK-UNIMPLEMENTED` 字符串在）；② 非法旗标 ⇒ 用法错退出码 2；③ `--diag-dump --lang go1.22 --test-hooks` 组合可解析（不报用法错）
+- [x] **Step 2: 运行确认失败** —— `scripts/in-container.sh cargo test -p rgoc-driver check_ -v`；期望 FAIL（`check` 子命令不存在）
+- [x] **Step 3: 实现骨架** —— crate 空壳（`pub fn check_package` 返回 `CHK-UNIMPLEMENTED`）；`DiagCode` 加 `ChkUnimplemented`（字典序落位 + `ALL` + `as_str` + 两个计数测试）；`cli.rs` 加分支与旗标解析
+- [x] **Step 4: 全量不回归** —— `scripts/in-container.sh cargo test -p rgoc-driver --no-fail-fast`
+- [x] **Step 5: 提交**
 
 ```bash
 git add rgoc/Cargo.toml rgoc/crates/rgoc-check rgoc/crates/rgoc-driver rgoc/crates/rgoc-lex
@@ -113,11 +113,11 @@ git commit -m "feat(m4): rgoc-check 骨架 + rgoc check 子命令占位（TG-CHK
 - Consumes: `docs/contracts/C8-check-diags.md`（Task 1）；官方 `go/types/check_test.go` 的 `parseFiles/parseFlags/commentMap/shouldTest` 语义（M4-design `F2`）
 - Produces: `types-oracle --check [--test-hooks] <files…>` ⇒ stdout = C8 渲染；退出码 0/1/2。语义清单：① `parseFlags` 复刻**只读第一个文件（`srcs[0]`）首行**（`-lang` 提取；非空 `-goexperiment` 与 `-fakeImportC` 都要**响亮失败**，`U-M4-04/05`）；② …③ `parser.AllErrors|parser.SkipObjectResolution`，解析错误**参与**；④ importer **只认 `unsafe`**，其余失败（错误文本含 `could not import <path>`；包装细节以本侧输出为准）；⑤ 错误回调剔除 `": \t"` 次级；⑥ `shouldTest` 构建约束（`ReleaseTags`+GOOS/GOARCH）；⑦ marker 判定（前缀 `^ ERRORx? `；位置=前一 token）输出 `# markers: N`；⑧ `--test-hooks` ⇒ `types.DefPredeclaredTestFuncs()`（**仅**供 `check/` 前缀文件使用 —— 官方 `TestCheck` 注入而 `TestSpec/TestExamples` 不注入）；⑨ **Cheap-trick 抑制**由 `go/types` 内部生效（`errors.go:111-123`）——本侧免费继承，但 Step 1 要加**合成探针**锁行为
 
-- [ ] **Step 1: 写失败测试**（`check_test.go`，先 RED）：`parseFlags` 向量（lang 提取 / `-fakeImportC` 响亮失败 / goexperiment 响亮失败 / 无指令 ⇒ 不门控）；marker 计数向量（前缀正则、`ERRORx`、前一 token 位置、行首注释 ⇒ 0,0）；渲染排序与重复；**Cheap-trick 合成探针**（首错 + 随后含 `invalid operand`/`invalid type` 的错误 ⇒ 后者被抑制）
-- [ ] **Step 2: 运行确认失败** —— `scripts/in-container.sh bash -lc 'cd tools/types-oracle && go test ./... -run Check'`；期望 FAIL（check.go 不存在）
-- [ ] **Step 3: 实现** —— 把 `.superpowers/sdd/M4-design/probe/m4probe.go`（已实测通过）的语义**移植**进 `check.go`（单文件/多文件同包；目录输入取顶层 `.go`）；适配表骨架（消息 → 类别，起步覆盖 F1/语料常见族；`other` 命中时**打印告警行到 stderr**，正式守卫在 Task 4）
-- [ ] **Step 4: 手动冒烟** —— 对 `check/literals.go`（`--test-hooks`）期望 0 错、`# markers: 0`；对 `check/go1_12.go` 期望 14 错、`# markers: 14`；对 `spec/conversions.go` 期望非空且无 `other`
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`check_test.go`，先 RED）：`parseFlags` 向量（lang 提取 / `-fakeImportC` 响亮失败 / goexperiment 响亮失败 / 无指令 ⇒ 不门控）；marker 计数向量（前缀正则、`ERRORx`、前一 token 位置、行首注释 ⇒ 0,0）；渲染排序与重复；**Cheap-trick 合成探针**（首错 + 随后含 `invalid operand`/`invalid type` 的错误 ⇒ 后者被抑制）
+- [x] **Step 2: 运行确认失败** —— `scripts/in-container.sh bash -lc 'cd tools/types-oracle && go test ./... -run Check'`；期望 FAIL（check.go 不存在）
+- [x] **Step 3: 实现** —— 把 `.superpowers/sdd/M4-design/probe/m4probe.go`（已实测通过）的语义**移植**进 `check.go`（单文件/多文件同包；目录输入取顶层 `.go`）；适配表骨架（消息 → 类别，起步覆盖 F1/语料常见族；`other` 命中时**打印告警行到 stderr**，正式守卫在 Task 4）
+- [x] **Step 4: 手动冒烟** —— 对 `check/literals.go`（`--test-hooks`）期望 0 错、`# markers: 0`；对 `check/go1_12.go` 期望 14 错、`# markers: 14`；对 `spec/conversions.go` 期望非空且无 `other`
+- [x] **Step 5: 提交**
 
 ```bash
 git add tools/types-oracle
@@ -133,10 +133,10 @@ git commit -m "feat(m4): types-oracle --check（官方 harness 语义复刻 + C8
 - Consumes: Task 2（`rgoc check --diag-dump`）、Task 3（`--check`）、`check-selected.txt`
 - Produces: `run-collide.sh --check [--list <清单>] <testdata 根>` —— 逐文件：oracle 渲染（`check/` 前缀加 `--test-hooks`）vs `rgoc check --diag-dump`；硬判据=剥列后（行号,类别）多重集；列差异**计数并提示**；两侧 stderr 空；重复运行确定；`other` 出现在入选渲染中 ⇒ 红；清单行不在语料 ⇒ exit 2；首个不一致 ⇒ 打印现场 exit 1
 
-- [ ] **Step 1: 写脚本**（照 M3 `--corpus` 形态：不自己重算筛法；清单为唯一输入；temp 文件逐文件清理）
-- [ ] **Step 2: 首次运行（预期响亮红）** —— `scripts/in-container.sh bash tools/types-oracle/run-collide.sh --check go_source_code/src/internal/types/testdata`；期望输出「rgoc 侧未实现（CHK-UNIMPLEMENTED）/ 首个不一致」并 exit 1（**保存输出节选，作为 RED 证据入** `.superpowers/sdd/M4-plan/progress.md`）
-- [ ] **Step 3: 非入选守卫** —— `--list` 指向一个含不存在路径的临时清单 ⇒ exit 2
-- [ ] **Step 4: 提交**
+- [x] **Step 1: 写脚本**（照 M3 `--corpus` 形态：不自己重算筛法；清单为唯一输入；temp 文件逐文件清理）
+- [x] **Step 2: 首次运行（预期响亮红）** —— `scripts/in-container.sh bash tools/types-oracle/run-collide.sh --check go_source_code/src/internal/types/testdata`；期望输出「rgoc 侧未实现（CHK-UNIMPLEMENTED）/ 首个不一致」并 exit 1（**保存输出节选，作为 RED 证据入** `.superpowers/sdd/M4-plan/progress.md`）
+- [x] **Step 3: 非入选守卫** —— `--list` 指向一个含不存在路径的临时清单 ⇒ exit 2
+- [x] **Step 4: 提交**
 
 ```bash
 git add tools/types-oracle/run-collide.sh
@@ -153,10 +153,10 @@ git commit -m "feat(m4): run-collide.sh --check [--list]（双腿对撞形态）
 - Consumes: `check-selected.txt` / `check-allowlist.txt` / `check-fixedbugs-waveA.txt`；语料根解析沿 `collide_corpus.rs`（`RGOC_CORPUS_SRC_DIR` 可覆盖；读不到**响亮失败**）
 - Produces: Rust 侧断言（`T-CK-93` / `T-CK-A1`）：① 候选（三目录顶层 `.go`）机械重算 == 入选 ∪ 排除（两向、无重复、无死行）；② 每行存在；③ 排除理由非空且含指针（`D-M4-`/`U-M3-`/`T-CK-`/`CH-`）；④ wave A 50 行、4 组注释、全部存在且**不**与三目录候选重复；⑤ 四个目录包（`check/decls2/` 等）存在但不在候选
 
-- [ ] **Step 1: 写测试**（先 RED：故意断言候选==91 与两向相等；若初始即绿，用「临时改一行清单」制造 RED 再复原）
-- [ ] **Step 2: 运行** —— `scripts/in-container.sh cargo test -p rgoc-driver --test check_corpus -v`
-- [ ] **Step 3: 反向验证（`B7` 第一半）** —— 从 `check-selected.txt` 移走一行 ⇒ 期望该测试**变红**（打印两向差集）；复原。记录命令与输出摘录入 progress
-- [ ] **Step 4: 提交**
+- [x] **Step 1: 写测试**（先 RED：故意断言候选==91 与两向相等；若初始即绿，用「临时改一行清单」制造 RED 再复原）
+- [x] **Step 2: 运行** —— `scripts/in-container.sh cargo test -p rgoc-driver --test check_corpus -v`
+- [x] **Step 3: 反向验证（`B7` 第一半）** —— 从 `check-selected.txt` 移走一行 ⇒ 期望该测试**变红**（打印两向差集）；复原。记录命令与输出摘录入 progress
+- [x] **Step 4: 提交**
 
 ```bash
 git add rgoc/crates/rgoc-driver/tests/check_corpus.rs
@@ -179,11 +179,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - 规则序（`go/types` `operand.go::assignableTo`）：identical → 类型参数面（1.18 规则：`T` 与 `~T` 项存在）→ 底层同一且**至少一侧非具名**→ `implements(tgt)` → chan 方向（V/V 双向、具名通道对裸通道单向）→ `nil` 面
 - Consumes: `identical` / `underlying` / `implements`（Task 8 前先留 `todo!` 路径**不可达**，或先本地窄实现 —— 二选一由 Step 3 决定并记 Ruling）
 
-- [ ] **Step 1: 写失败测试**（`T-CK-11` 底座）：每族 ≥2 正例 + ≥2 反例（`spec/assignability.go`、`examples/*` 取型；至少含 `type T = int` 别名、具名/非具名底层、chan 方向、`nil`）
-- [ ] **Step 2: 运行确认失败** —— `scripts/in-container.sh cargo test -p rgoc-types --test assignable`
-- [ ] **Step 3: 实现**（严格按规则序；对暂不可判形态返回 `Err(DiagCode::Typ…)` **新码/既有码**，不许答错）
-- [ ] **Step 4: 全量不回归** —— `scripts/in-container.sh cargo test -p rgoc-types --no-fail-fast`
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-11` 底座）：每族 ≥2 正例 + ≥2 反例（`spec/assignability.go`、`examples/*` 取型；至少含 `type T = int` 别名、具名/非具名底层、chan 方向、`nil`）
+- [x] **Step 2: 运行确认失败** —— `scripts/in-container.sh cargo test -p rgoc-types --test assignable`
+- [x] **Step 3: 实现**（严格按规则序；对暂不可判形态返回 `Err(DiagCode::Typ…)` **新码/既有码**，不许答错）
+- [x] **Step 4: 全量不回归** —— `scripts/in-container.sh cargo test -p rgoc-types --no-fail-fast`
+- [x] **Step 5: 提交**
 
 ### Task 7: `methodset.rs`（方法集）
 
@@ -195,11 +195,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `pub struct MSetEntry { pub name: String, pub sig: SignatureId }`；`pub fn methodset(t: &TypeTable, typ: TypeId) -> Result<Vec<MSetEntry>, DiagCode>`（按名字排序；嵌入提升取**深度最小者**；同级歧义名**排除**；`*T` 规则照 `go/types/methodset.go`）
 - Consumes: `TypeTable` 的 `NamedDef`/`StructDef`/`InterfaceDef` 表示（M3）+ `unalias`
 
-- [ ] **Step 1: 写失败测试**（`T-CK-14` 底座）：值/指针接收者、嵌入 1 层与 2 层提升、歧义排除、接口方法集、`*T` vs `T`
-- [ ] **Step 2: 运行确认失败** —— `cargo test -p rgoc-types --test methodset`
-- [ ] **Step 3: 实现**
-- [ ] **Step 4: 全量不回归**
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-14` 底座）：值/指针接收者、嵌入 1 层与 2 层提升、歧义排除、接口方法集、`*T` vs `T`
+- [x] **Step 2: 运行确认失败** —— `cargo test -p rgoc-types --test methodset`
+- [x] **Step 3: 实现**
+- [x] **Step 4: 全量不回归**
+- [x] **Step 5: 提交**
 
 ### Task 8: `implements.rs`（接口实现 + 约束满足）
 
@@ -213,11 +213,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
   - `constraint=true`：类型集包含（`V ∈ C`：空集恒满足；`~T` 项、并集、`comparable` 标志面）；供 `satisfies` 与实例化校验共用
 - Consumes: `methodset`（Task 7）、`identical`（Task 10 升级后）
 
-- [ ] **Step 1: 写失败测试**（`T-CK-12/13` 底座）：方法缺失/多余、空接口、`~int`、并集、`comparable`、空类型集边界
-- [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现**（`constraint` 双态一核两径，共享方法集比较）
-- [ ] **Step 4: 全量不回归**
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-12/13` 底座）：方法缺失/多余、空接口、`~int`、并集、`comparable`、空类型集边界
+- [x] **Step 2: 运行确认失败**
+- [x] **Step 3: 实现**（`constraint` 双态一核两径，共享方法集比较）
+- [x] **Step 4: 全量不回归**
+- [x] **Step 5: 提交**
 
 ### Task 9: `comparable.rs` + `convertible.rs`（可比较 / 可转换静态面）
 
@@ -229,11 +229,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `pub fn comparable(t: &TypeTable, typ: TypeId) -> Result<bool, DiagCode>`；`pub fn convertible(t: &TypeTable, v: TypeId, tgt: TypeId) -> Result<bool, DiagCode>`（静态类型对；**常量**特例面留给检查器 Task 22）
 - 规则序照 `go/types/predicates.go::comparable` 与 `conversions.go`
 
-- [ ] **Step 1: 写失败测试**（`T-CK-32/33` 底座）：struct/array/接口/类型参数 comparable 面；`[]byte↔string`、数值互转、通道方向、指针↔uintptr 拒绝面
-- [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现**
-- [ ] **Step 4: 全量不回归**
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-32/33` 底座）：struct/array/接口/类型参数 comparable 面；`[]byte↔string`、数值互转、通道方向、指针↔uintptr 拒绝面
+- [x] **Step 2: 运行确认失败**
+- [x] **Step 3: 实现**
+- [x] **Step 4: 全量不回归**
+- [x] **Step 5: 提交**
 
 ### Task 10: `identical` 升级 —— 类型集版 interface 同一性（**解除 `U-M3-05`**）
 
@@ -248,11 +248,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `identical` 对「两侧都是匿名约束接口（至少一侧含项集或 `comparable`）」给出判定；具名约束接口沿具名分支
 - **同步义务（`D-M4-11` 第一刀）**：代码与测试**原子**改（含 `D-M4-14` 牵连条目）；`M3-tests.md` 修订行与 `M3-manifest.json` 的 `resolved_by` 落档在 Task 40（此处只登记在 progress）
 
-- [ ] **Step 1: 改失败测试为先**：把原「期望 Err」用例改「期望 Ok(true/false)」（含 `interface{ ~int | ~string }` 置换序相等、`comparable` 差异不等 2 条合成反例）
-- [ ] **Step 2: 运行确认失败**（红在实现仍早退 Err）
-- [ ] **Step 3: 实现** + 移除死码 + 全量不回归（`cargo test --workspace --no-fail-fast`；`manifest_m3.rs` 若红⇒当场最小修）
-- [ ] **Step 4: B 类反向抽验**：手动把 terms 比较改成恒 true ⇒ 期望合成反例变红；复原
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 改失败测试为先**：把原「期望 Err」用例改「期望 Ok(true/false)」（含 `interface{ ~int | ~string }` 置换序相等、`comparable` 差异不等 2 条合成反例）
+- [x] **Step 2: 运行确认失败**（红在实现仍早退 Err）
+- [x] **Step 3: 实现** + 移除死码 + 全量不回归（`cargo test --workspace --no-fail-fast`；`manifest_m3.rs` 若红⇒当场最小修）
+- [x] **Step 4: B 类反向抽验**：手动把 terms 比较改成恒 true ⇒ 期望合成反例变红；复原
+- [x] **Step 5: 提交**
 
 ### Task 11: 类别投影骨架 `rgoc-check::diag`（`T-CK-16` 起步）
 
@@ -264,10 +264,10 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: `rgoc-lex::DiagCode` 全枚举（含 M3 `Typ*` 全部 + M4 `Chk*` 生长中）
 - Produces: 投影函数；`Category::Other` 存在但**无码映射到它**（编译期不允许；由测试断言 + 后续 `T-CK-94` 语料守卫）
 
-- [ ] **Step 1: 写失败测试**（26 类枚举、抽样 12 个码的期望类别、`ALL_CATEGORIES` 计数）
-- [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现**（对每个既有 `TYP-` 码定类；新增 `CHK-` 码在各自任务落位时**必须**同步此 match —— 编译不过即提醒）
-- [ ] **Step 4: 提交**
+- [x] **Step 1: 写失败测试**（26 类枚举、抽样 12 个码的期望类别、`ALL_CATEGORIES` 计数）
+- [x] **Step 2: 运行确认失败**
+- [x] **Step 3: 实现**（对每个既有 `TYP-` 码定类；新增 `CHK-` 码在各自任务落位时**必须**同步此 match —— 编译不过即提醒）
+- [x] **Step 4: 提交**
 
 ---
 
@@ -283,10 +283,10 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `pub fn instantiate(t: &mut TypeTable, origin: NamedId, args: &[TypeId]) -> Result<TypeId, DiagCode>`（实参数量校验 + `implements/satisfies` 校验；**按 (origin, args) memo**，同一实例化 ⇒ 同一 id）；`pub fn substitute(...)`（类型参数替换）
 - Consumes: Task 8/10
 
-- [ ] **Step 1: 写失败测试**（`T-CK-21` 底座）：等价实参不同写法 ⇒ 同 id；不同实参 ⇒ 不同 id；数量错 ⇒ 稳定拒绝；约束不满足 ⇒ 稳定拒绝
-- [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现**；跑 `cargo test -p rgoc-types --no-fail-fast`；再跑 `--dump` 对撞（`collide_dump.rs`）确认**不回归**
-- [ ] **Step 4: 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-21` 底座）：等价实参不同写法 ⇒ 同 id；不同实参 ⇒ 不同 id；数量错 ⇒ 稳定拒绝；约束不满足 ⇒ 稳定拒绝
+- [x] **Step 2: 运行确认失败**
+- [x] **Step 3: 实现**；跑 `cargo test -p rgoc-types --no-fail-fast`；再跑 `--dump` 对撞（`collide_dump.rs`）确认**不回归**
+- [x] **Step 4: 提交**
 
 ### Task 13: `unify.rs`（统一，三模式）
 
@@ -297,8 +297,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `pub enum UnifyMode { Exact, Loose, Assign }`；`pub fn unify(t, mode, x: TypeId, y: TypeId, infer: &mut Vec<(TypeParamId, TypeId)>) -> Result<bool, DiagCode>`（照 `go/types/unify.go` 结构递归：类型参数绑定、项集交集、通道方向、签名、接口）
 - Consumes: Task 8/10/12
 
-- [ ] **Step 1: 写失败测试**（`T-CK-24` 底座）：exact/loose/assign 三模式差异向量；嵌套泛型；`~T` 项集交集
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-24` 底座）：exact/loose/assign 三模式差异向量；嵌套泛型；`~T` 项集交集
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 14: `infer.rs`（推断三入口）
 
@@ -309,8 +309,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: ① `infer_from_args`（1.18 实参模式）；② 隐式实例化于**实参位置**与**赋值/接口方法语境**（1.21）；③ 赋值上下文**函数类型**推断（1.27）；失败 ⇒ `Err`/`Ok(None)` + 稳定码
 - Consumes: Task 13
 
-- [ ] **Step 1: 写失败测试**（`T-CK-22/23/24` 底座）：三入口各 ≥4 向量 + 失败形态（不能推断 ⇒ 稳定码）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（`T-CK-22/23/24` 底座）：三入口各 ≥4 向量 + 失败形态（不能推断 ⇒ 稳定码）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 15: cmp 新判定式（两侧）—— `T-CK-81..85`
 
@@ -324,11 +324,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: Task 6/7/8/12（判定实现）
 - Produces: 五种 kind 的**双侧一致**输出（`true/false/reject`；`methodset`=名字序列；`instance`=C7 单根 dump / `reject:<category>`）
 
-- [ ] **Step 1: fixture 先行**：写 `cmp-*` 行（每 kind ≥6 行，含 reject 行）
-- [ ] **Step 2: RED** —— `scripts/in-container.sh bash tools/types-oracle/run-collide.sh --cmp tools/types-oracle/testdata`；期望未知 kind / 缺实现红
-- [ ] **Step 3: 实现两侧**（oracle 侧最简：直接用 `go/types` 对应 API；driver 侧接线 Task 6–12 的判定）
-- [ ] **Step 4: 绿 + 全量不回归**（含 `collide_cmp.rs`）
-- [ ] **Step 5: 提交**
+- [x] **Step 1: fixture 先行**：写 `cmp-*` 行（每 kind ≥6 行，含 reject 行）
+- [x] **Step 2: RED** —— `scripts/in-container.sh bash tools/types-oracle/run-collide.sh --cmp tools/types-oracle/testdata`；期望未知 kind / 缺实现红
+- [x] **Step 3: 实现两侧**（oracle 侧最简：直接用 `go/types` 对应 API；driver 侧接线 Task 6–12 的判定）
+- [x] **Step 4: 绿 + 全量不回归**（含 `collide_cmp.rs`）
+- [x] **Step 5: 提交**
 
 ### Task 16: 实例环与拒绝面（`T-CK-25`）
 
@@ -338,8 +338,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 **Interfaces:**
 - Produces: 实例化过程的**环检测**（`F1[*]` 类自引用链）+ 已知边界形态的**显式拒绝**（`U-M4-09` 登记）；语料 `typeinstcycles.go` / `fixedbugs` G1 族将有对照
 
-- [ ] **Step 1: 写失败测试**（环 ⇒ 稳定拒绝非 panic；样例取 `check/typeinstcycles.go` 邻域）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（环 ⇒ 稳定拒绝非 panic；样例取 `check/typeinstcycles.go` 邻域）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 17: 版本门控核心（`verify_version` 表）
 
@@ -351,8 +351,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: `rgoc-types::version`（M3 既有 `Versions::require` / `pkg_versions`）
 - Produces: `verify_version(cx, at: Pos, feature: Feat, ...)` 全表（`F1`：数值字面量/别名词法/移位/切片→数组指针/`~T` 等）；表驱动 fixture 每特性低/高两档（`T-CK-61` 起步）
 
-- [ ] **Step 1: 写失败测试**（≥12 特性 × 低/高两档；期望类别恒 `version`）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（≥12 特性 × 低/高两档；期望类别恒 `version`）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 18: `-lang` / `//go:build` 同源进入（`T-CK-62/63` 接线）
 
@@ -365,8 +365,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: M2 `go_version_from_build`、M3 `Versions`
 - Produces: 语料 `go1_*` 文件的判定在 `rgoc check` 侧**可重放**（本 Task 只接线；全绿收口在 Task 37）
 
-- [ ] **Step 1: 写失败测试**：向量 `go1_19_20`（max⇒1.21 不门控）/ `go1_22_21`（1.22 门控 range）/ `go1_xx_19`（只有 build 版本）/ `decls0`（1.17）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**：向量 `go1_19_20`（max⇒1.21 不门控）/ `go1_22_21`（1.22 门控 range）/ `go1_xx_19`（只有 build 版本）/ `decls0`（1.17）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 19: 门控位置与 soft 面（`T-CK-64`）
 
@@ -378,8 +378,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: 门控错误的**行/列来源** = 触发点（range 的 `range` 关键字、new 的实参……）；soft 面与官方一致（不因 soft 提前丢）
 - Consumes: Task 17/18
 
-- [ ] **Step 1: 写失败测试**：`go1_25.go` 的 4 条 new() 门控行号向量；`go1_22_21` 的 1 条 range 门控
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**：`go1_25.go` 的 4 条 new() 门控行号向量；`go1_22_21` 的 1 条 range 门控
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ## Phase 3：`rgoc-check` 主体（Task 20–36）
 
@@ -395,11 +395,11 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Produces: `check_package` 真身（返回 `CheckedPackage { 诊断流（含原始次级链）、渲染入口 }`）；`render.rs` 输出**与 `check-diags-min.want` 逐字节一致**；诊断**上报层**实现 Cheap-trick 抑制同规则（`F2`⑧）
 - **值层接线的落点**：M3 `open_gaps`「值层没有类型接线」（`-uint32(5)` 漏报根因）在本任务落
 
-- [ ] **Step 1: 写失败测试**：`render.rs` 对 min fixture 逐字节；`operand` 模式向量 ≥12（常量/变量/类型/nil/内建名）
-- [ ] **Step 2: 运行确认失败**
-- [ ] **Step 3: 实现**（诊断流**内部保留**含 `": \t"` 的原始条目；渲染层过滤——见 Review Focus #3）
-- [ ] **Step 4: 冒烟** —— `rgoc check --diag-dump` 对 `check/go1_12.go` 输出 vs oracle 手工对比
-- [ ] **Step 5: 提交**
+- [x] **Step 1: 写失败测试**：`render.rs` 对 min fixture 逐字节；`operand` 模式向量 ≥12（常量/变量/类型/nil/内建名）
+- [x] **Step 2: 运行确认失败**
+- [x] **Step 3: 实现**（诊断流**内部保留**含 `": \t"` 的原始条目；渲染层过滤——见 Review Focus #3）
+- [x] **Step 4: 冒烟** —— `rgoc check --diag-dump` 对 `check/go1_12.go` 输出 vs oracle 手工对比
+- [x] **Step 5: 提交**
 
 ### Task 21: `expr.rs` 运算符与表达式（`T-CK-32`）
 
@@ -410,8 +410,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: Task 9（`comparable/convertible`）、Task 20
 - Produces: 运算符静态规则诊断（`op-invalid` / `shift` / `overflow` 类）；**移位计数**与常量面
 
-- [ ] **Step 1: 写失败测试**：每运算符族 ≥3 接受 + ≥3 拒绝（样本取自 `check/expr*.go` 与 `spec/*`）
-- [ ] **Step 2..5: RED → 实现 → 全量不回归 → 提交**
+- [x] **Step 1: 写失败测试**：每运算符族 ≥3 接受 + ≥3 拒绝（样本取自 `check/expr*.go` 与 `spec/*`）
+- [x] **Step 2..5: RED → 实现 → 全量不回归 → 提交**
 
 ### Task 22: 转换接线（`T-CK-33`）
 
@@ -422,16 +422,16 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: Task 9 `convertible` + `rgoc-const` 可表示性（M3）
 - Produces: 转换诊断（`convert` 类；常量边界）
 
-- [ ] **Step 1: 写失败测试**（`spec/conversions.go` 邻域样本 ≥10）：数值/字符串/指针/常量边界
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（`spec/conversions.go` 邻域样本 ≥10）：数值/字符串/指针/常量边界
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 23: 索引与切片（`T-CK-34` 前半）
 
 **Files:**
 - Modify: `rgoc/crates/rgoc-check/src/expr.rs`（索引：数组/切片/字符串/map 双值/泛型实参二义消解；切片：3-index）；Test: `tests/index_slice.rs`
 
-- [ ] **Step 1: 写失败测试**：map 双值、字符串 rune 面、3-index 约束、负常量索引
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**：map 双值、字符串 rune 面、3-index 约束、负常量索引
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 24: 选择器 / 字段提升 / 方法值（`T-CK-34` 后半、`T-CK-51/52` 接线）
 
@@ -442,8 +442,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: Task 7 `methodset` + M3 `Scope/ScopeRef`
 - Produces: 选择器诊断（`selector` 类）；深度最小者胜 / 同级歧义错 / 方法值与方法表达式形态
 
-- [ ] **Step 1: 写失败测试**（G4 点名组之一）：提升 2 层、歧义、方法值 `x.M`、方法表达式 `T.M`、指针自动解引用
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（G4 点名组之一）：提升 2 层、歧义、方法值 `x.M`、方法表达式 `T.M`、指针自动解引用
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 25: `stmt.rs` 语句静态规则（`T-CK-35`）
 
@@ -453,8 +453,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 **Interfaces:**
 - Produces: 赋值/复合赋值、短变量声明、if/for/switch/type-switch/select 合法性、go/defer 约束、return 规则、fallthrough 规则、**终止语句**（`terminate` 类）、break/continue/goto 标签面（沿 M3）
 
-- [ ] **Step 1: 写失败测试**：每族 ≥2 接受 + ≥2 拒绝（样本 `check/stmt0/1.go`、`check/gotos.go`、`check/labels.go`）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**：每族 ≥2 接受 + ≥2 拒绝（样本 `check/stmt0/1.go`、`check/gotos.go`、`check/labels.go`）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 26: `range` 静态形态（`T-CK-36`）
 

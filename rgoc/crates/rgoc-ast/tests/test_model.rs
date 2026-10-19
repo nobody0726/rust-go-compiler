@@ -321,6 +321,7 @@ fn t_a_02_expr_variants() {
         args: vec![],
         has_dots: false,
         pos: pos(1, 1),
+        rparen: pos(1, 3),
     });
     let _paren = Expr::Paren(ParenExpr {
         x: Box::new(Expr::Name(n("x"))),
@@ -571,6 +572,7 @@ fn start_pos_修正到子节点的那些变体() {
         args: vec![],
         has_dots: false,
         pos: pos(2, 3),
+        rparen: pos(2, 5),
     });
     assert_eq!(
         call.start_pos(),

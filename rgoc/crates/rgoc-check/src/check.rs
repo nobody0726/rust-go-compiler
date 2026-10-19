@@ -316,8 +316,8 @@ impl<'a> Session<'a> {
 /// 检查一个**已装载**的包 —— 会话真身（Task 20 起）。
 ///
 /// 当前内容 = 「装载诊断入流」+ Task 21 的**表达式运算符面**（包级 `var`
-/// 初始化式；`Decl::Var.values`）。语句 / 内建 / 门控点由 Task 22–36
-/// 逐个挂到会话上（每个判定走 [`Session::report`]）。
+/// 初始化式；`Decl::Var.values`）+ Task 25 的**函数体语句面**（`check_package_bodies`）。
+/// 语句 / 内建 / 门控点由 Task 22–36 逐个挂到会话上（每个判定走 [`Session::report`]）。
 #[must_use]
 pub fn check_package(
     pkg: &Package,
@@ -328,5 +328,6 @@ pub fn check_package(
     let mut session = Session::new(pkg, tt, opts);
     session.seed(load_diags);
     crate::expr::check_package_decls(&mut session);
+    crate::stmt::check_package_bodies(&mut session);
     session.into_checked()
 }

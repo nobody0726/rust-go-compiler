@@ -387,6 +387,7 @@ mod tests {
             args: vec![],
             has_dots: false,
             pos: pos(1, 1),
+            rparen: pos(1, 3),
         });
         assert_eq!(expr_text(&call), UNRENDERED);
         assert_ne!(UNRENDERED, "", "标记不能是空串（空串看起来像「没有值」）");

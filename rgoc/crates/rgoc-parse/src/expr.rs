@@ -465,12 +465,13 @@ impl Parser {
     /// 误判成块 —— **不报错**，只是树形悄悄变浅。
     fn call_expr(&mut self, fun: Expr, pos: Pos) -> Expr {
         self.next(); // 吃掉 `(`
-        let (args, has_dots) = self.arg_list();
+        let (args, has_dots, rparen) = self.arg_list();
         Expr::Call(CallExpr {
             fun: Box::new(fun),
             args,
             has_dots,
             pos,
+            rparen,
         })
     }
 
@@ -493,17 +494,19 @@ impl Parser {
     /// 官方每轮都写 `hasDots = p.got(_DotDotDot)`，且 `...` 一出现就 `return true`
     /// 结束循环 —— 所以它等价于「**最后一个**实参后面跟了 `...`」。
     /// 若写成 `has_dots |= …`，`f(a..., b)`（本不合法）会留下 `true`。
-    fn arg_list(&mut self) -> (Vec<Expr>, bool) {
+    /// 返回 `(实参表, 末参是否带 ...)` 与**右括号位置**（`Task 25`：实参不足的
+    /// 报点是 `)`，见 [`CallExpr::rparen`]）。
+    fn arg_list(&mut self) -> (Vec<Expr>, bool, Pos) {
         let mut args: Vec<Expr> = Vec::new();
         let mut has_dots = false;
         self.xnest += 1;
-        self.list("argument list", COMMA, RPAREN, |p| {
+        let rparen = self.list("argument list", COMMA, RPAREN, |p| {
             args.push(p.expr());
             has_dots = p.got(&ELLIPSIS);
             has_dots
         });
         self.xnest -= 1;
-        (args, has_dots)
+        (args, has_dots, rparen)
     }
 
     // ── 复合字面量（`AST-12/13`）─────────────────────────────────────────

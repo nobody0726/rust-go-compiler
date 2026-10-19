@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：75 个码各有恰好一个类别（M4/Task 24 后 75）
-    assert_eq!(DiagCode::ALL.len(), 75, "码表总数（M4/Task 24 后 75）");
+    // 总数守恒：86 个码各有恰好一个类别（M4/Task 25 后 86）
+    assert_eq!(DiagCode::ALL.len(), 86, "码表总数（M4/Task 25 后 86）");
 }
 
 #[test]
@@ -165,28 +165,33 @@ fn t_ck_16_每类计数快照() {
     // M4/Task 21 新增 `ChkInvalidOperation` ⇒ op-invalid 1→2、总数 71→72；
     // M4/Task 23 新增 `ChkInvalidIndex` / `ChkInvalidSlice` ⇒ index 0→1、
     // slice 0→1、总数 72→74；M4/Task 24 新增 `ChkInvalidSelector` ⇒
-    // selector 0→1、总数 74→75）：
+    // selector 0→1、总数 74→75；M4/Task 25 新增 11 个语句面码 ⇒
+    // assign 1→2、comma-ok 0→1、decl 8→9、not-type 1→2、ret 0→1、
+    // stmt 7→11、terminate 0→1、unused 2→3、总数 75→86）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
-        ("assign", 1),
+        ("assign", 2),
+        ("comma-ok", 1),
         ("convert", 2),
         ("cycle", 4),
-        ("decl", 8),
+        ("decl", 9),
         ("implements", 1),
         ("import", 3),
         ("index", 1),
-        ("not-type", 1),
+        ("not-type", 2),
         ("op-invalid", 2),
         ("other", 3),
         ("overflow", 2),
         ("parse", 25),
+        ("ret", 1),
         ("selector", 1),
         ("shift", 2),
         ("slice", 1),
-        ("stmt", 7),
+        ("stmt", 11),
+        ("terminate", 1),
         ("type-arg", 3),
         ("undef", 3),
-        ("unused", 2),
+        ("unused", 3),
         ("version", 3),
     ]);
     assert_eq!(counts, want, "每类计数快照");

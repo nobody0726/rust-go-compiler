@@ -264,6 +264,25 @@ pub fn category_of(code: DiagCode) -> Category {
         // （C8 适配表；`task23-reject.go` 19 行实证）。
         ChkInvalidIndex => Category::Index,
         ChkInvalidSlice => Category::Slice,
+
+        // ── 语句静态规则面（M4/Task 25；`task25-reject.go` 36 行实证）──────
+        // 赋值面：`cannot use ... as ... value in <语境>` / `cannot assign to`
+        // / `assignment mismatch` / `(not enough|too many) arguments in call`
+        // 经 C8 适配表全部落 `assign`。
+        ChkInvalidAssign => Category::Assign,
+        // `switch` 的 `invalid case` / `duplicate case`、非布尔条件、
+        // `go`/`defer` 的 `discards result` / `requires function call`、
+        // `select` 的 `select case must be` / `multiple defaults` 落 `stmt`。
+        ChkInvalidCase | ChkInvalidCond | ChkInvalidGoDefer | ChkInvalidSelectCase => {
+            Category::Stmt
+        }
+        ChkMissingReturn => Category::Terminate,
+        ChkNoNewVar => Category::Decl,
+        ChkNotAType => Category::NotType,
+        ChkSingleValueContext => Category::CommaOk,
+        ChkUnusedExpr => Category::Unused,
+        ChkWrongResultCount => Category::Ret,
+
         TypInvalidBlank => Category::NotType,
         TypInvalidTypeArg => Category::Implements,
         TypWrongTypeArgCount => Category::TypeArg,

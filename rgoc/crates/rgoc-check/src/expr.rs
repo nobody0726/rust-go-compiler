@@ -104,7 +104,7 @@ use crate::selection::{SelKind, method_expr_sig, method_value_sig};
 pub(crate) fn check_package_decls(s: &mut Session<'_>) {
     // 先把包引用拷出来：迭代需要它，而 `cx` 独占 `&mut Session`。
     let pkg = s.pkg;
-    let mut cx = ExprChecker { s };
+    let mut cx = ExprChecker { s, env: None };
     for (i, ast) in pkg.asts.iter().enumerate() {
         let file = pkg.files[i];
         for decl in &ast.decls {
@@ -117,8 +117,13 @@ pub(crate) fn check_package_decls(s: &mut Session<'_>) {
 }
 
 /// 表达式检查器：持会话（诊断流 + 类型表 + 被检查包）。
-struct ExprChecker<'s, 'p> {
-    s: &'s mut Session<'p>,
+///
+/// `env` 是**语句面**（Task 25）的局部作用域栈：包级初始化式检查时为 `None`，
+/// 函数体里由 [`crate::stmt`] 传入 —— 否则 `y := 1` 之后的 `y` 在
+/// [`Package::lookup_in_file`] 里查不到（那里只有文件/包/universe 三层）。
+pub(crate) struct ExprChecker<'s, 'p> {
+    pub(crate) s: &'s mut Session<'p>,
+    pub(crate) env: Option<&'s crate::env::Env>,
 }
 
 // ─────────────────────────────── 入口分派 ───────────────────────────────
@@ -128,10 +133,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         self.s.tt
     }
 
-    fn report(&mut self, pos: Pos, code: DiagCode, message: String) {
+    pub(crate) fn report(&mut self, pos: Pos, code: DiagCode, message: String) {
         self.s.report_hard(Diag { pos, code, message });
     }
-
     fn type_text(&self, t: TypeId) -> String {
         type_str(self.tt(), t)
     }
@@ -141,7 +145,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 避免用假诊断抢占 Task 25/30 的落点。转换（类型函数位）在
     /// [`Self::call`] 里接（Task 22），索引 / 切片在 [`Self::index_expr`] /
     /// [`Self::slice_expr`]（Task 23），选择器在 [`Self::selector`]（Task 24）。
-    fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
+    pub(crate) fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
         match e {
             Expr::Name(n) => self.ident(file, n),
             Expr::BasicLit(l) => self.literal(l),
@@ -161,6 +165,13 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 未命中说明名字未声明 —— 装载器已报 `TYP-UNDECLARED-NAME`（`T-CK-95`
     /// 钉住），这里**不得**重复上报。
     fn ident(&mut self, file: FileId, n: &Name) -> Operand {
+        // ① 局部作用域（Task 25）：`:=` / 参数 / 命名结果 —— 装载表查不到它们
+        //    （`Package::lookup_in_file` 只管文件 → 包 → universe 三层）。
+        if let Some(env) = self.env
+            && let Some(op) = env.lookup(&n.value)
+        {
+            return op.clone();
+        }
         match self.s.pkg.lookup_in_file(file, &n.value) {
             Some(obj) => Operand::from_object(obj).unwrap_or_else(Operand::invalid),
             None => Operand::invalid(),
@@ -190,19 +201,25 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
 
     // ────────────────────────────── 转换 ──────────────────────────────
 
-    /// 官方 `Checker.call` 的类型函数位分支：`T(x)` ⇒ [`Self::conversion`]。
+    /// 官方 `Checker.call`：类型函数位 ⇒ 转换；值函数位 ⇒ **真调用**（Task 25）；
+    /// 内建的**结果面**（Task 25 的窄表；签名面归 Task 29）。
     ///
-    /// 值函数位（真调用 / 内建）⇒ `invalid` 且不报 —— 实参面与签名匹配归
-    /// Task 23+/25；类型族函数位（`[]byte(x)` 等）在本任务同样不接。
+    /// 内建 / 真调用的**实参检查**（个数、可赋值性、单值语境）也在这一层 ——
+    /// 所谓「调用面」在官方就是 `call.go` 的一处逻辑，拆开会让位置口径分家。
     fn call(&mut self, file: FileId, c: &CallExpr) -> Operand {
         let f = self.expr(file, &c.fun);
-        if f.mode != Mode::TypeExpr {
-            return Operand::invalid();
+        if f.mode == Mode::TypeExpr {
+            let Some(target) = f.typ else {
+                return Operand::invalid();
+            };
+            return self.conversion(file, c, target);
         }
-        let Some(target) = f.typ else {
-            return Operand::invalid();
-        };
-        self.conversion(file, c, target)
+        match f.mode {
+            Mode::Value => self.call_value(file, c, f.typ),
+            Mode::Builtin => self.call_builtin(file, c, &c.fun),
+            // 无效 / 类型族函数位 / 其他：不报（转换之外的类型族归 Task 23+）。
+            _ => Operand::invalid(),
+        }
     }
 
     /// 官方 `Checker.conversion`（`conversions.go:20`）的窄面。
@@ -266,6 +283,182 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             }
             // 类型参数窄面等能力边界：不报（台账登记；语料撞面在 Task 37）。
             Err(_) => Operand::invalid(),
+        }
+    }
+
+    // ────────────────────────────── 调用（Task 25）──────────────────────────────
+
+    /// 取一个类型的签名条目（非签名 ⇒ `None`）。
+    fn signature_id(&self, t: TypeId) -> Option<rgoc_types::SignatureId> {
+        let tt = self.tt();
+        match tt.type_of(underlying(tt, t)) {
+            Type::Signature(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// 值函数位的**真调用**（官方 `call.go` 的 `arguments` 面）。
+    ///
+    /// 窄面（台账登记）：
+    /// * **变参**只接「实参个数够」的形态，`...` 与变参逐参类型不判；
+    /// * 函数值类型参数（泛型函数）已由 Task 14 的推断面覆盖，这里只按
+    ///   已实例化的签名判；
+    /// * 返回值个数为 1 时给类型、>1 时给**元组类型**（官方同形：多值以
+    ///   `*Tuple` 出现在 `operand.typ` 里），0 个 ⇒ `novalue`。
+    fn call_value(&mut self, file: FileId, c: &CallExpr, ty: Option<TypeId>) -> Operand {
+        let Some(t) = ty else {
+            return Operand::invalid();
+        };
+        let Some(sid) = self.signature_id(t) else {
+            return Operand::invalid();
+        };
+        let sig = self.tt().signature_def(sid).clone();
+        let params = self.tuple_vars(sig.params);
+        let results = self.tuple_vars(sig.results);
+
+        // ① 实参逐个求值（顺序照官方：先全部求值，再判长度）
+        let mut args: Vec<Operand> = Vec::with_capacity(c.args.len());
+        for a in &c.args {
+            let x = self.expr(file, a);
+            args.push(x);
+        }
+
+        // ② 个数（官方 `call.go:531-555`）。
+        let npars = params.len();
+        let variadic_ok = sig.variadic && args.len() + 1 >= npars;
+        if !variadic_ok && args.len() != npars {
+            let (at, qualifier) = if args.len() > npars {
+                // 多的第一个实参位。
+                (c.args[npars].pos(), "too many")
+            } else {
+                // 官方 `atPos(call.Rparen)`：`)` 位。
+                (c.rparen, "not enough")
+            };
+            let msg = format!(
+                "{qualifier} arguments in call to {}\n\thave {}\n\twant {}",
+                expr_label(&c.fun).unwrap_or_else(|| "function".to_owned()),
+                tuple_text(self.tt(), &args),
+                params_text(self.tt(), &params, sig.variadic),
+            );
+            self.report(at, DiagCode::ChkInvalidAssign, msg);
+            return Operand::invalid();
+        }
+
+        // ③ 逐参可赋值性（变参末尾不展开 —— 窄面）
+        if !sig.variadic {
+            for (i, p) in params.iter().enumerate() {
+                let Some(arg) = c.args.get(i) else { break };
+                let mut x = args[i].clone();
+                self.assignment(
+                    &mut x,
+                    arg.pos(),
+                    Some(p.1),
+                    &format!(
+                        "argument to {}",
+                        expr_label(&c.fun).unwrap_or_else(|| "function".to_owned())
+                    ),
+                );
+            }
+        }
+
+        // ④ 结果面
+        match results.len() {
+            0 => Operand::no_value(),
+            1 => Operand::value(Some(results[0].1)),
+            _ => {
+                let tt = &mut *self.s.tt;
+                let tid = tt.add_tuple(results.clone());
+                let tup = tt.tuple_def(tid).self_ty;
+                Operand::value(Some(tup))
+            }
+        }
+    }
+
+    /// 内建的**结果面**（窄表；`M4-plan` Task 29 用真签名替换）。
+    ///
+    /// 只回答「这个内建调用有没有值 / 值的元数」，够 `go`/`defer` 与表达式
+    /// 语句判「结果被丢弃」；**不做**实参检查（那是 Task 29）。
+    fn call_builtin(&mut self, file: FileId, c: &CallExpr, fun: &Expr) -> Operand {
+        // 先求值实参：`len(undefinedName)` 的 `undefined` 已在装载面报过，
+        // 这里只保证 `x` 的表达式面照常走（与官方 `check.builtin` 同序）。
+        for a in &c.args {
+            let _ = self.expr(file, a);
+        }
+        let Some(name) = expr_label(fun) else {
+            return Operand::invalid();
+        };
+        match name.as_str() {
+            // 有值且类型确定：`len`/`cap`/`copy` 恒 `int`。
+            "len" | "cap" | "copy" => {
+                let t = self.s.tt.add_basic(BasicId::Int);
+                Operand::value(Some(t))
+            }
+            // 有值、类型面归 Task 29（`append`/`min`/`max`/`make`/`new`/…）。
+            "append" | "min" | "max" | "complex" | "real" | "imag" | "recover" | "make" | "new" => {
+                Operand::value(None)
+            }
+            // 无返回值。
+            "close" | "delete" | "panic" | "print" | "println" | "clear" | "assert" | "trace" => {
+                Operand::no_value()
+            }
+            _ => Operand::invalid(),
+        }
+    }
+
+    /// 元组条目（`Type::Invalid` / 非元组 ⇒ 空表 —— 签名残缺时不报假错）。
+    fn tuple_vars(&self, t: TypeId) -> Vec<(Option<String>, TypeId)> {
+        let tt = self.tt();
+        match tt.type_of(unalias(tt, t)) {
+            Type::Tuple(id) => tt.tuple_def(*id).vars.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// 官方 `Checker.assignment`（`assignments.go:22`）的窄面。
+    ///
+    /// `target == None` ⇒ 空标识符位（不做类型判定）。类型未知（`None` /
+    /// `invalid`）⇒ **不判**（假阴性优于假阳性；台账登记）。
+    /// 失败时把操作数打成 `invalid`（官方 `x.invalidate()`），调用方据此
+    /// **不再**级联报错。
+    pub(crate) fn assignment(
+        &mut self,
+        x: &mut Operand,
+        xpos: Pos,
+        target: Option<TypeId>,
+        context: &str,
+    ) -> bool {
+        if x.mode == Mode::Invalid {
+            return false;
+        }
+        let Some(t) = target else {
+            return true;
+        };
+        let Some(xt) = x.typ else {
+            return true;
+        };
+        {
+            let tt = self.tt();
+            if matches!(tt.type_of(unalias(tt, t)), Type::Invalid)
+                || matches!(tt.type_of(unalias(tt, xt)), Type::Invalid)
+            {
+                return true;
+            }
+        }
+        match assignable(self.tt(), xt, t) {
+            Ok(true) => true,
+            Ok(false) => {
+                let desc = type_str(self.tt(), t);
+                let what = operand_text(self.tt(), x);
+                self.report(
+                    xpos,
+                    DiagCode::ChkInvalidAssign,
+                    format!("cannot use {what} as {desc} value in {context}"),
+                );
+                x.mode = Mode::Invalid;
+                false
+            }
+            // 能力边界（类型参数面）：不报。
+            Err(_) => true,
         }
     }
 
@@ -1459,7 +1652,13 @@ fn is_valid_op(x: &Operand) -> bool {
 }
 
 /// 官方 `mayConvert`（`expr.go` `matchTypes` 内联；规则顺序逐条对齐）。
-fn may_convert(tt: &TypeTable, x: &Operand, y: &Operand, tx: TypeId, ty: TypeId) -> bool {
+pub(crate) fn may_convert(
+    tt: &TypeTable,
+    x: &Operand,
+    y: &Operand,
+    tx: TypeId,
+    ty: TypeId,
+) -> bool {
     let x_typed = !is_untyped(tt, tx);
     let y_typed = !is_untyped(tt, ty);
     if x_typed && y_typed {
@@ -1491,7 +1690,7 @@ fn may_convert(tt: &TypeTable, x: &Operand, y: &Operand, tx: TypeId, ty: TypeId)
 
 /// 官方 `maxType` 的**无类型 kind 面**：同 kind ⇒ 自身；数值按
 /// `int < rune < float < complex` 提升；其余（bool / string / nil 混合）⇒ `None`。
-fn max_type(a: BasicId, b: BasicId) -> Option<BasicId> {
+pub(crate) fn max_type(a: BasicId, b: BasicId) -> Option<BasicId> {
     if a == b {
         return Some(a);
     }
@@ -1554,7 +1753,7 @@ fn is_comparison(op: Op) -> bool {
 }
 
 /// 运算符文本（`Op` 无 `as_str`；这里是**消息**用文本，官方按 `token.Token` 渲染）。
-fn op_str(op: Op) -> &'static str {
+pub(crate) fn op_str(op: Op) -> &'static str {
     match op {
         Op::Add => "+",
         Op::Sub => "-",
@@ -1582,7 +1781,7 @@ fn op_str(op: Op) -> &'static str {
 }
 
 /// 常量值文本（消息用；`Const` 没有 `Display`）。
-fn const_text(c: &Const) -> String {
+pub(crate) fn const_text(c: &Const) -> String {
     match c {
         Const::Int(n) => n.to_string(),
         Const::Float(r) => r.to_string(),
@@ -1660,7 +1859,7 @@ fn what_or_type(tt: &TypeTable, t: TypeId) -> String {
 
 /// 类型文本（消息用）。具名类型用其名字；复合按官方构造子渲染；签名/结构体等
 /// 只给类名（消息不复刻 —— `C8` 只比位置 + 类别）。
-fn type_str(tt: &TypeTable, t: TypeId) -> String {
+pub(crate) fn type_str(tt: &TypeTable, t: TypeId) -> String {
     let t = unalias(tt, t);
     match tt.type_of(t) {
         Type::Basic(b) => b.as_str().to_string(),
@@ -1687,7 +1886,7 @@ fn type_str(tt: &TypeTable, t: TypeId) -> String {
     }
 }
 
-fn basic_kind(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
+pub(crate) fn basic_kind(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
     match tt.type_of(underlying(tt, t)) {
         Type::Basic(b) => Some(*b),
         _ => None,
@@ -1752,7 +1951,7 @@ fn const_negative(c: &Const) -> bool {
 
 /// 官方 `operand.String` 的源码近似：名字 / 选择器链 / 括号剥壳。
 /// （消息文本只进人读面，`(行,列,类别)` 才是对账面 —— 与 22-3 / 23-4 同口径。）
-fn expr_label(e: &Expr) -> Option<String> {
+pub(crate) fn expr_label(e: &Expr) -> Option<String> {
     match e {
         Expr::Name(n) => Some(n.value.clone()),
         Expr::Selector(s) => expr_label(&s.x).map(|b| format!("{b}.{}", s.sel.value)),
@@ -1764,7 +1963,7 @@ fn expr_label(e: &Expr) -> Option<String> {
 /// 官方 `operand.String` 的**窄面替身**：常量 ⇒ 值文本；
 /// 其余 ⇒ `value of type T`。（无源码文本 —— 消息文本只进人读面，
 /// `(行,列,类别)` 才是对账面。）
-fn operand_text(tt: &TypeTable, x: &Operand) -> String {
+pub(crate) fn operand_text(tt: &TypeTable, x: &Operand) -> String {
     if x.mode == Mode::Constant
         && let Some(v) = &x.val
     {
@@ -1776,18 +1975,57 @@ fn operand_text(tt: &TypeTable, x: &Operand) -> String {
     }
 }
 
+/// 官方 `typesSummary(operandTypes(args), …)` 的窄面：`(int, string)`。
+///
+/// 只进人读消息（`not enough arguments in call to f` 的 `have` 行）。
+pub(crate) fn tuple_text(tt: &TypeTable, args: &[Operand]) -> String {
+    let items: Vec<String> = args
+        .iter()
+        .map(|x| match x.typ {
+            Some(t) => type_str(tt, t),
+            None => "value".to_owned(),
+        })
+        .collect();
+    format!("({})", items.join(", "))
+}
+
+/// 形参表的窄面文本：`(int)` / `(...int)`。
+pub(crate) fn params_text(
+    tt: &TypeTable,
+    params: &[(Option<String>, TypeId)],
+    variadic: bool,
+) -> String {
+    let n = params.len();
+    let items: Vec<String> = params
+        .iter()
+        .enumerate()
+        .map(|(i, (_, t))| {
+            if variadic && i + 1 == n {
+                let inner = match tt.type_of(underlying(tt, *t)) {
+                    Type::Slice(e) => type_str(tt, *e),
+                    _ => type_str(tt, *t),
+                };
+                format!("...{inner}")
+            } else {
+                type_str(tt, *t)
+            }
+        })
+        .collect();
+    format!("({})", items.join(", "))
+}
+
 /// 官方 `isUntyped`（含 `untyped nil`）。
-fn is_untyped(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn is_untyped(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_untyped)
 }
 
 /// 官方 `allNumeric`（含无类型数值）。
-fn all_numeric(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn all_numeric(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_numeric)
 }
 
 /// 官方 `allBoolean`（含无类型 bool）。
-fn all_boolean(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn all_boolean(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_bool)
 }
 
@@ -1797,7 +2035,7 @@ fn all_string(tt: &TypeTable, t: TypeId) -> bool {
 }
 
 /// 官方 `allInteger`（含无类型整数/rune）。
-fn all_integer(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn all_integer(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_integer)
 }
 
@@ -1814,7 +2052,7 @@ fn is_pointer(tt: &TypeTable, t: TypeId) -> bool {
 /// 官方 `isNonTypeParamInterface`：非类型参数的接口。
 ///
 /// 我们的 `Type::TypeParam` 是独立变体 ⇒ `underlying` 落在 `Interface` 即「非类型参数」。
-fn is_non_typeparam_interface(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn is_non_typeparam_interface(tt: &TypeTable, t: TypeId) -> bool {
     if matches!(tt.type_of(unalias(tt, t)), Type::TypeParam(_)) {
         return false;
     }
