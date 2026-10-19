@@ -1,0 +1,16 @@
+# source: oracle
+# files: testdata/cmp-assignable.go
+# package: p
+# cmp
+23	assignable	true
+24	assignable	false
+25	assignable	false
+26	assignable	true
+27	assignable	true
+28	assignable	true
+29	assignable	true
+30	assignable	true
+31	assignable	false
+32	assignable	true
+33	assignable	false
+34	assignable	true

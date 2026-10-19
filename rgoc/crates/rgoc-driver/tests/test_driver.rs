@@ -1084,10 +1084,16 @@ fn types_cmp_指令格式错_响亮报错() {
             "//rgoc:cmp identical int int int",
             "恰好两个",
         ),
+        ("cmp-kind", "//rgoc:cmp unify int => int", "未知的 cmp kind"),
         (
-            "cmp-kind",
-            "//rgoc:cmp assignable int => int",
-            "未知的 cmp kind",
+            "cmp-methodset-binary",
+            "//rgoc:cmp methodset int => int",
+            "一元 kind",
+        ),
+        (
+            "cmp-instance-empty-arg",
+            "//rgoc:cmp instance Box => int,",
+            "空实参",
         ),
     ] {
         let src = format!("package p\n\n{line}\n");

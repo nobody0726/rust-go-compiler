@@ -25,16 +25,29 @@
 //!
 //! # 判定与拒绝
 //!
-//! - `identical` ⇒ [`rgoc_types::identical`]（内部先 `unalias`）。M4/Task 10
-//!   起它**没有拒绝面**（`U-M3-05` 解除，`TypUnsupportedConstraintIdentity`
-//!   已移除）。`Err(code)` ⇒ **`reject`**：渲染面保留给后续 kind 的拒面
-//!   （现存的语言层边界如 `TYP-UNSUPPORTED-ASSIGNABILITY`）—— 对撞时按白名单
-//!   排除（`M3-tests.md` §6），**排除集本身也要被断言**（`collide_cmp.rs`）。
-//! - `representable` ⇒ [`rgoc_const::representable`]，取常量对象的**值**与目标的
-//!   基本类型（目标是具名类型时取其**本体**，官方判据就是 `Underlying()` 的
-//!   `*Basic`）。`Err(code)` ⇒ `false`（不可表示就是不可表示，**不是**拒绝）；
-//!   目标连本体都不是基本类型 ⇒ **响亮报错** —— M3 只对基本类型给这个判定，
-//!   样本违规不该伪装成 `reject`（Ruling 27-1 的同一条纪律）。
+//! 七种 kind（`R-32-2`，与 oracle 侧**同一套**名字与操作数个数）：
+//!
+//! | kind | 形状 | 判定 |
+//! |---|---|---|
+//! | `identical` | 二元 | [`rgoc_types::identical`] |
+//! | `representable` | 二元 | [`rgoc_const::representable`] |
+//! | `assignable` | 二元 | [`rgoc_types::assignable`]（M4/Task 15 起作答） |
+//! | `implements` | 二元 | [`rgoc_types::implements`]`(…, false)` |
+//! | `satisfies` | 二元 | [`rgoc_types::implements`]`(…, true)`（类型集参与） |
+//! | `methodset` | **一元** | [`rgoc_types::methodset`]（名字升序、`,` 连接；空集 `-`） |
+//! | `instance` | 二元 + 实参列表 | [`rgoc_types::instantiate`]（成功 ⇒ C7 单根 dump） |
+//!
+//! - `identical` ⇒ M4/Task 10 起**没有拒绝面**（`U-M3-05` 解除）。
+//! - `representable` ⇒ `Err(code)` ⇒ `false`（不可表示就是不可表示，**不是**拒绝）；
+//!   目标连本体都不是基本类型 ⇒ **响亮报错**（Ruling 27-1 的同一条纪律）。
+//! - `assignable` / `implements` / `satisfies` / `methodset` ⇒ 语言层的
+//!   `Err(code)` ⇒ **`reject`** + `# reject <行> <CODE>`：对撞时按白名单排除
+//!   （`M3-tests.md` §6），**排除集本身也要被断言**（`collide_cmp.rs`）。
+//! - `instance` ⇒ `Ok(v)` ⇒ `ok` + C7 单根 dump（每行前加一个 tab）；
+//!   `Err(code)` ⇒ `reject:<category>`（类别 = `rgoc-check::diag` 的 26 类投影：
+//!   计数错 ⇒ `type-arg`，约束不满足 ⇒ `implements`）。**不**走白名单：
+//!   类别本身就是判定结果，两侧必须逐字一致。F 必须是**本包声明的泛型具名
+//!   类型的名字**（非泛型 / 不存在 ⇒ 样本违规，响亮报错）。
 //!
 //! # 来源标注
 //!
@@ -45,10 +58,14 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
+use rgoc_check::diag::category_of;
 use rgoc_const::{Const, representable};
 use rgoc_lex::{Lexer, Mode, TokenKind};
 use rgoc_load::{Package, Source, load_sources};
-use rgoc_types::{BasicId, Sizes, Type, TypeId, TypeTable, identical, unalias};
+use rgoc_types::{
+    BasicId, Sizes, Type, TypeId, TypeTable, assignable, identical, implements, instantiate,
+    methodset, try_dump_types, unalias,
+};
 
 use crate::types_cmd::TypesOutcome;
 
@@ -56,7 +73,7 @@ use crate::types_cmd::TypesOutcome;
 /// 各自的诊断都靠它归位）。
 const SYN_NAME: &str = "<rgoc:cmp>";
 
-/// `//rgoc:cmp` 的 kind 不是 M3 支持的两个之一时的**稳定拒绝码**（`T-TY-82`）。
+/// `//rgoc:cmp` 的 kind 不认识时的**稳定拒绝码**（`T-TY-82`）。
 ///
 /// 为什么是驱动层的码、而不是 [`rgoc_lex::DiagCode`]：它说的是「这个**请求**
 /// 我们不判」——没有官方对应代号，也不来自某个源码位置。它与语言层的能力边界
@@ -64,17 +81,25 @@ const SYN_NAME: &str = "<rgoc:cmp>";
 /// 那条是**语言层**的能力边界（判可赋值性时撞上没做完的推理），这条是
 /// **请求层**的能力边界（连问都没法问）。
 ///
-/// 为什么「拼错的 kind」与「M3 不判的判定」共用一个码：语法上不可分
-/// （`assignable` / `implements` / `instance` 都只是没见过的名字）。kind 集合
-/// **与 oracle 侧共用且封闭**（都只认 `identical` / `representable`）—— 不发明
-/// 新 kind 名：fixture 由两侧读**同一份**文件，输入语言分叉比少支持一个 kind 坏。
+/// M4/Task 15 起 kind 集合扩到七个（`R-32-2`）；**封闭性不变** —— 拼错的
+/// kind（`unify` / `infer` / `Assignable`）仍走这个码。集合与 oracle 侧共用：
+/// fixture 由两侧读**同一份**文件，输入语言分叉比少支持一个 kind 坏。
 pub const KIND_UNSUPPORTED: &str = "TYP-CMP-KIND-UNSUPPORTED";
 
-/// 指令种类（`D-M3-17` 的两种）。
+/// 支持的 kind（报错要说出支持面；顺序固定，便于人读与测试）。
+pub const SUPPORTED_KINDS: &str =
+    "identical / representable / assignable / implements / satisfies / methodset / instance";
+
+/// 指令种类（`D-M3-17` 的两种 + M4/Task 15 的五个；`R-32-2`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CmpKind {
     Identical,
     Representable,
+    Assignable,
+    Implements,
+    Satisfies,
+    MethodSet,
+    Instance,
 }
 
 impl CmpKind {
@@ -82,6 +107,11 @@ impl CmpKind {
         match self {
             CmpKind::Identical => "identical",
             CmpKind::Representable => "representable",
+            CmpKind::Assignable => "assignable",
+            CmpKind::Implements => "implements",
+            CmpKind::Satisfies => "satisfies",
+            CmpKind::MethodSet => "methodset",
+            CmpKind::Instance => "instance",
         }
     }
 }
@@ -92,36 +122,30 @@ struct CmpEntry {
     /// 指令所在的**物理**行号（`Pos::line` 是绝对行号，不带 `//line` 重映射）。
     line: u32,
     kind: CmpKind,
-    /// 第一个操作数（`identical` 的 A / `representable` 的 C）
+    /// 第一个操作数（二元 kind 的左侧；`methodset` 的唯一操作数）
     a: String,
-    /// 第二个操作数（`identical` 的 B / `representable` 的 T）
+    /// 第二个操作数（二元 kind 的右侧；一元 kind 为空）
     b: String,
+    /// `instance` 的实参列表（其他 kind 为空）
+    args: Vec<String>,
 }
 
 /// 合成文件里的一行对应哪个操作数（诊断归位用）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Operand {
-    A,
-    B,
-    C,
-    T,
-}
-
-impl Operand {
-    /// 这个操作数该被说成什么（错误消息用词）。
-    fn noun(self) -> &'static str {
-        match self {
-            Operand::C => "常量表达式",
-            _ => "类型表达式",
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SynthRole {
+    /// `entries` 里的下标。
+    entry: usize,
+    /// 该操作数的原文。
+    text: String,
+    /// 该操作数该被说成什么（错误消息用词）。
+    noun: &'static str,
 }
 
 /// 合成源 + 逐行归属。
 struct Synth {
     src: String,
     /// 下标 `i` 对应合成文件的第 `i + 1` 行（第 1 行是 `package` 子句 ⇒ `None`）。
-    lines: Vec<Option<(usize, Operand)>>,
+    lines: Vec<Option<SynthRole>>,
 }
 
 /// 跑 `--cmp`：读指令 → 合成 → 装载 → 逐条判定 → 规范行。
@@ -194,18 +218,14 @@ pub fn run_cmp(cmd: &super::cli::TypesCommand) -> Result<TypesOutcome, String> {
             ));
         }
         let idx = (d.pos.line as usize).checked_sub(1);
-        return match idx.and_then(|i| synth.lines.get(i)).copied().flatten() {
-            Some((i, op)) => {
-                let e = &entries[i];
-                let text = match op {
-                    Operand::B | Operand::T => &e.b,
-                    _ => &e.a,
-                };
+        return match idx.and_then(|i| synth.lines.get(i)).cloned().flatten() {
+            Some(role) => {
+                let e = &entries[role.entry];
                 Err(format!(
                     "第 {} 行：`{}` 不是{}（合成文件第 {} 行：{} [{}]）",
                     e.line,
-                    text,
-                    op.noun(),
+                    role.text,
+                    role.noun,
                     d.pos.line,
                     d.message,
                     d.code.as_str()
@@ -231,22 +251,13 @@ pub fn run_cmp(cmd: &super::cli::TypesCommand) -> Result<TypesOutcome, String> {
         let kind = e.kind.as_str();
         match e.kind {
             CmpKind::Identical => {
-                let ta = object_type(&pkg, &format!("{n}_a"), e, Operand::A)?;
-                let tb = object_type(&pkg, &format!("{n}_b"), e, Operand::B)?;
-                match identical(&tt, ta, tb) {
-                    Ok(v) => {
-                        let _ = writeln!(stdout, "{}\t{kind}\t{}", e.line, v);
-                    }
-                    Err(code) => {
-                        // **拒绝**：理由必须写出来（白名单断言读它，人读也靠它）
-                        let _ = writeln!(stdout, "{}\t{kind}\treject", e.line);
-                        let _ = writeln!(stdout, "# reject {} {}", e.line, code.as_str());
-                    }
-                }
+                let ta = synth_type(&pkg, &format!("{n}_a"), e.line, &e.a)?;
+                let tb = synth_type(&pkg, &format!("{n}_b"), e.line, &e.b)?;
+                write_result(&mut stdout, e, kind, identical(&tt, ta, tb));
             }
             CmpKind::Representable => {
-                let val = object_const(&pkg, &format!("{n}_c"), e)?;
-                let t = object_type(&pkg, &format!("{n}_t"), e, Operand::T)?;
+                let val = object_const(&pkg, &format!("{n}_c"), e.line, &e.a)?;
+                let t = synth_type(&pkg, &format!("{n}_t"), e.line, &e.b)?;
                 let basic = basic_of(&tt, t).ok_or_else(|| {
                     format!(
                         "第 {} 行：`{}` 不是基本类型（本体也不是）—— M3 只对基本类型给可表示性判定",
@@ -256,6 +267,91 @@ pub fn run_cmp(cmd: &super::cli::TypesCommand) -> Result<TypesOutcome, String> {
                 let ok = representable(&val, basic, &Sizes::HOST_ARM64).is_ok();
                 let _ = writeln!(stdout, "{}\t{kind}\t{}", e.line, ok);
             }
+            CmpKind::Assignable => {
+                let v = synth_type(&pkg, &format!("{n}_a"), e.line, &e.a)?;
+                let t = synth_type(&pkg, &format!("{n}_b"), e.line, &e.b)?;
+                write_result(&mut stdout, e, kind, assignable(&tt, v, t));
+            }
+            CmpKind::Implements | CmpKind::Satisfies => {
+                let v = synth_type(&pkg, &format!("{n}_a"), e.line, &e.a)?;
+                let target = synth_type(&pkg, &format!("{n}_b"), e.line, &e.b)?;
+                // `satisfies` = 官方 `types.Satisfies` = 约束面（`constraint = true`）；
+                // `implements` 只看方法集。
+                let constraint = e.kind == CmpKind::Satisfies;
+                write_result(&mut stdout, e, kind, implements(&tt, v, target, constraint));
+            }
+            CmpKind::MethodSet => {
+                let t = synth_type(&pkg, &format!("{n}_a"), e.line, &e.a)?;
+                match methodset(&tt, t) {
+                    Ok(list) => {
+                        // 结果按名字升序（`methodset` 的实现已排）；空集写 `-`。
+                        let names: Vec<&str> = list.iter().map(|m| m.name.as_str()).collect();
+                        let res = if names.is_empty() {
+                            "-".to_string()
+                        } else {
+                            names.join(",")
+                        };
+                        let _ = writeln!(stdout, "{}\t{kind}\t{res}", e.line);
+                    }
+                    Err(code) => write_reject(&mut stdout, e, kind, code),
+                }
+            }
+            CmpKind::Instance => {
+                // F 必须是**本包声明的泛型具名类型的名字**：不能合成
+                // `type __x_f = F`（泛型类型不实例化不能当类型用）。
+                let obj = pkg.lookup(&e.a).ok_or_else(|| {
+                    format!(
+                        "第 {} 行：`{}` 不是本包声明的类型名 —— instance 的 F 必须是泛型具名类型的名字",
+                        e.line, e.a
+                    )
+                })?;
+                let ft = obj.typ.ok_or_else(|| {
+                    format!("第 {} 行：`{}` 没有类型（装载器给了占位对象）", e.line, e.a)
+                })?;
+                let origin = match tt.type_of(unalias(&tt, ft)) {
+                    Type::Named(id) => *id,
+                    _ => {
+                        return Err(format!(
+                            "第 {} 行：`{}` 不是具名类型 —— instance 的 F 必须是泛型具名类型",
+                            e.line, e.a
+                        ));
+                    }
+                };
+                if tt.named_def(origin).type_params.is_empty() {
+                    return Err(format!(
+                        "第 {} 行：`{}` 不是泛型类型（没有类型形参）",
+                        e.line, e.a
+                    ));
+                }
+                let mut args = Vec::with_capacity(e.args.len());
+                for (k, text) in e.args.iter().enumerate() {
+                    // 与 oracle 侧 `types.Unalias(ta)` 同口径：实参是**指代的类型**，
+                    // 合成别名那一层不进实例体（否则 dump 里会多一个 alias 条目）。
+                    let t = synth_type(&pkg, &format!("{n}_a{k}"), e.line, text)?;
+                    args.push(unalias(&tt, t));
+                }
+                match instantiate(&mut tt, origin, &args) {
+                    Ok(inst) => {
+                        let block = try_dump_types(&tt, &[inst]).map_err(|err| {
+                            format!("第 {} 行：实例化结果的 dump 失败：{err}", e.line)
+                        })?;
+                        // `try_dump_types` 自带 `# source: rgoc` 头（C7 §2 规则 1）。
+                        // 条目块里**不留**它：oracle 的 `dumpRoot` 也不产头 —— 两侧
+                        // 的头部只出现在整份输出开头（`# source: rgoc` vs `# source:
+                        // oracle`，是刻意保留的唯一一处不同）。
+                        let body = block.strip_prefix("# source: rgoc\n").unwrap_or(&block);
+                        let _ = writeln!(stdout, "{}\t{kind}\tok", e.line);
+                        for ln in body.trim_end_matches('\n').split('\n') {
+                            let _ = writeln!(stdout, "\t{ln}");
+                        }
+                    }
+                    Err(code) => {
+                        // 类别本身就是判定结果（两侧逐字一致）；**不**走白名单。
+                        let cat = category_of(code);
+                        let _ = writeln!(stdout, "{}\t{kind}\treject:{}", e.line, cat.as_str());
+                    }
+                }
+            }
         }
     }
 
@@ -264,6 +360,22 @@ pub fn run_cmp(cmd: &super::cli::TypesCommand) -> Result<TypesOutcome, String> {
         stderr: String::new(),
         errors: 0,
     })
+}
+
+/// 二元判定的渲染：`Ok` ⇒ `true/false`；`Err` ⇒ `reject` + `# reject` 理由行。
+fn write_result(out: &mut String, e: &CmpEntry, kind: &str, res: Result<bool, rgoc_lex::DiagCode>) {
+    match res {
+        Ok(v) => {
+            let _ = writeln!(out, "{}\t{kind}\t{}", e.line, v);
+        }
+        Err(code) => write_reject(out, e, kind, code),
+    }
+}
+
+/// `reject` 条目：判定行 + 理由行（白名单断言读 `# reject` 的代号）。
+fn write_reject(out: &mut String, e: &CmpEntry, kind: &str, code: rgoc_lex::DiagCode) {
+    let _ = writeln!(out, "{}\t{kind}\treject", e.line);
+    let _ = writeln!(out, "# reject {} {}", e.line, code.as_str());
 }
 
 /// 读一个文件的 `//rgoc:cmp` 指令。
@@ -302,21 +414,47 @@ fn read_directives(path: &Path) -> Result<Vec<CmpEntry>, String> {
         let kind = match kind_str {
             "identical" => CmpKind::Identical,
             "representable" => CmpKind::Representable,
+            "assignable" => CmpKind::Assignable,
+            "implements" => CmpKind::Implements,
+            "satisfies" => CmpKind::Satisfies,
+            "methodset" => CmpKind::MethodSet,
+            "instance" => CmpKind::Instance,
             other => {
-                // `T-TY-82`：请求 `TYP-13/18/19/23..26` 的判定在 M3 的**唯一入口**
-                // 就是这个 kind 名。往后 `[…]` 里那份稳定码是给 grep / 断言用的。
+                // `T-TY-82`（M4 改写）：kind 集合扩到七个（`R-32-2`），**封闭性
+                // 不变** —— 拼错的名字仍走这个稳定码。
                 return Err(err(format!(
-                    "未知的 cmp kind {other:?}（M3 只判 identical / representable；\
-                     TYP-13/18/19/23..26 的判定属 M4，U-M3-01..04）[{KIND_UNSUPPORTED}]"
+                    "未知的 cmp kind {other:?}（支持 {SUPPORTED_KINDS}）[{KIND_UNSUPPORTED}]"
                 )));
             }
         };
-        let (a, b) = split_operands(operands).map_err(err)?;
+        let (a, b, args) = match kind {
+            CmpKind::MethodSet => {
+                // 一元：`methodset ` 之后整段原文都是类型表达式。
+                let t = operands.trim();
+                if t.is_empty() {
+                    return Err(err("cmp 指令缺少操作数".into()));
+                }
+                if t.contains("=>") {
+                    return Err(err("methodset 是一元 kind，不接受 `=>`".into()));
+                }
+                (t.to_string(), String::new(), Vec::new())
+            }
+            CmpKind::Instance => {
+                let (a, b) = split_operands(operands).map_err(err)?;
+                let args = split_arg_list(b).map_err(err)?;
+                (a.to_string(), b.to_string(), args)
+            }
+            _ => {
+                let (a, b) = split_operands(operands).map_err(err)?;
+                (a.to_string(), b.to_string(), Vec::new())
+            }
+        };
         out.push(CmpEntry {
             line: m.pos.line,
             kind,
-            a: a.to_string(),
-            b: b.to_string(),
+            a,
+            b,
+            args,
         });
     }
     Ok(out)
@@ -358,25 +496,81 @@ fn split_operands(s: &str) -> Result<(&str, &str), String> {
     Ok((fields[0], fields[1]))
 }
 
+/// 把 `instance` 右侧的**实参列表**按顶层逗号切开（与 oracle 侧 `splitArgList`
+/// **同一条判据**）：只按括号/方括号/花括号的嵌套深度与引号状态切 ——
+/// `map[string]int, func(int, string) bool` 是两条实参，不是四条。
+fn split_arg_list(s: &str) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut start = 0usize;
+    let mut quote: Option<char> = None;
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if let Some(q) = quote {
+            if q == '"' && c == b'\\' {
+                i += 2; // 跳过转义的下一个字节（类型表达式里只有 struct tag 可能出现）
+                continue;
+            }
+            if c as char == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'`' => quote = Some(c as char),
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(format!("实参列表的括号不配对：{s:?}"));
+                }
+            }
+            b',' if depth == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    if quote.is_some() || depth != 0 {
+        return Err(format!("实参列表的括号/引号不配对：{s:?}"));
+    }
+    out.push(s[start..].trim().to_string());
+    if let Some(k) = out.iter().position(|a| a.is_empty()) {
+        return Err(format!("实参列表里有空实参（第 {} 条）：{s:?}", k + 1));
+    }
+    Ok(out)
+}
+
 /// 合成源：每条指令的声明**各占一行**（诊断按行归位）。
 ///
 /// 与 oracle 侧一样从 `package` 子句起（行号从 1 起）—— 两侧的行号口径必须
 /// 一样，否则「第 N 行」在两边指的不是同一处。
 fn synth_source(pkg_name: &str, entries: &[CmpEntry]) -> Synth {
     let mut src = String::new();
-    let mut lines: Vec<Option<(usize, Operand)>> = Vec::new();
+    let mut lines: Vec<Option<SynthRole>> = Vec::new();
     let _ = writeln!(src, "package {pkg_name}");
     lines.push(None); // 第 1 行：package 子句
 
+    let role = |entry: usize, text: &str, noun: &'static str| SynthRole {
+        entry,
+        text: text.to_string(),
+        noun,
+    };
     let push = |src: &mut String,
-                lines: &mut Vec<Option<(usize, Operand)>>,
+                lines: &mut Vec<Option<SynthRole>>,
                 text: String,
-                role: Option<(usize, Operand)>| {
+                r: Option<SynthRole>| {
         src.push_str(&text);
         src.push('\n');
-        lines.push(role);
+        lines.push(r);
     };
 
+    const TYP: &str = "类型表达式";
     for (i, e) in entries.iter().enumerate() {
         let n = format!("__rgoc_cmp_{}", e.line);
         match e.kind {
@@ -385,13 +579,13 @@ fn synth_source(pkg_name: &str, entries: &[CmpEntry]) -> Synth {
                     &mut src,
                     &mut lines,
                     format!("type {n}_a = {}", e.a),
-                    Some((i, Operand::A)),
+                    Some(role(i, &e.a, TYP)),
                 );
                 push(
                     &mut src,
                     &mut lines,
                     format!("type {n}_b = {}", e.b),
-                    Some((i, Operand::B)),
+                    Some(role(i, &e.b, TYP)),
                 );
             }
             CmpKind::Representable => {
@@ -399,14 +593,54 @@ fn synth_source(pkg_name: &str, entries: &[CmpEntry]) -> Synth {
                     &mut src,
                     &mut lines,
                     format!("const {n}_c = {}", e.a),
-                    Some((i, Operand::C)),
+                    Some(role(i, &e.a, "常量表达式")),
                 );
                 push(
                     &mut src,
                     &mut lines,
                     format!("type {n}_t = {}", e.b),
-                    Some((i, Operand::T)),
+                    Some(role(i, &e.b, TYP)),
                 );
+                // 判定行：这里的诊断是**结果**（false），不是样本违规 ⇒ 角色不会被渲染。
+                push(
+                    &mut src,
+                    &mut lines,
+                    format!("var {n}_v {n}_t = {n}_c"),
+                    Some(role(i, &e.b, TYP)),
+                );
+            }
+            CmpKind::Assignable | CmpKind::Implements | CmpKind::Satisfies => {
+                push(
+                    &mut src,
+                    &mut lines,
+                    format!("type {n}_a = {}", e.a),
+                    Some(role(i, &e.a, TYP)),
+                );
+                push(
+                    &mut src,
+                    &mut lines,
+                    format!("type {n}_b = {}", e.b),
+                    Some(role(i, &e.b, TYP)),
+                );
+            }
+            CmpKind::MethodSet => {
+                push(
+                    &mut src,
+                    &mut lines,
+                    format!("type {n}_a = {}", e.a),
+                    Some(role(i, &e.a, TYP)),
+                );
+            }
+            CmpKind::Instance => {
+                // F 不合成（泛型类型不实例化不能当类型用）⇒ 按包作用域解析。
+                for (k, arg) in e.args.iter().enumerate() {
+                    push(
+                        &mut src,
+                        &mut lines,
+                        format!("type {n}_a{k} = {arg}"),
+                        Some(role(i, arg, TYP)),
+                    );
+                }
             }
         }
     }
@@ -414,40 +648,26 @@ fn synth_source(pkg_name: &str, entries: &[CmpEntry]) -> Synth {
 }
 
 /// 取合成别名声明的类型（`type __x = <A>` ⇒ 对象类型是 `alias`）。
-fn object_type(pkg: &Package, name: &str, e: &CmpEntry, op: Operand) -> Result<TypeId, String> {
-    let text = match op {
-        Operand::B | Operand::T => &e.b,
-        _ => &e.a,
-    };
+fn synth_type(pkg: &Package, name: &str, line: u32, text: &str) -> Result<TypeId, String> {
     let obj = pkg.lookup(name).ok_or_else(|| {
-        format!(
-            "第 {} 行：合成声明 {name} 不在包作用域里（`{text}` 没能成为类型？）",
-            e.line
-        )
+        format!("第 {line} 行：合成声明 {name} 不在包作用域里（`{text}` 没能成为类型？）")
     })?;
     obj.typ.ok_or_else(|| {
-        format!(
-            "第 {} 行：`{text}` 没有类型（装载器给了占位对象）—— 不是类型表达式",
-            e.line
-        )
+        format!("第 {line} 行：`{text}` 没有类型（装载器给了占位对象）—— 不是类型表达式")
     })
 }
 
 /// 取合成常量声明的**值**。
-fn object_const(pkg: &Package, name: &str, e: &CmpEntry) -> Result<Const, String> {
+fn object_const(pkg: &Package, name: &str, line: u32, text: &str) -> Result<Const, String> {
     let obj = pkg.lookup(name).ok_or_else(|| {
-        format!(
-            "第 {} 行：合成声明 {name} 不在包作用域里（`{}` 没能成为常量？）",
-            e.line, e.a
-        )
+        format!("第 {line} 行：合成声明 {name} 不在包作用域里（`{text}` 没能成为常量？）")
     })?;
     match obj.val.clone() {
         // `Unknown` 是「值没算出来」——直接拿去判可表示性会**默认返回 true**
         // （官方 `representableConst` 的第一条），那是把「不知道」当「行」。
         // 宁可报错：样本契约要求 C 是常量表达式。
         Some(Const::Unknown) | None => Err(format!(
-            "第 {} 行：`{}` 不是常量表达式（装载器没算出值）",
-            e.line, e.a
+            "第 {line} 行：`{text}` 不是常量表达式（装载器没算出值）"
         )),
         Some(v) => Ok(v),
     }

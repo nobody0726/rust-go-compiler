@@ -1,5 +1,11 @@
-//! identity / representable 对撞（`T-TY-92` / `T-TY-93`）—— `testdata/cmp-*.go`
-//! 的判定行必须与 oracle golden 逐条一致，**除了**声明为排除的条目。
+//! identity / representable / 新判定式对撞（`T-TY-92/93` + `T-CK-81..85`）——
+//! `testdata/cmp-*.go` 的判定行必须与 oracle golden 逐条一致，**除了**声明为排除的条目。
+//!
+//! M4/Task 15 起 kind 集合扩到七个（`R-32-2`）：`assignable` / `implements` /
+//! `satisfies` / `methodset` / `instance`。前四者的 `reject` 走 M3 的排除集
+//! 机制；`instance` 的失败是 `reject:<category>`（**判定结果**，不排除）。
+//! `instance` 的 `ok` 后跟 C7 单根 dump 的**续行**（每行一个前导 tab），
+//! `parse_entries` 把它们拼回同一条 `result` ⇒ 比较的是整块逐字节。
 //!
 //! # 与 `collide_dump.rs` 同一套传递
 //!
@@ -45,9 +51,21 @@ use std::process::Command;
 
 const K_ID: &str = "identical";
 const K_REP: &str = "representable";
+const K_ASG: &str = "assignable";
+const K_IMP: &str = "implements";
+const K_SAT: &str = "satisfies";
+const K_METH: &str = "methodset";
+const K_INST: &str = "instance";
 const R_REJECT: &str = "reject";
 
+/// 支持的 kind（与两侧实现**同一套**；`R-32-2`）。
+const KINDS: [&str; 7] = [K_ID, K_REP, K_ASG, K_IMP, K_SAT, K_METH, K_INST];
+
 /// 一条判定行：`<行号>\t<kind>\t<result>`。
+///
+/// `instance` 的 `result` 可以**跨行**：首行是 `ok`，随后每行以**一个 tab**
+/// 开头（C7 单根 dump 原样）。解析时把续行拼回 `result`（`\n` 分隔、去掉
+/// 前导 tab）—— 这样逐条比较就是逐字节比较整个块。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Entry {
     line: u32,
@@ -69,10 +87,26 @@ fn testdata() -> PathBuf {
 
 /// 读判定行（`#` 开头的行与空行忽略，`M3-tests.md` §5.2）。
 fn parse_entries(text: &str) -> Result<Vec<Entry>, String> {
-    let mut out = Vec::new();
+    let mut out: Vec<Entry> = Vec::new();
     for (i, raw) in text.lines().enumerate() {
         let l = raw.trim_end_matches('\r');
         if l.starts_with('#') || l.trim().is_empty() {
+            continue;
+        }
+        // `instance` 的 C7 dump 续行：一个 tab + dump 原行。
+        if let Some(rest) = l.strip_prefix('\t') {
+            let Some(last) = out.last_mut() else {
+                return Err(format!("第 {} 行是续行，但前面没有判定行：{l:?}", i + 1));
+            };
+            if last.kind != K_INST {
+                return Err(format!(
+                    "第 {} 行是续行，但上一条不是 instance（kind={}）：{l:?}",
+                    i + 1,
+                    last.kind
+                ));
+            }
+            last.result.push('\n');
+            last.result.push_str(rest);
             continue;
         }
         let f: Vec<&str> = l.split('\t').collect();
@@ -85,16 +119,44 @@ fn parse_entries(text: &str) -> Result<Vec<Entry>, String> {
         let line: u32 = f[0]
             .parse()
             .map_err(|_| format!("第 {} 行的行号不是数字：{:?}", i + 1, f[0]))?;
-        if f[1] != K_ID && f[1] != K_REP {
-            return Err(format!("第 {} 行的 kind 不认识：{:?}", i + 1, f[1]));
+        if !KINDS.contains(&f[1]) {
+            return Err(format!(
+                "第 {} 行的 kind 不认识：{:?}（支持 {:?}）",
+                i + 1,
+                f[1],
+                KINDS
+            ));
         }
-        if !matches!(f[2], "true" | "false" | R_REJECT) {
-            return Err(format!("第 {} 行的 result 不认识：{:?}", i + 1, f[2]));
+        let result = f[2].to_string();
+        match f[1] {
+            // 二元判定：真/假/拒绝（拒绝的代号在 `# reject` 行）。
+            K_ID | K_REP | K_ASG | K_IMP | K_SAT => {
+                if !matches!(result.as_str(), "true" | "false" | R_REJECT) {
+                    return Err(format!("第 {} 行的 result 不认识：{:?}", i + 1, result));
+                }
+            }
+            // 方法集：`-` 或 `a,b` 形态（非空；具体名字不在这里做词法校验）。
+            K_METH => {
+                if result.is_empty() {
+                    return Err(format!("第 {} 行的 methodset 结果为空", i + 1));
+                }
+            }
+            // 实例化：`ok`（后跟 dump 续行）或 `reject:<category>`。
+            K_INST => {
+                if result != "ok" && !result.starts_with("reject:") {
+                    return Err(format!(
+                        "第 {} 行的 instance result 不认识：{:?}（要 `ok` 或 `reject:<category>`）",
+                        i + 1,
+                        result
+                    ));
+                }
+            }
+            _ => unreachable!(),
         }
         out.push(Entry {
             line,
             kind: f[1].to_string(),
-            result: f[2].to_string(),
+            result,
         });
     }
     Ok(out)
@@ -205,7 +267,9 @@ fn check(fixture_text: &str, want: &str, rgoc_out: &str) -> Result<String, Strin
         if r.result == g.result {
             continue;
         }
-        if r.result == R_REJECT {
+        // `instance` 的失败是**判定结果**（`reject:<category>`），不是能力边界边界
+        // 的白名单条目 —— 两侧必须逐字一致（走下面的不一致报错）。
+        if r.kind != K_INST && r.result == R_REJECT {
             excluded.push(g.line);
             continue;
         }
@@ -376,6 +440,24 @@ fn 排除集机制_四种情形() {
     )
     .expect_err("representable 不许 reject");
     assert!(e.contains("只在 identity"), "{e}");
+
+    // ⑦ `instance` 的 `reject:<category>` 是**判定结果**，不是白名单条目：
+    //    两侧类别不同 ⇒ 必须报不一致（不能像裸 `reject` 那样被排除）。
+    let fx_inst = "package p\n\n//rgoc:cmp instance Box => int\n";
+    let e = check(
+        fx_inst,
+        "3\tinstance\treject:implements\n",
+        "3\tinstance\treject:type-arg\n",
+    )
+    .expect_err("instance 的类别不同必须报错");
+    assert!(e.contains("不一致"), "{e}");
+
+    // ⑧ `instance` 的 dump 块按**整块**逐字节比较（续行拼回 result）。
+    let want_blk = "3\tinstance\tok\n\t0\tnamed 2\n\t1\tbasic int\n";
+    let got_blk = "3\tinstance\tok\n\t0\tnamed 3\n\t1\tbasic int\n";
+    let e = check(fx_inst, want_blk, got_blk).expect_err("dump 块不同必须报错");
+    assert!(e.contains("不一致"), "{e}");
+    check(fx_inst, want_blk, want_blk).expect("相同的 dump 块必须通过");
 }
 
 /// 标记写错位置要**当场报错**（不然后面就是「静静地什么也没标记」）。

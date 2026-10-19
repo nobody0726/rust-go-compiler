@@ -217,6 +217,22 @@ func dumpAll(files []*ast.File, fset *token.FileSet, info *types.Info) string {
 	return d.render()
 }
 
+// dumpRoot 渲染**单个根**的 C7 正文（`instance` 对撞用；`T-CK-85`）。
+//
+// 编号从 0 起、只对这一个根做后序 —— 与 rgoc 侧 `dump_types(&tt, &[root])`
+// 同口径（两侧都从 0 开始，块内自洽）。`info` 留空：本函数只走类型图，
+// 不需要 AST 回链（`dumper.typOf` / `defType` 只服务 `roots`）。
+func dumpRoot(root types.Type) string {
+	d := &dumper{
+		idx:        map[types.Type]int{},
+		descending: map[types.Type]bool{},
+		unions:     map[*types.Interface]*types.Union{},
+		ifaceSigs:  map[*types.Signature]bool{},
+	}
+	d.number(root)
+	return d.render()
+}
+
 // roots 按 C7 §3 列出「根」类型（顶层声明的类型表达式，源码序）。
 //
 // `type D <T>` 的根是 **D 本身**（定义），它的本体由 `number` 顺带下钻

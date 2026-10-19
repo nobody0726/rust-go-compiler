@@ -14,7 +14,7 @@
 //! | ID | 正向 | 反向 |
 //! |---|---|---|
 //! | `T-TY-81` | 约束接口（项集 / `comparable`）的同一性 ⇒ `reject` | 纯方法集接口、**具名**约束接口 ⇒ 按名字判，不 `reject` |
-//! | `T-TY-82` | `TYP-13/18/19/23..26` 的判定请求 ⇒ 稳定拒绝码 | 相邻的 M3 支持项（`identical` / `representable`）⇒ 有答 |
+//! | `T-TY-82` | 拼错的 `//rgoc:cmp` kind ⇒ 稳定拒绝码 | 五个新判定式（`assignable` / `implements` / `satisfies` / `methodset` / `instance`）与 M3 两项 ⇒ 都作答 |
 //! | `T-TY-83` | 需类型信息的 `const` 初始化式 ⇒ 稳定拒绝码 | 常量子集内 ⇒ 不报 |
 //! | `T-TY-84` | 未知 `//go:` 指令 ⇒ 前端**不**报错（`U-M3-09`） | `//go:build` 的版本**被读取**（高版本 ⇒ `TYP-FILE-REQUIRES-NEWER-GO`） |
 //! | `T-TY-85` | 模块路径 / 二进制 export data ⇒ 稳定拒绝码 | 源码路径 import（有 roots）⇒ 不报 |
@@ -34,9 +34,9 @@
 //! 的能力边界（如 `TYP-UNSUPPORTED-ASSIGNABILITY`：可赋值性的类型参数面，
 //! `U-M3-01..04`）同理不同层。
 //!
-//! `//rgoc:cmp` 的 kind 集合**与 oracle 侧共用且封闭**（都只认 `identical` /
-//! `representable`）：fixture 由两侧读**同一份**文件，输入语言分叉比「少支持一个
-//! kind」坏得多。「拼错的 kind」与「M3 不判的判定」在语法上不可分 ⇒ 同一条码。
+//! `//rgoc:cmp` 的 kind 集合**与 oracle 侧共用且封闭**（M4/Task 15 起七个，
+//! `R-32-2`）：fixture 由两侧读**同一份**文件，输入语言分叉比「少支持一个
+//! kind」坏得多。拼错的名字（`unify` / `infer` / `Assignable`）仍走同一条码。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -190,41 +190,81 @@ fn ty81_约束接口同一性_两侧都作答() {
 
 // ─────────────────────────── T-TY-82 ───────────────────────────
 
-/// `T-TY-82`：`TYP-13/18/19/23..26` 的判定请求 ⇒ 稳定拒绝码；相邻支持项 ⇒ 有答。
+/// `T-TY-82`（M4 改写，`D-M4-11` 第二刀）：五个新判定式**开始作答**；
+/// 拼错的 kind 仍走稳定拒绝码。`U-M3-01..04` 的翻转面就在这里。
 #[test]
-fn ty82_m3不判的判定请求_正向稳定码_反向支持项有答() {
+fn ty82_新判定式作答_未知kind仍拒() {
     let d = tmp_root("ty82");
 
-    // 正向：`assignable`（TYP-18）/ `implements`（TYP-13）/ `insance`（TYP-23..26）
-    // 都是「M3 不判」的判定名 ⇒ 同一个稳定码、退出码 2（请求本身不合格）。
-    for (kind, typ) in [
-        ("assignable", "TYP-18（U-M3-02）"),
-        ("implements", "TYP-13（U-M3-01）"),
-        ("instance", "TYP-23..26（U-M3-04）"),
-    ] {
-        let f = write(
-            &d,
-            &format!("fwd_{kind}.go"),
-            &format!("package p\n\n//rgoc:cmp {kind} int => string\n"),
-        );
-        let (code, out, err) = run(&["types", "--cmp", &f.to_string_lossy()]);
-        assert_eq!(code, 2, "{kind}（{typ}）该被拒；stdout={out} stderr={err}");
-        assert!(out.is_empty(), "拒绝时不该有 stdout：{out}");
-        assert!(
-            err.contains("[TYP-CMP-KIND-UNSUPPORTED]"),
-            "{kind} 缺稳定码：{err}"
-        );
-        assert!(
-            err.contains("identical") && err.contains("representable"),
-            "拒绝理由要说出**支持**哪些 kind：{err}"
-        );
-        assert!(
-            err.contains(&format!("{kind:?}")),
-            "拒绝理由要点名**是哪个** kind：{err}"
-        );
-    }
+    // 正向：五个新 kind 都在**同一份 fixture** 里作答（不同 kind 的入口不串）。
+    let fwd = write(
+        &d,
+        "fwd.go",
+        "package p\n\ntype Box[T any] struct{ v T }\n\n\
+         //rgoc:cmp assignable int => int\n\
+         //rgoc:cmp implements int => any\n\
+         //rgoc:cmp satisfies int => any\n\
+         //rgoc:cmp methodset int\n\
+         //rgoc:cmp instance Box => int\n",
+    );
+    let (code, out, err) = run(&["types", "--cmp", &fwd.to_string_lossy()]);
+    assert_eq!(
+        code, 0,
+        "新判定式该作答（退出码 0）；stdout={out} stderr={err}"
+    );
+    assert!(err.is_empty(), "判定走 stdout，stderr 该空：{err}");
+    assert_eq!(
+        line_with(&out, "5\tassignable"),
+        "5\tassignable\ttrue",
+        "{out}"
+    );
+    assert_eq!(
+        line_with(&out, "6\timplements"),
+        "6\timplements\ttrue",
+        "{out}"
+    );
+    assert_eq!(
+        line_with(&out, "7\tsatisfies"),
+        "7\tsatisfies\ttrue",
+        "{out}"
+    );
+    assert_eq!(line_with(&out, "8\tmethodset"), "8\tmethodset\t-", "{out}");
+    assert_eq!(line_with(&out, "9\tinstance"), "9\tinstance\tok", "{out}");
+    assert!(
+        out.contains("\t0\tnamed "),
+        "instance 后面该跟 C7 单根 dump（续行）：{out}"
+    );
+    assert!(
+        !out.contains("TYP-CMP-KIND-UNSUPPORTED"),
+        "新 kind 不该走拒绝码：{out}"
+    );
 
-    // 反向：两个支持项照常有答（这正是「相邻」的含义：kind 名差一点，行为天壤之别）。
+    // 反向甲：**拼错的** kind（不是判定式）仍走稳定码，并说出支持面。
+    let bad = write(&d, "bad.go", "package p\n\n//rgoc:cmp unify int => int\n");
+    let (code, out, err) = run(&["types", "--cmp", &bad.to_string_lossy()]);
+    assert_eq!(code, 2, "未知 kind ⇒ 请求不合格（退出码 2）；stdout={out}");
+    assert!(out.is_empty(), "拒绝时不该有 stdout：{out}");
+    assert!(
+        err.contains("[TYP-CMP-KIND-UNSUPPORTED]"),
+        "缺稳定码：{err}"
+    );
+    for k in [
+        "identical",
+        "representable",
+        "assignable",
+        "implements",
+        "satisfies",
+        "methodset",
+        "instance",
+    ] {
+        assert!(err.contains(k), "拒绝理由要说出支持 {k}：{err}");
+    }
+    assert!(
+        err.contains("\"unify\""),
+        "拒绝理由要点名**是哪个** kind：{err}"
+    );
+
+    // 反向乙：M3 的两个支持项照常有答（kind 名差一点，行为天壤之别）。
     let rev = write(
         &d,
         "rev.go",

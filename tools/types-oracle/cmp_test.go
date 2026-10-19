@@ -78,7 +78,7 @@ func TestCmpMalformedDirectiveFailsLoudly(t *testing.T) {
 		name, src, wantSub string
 	}{
 		{"两个分隔符", "package p\n\n//rgoc:cmp identical int => int => int\n", "只能有一个"},
-		{"未知 kind", "package p\n\n//rgoc:cmp assignable int => int\n", "未知的 cmp kind"},
+		{"未知 kind", "package p\n\n//rgoc:cmp unify int => int\n", "未知的 cmp kind"},
 		{"空操作数", "package p\n\n//rgoc:cmp identical int =>\n", "空的操作数"},
 		{"缺操作数", "package p\n\n//rgoc:cmp identical\n", "缺少操作数"},
 		{"没有 => 且段数不对", "package p\n\n//rgoc:cmp identical int\n", "恰好两个"},
@@ -86,6 +86,14 @@ func TestCmpMalformedDirectiveFailsLoudly(t *testing.T) {
 		{"A 不是类型表达式", "package p\n\n//rgoc:cmp identical 1+1 => int\n", "不是类型表达式"},
 		{"常量不是常量表达式", "package p\n\nvar v = 1\n\n//rgoc:cmp representable v => int8\n", "不是常量表达式"},
 		{"目标不是类型表达式", "package p\n\n//rgoc:cmp representable 1 => 1+1\n", "不是类型表达式"},
+		{"methodset 带 =>", "package p\n\n//rgoc:cmp methodset int => int\n", "一元 kind"},
+		{"methodset 缺操作数", "package p\n\n//rgoc:cmp methodset \n", "缺少操作数"},
+		{"instance 空实参", "package p\n\n//rgoc:cmp instance Box => int,\n", "空实参"},
+		{"instance 括号不配对", "package p\n\n//rgoc:cmp instance Box => struct{ x int\n", "不配对"},
+		{"instance 非泛型", "package p\n\ntype S struct{}\n\n//rgoc:cmp instance S => int\n", "不是泛型类型"},
+		{"instance F 不存在", "package p\n\n//rgoc:cmp instance Nope => int\n", "不是本包声明的类型名"},
+		{"implements 目标不是接口", "package p\n\n//rgoc:cmp implements int => int\n", "不是接口类型"},
+		{"satisfies 目标不是接口", "package p\n\n//rgoc:cmp satisfies int => int\n", "不是接口类型"},
 		{"没有指令", "package p\n", "没有 `//rgoc:cmp` 指令"},
 	}
 	for _, c := range cases {

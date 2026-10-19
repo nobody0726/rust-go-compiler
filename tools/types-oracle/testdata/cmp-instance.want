@@ -1,0 +1,40 @@
+# source: oracle
+# files: testdata/cmp-instance.go
+# package: p
+# cmp
+29	instance	ok
+	0	named 2
+	1	basic int
+	2	struct 1
+	  "v" 1 - false
+30	instance	ok
+	0	named 2
+	1	basic string
+	2	struct 1
+	  "v" 1 - false
+31	instance	ok
+	0	named 3
+	1	named 2
+	2	basic int
+	3	struct 1
+	  "v" #1 - false
+32	instance	ok
+	0	named 3
+	1	basic int
+	2	basic string
+	3	struct 2
+	  "a" 1 - false
+	  "b" 2 - false
+33	instance	ok
+	0	named 2
+	1	basic int
+	2	struct 1
+	  "v" 1 - false
+34	instance	ok
+	0	named 2
+	1	basic string
+	2	struct 1
+	  "v" 1 - false
+35	instance	reject:implements
+36	instance	reject:type-arg
+37	instance	reject:type-arg

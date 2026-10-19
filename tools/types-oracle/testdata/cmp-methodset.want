@@ -1,0 +1,11 @@
+# source: oracle
+# files: testdata/cmp-methodset.go
+# package: p
+# cmp
+26	methodset	String
+27	methodset	Ptr,String
+28	methodset	-
+29	methodset	String
+30	methodset	Ptr,String
+31	methodset	-
+32	methodset	-

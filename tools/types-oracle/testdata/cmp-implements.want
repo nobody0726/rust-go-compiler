@@ -1,0 +1,14 @@
+# source: oracle
+# files: testdata/cmp-implements.go
+# package: p
+# cmp
+25	implements	true
+26	implements	true
+27	implements	true
+28	implements	false
+29	implements	false
+30	implements	true
+31	implements	true
+32	implements	true
+33	implements	true
+34	implements	true

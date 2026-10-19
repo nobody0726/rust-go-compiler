@@ -1,0 +1,14 @@
+# source: oracle
+# files: testdata/cmp-satisfies.go
+# package: p
+# cmp
+25	satisfies	true
+26	satisfies	true
+27	satisfies	true
+28	satisfies	false
+29	satisfies	true
+30	satisfies	true
+31	satisfies	true
+32	satisfies	false
+33	satisfies	true
+34	satisfies	true
