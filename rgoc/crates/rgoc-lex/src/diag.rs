@@ -54,6 +54,12 @@ use crate::pos::Pos;
 /// 加新代号时：**插入到它字典序该在的位置**，然后让那条断言告诉你有没有放对。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum DiagCode {
+    /// 索引表达式面拒绝（M4/Task 23）—— 官方 `NonIndexableOperand` 与
+    /// `InvalidIndex` 三条（`must be integer` / `must not be negative` /
+    /// `out of bounds [0:n]`）的**合并码**（类别面 `index`）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-34` 与
+    /// `.superpowers/sdd/M4-plan/probe/task23-reject.go`（oracle 实测 19 拒绝位）。
+    ChkInvalidIndex,
     /// 表达式的**运算符静态规则**拒绝（M4/Task 21）—— 官方
     /// `UndefinedOp` / `MismatchedTypes` / `UnaddressableOperand` /
     /// `InvalidIndirect` / `InvalidReceive` / 不可比（map/slice/func 只能与
@@ -61,6 +67,10 @@ pub enum DiagCode {
     /// 逐向量对照见 `M4-tests.md` `T-CK-32` 与
     /// `.superpowers/sdd/M4-plan/probe/task21-*.go`（oracle 实测 53 拒绝位）。
     ChkInvalidOperation,
+    /// 切片表达式面拒绝（M4/Task 23）—— 官方 `NonSliceableOperand` /
+    /// `InvalidSliceExpr`（`3-index slice of string`）/ `SwappedSliceIndices`
+    /// （`invalid slice indices: y < x`）的**合并码**（类别面 `slice`）。
+    ChkInvalidSlice,
     /// 不认识的字符
     BadChar,
     /// 进制字面量里出现了不属于该进制的数位（如 `0b12` 里的 `2`）
@@ -478,8 +488,10 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 72] = [
+    pub const ALL: [DiagCode; 74] = [
+        DiagCode::ChkInvalidIndex,
         DiagCode::ChkInvalidOperation,
+        DiagCode::ChkInvalidSlice,
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -556,7 +568,9 @@ impl DiagCode {
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagCode::ChkInvalidIndex => "CHK-INVALID-INDEX",
             DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
+            DiagCode::ChkInvalidSlice => "CHK-INVALID-SLICE",
             DiagCode::BadChar => "LEX-BAD-CHAR",
             DiagCode::BadDigit => "LEX-BAD-DIGIT",
             DiagCode::BadExponent => "LEX-BAD-EXPONENT",

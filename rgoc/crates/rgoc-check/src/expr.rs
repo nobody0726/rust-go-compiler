@@ -1,9 +1,10 @@
-//! 表达式检查（M4/Task 21–22）—— 一元 / 二元 / 比较 / 移位 / 常量面 + 转换。
+//! 表达式检查（M4/Task 21–23）—— 一元 / 二元 / 比较 / 移位 / 常量面 + 转换 + 索引 / 切片。
 //!
 //! 对照官方 `go/types/expr.go`（`unary` / `binary` / `shift` / `comparison` /
-//! `matchTypes`）、`const.go`（`overflow` / `representable`）与
-//! `conversions.go`（`conversion` / `convertibleTo`）。本文件是
-//! **Task 21–22 的窄面**：包级 `var` 声明的初始化式（`Decl::Var.values`）。
+//! `matchTypes`）、`const.go`（`overflow` / `representable`）、
+//! `conversions.go`（`conversion` / `convertibleTo`）与 `index.go`
+//! （`indexExpr` / `sliceExpr` / `index` / `isValidIndex`）。本文件是
+//! **Task 21–23 的窄面**：包级 `var` 声明的初始化式（`Decl::Var.values`）。
 //! 常量声明的求值在装载器（M3），函数体是 Task 25，赋值面是 Task 24+。
 //!
 //! # 转换面（Task 22；`T-CK-33`）
@@ -21,6 +22,18 @@
 //! - 其余不可转换 ⇒ `cannot convert V to type T`（类别 `convert`，码
 //!   `TYP-INVALID-CONVERSION`）；整数常量 → 字符串**恒可**（无效码点 ⇒
 //!   U+FFFD，`string(-1)` / `string(1<<100)` 都合法）。
+//!
+//! # 索引 / 切片面（Task 23；`T-CK-34`）
+//!
+//! `x[i]` 接数组 / 切片 / 字符串 / map / 指向数组的指针；字符串索引**恒**产出
+//! `byte` 值（即时字符串与索引都是常量）。下标经 `convertUntyped(int)`
+//! （`a[1.5]` / `a[1e100]` ⇒ `truncated to int`、`sl["x"]` ⇒ `cannot convert
+//! ... to type int` —— 类别 `convert`）→ 整数性 / 非负 / 可表示（类型化常量超
+//! `int` 范围 ⇒ `overflows int`，类别 **`overflow`**）→ 常量越界
+//! （类别 `index`）。`x[a:b:c]`：三下标（字符串禁用）+ 常量次序 + 边界
+//! （`max = len + 1`；类别 `slice`）。新码 `CHK-INVALID-INDEX` /
+//! `CHK-INVALID-SLICE`（oracle `task23-reject.go` 19 行实证）。map 键面
+//! （`cannot use ... in map index`，类别 `assign`）归 Task 25 的赋值面。
 //!
 //! # 位置规则（oracle 探针 1–7 与官方源双证；`task21-reject.go` 53 行）
 //!
@@ -57,15 +70,17 @@
 //! - 折叠产出 `Unknown` 时不报「not representable」（官方该分支在谓词过滤后
 //!   实际不可达；报出来反而会造出 oracle 没有的「other 类」行）。
 
-use rgoc_ast::{BasicLit, CallExpr, Decl, Expr, LitKind, Name, Op, Operation};
+use rgoc_ast::{
+    BasicLit, CallExpr, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation, SliceExpr,
+};
 use rgoc_const::{
     BasicId, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
     fold_unary_typed, representable,
 };
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{
-    ChanDir, Type, TypeId, TypeTable, assignable, comparable, convertible, identical, unalias,
-    underlying,
+    ChanDir, ConstId, Type, TypeId, TypeTable, assignable, comparable, convertible, identical,
+    unalias, underlying,
 };
 
 use crate::check::Session;
@@ -107,10 +122,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         type_str(self.tt(), t)
     }
 
-    /// 官方 `exprInternal` 的**已接入子集**。未接入的形态（选择器 / 索引 /
+    /// 官方 `exprInternal` 的**已接入子集**。未接入的形态（选择器 / 类型断言 /
     /// 值函数位的调用 / 复合字面量 / 类型族）⇒ `invalid` 且**不报** ——
-    /// 避免用假诊断抢占 Task 23+/25/30 的落点。转换（类型函数位）在
-    /// [`Self::call`] 里接（Task 22）。
+    /// 避免用假诊断抢占 Task 24+/25/30 的落点。转换（类型函数位）在
+    /// [`Self::call`] 里接（Task 22），索引 / 切片在 [`Self::index_expr`] /
+    /// [`Self::slice_expr`]（Task 23）。
     fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
         match e {
             Expr::Name(n) => self.ident(file, n),
@@ -119,6 +135,8 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Unary(o) => self.unary(file, o),
             Expr::Binary(o) => self.binary(file, o),
             Expr::Call(c) => self.call(file, c),
+            Expr::Index(ix) => self.index_expr(file, ix),
+            Expr::Slice(sx) => self.slice_expr(file, sx),
             _ => Operand::invalid(),
         }
     }
@@ -234,6 +252,347 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             // 类型参数窄面等能力边界：不报（台账登记；语料撞面在 Task 37）。
             Err(_) => Operand::invalid(),
         }
+    }
+
+    // ────────────────────────────── 索引 / 切片 ──────────────────────────────
+
+    /// 官方 `indexExpr`（`index.go:19`）的窄面。
+    ///
+    /// 泛型面（`X[A]` 类型实例化作值语境 / 函数实例化 / 类型参数接口索引）
+    /// 归 Task 16 的 API 与 Task 25 之后的语境，此处 `invalid` 且**不报**。
+    fn index_expr(&mut self, file: FileId, e: &IndexExpr) -> Operand {
+        let mut x = self.expr(file, &e.x);
+        if x.mode == Mode::Invalid || x.mode == Mode::TypeExpr {
+            return Operand::invalid();
+        }
+        let Some(xt) = x.typ else {
+            return Operand::invalid();
+        };
+        // 官方 `x.typ().Underlying()` 分类（窄面无类型参数）。
+        enum Shape {
+            Str,
+            Arr { len: i64, elem: TypeId },
+            PtrArr { len: i64, elem: TypeId },
+            Slice(TypeId),
+            Map(TypeId),
+            Other,
+        }
+        let shape = {
+            let tt = self.tt();
+            match tt.type_of(underlying(tt, xt)) {
+                Type::Basic(b) if b.is_string() => Shape::Str,
+                Type::Array { len, elem } => Shape::Arr {
+                    len: arr_len(tt, *len),
+                    elem: *elem,
+                },
+                Type::Pointer(base) => match tt.type_of(underlying(tt, *base)) {
+                    Type::Array { len, elem } => Shape::PtrArr {
+                        len: arr_len(tt, *len),
+                        elem: *elem,
+                    },
+                    _ => Shape::Other,
+                },
+                Type::Slice(elem) => Shape::Slice(*elem),
+                Type::Map { elem, .. } => Shape::Map(*elem),
+                _ => Shape::Other,
+            }
+        };
+        let mut length: i64 = -1;
+        match shape {
+            Shape::Str => {
+                length = if x.mode == Mode::Constant {
+                    string_len(&x.val)
+                } else {
+                    -1
+                };
+                // 官方：字符串索引**恒**产出 byte 值（非常量 —— 即时字符串与
+                // 索引都是常量）。
+                x.mode = Mode::Value;
+                x.typ = Some(self.s.tt.add_basic(BasicId::Uint8));
+                x.val = None;
+            }
+            Shape::Arr { len, elem } => {
+                length = len;
+                if x.mode != Mode::Variable {
+                    x.mode = Mode::Value;
+                }
+                x.typ = Some(elem);
+                x.val = None;
+            }
+            Shape::PtrArr { len, elem } => {
+                // 指向数组的指针：隐式解引用 ⇒ 变量。
+                length = len;
+                x.mode = Mode::Variable;
+                x.typ = Some(elem);
+                x.val = None;
+            }
+            Shape::Slice(elem) => {
+                x.mode = Mode::Variable;
+                x.typ = Some(elem);
+                x.val = None;
+            }
+            Shape::Map(elem) => {
+                // 键面（`cannot use ... in map index`）归 Task 25 的赋值面；
+                // 窄面只求索引表达式本身的诊断，结果照官方置 `mapindex`。
+                let _ = self.expr(file, &e.index);
+                x.mode = Mode::MapIndex;
+                x.typ = Some(elem);
+                x.val = None;
+                return x;
+            }
+            Shape::Other => {
+                let _ = self.expr(file, &e.index);
+                let what = operand_text(self.tt(), &x);
+                self.report(
+                    e.x.pos(),
+                    DiagCode::ChkInvalidIndex,
+                    format!("cannot index {what}"),
+                );
+                return Operand::invalid();
+            }
+        }
+        // 索引操作数：官方 `check.index`（`convertUntyped` + 整数性 + 非负 +
+        // 溢出 int + 越界 —— 后两项在常量时被判）。
+        let mut idx = self.expr(file, &e.index);
+        if !self.valid_index(&mut idx, e.index.pos()) {
+            return Operand::invalid();
+        }
+        if idx.mode == Mode::Constant {
+            let val = idx.val.clone().unwrap_or(Const::Unknown);
+            if val != Const::Unknown
+                && let Some(v) = const_as_i64(&val)
+                && length >= 0
+                && v >= length
+            {
+                self.report(
+                    e.index.pos(),
+                    DiagCode::ChkInvalidIndex,
+                    format!(
+                        "invalid argument: index {} out of bounds [0:{length}]",
+                        const_text(&val)
+                    ),
+                );
+                return Operand::invalid();
+            }
+        }
+        x
+    }
+
+    /// 官方 `sliceExpr`（`index.go:233`）的窄面。
+    fn slice_expr(&mut self, file: FileId, e: &SliceExpr) -> Operand {
+        let mut x = self.expr(file, &e.x);
+        if x.mode == Mode::Invalid {
+            return Operand::invalid();
+        }
+        let Some(xt) = x.typ else {
+            return Operand::invalid();
+        };
+        enum Cu {
+            Str,
+            Arr { len: i64, elem: TypeId },
+            PtrArr { len: i64, elem: TypeId },
+            Slice,
+            Other,
+        }
+        let cu = {
+            let tt = self.tt();
+            match tt.type_of(underlying(tt, xt)) {
+                Type::Basic(b) if b.is_string() => Cu::Str,
+                Type::Array { len, elem } => Cu::Arr {
+                    len: arr_len(tt, *len),
+                    elem: *elem,
+                },
+                Type::Pointer(base) => match tt.type_of(underlying(tt, *base)) {
+                    Type::Array { len, elem } => Cu::PtrArr {
+                        len: arr_len(tt, *len),
+                        elem: *elem,
+                    },
+                    _ => Cu::Other,
+                },
+                Type::Slice(_) => Cu::Slice,
+                _ => Cu::Other,
+            }
+        };
+        let mut length: i64 = -1;
+        match cu {
+            Cu::Str => {
+                if e.full {
+                    // 官方：`at := e.Max; if at == nil { at = e }`。
+                    let at = e.max.as_deref().map_or(e.pos, Expr::pos);
+                    self.report(
+                        at,
+                        DiagCode::ChkInvalidSlice,
+                        "invalid operation: 3-index slice of string".to_string(),
+                    );
+                    return Operand::invalid();
+                }
+                length = if x.mode == Mode::Constant {
+                    string_len(&x.val)
+                } else {
+                    -1
+                };
+                // 无类型字符串切片 ⇒ 非常量 string（有名字符串保持自身）。
+                if is_untyped(self.tt(), xt) {
+                    let st = self.s.tt.add_basic(BasicId::String);
+                    x.typ = Some(st);
+                }
+            }
+            Cu::Arr { len, elem } => {
+                length = len;
+                if x.mode != Mode::Variable {
+                    let what = operand_text(self.tt(), &x);
+                    self.report(
+                        e.x.pos(),
+                        DiagCode::ChkInvalidSlice,
+                        format!("cannot slice unaddressable value {what}"),
+                    );
+                    return Operand::invalid();
+                }
+                let st = self.s.tt.add_slice(elem);
+                x.typ = Some(st);
+            }
+            Cu::PtrArr { len, elem } => {
+                length = len;
+                let st = self.s.tt.add_slice(elem);
+                x.typ = Some(st);
+            }
+            Cu::Slice => {
+                // 官方：`x.typ` 不变（命名切片保持命名）。
+            }
+            Cu::Other => {
+                let what = operand_text(self.tt(), &x);
+                self.report(
+                    e.x.pos(),
+                    DiagCode::ChkInvalidSlice,
+                    format!("cannot slice {what}"),
+                );
+                return Operand::invalid();
+            }
+        }
+        x.mode = Mode::Value;
+        x.val = None;
+
+        // 下标：官方 `check.index` 逐个（`max = length + 1`）。
+        let exprs: [Option<&Expr>; 3] = [e.low.as_deref(), e.high.as_deref(), e.max.as_deref()];
+        let mut ind = [-1i64; 3];
+        for (i, expr) in exprs.iter().enumerate() {
+            let mut v: i64 = -1;
+            match expr {
+                Some(ex) => {
+                    let max = if length >= 0 { length + 1 } else { -1 };
+                    v = self.index_of(file, ex, max);
+                }
+                None => {
+                    // 官方：首位缺省 0；其余在长度已知时缺省 length。
+                    if i == 0 {
+                        v = 0;
+                    } else if length >= 0 {
+                        v = length;
+                    }
+                }
+            }
+            ind[i] = v;
+        }
+        // 常量下标的次序约束（官方 `L:` 双循环：**只报一条**）。
+        'outer: for i in 0..ind.len() - 1 {
+            let xv = ind[i];
+            if xv > 0 {
+                for j in 0..ind.len() - i - 1 {
+                    let yv = ind[i + 1 + j];
+                    if yv >= 0 && yv < xv {
+                        let at = exprs[i + 1 + j].map_or(e.pos, Expr::pos);
+                        self.report(
+                            at,
+                            DiagCode::ChkInvalidSlice,
+                            format!("invalid slice indices: {yv} < {xv}"),
+                        );
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        x
+    }
+
+    /// 官方 `index`（`index.go:420`）：索引合法性 + 常量越界；
+    /// 返回常量值（`-1` = 非常量 / 无效 / 已报错）。
+    fn index_of(&mut self, file: FileId, ex: &Expr, max: i64) -> i64 {
+        let mut idx = self.expr(file, ex);
+        if !self.valid_index(&mut idx, ex.pos()) {
+            return -1;
+        }
+        if idx.mode != Mode::Constant {
+            return -1;
+        }
+        let val = idx.val.clone().unwrap_or(Const::Unknown);
+        if val == Const::Unknown {
+            return -1;
+        }
+        let Some(v) = const_as_i64(&val) else {
+            return -1;
+        };
+        if max >= 0 && v >= max {
+            self.report(
+                ex.pos(),
+                DiagCode::ChkInvalidIndex,
+                format!(
+                    "invalid argument: index {} out of bounds [0:{max}]",
+                    const_text(&val)
+                ),
+            );
+            return -1;
+        }
+        v
+    }
+
+    /// 官方 `isValidIndex`（`index.go:449`）：无类型常量 ⇒ `int`；
+    /// 整数性 / 非负 / 可表示（超 `int` 范围 ⇒ `overflows int`）。
+    fn valid_index(&mut self, x: &mut Operand, pos: Pos) -> bool {
+        if x.mode == Mode::Invalid {
+            return false;
+        }
+        let int_t = self.s.tt.add_basic(BasicId::Int);
+        self.convert_untyped(x, int_t, pos);
+        if x.mode == Mode::Invalid {
+            return false;
+        }
+        let Some(xt) = x.typ else {
+            return false;
+        };
+        if !all_integer(self.tt(), xt) {
+            let what = operand_text(self.tt(), x);
+            self.report(
+                pos,
+                DiagCode::ChkInvalidIndex,
+                format!("invalid argument: index {what} must be integer"),
+            );
+            return false;
+        }
+        if x.mode == Mode::Constant {
+            let val = x.val.clone().unwrap_or(Const::Unknown);
+            if const_negative(&val) {
+                self.report(
+                    pos,
+                    DiagCode::ChkInvalidIndex,
+                    format!(
+                        "invalid argument: index {} must not be negative",
+                        const_text(&val)
+                    ),
+                );
+                return false;
+            }
+            if val != Const::Unknown
+                && representable(&val, BasicId::Int, &Sizes::HOST_ARM64).is_err()
+            {
+                self.report(
+                    pos,
+                    DiagCode::TypNumericOverflow,
+                    format!("invalid argument: index {} overflows int", const_text(&val)),
+                );
+                return false;
+            }
+        }
+        true
     }
 
     // ────────────────────────────── 一元 ──────────────────────────────
@@ -1239,6 +1598,56 @@ fn int_const_to_string(val: &Const) -> Vec<u8> {
         _ => '\u{FFFD}',
     };
     ch.to_string().into_bytes()
+}
+
+/// 数组长度（`[n]T` 的 `n`；`[...]T` 或非常量 ⇒ `-1`）。
+fn arr_len(tt: &TypeTable, len: Option<ConstId>) -> i64 {
+    match len.map(|c| tt.consts().get(c)) {
+        Some(Const::Int(v)) => v.to_i64().unwrap_or(-1),
+        _ => -1,
+    }
+}
+
+/// 官方 `constant.StringLen`：常量字符串的**字节**长度；
+/// `Unknown` ⇒ `0`（官方 `unknownVal` 分支）；非常量 ⇒ `-1`。
+fn string_len(val: &Option<Const>) -> i64 {
+    match val {
+        Some(Const::Str(bytes)) => i64::try_from(bytes.len()).unwrap_or(i64::MAX),
+        Some(Const::Unknown) => 0,
+        _ => -1,
+    }
+}
+
+/// 整值常量 ⇒ `i64`（官方 `constant.Int64Val` 的窄面：经 `ToInt`）。
+fn const_as_i64(c: &Const) -> Option<i64> {
+    match to_int(c) {
+        Some(Const::Int(n)) => n.to_i64(),
+        _ => None,
+    }
+}
+
+/// 官方 `constant.Sign(v) < 0`（索引面只会遇到整数常量）。
+fn const_negative(c: &Const) -> bool {
+    match c {
+        Const::Int(n) => n.is_neg(),
+        Const::Float(r) => r.is_neg(),
+        _ => false,
+    }
+}
+
+/// 官方 `operand.String` 的**窄面替身**：常量 ⇒ 值文本；
+/// 其余 ⇒ `value of type T`。（无源码文本 —— 消息文本只进人读面，
+/// `(行,列,类别)` 才是对账面。）
+fn operand_text(tt: &TypeTable, x: &Operand) -> String {
+    if x.mode == Mode::Constant
+        && let Some(v) = &x.val
+    {
+        return const_text(v);
+    }
+    match x.typ {
+        Some(t) => format!("value of type {}", type_str(tt, t)),
+        None => "value".to_string(),
+    }
 }
 
 /// 官方 `isUntyped`（含 `untyped nil`）。
