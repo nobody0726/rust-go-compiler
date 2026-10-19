@@ -599,6 +599,8 @@ fn t_a_66_diagcode_总数已更新() {
     //   ⇒ 共 66。
     // + M4/Task 2 新增 1 个（ChkUnimplemented —— `CHK-` 前缀首码，rgoc-check
     //   骨架期的占位诊断；官方无对应物）⇒ 共 67。
+    //   —— M4/Task 20 **移除** 该码（检查会话真身落地、骨架占位退出；
+    //   五件套纪律「没有触发者的码不许进枚举」）。
     // + M4/Task 6 新增 1 个（TypUnsupportedAssignability —— 可赋值性窄面的稳定
     //   拒绝码；官方无对应物）⇒ 共 68。
     // + M4/Task 10 **移除** 1 个（TypUnsupportedConstraintIdentity —— `identical`
@@ -611,9 +613,11 @@ fn t_a_66_diagcode_总数已更新() {
     //   官方 `InvalidInstanceCycle`）⇒ 共 71。
     // + M4/Task 16 新增 1 个（TypUnsupportedPendingInstanceArg —— 进行中实例作
     //   受约束实参，我方边界码）⇒ 共 72。
+    // + M4/Task 20 **移除** 1 个（ChkUnimplemented —— 检查会话真身落地、骨架
+    //   占位退出）⇒ 共 71。
     assert_eq!(
         DiagCode::ALL.len(),
-        72,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）"
+        71,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）"
     );
 }

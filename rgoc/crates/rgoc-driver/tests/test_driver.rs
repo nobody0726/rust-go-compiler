@@ -1164,11 +1164,11 @@ fn 解析_check_子命令_旗标面() {
     ));
 }
 
-/// 未实现期：`rgoc check` 必须**响亮失败** —— 退出码 1、stderr 带
-/// `CHK-UNIMPLEMENTED`、不 panic。静默通过（0）是本仓反复记录的最坏形状。
+/// 真身（Task 20）：有诊断 ⇒ 退出码 1、诊断走 stderr（`undefined: x`）、
+/// 不 panic。静默通过（0）是本仓反复记录的最坏形状。
 #[test]
-fn check_未实现期_稳定失败且可判读() {
-    let f = 临时_go("chk-unimpl", "package p\n\nvar _ = x\n");
+fn check_有诊断_退出码1_且诊断走stderr() {
+    let f = 临时_go("chk-diag", "package p\n\nvar _ = x\n");
     let bin = env!("CARGO_BIN_EXE_rgoc-driver");
     let out = std::process::Command::new(bin)
         .arg("check")
@@ -1181,11 +1181,45 @@ fn check_未实现期_稳定失败且可判读() {
         "有诊断 ⇒ 1（不是 0 的假通过，也不是 2 的用法错）"
     );
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("CHK-UNIMPLEMENTED"),
-        "stderr 带稳定代号：{err}"
-    );
+    assert!(err.contains("undefined: x"), "stderr 带可判读诊断：{err}");
     assert!(!err.contains("panicked"), "必须是显式诊断而非 panic：{err}");
+}
+
+/// `--diag-dump` 逐字节对齐 `docs/contracts/testdata/check-diags-min.want`
+/// （`C8` §8：**忽略 `#` 注释行**；`.want` 是两侧共用的同一份文件）。
+///
+/// 这条测试是「rgoc 侧渲染 == 契约」的 CLI 级钉子：会话/渲染单元测试都过、
+/// 但 CLI 把 stderr 混进 stdout（或漏了 `# file:` 头）时，这里会红。
+#[test]
+fn check_diag_dump_与契约want_逐字节一致() {
+    let f = 临时_go("chk-min", "package p\n\nvar _ = x\nvar _ = y; var _ = y\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .args(["check", "--diag-dump"])
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(1), "三条 undef ⇒ 有诊断");
+    assert!(
+        out.stderr.is_empty(),
+        "C8 §6-1：--diag-dump 下 stderr 必须空；诊断只许进 stdout 渲染"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.starts_with("# source: rgoc\n"), "{stdout:?}");
+    assert!(stdout.contains("# file: "), "头两行必须都在：{stdout:?}");
+    assert!(
+        stdout.ends_with('\n') && !stdout.ends_with("\n\n"),
+        "文件末尾恰一个换行：{stdout:?}"
+    );
+
+    let want = include_str!("../../../../docs/contracts/testdata/check-diags-min.want");
+    let rows = |t: &str| -> Vec<String> {
+        t.lines()
+            .filter(|l| !l.starts_with('#'))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(rows(&stdout), rows(want), "数据行必须与契约 want 一致");
 }
 
 /// 组合旗标**不得**被当成用法错；真正非法的旗标才给 2。
@@ -1193,7 +1227,7 @@ fn check_未实现期_稳定失败且可判读() {
 fn check_组合旗标_不报用法错() {
     let f = 临时_go("chk-flags", "package p\n");
     let bin = env!("CARGO_BIN_EXE_rgoc-driver");
-    // ① 组合旗标：合法用法（占位期允许稳定失败，不允许“不认识”）
+    // ① 组合旗标：合法用法（可以不报诊断，但必须可解析 —— 不认识才给 2）
     let out = std::process::Command::new(bin)
         .args(["check", "--diag-dump", "--lang", "go1.22", "--test-hooks"])
         .arg(&f)

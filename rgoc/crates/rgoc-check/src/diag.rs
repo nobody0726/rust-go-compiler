@@ -1,10 +1,11 @@
-//! `rgoc-check` 的诊断：构造 + 类别投影。
+//! `rgoc-check` 的诊断：原始诊断位 + 类别投影。
 //!
 //! # 两面
 //!
-//! - **构造**（Task 2）：`CHK-` 族代号的 [`Diag`] 构造 —— 位置一律由检查阶段
-//!   自己算（`Pos` 从 `rgoc-lex` 来；`CHK-` 码的枚举落位在
-//!   `rgoc-lex::diag::DiagCode`，与 `LEX-`/`SYN-`/`TYP-` 同表）。
+//! - **原始诊断**（Task 2 起步、Task 20 定型）：[`RawDiag`] 是 `rgoc_lex::Diag`
+//!   加官方 `types.Error.Soft` 位；检查阶段自己算位置（`Pos` 从 `rgoc-lex` 来）。
+//!   将来新增的 `CHK-` 码落位在 `rgoc-lex::diag::DiagCode`，与
+//!   `LEX-`/`SYN-`/`TYP-` 同表。
 //! - **类别投影**（Task 11）：[`DiagCode`] → `C8` §3 的 26 类枚举，
 //!   **全量穷尽**（编译期 `match` 无 `_` 通配 + 计数断言，见
 //!   `tests/category.rs` 的 `T-CK-16`）。进 `--diag-dump`（对撞面）的每条
@@ -13,18 +14,20 @@
 //! # 类别（`C8` §3 冻结 v1，26 类）
 //!
 //! 枚举是**封闭集合**；[`Category::Other`] 是**逃逸口**：按 `T-CK-94` 的
-//! 纪律，入选语料上出现 `other` 即红。值域定案（**Ruling 11-1**）= 恰好 4 个
-//! 「无官方语义」码 —— [`DiagCode::ChkUnimplemented`]（骨架占位）+
+//! 纪律，入选语料上出现 `other` 即红。值域定案（**Ruling 11-1**，经
+//! **Ruling 20-1** 收窄）= 恰好 3 个「无官方语义」码 ——
 //! [`DiagCode::ExceedsFileLimit`] / [`DiagCode::SynNestingTooDeep`] /
-//! [`DiagCode::TypNestingTooDeep`]（本仓实现限制；官方无对应行为）。其余
-//! 全部映射到真实语义族 —— 包括能力边界 **`U-` 码**（`TypUnsupported*`：
-//! 官方有答案、我们阶段没做到，投影到各自语义族，不用 `other` 顶包）。
+//! [`DiagCode::TypNestingTooDeep`]（本仓实现限制；官方无对应行为）。（原第 4
+//! 码 `ChkUnimplemented` 随 Task 20 的检查会话真身落地退出 —— 五件套纪律
+//! 「没有触发者的码不许进枚举」。）其余全部映射到真实语义族 —— 包括能力边界
+//! **`U-` 码**（`TypUnsupported*`：官方有答案、我们阶段没做到，投影到各自
+//! 语义族，不用 `other` 顶包）。
 //!
 //! ⚠️ 新增 `CHK-` 码时：先按字典序落进 `rgoc-lex::diag::DiagCode`（五件套），
 //! 再在 [`category_of`] 里归类 —— 忘了归类**编译不过**（无通配的穷尽
 //! `match`），这就是本文件存在的意义。
 
-use rgoc_lex::{Diag, DiagCode, FileId, Pos};
+use rgoc_lex::{Diag, DiagCode};
 
 /// `C8` §3 的类别枚举（26 类，冻结 v1）。
 ///
@@ -54,7 +57,7 @@ pub enum Category {
     NotType,
     /// 非法操作面（`invalid operation:` 通用前缀族）。
     OpInvalid,
-    /// **逃逸口**：无官方语义的能力边界与占位诊断（见模块头 Ruling 11-1）。
+    /// **逃逸口**：无官方语义的能力边界诊断（见模块头 Ruling 11-1 / 20-1）。
     Other,
     /// 常量溢出 / 表示范围面。
     Overflow,
@@ -199,7 +202,8 @@ pub const ALL_CATEGORIES: [Category; 26] = [
 ///
 /// 归类的判据 = 「该码官方对应消息经 oracle 适配表得到的类别」
 /// （`tools/types-oracle/check.go` 的 `c8Rules` 即 26 类的**语义字典**）；
-/// 官方无对应行为的实现限制 / 占位码 → [`Category::Other`]（Ruling 11-1）。
+/// 官方无对应行为的实现限制码（`ExceedsFileLimit` / `*NestingTooDeep`）→
+/// [`Category::Other`]（Ruling 11-1 / 20-1）。
 ///
 /// 少数**跨语境**码（`TypTruncatedFloat` / `TypInvalidConversion` /
 /// `TypNumericOverflow` / `TypInvalidConstVal`）官方在不同语法语境下措辞不同、
@@ -256,27 +260,7 @@ pub fn category_of(code: DiagCode) -> Category {
         TypInvalidConstVal | TypNumericOverflow => Category::Overflow,
         TypUnsupportedAssignability => Category::Assign,
 
-        // ── other：无官方语义（Ruling 11-1；T-CK-94 出现即红）────────────
-        ChkUnimplemented | ExceedsFileLimit | SynNestingTooDeep | TypNestingTooDeep => {
-            Category::Other
-        }
-    }
-}
-
-/// 占位诊断：`CHK-UNIMPLEMENTED` —— 「检查器尚未实现」。
-///
-/// 挂在 `anchor` 的 `1:1`。这条代号在骨架期由
-/// `rgoc-driver` 的 `check_未实现期_稳定失败且可判读` 触发
-/// （五件套纪律：没有触发者的码不许进枚举）。
-pub(crate) fn unimplemented(anchor: FileId) -> Diag {
-    Diag {
-        pos: Pos {
-            base: None,
-            file: anchor,
-            line: 1,
-            col: 1,
-        },
-        code: DiagCode::ChkUnimplemented,
-        message: "检查器尚未实现（M4 骨架期）：`rgoc check` 当前只提供命令形态与稳定失败".into(),
+        // ── other：无官方语义（Ruling 11-1 / 20-1；T-CK-94 出现即红）──────
+        ExceedsFileLimit | SynNestingTooDeep | TypNestingTooDeep => Category::Other,
     }
 }

@@ -83,11 +83,13 @@ fn 代号表恰为冻结总数且无重复() {
     // 官方 `CannotInferTypeArgs`）⇒ 共 **70**；M4/Task 16 再 +1（`TypInvalidInstanceCycle` —— 实例化链
     // 无界增长，官方 `InvalidInstanceCycle`）⇒ 共 **71**；M4/Task 16 再 +1
     // （`TypUnsupportedPendingInstanceArg` —— 进行中实例作受约束实参，我方边界码）
-    // ⇒ 共 **72**。
+    // ⇒ 共 **72**；M4/Task 20 再 **-1**（移除 `ChkUnimplemented` —— 检查会话
+    // 真身落地、骨架占位退出；五件套纪律「没有触发者的码不许进枚举」）
+    // ⇒ 共 **71**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 72);
+    assert_eq!(DiagCode::ALL.len(), 71);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {
@@ -140,14 +142,17 @@ fn 同位置的诊断按_code_排序_保证输出唯一() {
 /// | `LEX-` | `rgoc-lex` | `tools/token-oracle/diagmap.go` |
 /// | `SYN-` | `rgoc-parse` | `tools/ast-oracle/diagmap.go`（T-AP16 建立） |
 /// | `TYP-` | `rgoc-types` | `tools/types-oracle/diagmap.go`（M3/Task 31 建立） |
-/// | `CHK-` | `rgoc-check` | `tools/types-oracle` 的 **C8 类别适配表**（M4/Task 3 建立；类别面，非逐码消息面） |
+/// | `CHK-` | `rgoc-check` | `tools/types-oracle` 的 **C8 类别适配表**（M4/Task 3 建立；类别面，非逐码消息面）。⚠️ **Task 20 起该前缀暂无代号**（骨架占位码 `ChkUnimplemented` 随真身落地移除）—— 首个检查面代号落地时把它加回白名单 |
 ///
 /// 后半段的反向断言比前半段更关键：只查「前缀合法」的话，一个前缀写错的新代号会
 /// 静默落进「没人管」的区 —— 那正是 `AGENTS.md` 记的「漏了不会报错」形状。
 /// 但白名单本身也不能恒真：留了个没人用的前缀，说明它对应的那一半镜像表**不存在**。
 #[test]
 fn diag_code_的_as_str_前缀落在阶段白名单内() {
-    const PHASES: [&str; 4] = ["CHK-", "LEX-", "SYN-", "TYP-"];
+    // `CHK-` 暂不在列：Task 20 移除唯一占位码后无人使用；反向断言（每个白名单
+    // 前缀必须有代号在用）不允许留空前缀 —— 首个检查面代号落地时把 `CHK-`
+    // 加回（与五件套纪律同一条）。
+    const PHASES: [&str; 3] = ["LEX-", "SYN-", "TYP-"];
 
     for c in DiagCode::ALL {
         let s = c.as_str();

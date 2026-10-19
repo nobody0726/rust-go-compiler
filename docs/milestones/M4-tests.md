@@ -34,6 +34,7 @@
 | `R-5-1` | 2026-10-18 | §5.1 判据收束：腿①**操作口径 = verdict-only**（官方全量消耗语义不采用）；过滤清单补 **Cheap-trick 抑制**（`F2`⑧）；§3.2 `T-CK-84/85` 增输入语法指针（`M3-tests.md` §5.2 `R-32-2`） | 设计复审（B2/M1/M5 对齐） |
 | `R-8-1` | 2026-10-18 | §8 `CH-8` 形态计数勘误：四 ⇒ **五**（与 §9.2 对齐；`--check --list` 为独立形态）；判据不变 | 设计复审（M4 对齐） |
 | `R-4-1` | 2026-10-19 | §4.2 表「`Other` 不出现在投影表」按**「（除修订）」**口修订：rgoc 侧 `Other` 值域 = 恰 **4 个无官方语义码**（`ChkUnimplemented` 骨架占位 + `ExceedsFileLimit`/`SynNestingTooDeep`/`TypNestingTooDeep` 实现限制）；由 `T-CK-16`（`rgoc-check/tests/category.rs`）精确钉值域（第 5 码入 `Other` 即红）；其余 **63** 码全落真实类别；入选语料出现 `other` 即红（`T-CK-94`）不变 | `T-CK-16` 落地实测（边界码无真实类别可投影；硬塞真实类别 = 「答错」） |
+| `R-4-2` | 2026-10-19 | Task 20 检查会话真身落地：骨架占位码 `ChkUnimplemented` 按五件套纪律（无触发者不许进枚举）移除 ⇒ 码表 **72 → 71**（`rgoc-lex`/`rgoc-parse`/`rgoc-check` 计数断言同步）；`R-4-1` 的 `Other` 值域由 4 收窄为 **3**（仅实现限制码；`T-CK-16` 快照 `("other", 3)` + 边界数组三项）；`CHK-` 前缀暂离 `rgoc-lex` 白名单（反向断言「白名单前缀必须有代号在用」照纪律执行） | Task 20 落地实测（红 `72 vs 71` → 绿；driver `check_diag_dump_与契约want_逐字节一致` 上线） |
 
 ---
 
@@ -474,3 +475,4 @@ bash scripts/check-ast-stdlib.sh          # M2
 | `R-5-1` | 2026-10-18 | §5.1 判据收束：腿①**操作口径 = verdict-only**（官方全量消耗语义不采用）；过滤清单补 **Cheap-trick 抑制**（`F2`⑧）；§3.2 `T-CK-84/85` 增输入语法指针（`M3-tests.md` §5.2 `R-32-2`） | 设计复审（B2/M1/M5 对齐） |
 | `R-8-1` | 2026-10-18 | §8 `CH-8` 形态计数勘误：四 ⇒ **五**（与 §9.2 对齐；`--check --list` 为独立形态）；判据不变 | 设计复审（M4 对齐） |
 | `R-4-1` | 2026-10-19 | §4.2 表「`Other` 不出现在投影表」按**「（除修订）」**口修订：rgoc 侧 `Other` 值域 = 恰 **4 个无官方语义码**（`ChkUnimplemented` 骨架占位 + `ExceedsFileLimit`/`SynNestingTooDeep`/`TypNestingTooDeep` 实现限制）；由 `T-CK-16`（`rgoc-check/tests/category.rs`）精确钉值域（第 5 码入 `Other` 即红）；其余 **63** 码全落真实类别；入选语料出现 `other` 即红（`T-CK-94`）不变 | `T-CK-16` 落地实测（边界码无真实类别可投影；硬塞真实类别 = 「答错」） |
+| `R-4-2` | 2026-10-19 | Task 20 检查会话真身落地：骨架占位码 `ChkUnimplemented` 按五件套纪律（无触发者不许进枚举）移除 ⇒ 码表 **72 → 71**（`rgoc-lex`/`rgoc-parse`/`rgoc-check` 计数断言同步）；`R-4-1` 的 `Other` 值域由 4 收窄为 **3**（仅实现限制码；`T-CK-16` 快照 `("other", 3)` + 边界数组三项）；`CHK-` 前缀暂离 `rgoc-lex` 白名单（反向断言「白名单前缀必须有代号在用」照纪律执行） | Task 20 落地实测（红 `72 vs 71` → 绿；driver `check_diag_dump_与契约want_逐字节一致` 上线） |

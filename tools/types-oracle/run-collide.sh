@@ -333,11 +333,8 @@ if [ "$MODE" = check ]; then
             printf '     rgoc stderr 前 4 行：\n'
             sed -n '1,4p' "$tmp/r.err" | sed 's/^/       /'
         fi
-        # 骨架期（Task 20 前）rgoc 侧恒报 CHK-UNIMPLEMENTED —— 显式点名，
-        # 免得下一个人把「尚未实现」误读成「检查器真跑出了不一致」。
-        if grep -q 'CHK-UNIMPLEMENTED' "$tmp/r.raw" "$tmp/r.err" 2>/dev/null; then
-            printf '     ⇒ **rgoc 侧未实现（CHK-UNIMPLEMENTED）**：Task 20 前属预期（RED 期）。\n'
-        fi
+        # 骨架期（Task 20 前）的 `CHK-UNIMPLEMENTED` 提示语已随真身落地退役
+        # —— 占位码不在 `DiagCode` 里了，那段 grep 永远不可能命中（死分支）。
     }
     fail_first() { # $1=理由
         printf '  !! %s：%s\n' "$b" "$1"

@@ -6,8 +6,8 @@
 //!
 //! ```text
 //! 探文件可读性  →  rgoc_load::load_with_imports  →  rgoc_check::check_package
-//!                →  ├─ 诊断（stderr + 退出码）
-//!                   └─ dump（stdout，--diag-dump；C8 类别渲染自 Task 20 起）
+//!                →  ├─ 诊断（stderr + 退出码）            ← 非 dump 形态
+//!                   └─ dump（stdout，--diag-dump；C8 渲染） ← 对撞入口
 //! ```
 //!
 //! 判定逻辑一条都不在这里：检查在 `rgoc-check` 里。本命令**不解释**诊断、
@@ -24,18 +24,25 @@
 //! ⚠️ 「文件读不到」走 **2** 而不是 1：它不是语言层面的错（与 `types_cmd`
 //! 同一条 Ruling），**不**伪装成诊断。
 //!
-//! # 骨架期（Task 2）的两处临时形态
+//! # 两条通道的形态（`C8` §2 / §6）
 //!
-//! - `check_package` 恒报 `CHK-UNIMPLEMENTED` ⇒ 本命令现在**稳定失败**（1）；
-//! - `--diag-dump` 的正文是**临时形态**（C1 的 `位置: 消息 [代号]` 行 + 两行
-//!   `#` 头）；Task 20 起换成 C8 的 `<行号>:<列>\t<类别>`（类别投影在
-//!   `rgoc_check::diag` 落地后）。
+//! - `--diag-dump`：stdout = **C8 渲染**（`# source: rgoc` / `# file:` +
+//!   `<行号>:<列>\t<类别>`），**stderr 必须空**（§6 规则 1：对撞只读 stdout，
+//!   stderr 里有任何字节都说明通道混了）。
+//! - 不给时：stdout = 摘要（人读；数字摆出来是为了让「装载悄悄少收了文件」
+//!   可见），stderr = `{file}:{line}:{col}: <msg> [<CODE>]` 逐行诊断。
 //!
-//! `--test-hooks` 已可解析、Task 20 起注入（`F13` 的装置级开关）。
+//! # 「有诊断」指什么
+//!
+//! = **渲染得出来的行数 > 0**（`CheckedPackage::rendered_count`）—— 与
+//! oracle 的「过滤后 `len(diags) > 0`」同语义：只含次级消息（`\t` 开头，
+//! `C8` §2 规则 5）的文件两侧都算「无诊断」。
+//!
+//! `--test-hooks` 已可解析、随 `CheckOptions` 进会话（注入在 Task 29 生效；
+//! `F13` 的装置级开关）。
 
 use std::fmt::Write as _;
 
-use rgoc_lex::Diag;
 use rgoc_load::{Package, load_with_imports};
 use rgoc_types::TypeTable;
 
@@ -45,11 +52,11 @@ use crate::cli::CheckCommand;
 /// 再也分不开「dump 里混进诊断」的问题）。
 #[derive(Debug)]
 pub struct CheckOutcome {
-    /// stdout（`--diag-dump` 时是 dump；否则是摘要）
+    /// stdout（`--diag-dump` 时是 C8 渲染；否则是摘要）
     pub stdout: String,
-    /// stderr（渲染后的诊断，逐行 `<file>:<line>:<col>: <msg> [<CODE>]`）
+    /// stderr（非 dump 形态渲染后的诊断；`--diag-dump` 下恒空）
     pub stderr: String,
-    /// 诊断条数（>0 ⇒ 退出码 1）
+    /// 渲染得出来的诊断条数（>0 ⇒ 退出码 1）
     pub errors: usize,
 }
 
@@ -75,67 +82,55 @@ pub fn run_check(cmd: &CheckCommand) -> Result<CheckOutcome, String> {
 
     // ② 装载（`check` 暂不收 `-I`：首轮对撞逐文件单跑，import 面按需再扩）。
     let mut tt = TypeTable::new();
-    let (mut pkg, mut bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
+    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
 
-    // ③ 检查（Task 2 占位：恒报 `CHK-UNIMPLEMENTED`；Task 20 起真身）。
-    //    anchor 保证诊断有可指位置：优先第一个**被接受**的文件；装载把入口也
-    //    丢掉（极端）时，把第一个入参名字补进装载器的文件表 —— 诊断位置不许无主。
-    let first = pkg.files.first().copied();
-    let anchor = match first {
-        Some(fid) => fid,
-        None => pkg.file_table.intern(&cmd.files[0].display().to_string()),
+    // ③ 检查（Task 20 起真身：装载诊断入流 + 会话骨架；表达式/语句/内建/门控
+    //    点由 Task 21–36 逐个挂上）。
+    let opts = rgoc_check::CheckOptions {
+        test_hooks: cmd.test_hooks,
     };
-    match rgoc_check::check_package(&pkg, anchor) {
-        Ok(_checked) => {}
-        Err(check_bag) => {
-            for d in check_bag.into_sorted() {
-                bag.push(d);
-            }
-        }
-    }
-    let diags = bag.into_sorted();
+    let checked = rgoc_check::check_package(&pkg, bag, &opts);
 
     // ④ 两条通道各自成形
+    let display = cmd
+        .files
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut stdout = String::new();
+    let mut stderr = String::new();
     if cmd.diag_dump {
-        // 注释行（C8 §2 规则 3：`#` 行不进对撞）—— 只为人读。
-        let _ = writeln!(stdout, "# source: rgoc");
-        let _ = writeln!(
-            stdout,
-            "# files: {}",
-            cmd.files
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(" ")
-        );
-        stdout.push_str(&render_diags(&pkg, &diags));
+        // C8 渲染（含两行 `#` 头；`#` 行不进对撞，只为人读）。
+        stdout = checked.render(&display);
     } else {
         // 摘要：人读用（数字摆出来是为了让「装载悄悄少收了文件」可见）。
         let _ = writeln!(stdout, "package {}", pkg.name);
         let _ = writeln!(stdout, "files {}", pkg.files.len());
-        let _ = writeln!(stdout, "diagnostics {}", diags.len());
+        let _ = writeln!(stdout, "diagnostics {}", checked.rendered_count());
+        stderr = render_diags(&pkg, &checked.diags);
     }
 
-    let errors = diags.len();
     Ok(CheckOutcome {
         stdout,
-        stderr: render_diags(&pkg, &diags),
-        errors,
+        stderr,
+        errors: checked.rendered_count(),
     })
 }
 
-/// 渲染诊断。位置用**装载器自己的** `FileTable`（`C1` §2.2 的 `{file}:{line}:{col}`）
+/// 渲染诊断（非 dump 形态；跳过渲染层过滤掉的次级消息 —— 与退出码同语义）。
+///
+/// 位置用**装载器自己的** `FileTable`（`C1` §2.2 的 `{file}:{line}:{col}`）
 /// —— 不拿命令行入参回显（与 `types_cmd` 同一条）。
-fn render_diags(pkg: &Package, diags: &[Diag]) -> String {
+fn render_diags(pkg: &Package, diags: &[rgoc_check::diag::RawDiag]) -> String {
     let mut s = String::new();
-    for d in diags {
+    for d in diags.iter().filter(|d| rgoc_check::render::is_rendered(d)) {
         let _ = writeln!(
             s,
             "{}: {} [{}]",
-            pkg.file_table.format_pos(d.pos),
-            d.message,
-            d.code.as_str()
+            pkg.file_table.format_pos(d.diag.pos),
+            d.diag.message,
+            d.diag.code.as_str()
         );
     }
     s

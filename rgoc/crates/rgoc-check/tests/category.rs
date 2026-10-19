@@ -7,13 +7,12 @@
 //!   `TestC8CategoryVocabulary` 的纪律）。
 //! * `category_of` 对 `DiagCode::ALL` 的**每个**码都给类别，且落在枚举内
 //!   （穷尽性由编译期 `match` 无通配强制；本测试断言运行期值域）。
-//! * **Ruling 11-1**（对 `M4-plan.md` Task 11 的「`Other` 无码映射」条目的
-//!   修订，走 `C8` §3 的「除修订」口）：`other` 是**逃逸口**，其值域 = 恰好
-//!   **4 个「无官方语义」码** —— `ChkUnimplemented`（骨架占位）+
-//!   `ExceedsFileLimit` / `SynNestingTooDeep` / `TypNestingTooDeep`
-//!   （本仓实现限制，官方无对应行为）。把边界码硬塞进真实类别 = 用类别
-//!   「答错」（本仓纪律：「不判」与「答错」是两件事）；`T-CK-94` 的
-//!   「入选语料出现 `other` 即红」对它们**恰好正确** —— 边界码出现在入选
+//! * **Ruling 11-1 + Ruling 20-1**（后者纪要：Task 20 移除骨架占位码
+//!   `ChkUnimplemented` —— 真身会话接管）：`other` 是**逃逸口**，其值域 = 恰好
+//!   **3 个「无官方语义」码** —— `ExceedsFileLimit` / `SynNestingTooDeep` /
+//!   `TypNestingTooDeep`（本仓实现限制，官方无对应行为）。把边界码硬塞进真实
+//!   类别 = 用类别「答错」（本仓纪律：「不判」与「答错」是两件事）；`T-CK-94`
+//!   的「入选语料出现 `other` 即红」对它们**恰好正确** —— 边界码出现在入选
 //!   语料上本来就无法与 oracle 对齐。每类计数快照钉住这次定案；后续新码
 //!   落位时必须同步 `category_of` 与快照（编译开路，快照收口）。
 
@@ -96,19 +95,16 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：72 个码各有恰好一个类别（M4/Task 16 后 72）
-    assert_eq!(DiagCode::ALL.len(), 72, "码表总数（M4/Task 16 后 72）");
+    // 总数守恒：71 个码各有恰好一个类别（M4/Task 20 后 71）
+    assert_eq!(DiagCode::ALL.len(), 71, "码表总数（M4/Task 20 后 71）");
 }
 
 #[test]
-fn t_ck_16_other_值域恰好是四个无官方语义码() {
+fn t_ck_16_other_值域恰好是三个实现限制码() {
     use DiagCode::*;
-    let boundary = [
-        ChkUnimplemented,
-        ExceedsFileLimit,
-        SynNestingTooDeep,
-        TypNestingTooDeep,
-    ];
+    // Ruling 11-1 原文 4 码，经 Ruling 20-1 收窄为 3：`ChkUnimplemented` 随
+    // Task 20 的检查会话真身落地退出（没有触发者的码不许进枚举）。
+    let boundary = [ExceedsFileLimit, SynNestingTooDeep, TypNestingTooDeep];
     for code in boundary {
         assert_eq!(category_of(code), Category::Other, "{code:?} 是能力边界码");
     }
@@ -160,8 +156,8 @@ fn t_ck_16_每类计数快照() {
     for code in DiagCode::ALL {
         *counts.entry(category_of(code).as_str()).or_default() += 1;
     }
-    // 定案快照（Ruling 11-1；Task 12 补 implements/type-arg 首码；
-    // M4/Task 14 给 type-arg 加推断失败码）：
+    // 定案快照（Ruling 11-1 / Ruling 20-1；Task 12 补 implements/type-arg 首码；
+    // M4/Task 14 给 type-arg 加推断失败码；M4/Task 20 other 4→3）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 1),
@@ -172,7 +168,7 @@ fn t_ck_16_每类计数快照() {
         ("import", 3),
         ("not-type", 1),
         ("op-invalid", 1),
-        ("other", 4),
+        ("other", 3),
         ("overflow", 2),
         ("parse", 25),
         ("shift", 2),

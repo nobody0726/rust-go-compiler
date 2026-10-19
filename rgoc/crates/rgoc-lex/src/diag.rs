@@ -28,7 +28,9 @@
 //!
 //! 现在是**枚举** `scanner.go` / `source.go` 里全部 `errorf`/`errorAtf`/`error` 调用点
 //! （26 处 ⇒ 去重 25 条消息模板）得到 22 个官方代号，再加 1 个本仓自己的限制，共 **23**（M1 冻结）。
-//! M2 增补 `SYN-`、M3 增补 `TYP-`、M4 增补 `CHK-`（`rgoc-check` 的骨架期占位诊断）——
+//! M2 增补 `SYN-`、M3 增补 `TYP-`、M4 继续增补 `TYP-`（`CHK-` 面的骨架占位码
+//! `ChkUnimplemented` 已随 Task 20 的检查会话真身落地移除 —— 五件套纪律
+//! 「没有触发者的码不许进枚举」）——
 //! 逐里程碑的计数与沿革见 [`DiagCode::ALL`] 上下的注释与 `tests/test_diag.rs` 的计数断言。
 //!
 //! 两侧（Go 的 `tools/token-oracle/diagmap.go` 与这里）必须同步 ——
@@ -51,14 +53,6 @@ use crate::pos::Pos;
 /// 加新代号时：**插入到它字典序该在的位置**，然后让那条断言告诉你有没有放对。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum DiagCode {
-    // ── M4 静态检查（`CHK-` 前缀）──
-    /// 检查器尚未实现（骨架期的**稳定拒绝**）。
-    ///
-    /// 官方**无**对应物：M4/Task 2 只立 `rgoc-check` 骨架，`check_package` 恒报
-    /// 此码 —— 让 `rgoc check` 响亮失败而不是静默通过（`M4-plan.md` Task 2）。
-    /// 触发者：`rgoc-driver` 的 `check_未实现期_稳定失败且可判读`。
-    ChkUnimplemented,
-
     /// 不认识的字符
     BadChar,
     /// 进制字面量里出现了不属于该进制的数位（如 `0b12` 里的 `2`）
@@ -476,8 +470,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 72] = [
-        DiagCode::ChkUnimplemented,
+    pub const ALL: [DiagCode; 71] = [
         DiagCode::BadChar,
         DiagCode::BadDigit,
         DiagCode::BadExponent,
@@ -554,7 +547,6 @@ impl DiagCode {
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
     pub fn as_str(self) -> &'static str {
         match self {
-            DiagCode::ChkUnimplemented => "CHK-UNIMPLEMENTED",
             DiagCode::BadChar => "LEX-BAD-CHAR",
             DiagCode::BadDigit => "LEX-BAD-DIGIT",
             DiagCode::BadExponent => "LEX-BAD-EXPONENT",

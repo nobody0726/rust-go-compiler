@@ -1,4 +1,5 @@
-# rgoc-check —— 静态检查主体（M4）。依赖 rgoc-lex（位置/诊断）与 rgoc-load（装载）。
+# rgoc-check —— 静态检查主体（M4）。依赖 rgoc-lex（位置/诊断）、rgoc-const（常量值）
+# 与 rgoc-load（装载）。
 [package]
 name = "rgoc-check"
 version.workspace = true
@@ -12,6 +13,7 @@ workspace = true
 
 [dependencies]
 rgoc-ast = { path = "../rgoc-ast" }
+rgoc-const = { path = "../rgoc-const" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
 rgoc-types = { path = "../rgoc-types" }

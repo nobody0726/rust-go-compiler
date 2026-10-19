@@ -1,4 +1,4 @@
-//! 检查面的**版本源**（M4/Task 18）：首行 harness 旗标 + 文件版本同源进入。
+//! 检查面的**版本源**（M4/Task 18）与**检查会话**（M4/Task 20）。
 //!
 //! # 两层
 //!
@@ -19,10 +19,20 @@
 //! **显式 `--lang` 赢**（`Ruling 18-1`）：它是 `D-M3-15` 的显式覆盖路径；
 //! 没有显式值时用首行注释。官方 harness 没有 CLI 旗标，所以这条合并规则是
 //! 本仓的**扩展**，不改变「注释 ⇒ `Config.GoVersion`」的对撞面。
+//!
+//! # 检查会话（Task 20 起）
+//!
+//! [`Session`] 是检查主体的**诊断流与上报层**（官方 `Checker` 的错误面）：
+//! 装载诊断经 [`Session::seed`] 先入流，检查面（Task 21–36）逐任务往
+//! [`Session::report`] 上报。Cheap-trick 抑制与「次级消息留流」两条纪律
+//! 见 [`Session`] 的文档。入口是 [`check_package`]。
 
 use rgoc_ast::AstFile;
-use rgoc_lex::DiagBag;
+use rgoc_lex::{Diag, DiagBag};
+use rgoc_load::Package;
 use rgoc_types::version::{Versions, pkg_versions};
+
+use crate::diag::RawDiag;
 
 /// 首行注释里的三个旗标（官方 `parseFlags` 的 `flag.FlagSet`）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -151,4 +161,160 @@ pub fn version_source(cli_lang: Option<&str>, first_src: &[u8]) -> Result<Option
 /// 两处 `TooNew` 的诊断一并返回。
 pub fn versions(lang: Option<&str>, files: &[&AstFile]) -> (Versions, DiagBag) {
     pkg_versions(lang, files)
+}
+
+// ═══ 检查会话（M4/Task 20）═══════════════════════════════════════════════════
+
+/// 检查装置选项（CLI 旗标在检查面的投影）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CheckOptions {
+    /// `--test-hooks`：注入官方测试内建（`assert` / `trace`，`F13`）。
+    ///
+    /// 对应官方 `types.DefPredeclaredTestFuncs()` 的装置级开关；
+    /// **Task 29 起生效**（本任务只把它带进会话）。
+    pub test_hooks: bool,
+}
+
+/// 检查结果：**原始诊断流** + 渲染入口。
+///
+/// 「原始」= 含次级链（`\t` 开头）与 soft 位；对外渲染与退出码判据都走
+/// [`CheckedPackage::render`] / [`CheckedPackage::rendered_count`]（过滤后）
+/// —— 与 oracle 的行集合等价。
+#[derive(Clone, Debug, Default)]
+pub struct CheckedPackage {
+    /// 诊断流；装载诊断在前、检查诊断在后（官方 go/types 是**同一个**
+    /// checker 错误流，装载即检查的一部分）。
+    pub diags: Vec<RawDiag>,
+}
+
+impl CheckedPackage {
+    /// `C8` 渲染入口（`--diag-dump`）；`file` = `# file:` 行的人读文本。
+    #[must_use]
+    pub fn render(&self, file: &str) -> String {
+        crate::render::render(&self.diags, file)
+    }
+
+    /// 渲染得出来的数据行数 —— **退出码判据**（`> 0` ⇒ 调用方退出码 1）。
+    ///
+    /// 与 oracle 的「过滤后 `len(diags) > 0`」同语义：只含次级消息的文件
+    /// 两侧都算「无诊断」。
+    #[must_use]
+    pub fn rendered_count(&self) -> usize {
+        self.diags
+            .iter()
+            .filter(|d| crate::render::is_rendered(d))
+            .count()
+    }
+}
+
+/// 检查**会话**：诊断流 + 上报层（官方 `Checker` 的错误面）。
+///
+/// # 上报层三条纪律
+///
+/// 1. **Cheap-trick**（`F2`⑧；官方 `go/types/errors.go:111-123`）：
+///    **已有首错**（`firstErr != nil`）且**首个子错误**（`\n\t` 之前的主句）
+///    的消息里 `"invalid operand"` / `"invalid type"` 出现在位置 **> 0**
+///    ⇒ 丢弃（不进流）。首错自己永不被吞（`firstErr == nil` 不检查）；
+///    soft 同样把「首错已立」置起来（官方 `report` 不区分软硬）。
+/// 2. **次级消息留流**：`\t` 开头的条目保留在 [`Session::diags`]（人读的
+///    澄清链），渲染层过滤 —— 过滤点是渲染出口，不是上报层。
+/// 3. **装载先于检查**：装载诊断以硬错误入流（[`Session::seed`]），与官方
+///    「装载即检查的一部分」同序。
+///
+/// `pkg` / `opts` 由会话携带：Task 21–36 的各个检查面从这里取作用域、
+/// 类型表与装置开关。
+pub struct Session<'a> {
+    /// 被检查的包（作用域 / 对象 / 常量值都从这里读）。
+    pub pkg: &'a Package,
+    /// 装置选项。
+    pub opts: &'a CheckOptions,
+    diags: Vec<RawDiag>,
+    reported_any: bool,
+}
+
+impl std::fmt::Debug for Session<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("pkg", &self.pkg.name)
+            .field("opts", &self.opts)
+            .field("diags", &self.diags)
+            .field("reported_any", &self.reported_any)
+            .finish()
+    }
+}
+
+impl<'a> Session<'a> {
+    /// 开一个会话（空流）。
+    #[must_use]
+    pub fn new(pkg: &'a Package, opts: &'a CheckOptions) -> Self {
+        Self {
+            pkg,
+            opts,
+            diags: Vec::new(),
+            reported_any: false,
+        }
+    }
+
+    /// 装载诊断入流（作为硬错误；顺序在检查诊断之前）。
+    ///
+    /// 装载诊断也过一遍 [`Session::report`] 的上报层 —— 官方装载与检查是
+    /// 同一个错误流，共用一条上报纪律；装载侧消息不含 Cheap-trick 的两个
+    /// 关键词，实际是恒等变换。
+    pub fn seed(&mut self, bag: DiagBag) {
+        for d in bag.into_sorted() {
+            self.report(RawDiag::hard(d));
+        }
+    }
+
+    /// 上报一条原始诊断（**唯一入口**；Cheap-trick 在这里）。
+    pub fn report(&mut self, raw: RawDiag) {
+        if self.reported_any {
+            let primary = raw.diag.message.split("\n\t").next().unwrap_or("");
+            let hits = |needle: &str| primary.find(needle).is_some_and(|i| i > 0);
+            if hits("invalid operand") || hits("invalid type") {
+                return;
+            }
+        }
+        self.reported_any = true;
+        self.diags.push(raw);
+    }
+
+    /// 上报一条**硬**错误。
+    pub fn report_hard(&mut self, diag: Diag) {
+        self.report(RawDiag::hard(diag));
+    }
+
+    /// 上报一条**软**错误（官方 `softErrorf` 面）。
+    pub fn report_soft(&mut self, diag: Diag) {
+        self.report(RawDiag::soft(diag));
+    }
+
+    /// 当前流（只读）。
+    #[must_use]
+    pub fn diags(&self) -> &[RawDiag] {
+        &self.diags
+    }
+
+    /// 收会话取流。
+    #[must_use]
+    pub fn into_diags(self) -> Vec<RawDiag> {
+        self.diags
+    }
+
+    /// 收会话取检查结果。
+    #[must_use]
+    pub fn into_checked(self) -> CheckedPackage {
+        CheckedPackage { diags: self.diags }
+    }
+}
+
+/// 检查一个**已装载**的包 —— 会话真身（Task 20 起）。
+///
+/// 当前内容 = 「装载诊断入流」；表达式 / 语句 / 内建 / 门控点由 Task 21–36
+/// 逐个挂到会话上（每个判定走 [`Session::report`]）。
+#[must_use]
+pub fn check_package(pkg: &Package, load_diags: DiagBag, opts: &CheckOptions) -> CheckedPackage {
+    let mut session = Session::new(pkg, opts);
+    session.seed(load_diags);
+    session.into_checked()
 }
