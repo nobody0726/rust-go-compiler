@@ -1216,3 +1216,38 @@ fn check_组合旗标_不报用法错() {
         .expect("起进程");
     assert_eq!(out3.status.code(), Some(2));
 }
+
+// ── Task 18：harness 旗标的响亮失败（`F2`① / `U-M4-04/05`）────────────
+
+/// 首行 `// -goexperiment=…` ⇒ 退出码 **2**（装置不支持，不是语言诊断）。
+#[test]
+fn check_goexperiment_响亮失败() {
+    let f = 临时_go("chk-goexp", "// -goexperiment=foo\npackage p\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .arg("check")
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(2), "未支持的旗标是用法错");
+    assert!(out.stdout.is_empty(), "用法错时不该有 stdout");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("U-M4-04"), "错误要指向登记项：{err}");
+    assert!(!err.contains("panicked"), "必须是显式报错：{err}");
+}
+
+/// 首行 `// -fakeImportC` ⇒ 退出码 **2**（`U-M4-05`）。
+#[test]
+fn check_fake_import_c_响亮失败() {
+    let f = 临时_go("chk-fakec", "// -fakeImportC\npackage p\n");
+    let bin = env!("CARGO_BIN_EXE_rgoc-driver");
+    let out = std::process::Command::new(bin)
+        .arg("check")
+        .arg(&f)
+        .output()
+        .expect("起进程");
+    assert_eq!(out.status.code(), Some(2), "未支持的旗标是用法错");
+    assert!(out.stdout.is_empty(), "用法错时不该有 stdout");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("U-M4-05"), "错误要指向登记项：{err}");
+}

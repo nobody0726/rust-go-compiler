@@ -53,7 +53,9 @@ pub struct CheckCommand {
     /// 不给时只报诊断（stderr）与摘要（stdout）—— 门禁读的是退出码与诊断流，
     /// dump 是给对撞看的中间产物，两条通道刻意分开（与 `types` 同一条纪律）。
     pub diag_dump: bool,
-    /// `--lang go1.N`：版本门控覆盖（`D-M3-15` 的显式覆盖路径，透传给装载器）。
+    /// `--lang go1.N`：版本门控覆盖（`D-M3-15` 的显式覆盖路径）。
+    ///
+    /// 优先级高于文件首行的 `// -lang=`（`Ruling 18-1`）；不给时用首行旗标。
     pub lang: Option<String>,
     /// `--test-hooks`：注入官方的测试内建（`assert`/`trace`，`F13`）。
     ///

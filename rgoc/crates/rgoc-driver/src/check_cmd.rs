@@ -61,9 +61,21 @@ pub fn run_check(cmd: &CheckCommand) -> Result<CheckOutcome, String> {
         std::fs::metadata(f).map_err(|e| format!("读 {} 失败：{e}", f.display()))?;
     }
 
+    // ①.5 首行 harness 旗标（`F2`①）：`// -lang=go1.N` 与 `//go:build`（装载器读）
+    //      **同源进入**；`-goexperiment` / `-fakeImportC` 在装置层响亮失败。
+    //      显式 `--lang` 覆盖注释（`Ruling 18-1`，`D-M3-15` 的覆盖路径）。
+    let lang = match cmd.files.first() {
+        Some(f) => {
+            let src = std::fs::read(f).map_err(|e| format!("读 {} 失败：{e}", f.display()))?;
+            rgoc_check::check::version_source(cmd.lang.as_deref(), &src)
+                .map_err(|e| format!("{}: {e}", f.display()))?
+        }
+        None => cmd.lang.clone(),
+    };
+
     // ② 装载（`check` 暂不收 `-I`：首轮对撞逐文件单跑，import 面按需再扩）。
     let mut tt = TypeTable::new();
-    let (mut pkg, mut bag) = load_with_imports(&mut tt, &cmd.files, &[], cmd.lang.as_deref());
+    let (mut pkg, mut bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
 
     // ③ 检查（Task 2 占位：恒报 `CHK-UNIMPLEMENTED`；Task 20 起真身）。
     //    anchor 保证诊断有可指位置：优先第一个**被接受**的文件；装载把入口也

@@ -11,6 +11,7 @@ description = "M4：静态检查闭环（操作数/表达式/语句/内建/初�
 workspace = true
 
 [dependencies]
+rgoc-ast = { path = "../rgoc-ast" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
 rgoc-types = { path = "../rgoc-types" }

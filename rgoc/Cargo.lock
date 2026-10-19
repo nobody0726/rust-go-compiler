@@ -81,6 +81,7 @@ dependencies = [
 name = "rgoc-check"
 version = "0.0.0"
 dependencies = [
+ "rgoc-ast",
  "rgoc-lex",
  "rgoc-load",
  "rgoc-types",

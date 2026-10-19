@@ -16,6 +16,7 @@
 //! 1:1）。作用是让 `rgoc check` **响亮失败**而不是静默通过 —— 静默失败是本仓
 //! 反复记录的最坏形状；Task 20 起换真身（`check.rs` / `operand.rs` / …）。
 
+pub mod check;
 pub mod diag;
 pub mod version;
 
