@@ -1,4 +1,5 @@
-//! 表达式检查（M4/Task 21–23）—— 一元 / 二元 / 比较 / 移位 / 常量面 + 转换 + 索引 / 切片。
+//! 表达式检查（M4/Task 21–24）—— 一元 / 二元 / 比较 / 移位 / 常量面 +
+//! 转换 + 索引 / 切片 + 选择器。
 //!
 //! 对照官方 `go/types/expr.go`（`unary` / `binary` / `shift` / `comparison` /
 //! `matchTypes`）、`const.go`（`overflow` / `representable`）、
@@ -34,6 +35,16 @@
 //! （`max = len + 1`；类别 `slice`）。新码 `CHK-INVALID-INDEX` /
 //! `CHK-INVALID-SLICE`（oracle `task23-reject.go` 19 行实证）。map 键面
 //! （`cannot use ... in map index`，类别 `assign`）归 Task 25 的赋值面。
+//!
+//! # 选择器面（Task 24；`T-CK-34`）
+//!
+//! `x.f` / `x.M` / `T.M`：查找在 `lookup.rs`（官方 `lookup.go` 的逐深度 BFS、
+//! `seen` 遮蔽、同级碰撞、具名指针类型特例），方法值 / 方法表达式签名在
+//! `selection.rs`。诊断四式合一码 `CHK-INVALID-SELECTOR`（类别 `selector`）：
+//! `ambiguous selector` / `... undefined (type ...)` / `cannot call pointer
+//! method`（不可寻址遇指针接收者）/ `invalid method expression`（typexpr 面）
+//! / `operand for field selector`（报在 `X` 位）。`*T` 的 typexpr 臂已接
+//! （`(*T).M` 可达）。`pkg.Name` 与泛型接收者面 ⇒ 不报。
 //!
 //! # 位置规则（oracle 探针 1–7 与官方源双证；`task21-reject.go` 53 行）
 //!
@@ -71,7 +82,8 @@
 //!   实际不可达；报出来反而会造出 oracle 没有的「other 类」行）。
 
 use rgoc_ast::{
-    BasicLit, CallExpr, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation, SliceExpr,
+    BasicLit, CallExpr, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation, SelectorExpr,
+    SliceExpr,
 };
 use rgoc_const::{
     BasicId, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
@@ -84,7 +96,9 @@ use rgoc_types::{
 };
 
 use crate::check::Session;
+use crate::lookup::{Found, lookup_field_or_method};
 use crate::operand::{Mode, Operand};
+use crate::selection::{SelKind, method_expr_sig, method_value_sig};
 
 /// 表达式入口：包级 `Decl::Var` 的初始化式逐个检查（Task 21 的窄面）。
 pub(crate) fn check_package_decls(s: &mut Session<'_>) {
@@ -122,11 +136,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         type_str(self.tt(), t)
     }
 
-    /// 官方 `exprInternal` 的**已接入子集**。未接入的形态（选择器 / 类型断言 /
+    /// 官方 `exprInternal` 的**已接入子集**。未接入的形态（类型断言 /
     /// 值函数位的调用 / 复合字面量 / 类型族）⇒ `invalid` 且**不报** ——
-    /// 避免用假诊断抢占 Task 24+/25/30 的落点。转换（类型函数位）在
+    /// 避免用假诊断抢占 Task 25/30 的落点。转换（类型函数位）在
     /// [`Self::call`] 里接（Task 22），索引 / 切片在 [`Self::index_expr`] /
-    /// [`Self::slice_expr`]（Task 23）。
+    /// [`Self::slice_expr`]（Task 23），选择器在 [`Self::selector`]（Task 24）。
     fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
         match e {
             Expr::Name(n) => self.ident(file, n),
@@ -137,6 +151,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Call(c) => self.call(file, c),
             Expr::Index(ix) => self.index_expr(file, ix),
             Expr::Slice(sx) => self.slice_expr(file, sx),
+            Expr::Selector(se) => self.selector(file, se),
             _ => Operand::invalid(),
         }
     }
@@ -595,6 +610,104 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         true
     }
 
+    // ────────────────────────────── 选择器 ──────────────────────────────
+
+    /// 官方 `selector`（`call.go:686`）的窄面。
+    ///
+    /// 查找在 [`lookup_field_or_method`]（官方 `lookup.go`），方法值 /
+    /// 方法表达式的签名构造在 [`crate::selection`]。`pkg.Name`（`PkgName`
+    /// 操作数建不出来 ⇒ `invalid`）与泛型接收者面 ⇒ 不报。
+    fn selector(&mut self, file: FileId, e: &SelectorExpr) -> Operand {
+        let mut x = self.expr(file, &e.x);
+        let sel = e.sel.value.as_str();
+        if x.mode == Mode::Invalid {
+            return Operand::invalid();
+        }
+        if x.mode == Mode::Builtin {
+            // 官方 `UncalledBuiltin`（内建不能进选择器）；报在 `.` 后的名字位。
+            self.report(
+                e.sel.pos,
+                DiagCode::ChkInvalidSelector,
+                "invalid use of builtin in selector expression".to_string(),
+            );
+            return Operand::invalid();
+        }
+        let Some(xt) = x.typ else {
+            return Operand::invalid();
+        };
+        let addressable = x.mode == Mode::Variable;
+        let r = lookup_field_or_method(self.tt(), xt, addressable, sel);
+        let Some(found) = r.obj else {
+            if r.index.is_some() {
+                let label = expr_label(&e.x).unwrap_or_else(|| operand_text(self.tt(), &x));
+                self.report(
+                    e.sel.pos,
+                    DiagCode::ChkInvalidSelector,
+                    format!("ambiguous selector {label}.{sel}"),
+                );
+                return Operand::invalid();
+            }
+            if r.indirect {
+                let t = self.type_text(xt);
+                let msg = if x.mode == Mode::TypeExpr {
+                    format!(
+                        "invalid method expression {t}.{sel} (needs pointer receiver (*{t}).{sel})"
+                    )
+                } else {
+                    format!("cannot call pointer method {sel} on {t}")
+                };
+                self.report(e.sel.pos, DiagCode::ChkInvalidSelector, msg);
+                return Operand::invalid();
+            }
+            let label = expr_label(&e.x).unwrap_or_else(|| operand_text(self.tt(), &x));
+            let t = self.type_text(xt);
+            self.report(
+                e.sel.pos,
+                DiagCode::ChkInvalidSelector,
+                format!("{label}.{sel} undefined (type {t} has no field or method {sel})"),
+            );
+            return Operand::invalid();
+        };
+        // 类别按官方两处分支裁决：typexpr 面的方法 ⇒ 方法表达式。
+        let kind = match &found {
+            Found::Field { .. } => SelKind::FieldVal,
+            Found::Method { .. } if x.mode == Mode::TypeExpr => SelKind::MethodExpr,
+            Found::Method { .. } => SelKind::MethodVal,
+        };
+        match (kind, found) {
+            (SelKind::FieldVal, Found::Field { typ }) => {
+                if x.mode == Mode::TypeExpr {
+                    // 官方 `NonFieldSelector`：报在 `X` 位（不是 `.` 后的名字位）。
+                    let t = self.type_text(xt);
+                    self.report(
+                        e.x.pos(),
+                        DiagCode::ChkInvalidSelector,
+                        format!("operand for field selector {sel} must be value of type {t}"),
+                    );
+                    return Operand::invalid();
+                }
+                // 字段值：可寻址变量或路径带指针 ⇒ variable，否则 value。
+                x.mode = if x.mode == Mode::Variable || r.indirect {
+                    Mode::Variable
+                } else {
+                    Mode::Value
+                };
+                x.typ = Some(typ);
+                x.val = None;
+                x
+            }
+            (SelKind::MethodVal | SelKind::MethodExpr, Found::Method { sig }) => {
+                let new_sig = if kind == SelKind::MethodExpr {
+                    method_expr_sig(self.s.tt, xt, sig)
+                } else {
+                    method_value_sig(self.s.tt, sig)
+                };
+                Operand::value(Some(new_sig))
+            }
+            _ => unreachable!("kind 由 found 裁决（构造保证同源）"),
+        }
+    }
+
     // ────────────────────────────── 一元 ──────────────────────────────
 
     /// 官方 `unary`（`expr.go:129`）。
@@ -666,9 +779,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         let Some(t) = x.typ else {
             return Operand::invalid();
         };
-        // `*T` 类型面（TypeExpr）不在本任务范围：不报。
+        // `*T` 类型面（TypeExpr）：官方 `*ast.StarExpr` 的 typexpr 臂 ——
+        // 模式保持 `typexpr`，类型换成**指针类型**（`(*T).M` 方法表达式由此可达）。
         if matches!(x.mode, Mode::TypeExpr) {
-            return Operand::invalid();
+            let p = self.s.tt.add_pointer(t);
+            return Operand::type_expr(p);
         }
         let base = {
             let tt = self.tt();
@@ -1632,6 +1747,17 @@ fn const_negative(c: &Const) -> bool {
         Const::Int(n) => n.is_neg(),
         Const::Float(r) => r.is_neg(),
         _ => false,
+    }
+}
+
+/// 官方 `operand.String` 的源码近似：名字 / 选择器链 / 括号剥壳。
+/// （消息文本只进人读面，`(行,列,类别)` 才是对账面 —— 与 22-3 / 23-4 同口径。）
+fn expr_label(e: &Expr) -> Option<String> {
+    match e {
+        Expr::Name(n) => Some(n.value.clone()),
+        Expr::Selector(s) => expr_label(&s.x).map(|b| format!("{b}.{}", s.sel.value)),
+        Expr::Paren(p) => expr_label(&p.x),
+        _ => None,
     }
 }
 

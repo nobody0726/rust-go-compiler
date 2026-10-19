@@ -619,9 +619,10 @@ fn t_a_66_diagcode_总数已更新() {
     //   合并码，`CHK-` 前缀真身首码）⇒ 共 72。
     // + M4/Task 23 新增 2 个（ChkInvalidIndex / ChkInvalidSlice —— 索引 / 切片
     //   表达式面的合并码）⇒ 共 74。
+    // + M4/Task 24 新增 1 个（ChkInvalidSelector —— 选择器面的合并码）⇒ 共 75。
     assert_eq!(
         DiagCode::ALL.len(),
-        74,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）再 +1（Task 21 新增 ChkInvalidOperation）再 +2（Task 23 新增 ChkInvalidIndex / ChkInvalidSlice）"
+        75,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）再 +1（Task 21 新增 ChkInvalidOperation）再 +2（Task 23 新增 ChkInvalidIndex / ChkInvalidSlice）再 +1（Task 24 新增 ChkInvalidSelector）"
     );
 }

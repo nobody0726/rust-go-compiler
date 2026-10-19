@@ -254,6 +254,10 @@ pub fn category_of(code: DiagCode) -> Category {
         // `InvalidIndirect` / 不可比族消息经 C8 适配表全部落 `op-invalid`
         // （Task 21 探针 `task21-reject.go` 53 行实证）。
         TypDivByZero | ChkInvalidOperation => Category::OpInvalid,
+        // 选择器面（Task 24）：官方 `MissingFieldOrMethod` / `AmbiguousSelector`
+        // / `InvalidMethodExpr` / `NonFieldSelector` 落 `selector`
+        // （C8 适配表；`task24-reject.go` 7 行实证）。
+        ChkInvalidSelector => Category::Selector,
         // 索引 / 切片面（Task 23）：官方 `NonIndexableOperand` / `InvalidIndex`
         // 与 `NonSliceableOperand` / `InvalidSliceExpr`（`3-index slice of
         // string`）/ `SwappedSliceIndices` 分别落 `index` / `slice`

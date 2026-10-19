@@ -67,6 +67,13 @@ pub enum DiagCode {
     /// 逐向量对照见 `M4-tests.md` `T-CK-32` 与
     /// `.superpowers/sdd/M4-plan/probe/task21-*.go`（oracle 实测 53 拒绝位）。
     ChkInvalidOperation,
+    /// 选择器面拒绝（M4/Task 24）—— 官方 `MissingFieldOrMethod`（`... undefined
+    /// (type ...)` 句式）/ `AmbiguousSelector` / `InvalidMethodExpr` /
+    /// `NonFieldSelector`（`operand for field selector`）的**合并码**
+    /// （类别面 `selector`）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-34` 与
+    /// `.superpowers/sdd/M4-plan/probe/task24-reject.go`（oracle 实测 7 拒绝位）。
+    ChkInvalidSelector,
     /// 切片表达式面拒绝（M4/Task 23）—— 官方 `NonSliceableOperand` /
     /// `InvalidSliceExpr`（`3-index slice of string`）/ `SwappedSliceIndices`
     /// （`invalid slice indices: y < x`）的**合并码**（类别面 `slice`）。
@@ -488,9 +495,10 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 74] = [
+    pub const ALL: [DiagCode; 75] = [
         DiagCode::ChkInvalidIndex,
         DiagCode::ChkInvalidOperation,
+        DiagCode::ChkInvalidSelector,
         DiagCode::ChkInvalidSlice,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -570,6 +578,7 @@ impl DiagCode {
         match self {
             DiagCode::ChkInvalidIndex => "CHK-INVALID-INDEX",
             DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
+            DiagCode::ChkInvalidSelector => "CHK-INVALID-SELECTOR",
             DiagCode::ChkInvalidSlice => "CHK-INVALID-SLICE",
             DiagCode::BadChar => "LEX-BAD-CHAR",
             DiagCode::BadDigit => "LEX-BAD-DIGIT",

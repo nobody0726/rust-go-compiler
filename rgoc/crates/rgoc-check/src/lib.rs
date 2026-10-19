@@ -16,7 +16,9 @@
 //! |---|---|
 //! | [`check`] | 版本源（Task 18）+ **检查会话**与 [`check_package`]（Task 20 起真身） |
 //! | [`operand`] | 操作数：带类型值（`operand.go` 的 11 模式；值层接线） |
-//! | [`expr`] | 表达式运算符面（Task 21：一元 / 二元 / 比较 / 移位 / 常量溢出） |
+//! | [`expr`] | 表达式运算符面（Task 21 起；Task 23 索引 / 切片、Task 24 选择器） |
+//! | [`lookup`] | 字段 / 方法查找（Task 24；官方 `lookup.go` 逐条对齐） |
+//! | [`selection`] | 选择结果与签名构造（Task 24；方法值 / 方法表达式） |
 //! | [`render`] | `--diag-dump` 的 `C8` 渲染（过滤 / 排序 / 字节格式） |
 //! | [`diag`] | 原始诊断位（soft）+ 26 类类别投影（全量穷尽） |
 //! | [`version`] | 版本门控判定（Task 19） |
@@ -31,8 +33,10 @@
 pub mod check;
 pub mod diag;
 pub mod expr;
+pub mod lookup;
 pub mod operand;
 pub mod render;
+pub mod selection;
 pub mod version;
 
 pub use check::{CheckOptions, CheckedPackage, Session, check_package};
