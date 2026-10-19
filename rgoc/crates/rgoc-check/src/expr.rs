@@ -1,9 +1,26 @@
-//! 表达式检查（M4/Task 21）—— 一元 / 二元 / 比较 / 移位与常量面。
+//! 表达式检查（M4/Task 21–22）—— 一元 / 二元 / 比较 / 移位 / 常量面 + 转换。
 //!
 //! 对照官方 `go/types/expr.go`（`unary` / `binary` / `shift` / `comparison` /
-//! `matchTypes`）与 `const.go`（`overflow` / `representable`）。本文件是
-//! **Task 21 的窄面**：包级 `var` 声明的初始化式（`Decl::Var.values`）。
+//! `matchTypes`）、`const.go`（`overflow` / `representable`）与
+//! `conversions.go`（`conversion` / `convertibleTo`）。本文件是
+//! **Task 21–22 的窄面**：包级 `var` 声明的初始化式（`Decl::Var.values`）。
 //! 常量声明的求值在装载器（M3），函数体是 Task 25，赋值面是 Task 24+。
+//!
+//! # 转换面（Task 22；`T-CK-33`）
+//!
+//! 函数位是**类型表达式** ⇒ 转换（官方 `exprOrType(x, e.Fun, true)` 的
+//! `typexpr` 分支）：常量走 `constConvertibleTo`（可表示性 + 整数→字符串
+//! 码点替换），非恒量走 `convertibleTo`（M4/Task 9 的静态类型对）。
+//! 只接**单实参**且函数位是名字（或括号包名字）的形态 —— 类型族
+//! （`[]byte(x)` / `*T(x)` / `map[K]V(x)`）与多实参归调用面 Task 23+/25，
+//! 此处 `invalid` 且不报（接受夹具钉住「不假报」）。
+//!
+//! 常量转换的两种拒绝（oracle 实测 9 行）：
+//! - **整数 → 整数**且不可表示 ⇒ `constant V overflows T`（类别 `overflow`，
+//!   码 `TYP-NUMERIC-OVERFLOW`）；
+//! - 其余不可转换 ⇒ `cannot convert V to type T`（类别 `convert`，码
+//!   `TYP-INVALID-CONVERSION`）；整数常量 → 字符串**恒可**（无效码点 ⇒
+//!   U+FFFD，`string(-1)` / `string(1<<100)` 都合法）。
 //!
 //! # 位置规则（oracle 探针 1–7 与官方源双证；`task21-reject.go` 53 行）
 //!
@@ -40,14 +57,15 @@
 //! - 折叠产出 `Unknown` 时不报「not representable」（官方该分支在谓词过滤后
 //!   实际不可达；报出来反而会造出 oracle 没有的「other 类」行）。
 
-use rgoc_ast::{BasicLit, Decl, Expr, LitKind, Name, Op, Operation};
+use rgoc_ast::{BasicLit, CallExpr, Decl, Expr, LitKind, Name, Op, Operation};
 use rgoc_const::{
     BasicId, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
     fold_unary_typed, representable,
 };
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{
-    ChanDir, Type, TypeId, TypeTable, assignable, comparable, identical, unalias, underlying,
+    ChanDir, Type, TypeId, TypeTable, assignable, comparable, convertible, identical, unalias,
+    underlying,
 };
 
 use crate::check::Session;
@@ -90,8 +108,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     }
 
     /// 官方 `exprInternal` 的**已接入子集**。未接入的形态（选择器 / 索引 /
-    /// 调用（含转换）/ 复合字面量 / 类型族）⇒ `invalid` 且**不报** ——
-    /// 避免用假诊断抢占 Task 22/23/30 的落点。
+    /// 值函数位的调用 / 复合字面量 / 类型族）⇒ `invalid` 且**不报** ——
+    /// 避免用假诊断抢占 Task 23+/25/30 的落点。转换（类型函数位）在
+    /// [`Self::call`] 里接（Task 22）。
     fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
         match e {
             Expr::Name(n) => self.ident(file, n),
@@ -99,6 +118,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Paren(p) => self.expr(file, &p.x),
             Expr::Unary(o) => self.unary(file, o),
             Expr::Binary(o) => self.binary(file, o),
+            Expr::Call(c) => self.call(file, c),
             _ => Operand::invalid(),
         }
     }
@@ -133,6 +153,87 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         }
         let t = self.s.tt.add_basic(kind);
         Operand::constant(t, val)
+    }
+
+    // ────────────────────────────── 转换 ──────────────────────────────
+
+    /// 官方 `Checker.call` 的类型函数位分支：`T(x)` ⇒ [`Self::conversion`]。
+    ///
+    /// 值函数位（真调用 / 内建）⇒ `invalid` 且不报 —— 实参面与签名匹配归
+    /// Task 23+/25；类型族函数位（`[]byte(x)` 等）在本任务同样不接。
+    fn call(&mut self, file: FileId, c: &CallExpr) -> Operand {
+        let f = self.expr(file, &c.fun);
+        if f.mode != Mode::TypeExpr {
+            return Operand::invalid();
+        }
+        let Some(target) = f.typ else {
+            return Operand::invalid();
+        };
+        self.conversion(file, c, target)
+    }
+
+    /// 官方 `Checker.conversion`（`conversions.go:20`）的窄面。
+    fn conversion(&mut self, file: FileId, c: &CallExpr, target: TypeId) -> Operand {
+        // 实参数量 / `...` 归调用面（Task 23+/25）；窄面只接单实参。
+        if c.args.len() != 1 || c.has_dots {
+            return Operand::invalid();
+        }
+        let arg = &c.args[0];
+        let x = self.expr(file, arg);
+        if x.mode == Mode::Invalid {
+            return Operand::invalid();
+        }
+        let arg_pos = arg.pos();
+        let Some(xt) = x.typ else {
+            return Operand::invalid();
+        };
+
+        if x.mode == Mode::Constant && is_const_type(self.tt(), target) {
+            let val = x.val.clone().unwrap_or(Const::Unknown);
+            let b = basic_kind(self.tt(), target).expect("is_const_type 已保证目标底层是 basic");
+            return match representable(&val, b, &Sizes::HOST_ARM64) {
+                Ok(rep) => Operand::constant(target, rep.value),
+                Err(_) => {
+                    // 整数常量 → 字符串：**恒可**（无效码点 ⇒ U+FFFD，
+                    // `string(-1)` / `string(1<<100)` 都合法）。
+                    if all_integer(self.tt(), xt) && b.is_string() {
+                        return Operand::constant(target, Const::Str(int_const_to_string(&val)));
+                    }
+                    let to = self.type_text(target);
+                    if all_integer(self.tt(), xt) && b.is_integer() {
+                        self.report(
+                            arg_pos,
+                            DiagCode::TypNumericOverflow,
+                            format!("constant {} overflows {to}", const_text(&val)),
+                        );
+                    } else {
+                        self.report(
+                            arg_pos,
+                            DiagCode::TypInvalidConversion,
+                            format!("cannot convert {} to type {to}", const_text(&val)),
+                        );
+                    }
+                    Operand::invalid()
+                }
+            };
+        }
+
+        // 非恒量面（含 `nil`）：静态类型对可转换性（M4/Task 9）。
+        match convertible(self.tt(), xt, target) {
+            Ok(true) => Operand::value(Some(target)),
+            Ok(false) => {
+                let from = self.type_text(xt);
+                let to = self.type_text(target);
+                self.report(
+                    arg_pos,
+                    DiagCode::TypInvalidConversion,
+                    format!("cannot convert value of type {from} to type {to}"),
+                );
+                Operand::invalid()
+            }
+            // 类型参数窄面等能力边界：不报（台账登记；语料撞面在 Task 37）。
+            Err(_) => Operand::invalid(),
+        }
     }
 
     // ────────────────────────────── 一元 ──────────────────────────────
@@ -1117,6 +1218,27 @@ fn basic_kind(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
         Type::Basic(b) => Some(*b),
         _ => None,
     }
+}
+
+/// 官方 `isConstType`（`predicates.go:32`）：**不探入类型参数**
+/// （`underlying` 对 `TypeParam` 返回约束接口 ⇒ [`basic_kind`] 为 `None`）。
+fn is_const_type(tt: &TypeTable, t: TypeId) -> bool {
+    basic_kind(tt, t).is_some_and(|b| b.is_bool() || b.is_numeric() || b.is_string())
+}
+
+/// 官方 `constConvertibleTo` 的整数→字符串码点面：
+/// `Uint64Val` 失败或超 `unicode.MaxRune` ⇒ **U+FFFD**（`string(-1)` 合法）。
+fn int_const_to_string(val: &Const) -> Vec<u8> {
+    let ch = match to_int(val) {
+        Some(Const::Int(n)) => n
+            .to_i64()
+            .filter(|v| (0..=0x10FFFF).contains(v))
+            .and_then(|v| u32::try_from(v).ok())
+            .and_then(char::from_u32)
+            .unwrap_or('\u{FFFD}'),
+        _ => '\u{FFFD}',
+    };
+    ch.to_string().into_bytes()
 }
 
 /// 官方 `isUntyped`（含 `untyped nil`）。
