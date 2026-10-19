@@ -13,3 +13,4 @@ workspace = true
 [dependencies]
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
+rgoc-types = { path = "../rgoc-types" }

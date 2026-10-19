@@ -17,6 +17,7 @@
 //! 反复记录的最坏形状；Task 20 起换真身（`check.rs` / `operand.rs` / …）。
 
 pub mod diag;
+pub mod version;
 
 use rgoc_lex::{DiagBag, FileId};
 use rgoc_load::Package;

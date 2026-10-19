@@ -137,6 +137,14 @@ fn cut_digits(s: &str) -> Option<(u32, &str)> {
 pub struct Versions(HashMap<FileId, Option<GoVersion>>);
 
 impl Versions {
+    /// 装配面：从 `(FileId, Option<GoVersion>)` 建表。
+    ///
+    /// 生产路径仍走 [`pkg_versions`]（`-lang` + `//go:build` 同源）；本构造器
+    /// 给**测试**和将来的 `Info.FileVersions` 反序列化面用。
+    pub fn from_entries(entries: impl IntoIterator<Item = (FileId, Option<GoVersion>)>) -> Self {
+        Self(entries.into_iter().collect())
+    }
+
     /// 某个文件生效的语言版本（`None` = 不门控）。
     #[must_use]
     pub fn get(&self, f: FileId) -> Option<GoVersion> {
