@@ -189,12 +189,16 @@ pub fn category_of(code: DiagCode) -> Category {
         SynLabelUnused | TypUnusedLabel => Category::Unused,
 
         // ── cycle / import / version / shift ───────────────────────────
-        TypInvalidDeclCycle | TypInvalidInitCycle | TypInvalidRecursiveType => Category::Cycle,
+        TypInvalidDeclCycle
+        | TypInvalidInitCycle
+        | TypInvalidInstanceCycle
+        | TypInvalidRecursiveType => Category::Cycle,
         TypBrokenImport | TypImportCycle | TypUnsupportedImportForm => Category::Import,
         TypFeatureRequiresGoVersion | TypFileRequiresNewerGo | TypPackageRequiresNewerGo => {
             Category::Version
         }
         TypInvalidShiftCount | TypInvalidShiftOperand => Category::Shift,
+        TypUnsupportedPendingInstanceArg => Category::TypeArg,
 
         // ── 单码类别 ────────────────────────────────────────────────────
         TypDivByZero => Category::OpInvalid,

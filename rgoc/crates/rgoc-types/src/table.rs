@@ -437,6 +437,17 @@ impl TypeTable {
         self.instances.entry(origin).or_default().push((args, inst));
     }
 
+    /// 撤销一次实例 memo 登记（展开失败时回滚；`inst` 是本次
+    /// [`Self::add_named_instance`] 产出的条目）。按**实例 id** 精确匹配 ——
+    /// 同一 origin 可能有多条 memo（`A[int]` / `A[A[int]]` / …）。
+    pub(crate) fn remove_instance(&mut self, origin: NamedId, inst: NamedId) {
+        if let Some(list) = self.instances.get_mut(&origin)
+            && let Some(pos) = list.iter().position(|(_, i)| *i == inst)
+        {
+            list.remove(pos);
+        }
+    }
+
     /// 填 `named` 的本体。
     pub fn set_named_underlying(&mut self, id: NamedId, t: TypeId) {
         self.named[id.index()].underlying = Some(t);

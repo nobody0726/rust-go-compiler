@@ -267,7 +267,7 @@ var c8Rules = []c8Rule{
 	// slice
 	{"slice", regexp.MustCompile(`^cannot slice |invalid slice indices|3-index slice`)},
 	// cycle
-	{"cycle", regexp.MustCompile(`^invalid recursive type|^invalid cycle in |^initialization cycle`)},
+	{"cycle", regexp.MustCompile(`^invalid recursive type|^invalid cycle in |^initialization cycle|^instantiation cycle`)},
 	// import
 	{"import", regexp.MustCompile(`^could not import `)},
 	// decl 泛族

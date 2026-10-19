@@ -76,7 +76,7 @@ pub use implements::implements;
 pub use infer::{
     GenericArgSite, infer_for_call, infer_from_args, infer_from_assignment, rename_tparams,
 };
-pub use instantiate::instantiate;
+pub use instantiate::{MAX_INSTANTIATION_DEPTH, instantiate};
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};

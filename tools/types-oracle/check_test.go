@@ -191,6 +191,7 @@ func TestClassifyCheckMessage(t *testing.T) {
 		{"invalid slice indices: 0 < 10", "slice"},
 		// cycle / import
 		{"initialization cycle: A refers to itself", "cycle"},
+		{"instantiation cycle:\n\tT instantiated as A[T]", "cycle"},
 		{"could not import math (could not import math (unsafe-only importer))", "import"},
 		// decl / stmt
 		{"x redeclared in this block", "decl"},

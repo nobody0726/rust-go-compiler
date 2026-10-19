@@ -55,8 +55,18 @@ pub fn implements(
     t: TypeId,
     constraint: bool,
 ) -> Result<bool, DiagCode> {
-    let vu = underlying(tt, v);
     let tu = underlying(tt, t);
+    // ⓪ 空接口恒真 —— **必须在看 `v` 的本体之前**：递归实例化链里 `v`
+    //    可能是「展开进行中」的实例（本体未填，`T-CK-25`），而 `any`
+    //    的判定不需要本体。两侧无效的情形仍由 ① 兜住（顺序不影响结果：
+    //    空接口对一切类型都答真）。
+    if let Type::Interface(tid) = tt.type_of(tu) {
+        let td = tt.interface_def(*tid);
+        if td.methods.is_empty() && td.tset.is_all() {
+            return Ok(true);
+        }
+    }
+    let vu = underlying(tt, v);
     // ① 两侧任一无效 ⇒ 真
     if matches!(tt.type_of(vu), Type::Invalid) || matches!(tt.type_of(tu), Type::Invalid) {
         return Ok(true);
@@ -73,13 +83,6 @@ pub fn implements(
     };
     let tid = *tid;
 
-    // ④ 空接口恒真
-    {
-        let td = tt.interface_def(tid);
-        if td.methods.is_empty() && td.tset.is_all() {
-            return Ok(true);
-        }
-    }
     // ⑤ V 接口且类型集为空 ⇒ 恒满足
     let vi = match tt.type_of(vu) {
         Type::Interface(i) => Some(*i),

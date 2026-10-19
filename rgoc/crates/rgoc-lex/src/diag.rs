@@ -293,6 +293,16 @@ pub enum DiagCode {
     /// 「环里**全是值**」⇒ 这条（官方由 initorder 报）；「环里只有别名、没有定义型」
     /// ⇒ `TypInvalidDeclCycle`（官方由 `decl.go` 的 `cycle()` 报）。
     TypInvalidInitCycle,
+    /// **实例化链**无界增长 —— 官方 `InvalidInstanceCycle`
+    ///
+    /// 官方形状（`go/types/mono.go:146`）是 `instantiation cycle:` 后跟逐层的
+    /// `%s instantiated as %s`，由**检查器**的实例化图报告。本仓的触发面在
+    /// **类型层**：`instantiate` 展开实例本体时递归重实例化嵌套实例
+    /// （`subst.rs::substitute_inst`），链在 `(origin, args)` 上不闭合 ⇒
+    /// 深度越界 [`crate::diag`] 给这条稳定拒绝码（`U-M4-09` 的拒绝形态，
+    /// 见 `M4-design.md` D-M4-5）。与 [`Self::TypInvalidInitCycle`] 的分工：
+    /// 后者是**初始化依赖图**的环，这条是**类型实例化链**的无界增长。
+    TypInvalidInstanceCycle,
     /// 类型图里存在**非法的递归**（`type A [1]A`）—— 官方 `InvalidRecursiveType`
     ///
     /// 判据是「内存里装得下」：环只要**经过**指针/切片/映射/通道/函数就算合法
@@ -422,6 +432,14 @@ pub enum DiagCode {
     /// `TypUnsupportedAssignability` 同一个理由）。
     /// ⚠️ 计划稿点名 `UnsupportedImportForm`，官方无此名 ⇒ 我方命名（`D-M3-11` 允许）。
     TypUnsupportedImportForm,
+    /// 以**展开进行中**的实例作受约束实参 —— **我方命名**（官方无对应代号）
+    ///
+    /// 触发面（`T-CK-25` / `U-M4-09`）：`instantiate` 的实参是本次递归实例化链
+    /// 上正在展开的实例（本体未填），而形参约束**不是**空接口。官方靠**懒展开**
+    /// 能在稍后看到本体并给出满足/不满足；本层是**急切展开**，此刻看不到，
+    /// 按 `D-M4-5` 给稳定拒绝码 —— 不 panic（`named_underlying` 的构造协议会
+    /// 炸），也不静默答真。落位 `type-arg`（诊断说的是类型实参）。
+    TypUnsupportedPendingInstanceArg,
     /// 标签**声明了却没被用** —— 官方 `UnusedLabel`（消息 `label %s declared and not used`）
     ///
     /// 位置取**标签声明**处（官方 `labels.go:51` 的 `check.softErrorf(lbl, …)`）。
@@ -458,7 +476,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 70] = [
+    pub const ALL: [DiagCode; 72] = [
         DiagCode::ChkUnimplemented,
         DiagCode::BadChar,
         DiagCode::BadDigit,
@@ -510,6 +528,7 @@ impl DiagCode {
         DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidDeclCycle,
         DiagCode::TypInvalidInitCycle,
+        DiagCode::TypInvalidInstanceCycle,
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
@@ -526,6 +545,7 @@ impl DiagCode {
         DiagCode::TypUndeclaredName,
         DiagCode::TypUnsupportedAssignability,
         DiagCode::TypUnsupportedImportForm,
+        DiagCode::TypUnsupportedPendingInstanceArg,
         DiagCode::TypUnusedLabel,
         DiagCode::TypWrongAssignCount,
         DiagCode::TypWrongTypeArgCount,
@@ -585,6 +605,8 @@ impl DiagCode {
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidDeclCycle => "TYP-INVALID-DECL-CYCLE",
             DiagCode::TypInvalidInitCycle => "TYP-INVALID-INIT-CYCLE",
+            DiagCode::TypInvalidInstanceCycle => "TYP-INVALID-INSTANCE-CYCLE",
+            DiagCode::TypUnsupportedPendingInstanceArg => "TYP-UNSUPPORTED-PENDING-INSTANCE-ARG",
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
             DiagCode::TypInvalidShiftOperand => "TYP-INVALID-SHIFT-OPERAND",

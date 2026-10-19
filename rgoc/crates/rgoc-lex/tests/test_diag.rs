@@ -80,11 +80,14 @@ fn 代号表恰为冻结总数且无重复() {
     // ⇒ 共 **67**；M4/Task 12 再 +2（`TypInvalidTypeArg` / `TypWrongTypeArgCount`
     // —— 实例化约束/数量拒绝，官方 `InvalidTypeArg` / `WrongTypeArgCount`）
     // ⇒ 共 **69**；M4/Task 14 再 +1（`TypCannotInferTypeArgs` —— 推断失败，
-    // 官方 `CannotInferTypeArgs`）⇒ 共 **70**。
+    // 官方 `CannotInferTypeArgs`）⇒ 共 **70**；M4/Task 16 再 +1（`TypInvalidInstanceCycle` —— 实例化链
+    // 无界增长，官方 `InvalidInstanceCycle`）⇒ 共 **71**；M4/Task 16 再 +1
+    // （`TypUnsupportedPendingInstanceArg` —— 进行中实例作受约束实参，我方边界码）
+    // ⇒ 共 **72**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 70);
+    assert_eq!(DiagCode::ALL.len(), 72);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

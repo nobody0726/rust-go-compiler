@@ -96,8 +96,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：70 个码各有恰好一个类别（M4/Task 14 后 70）
-    assert_eq!(DiagCode::ALL.len(), 70, "码表总数（M4/Task 14 后 70）");
+    // 总数守恒：72 个码各有恰好一个类别（M4/Task 16 后 72）
+    assert_eq!(DiagCode::ALL.len(), 72, "码表总数（M4/Task 16 后 72）");
 }
 
 #[test]
@@ -125,7 +125,7 @@ fn t_ck_16_other_值域恰好是四个无官方语义码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 20] = [
+    let vectors: [(DiagCode, Category); 22] = [
         (BadChar, Category::Parse),
         (SynExpectedSemicolon, Category::Parse),
         (SynBranchBreak, Category::Stmt),
@@ -142,6 +142,8 @@ fn t_ck_16_抽样映射向量() {
         (TypFeatureRequiresGoVersion, Category::Version),
         (TypBrokenImport, Category::Import),
         (TypInvalidRecursiveType, Category::Cycle),
+        (TypInvalidInstanceCycle, Category::Cycle),
+        (TypUnsupportedPendingInstanceArg, Category::TypeArg),
         (TypInvalidBlank, Category::NotType),
         (TypInvalidTypeArg, Category::Implements),
         (TypWrongTypeArgCount, Category::TypeArg),
@@ -164,7 +166,7 @@ fn t_ck_16_每类计数快照() {
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 1),
         ("convert", 2),
-        ("cycle", 3),
+        ("cycle", 4),
         ("decl", 8),
         ("implements", 1),
         ("import", 3),
@@ -175,7 +177,7 @@ fn t_ck_16_每类计数快照() {
         ("parse", 25),
         ("shift", 2),
         ("stmt", 7),
-        ("type-arg", 2),
+        ("type-arg", 3),
         ("undef", 3),
         ("unused", 2),
         ("version", 3),

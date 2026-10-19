@@ -607,9 +607,13 @@ fn t_a_66_diagcode_总数已更新() {
     //   的约束与数量拒绝；官方 `InvalidTypeArg` / `WrongTypeArgCount`）⇒ 共 69。
     // + M4/Task 14 新增 1 个（TypCannotInferTypeArgs —— 推断失败；官方
     //   `CannotInferTypeArgs`）⇒ 共 70。
+    // + M4/Task 16 新增 1 个（TypInvalidInstanceCycle —— 实例化链无界增长；
+    //   官方 `InvalidInstanceCycle`）⇒ 共 71。
+    // + M4/Task 16 新增 1 个（TypUnsupportedPendingInstanceArg —— 进行中实例作
+    //   受约束实参，我方边界码）⇒ 共 72。
     assert_eq!(
         DiagCode::ALL.len(),
-        70,
+        72,
         "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）"
     );
 }
