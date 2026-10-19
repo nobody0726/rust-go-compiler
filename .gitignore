@@ -33,3 +33,8 @@ tools/types-oracle/typesoracle
 # executing-plans / subagent-driven-development 的进度账本与任务简报。
 # 这些是「本次执行的草稿纸」，不是交付物 —— 交付物是代码与 docs/ 下的文档。
 .superpowers/
+
+# ── 本地工具配置（编辑器 / AI 助手的个人设置，不入库）─────────────────
+# opencode.json 是本机 AI 编码助手的工程配置，只对当次会话有效，
+# 与编译器交付无关；写进仓库会把个人环境差异带给所有人。
+opencode.json
