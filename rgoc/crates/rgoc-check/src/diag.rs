@@ -120,6 +120,50 @@ impl Category {
     }
 }
 
+/// 检查器的**原始诊断**：`rgoc_lex::Diag` + 官方 `types.Error.Soft`（`api.go:55`）。
+///
+/// # 为什么 soft 要留到渲染层
+///
+/// 官方 range 门控走 `softErrorf`（`range.go:72`），产出的错误带 `Soft: true`；
+/// 但 `Soft` **不参与** check 面判据（`check_test.go` 的 `Error` 回调只看
+/// `Pos/Msg`），渲染（`C8`）也只比「位置 + 类别」。所以我们**保留**这个位
+/// 而**不**让它改变任何输出 —— 丢掉它则等于丢掉官方的公开字段，将来任何
+/// 需要区分软硬的面（工具、IDE）都拿不回来。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawDiag {
+    /// 诊断本体。
+    pub diag: Diag,
+    /// 官方 `types.Error.Soft`。
+    pub soft: bool,
+}
+
+impl RawDiag {
+    /// 硬错误（默认；`soft = false`）。
+    #[must_use]
+    pub fn hard(diag: Diag) -> Self {
+        Self { diag, soft: false }
+    }
+
+    /// 软错误（官方 `softErrorf` 面）。
+    #[must_use]
+    pub fn soft(diag: Diag) -> Self {
+        Self { diag, soft: true }
+    }
+
+    /// `C8` 数据行：`<行号>:<列>\t<类别>`（`C8` §2 规则 4）。
+    ///
+    /// soft 与 hard **同形** —— 软硬不进入渲染，也不进入比较。
+    #[must_use]
+    pub fn render_row(&self) -> String {
+        format!(
+            "{}:{}\t{}",
+            self.diag.pos.line,
+            self.diag.pos.col,
+            category_of(self.diag.code).as_str()
+        )
+    }
+}
+
 /// 26 类全部成员，**按 token 字典序**（`C8` §3 的文档序；`T-CK-16` 断言
 /// 与文档枚举块逐字一致）。
 pub const ALL_CATEGORIES: [Category; 26] = [

@@ -34,8 +34,12 @@
 //! `resolver.go:427`、`range.go:69` —— 它们共用表里的同一变体）。
 //! 冻结快照在 `tests/version_table.rs` 的 `FROZEN`。
 
+use rgoc_ast::expr::CallExpr;
+use rgoc_ast::stmt::RangeClause;
 use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, Pos};
 use rgoc_types::version::{GoVersion, Versions};
+
+use crate::diag::RawDiag;
 
 /// 一处版本门控（官方 `verifyVersionf` / `allowVersion` 的站点）。
 ///
@@ -293,11 +297,61 @@ pub fn verify_version(
         return true;
     }
     if feat.emits_version_error() {
-        bag.push(Diag {
+        bag.push(version_error(at, feat, subject, false).diag);
+    }
+    false
+}
+
+/// 官方 `softErrorf` 的对应物（**soft** 版本门控）。
+///
+/// 与 [`verify_version`] 的判定完全相同，只是把诊断标成
+/// [`RawDiag::soft`]（官方 `types.Error.Soft`）。返回 `None` = 允许，
+/// 或该特性是「阈值面」（[`Feat::emits_version_error`] 为假）——
+/// 两种情形都不该产生 version 诊断。
+///
+/// 调用面（Task 26 的 range 门控）把它放进检查器的**原始诊断流**；
+/// 渲染层对 soft / hard 一视同仁（`C8`）。
+#[must_use]
+pub fn verify_version_soft(
+    versions: &Versions,
+    file: FileId,
+    at: Pos,
+    feat: Feat,
+    subject: &str,
+) -> Option<RawDiag> {
+    if allow(versions, file, feat) || !feat.emits_version_error() {
+        return None;
+    }
+    Some(version_error(at, feat, subject, true))
+}
+
+/// 造一条门控诊断（**不看**版本；调用方负责判定）。
+fn version_error(at: Pos, feat: Feat, subject: &str, soft: bool) -> RawDiag {
+    RawDiag {
+        diag: Diag {
             pos: at,
             code: DiagCode::TypFeatureRequiresGoVersion,
             message: format!("{} requires {} or later", feat.what(subject), feat.since()),
-        });
+        },
+        soft,
     }
-    false
+}
+
+/// `new(expr)` 的门控位置 = **`new` 标识符**。
+///
+/// 官方 `verifyVersionf(call.Fun, go1_26, "new(%s)", arg)`（`builtins.go:672`）；
+/// 实测 `go1_25.go` 四条全在 `:6`（`new` 的起始列），**不是** `(` 或实参。
+#[must_use]
+pub fn pos_of_new_call(call: &CallExpr) -> Pos {
+    call.fun.pos()
+}
+
+/// `range` 门控的位置 = **被 range 的表达式**。
+///
+/// 官方 `softErrorf(&x, InvalidRangeExpr, "cannot range over %s: %s", …)`
+/// （`range.go:72`）；实测 `go1_22_21.go` 在 `14:16`（操作数 `10`），
+/// **不是** `range` 关键字（后者是 `14:10`）。
+#[must_use]
+pub fn pos_of_range_operand(r: &RangeClause) -> Pos {
+    r.x.pos()
 }
