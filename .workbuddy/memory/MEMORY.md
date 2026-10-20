@@ -10,10 +10,10 @@
 
 ## 当前状态（2026-10-20）
 - **M0–M3 全部完成**（E1–E10 / L1–L7 / A1–A8 / TY-1–8，三份 manifest 填实；`manifest_m3.rs` 做文档对账）
-- **M4 执行中：Task 1–25 / 44 已落地**（提交链见台账 §提交链，已到 `6d3f185` + Task 25）。Phase 0 装置（1–5）/
-  Phase 1 判定五件套（6–11）/ Phase 2 泛型三件 + 版本门控（12–19）/ Phase 3 检查器主体（20–25：会话+operand+render、
-  `expr.rs` 运算符/转换/索引切片/选择器、`stmt.rs` 语句面 + `env.rs` 检查面作用域栈）全部完成；
-  **下一步 Task 26 `range` 静态形态（`T-CK-36`）**
+- **M4 执行中：Task 1–26 / 44 已落地**（提交链见台账 §提交链，已到 `45ffd62`）。Phase 0 装置（1–5）/
+  Phase 1 判定五件套（6–11）/ Phase 2 泛型三件 + 版本门控（12–19）/ Phase 3 检查器主体（20–26：会话+operand+render、
+  `expr.rs` 运算符/转换/索引切片/选择器、`stmt.rs` 语句面 + `env.rs` 检查面作用域栈 + `range` 形态矩阵）全部完成；
+  **下一步 Task 27 复合字面量（`T-CK-37`）**
 - M4 的完成口径 = 用户裁定 `docs/03-roadmap.md` §M4 九大项全量（不是 `AGENTS.md` §7.1 的三样子集）；
   设计 `M4-design.md`（D-M4-1..15 / F1–F18）、测试 `M4-tests.md`（63 个 `T-CK-*`，26 类枚举）、计划 `M4-plan.md` 均已冻结
 - `M4-manifest.json` 是骨架：`gate` CH-1..9 与全部 `verdict` **仍 pending**，Task 42 才填实（不要误读成失败）
@@ -30,6 +30,9 @@
 - 装载入口：`load_from_explicit_files(tt, &[PathBuf], lang)` / `load_sources(tt, &[(name,bytes)], lang)` / `load_with_imports(tt, entry, roots, lang)`；`Package` 不含类型表
 - **源码 import 四条口径**（`rgoc-load/src/importer.rs`）：① 只在 `roots` 下按 import 路径找同名目录、只挑 `.go`（排除 `_test.go` 与 `_`/`.` 开头）⇒ 其余 `TYP-UNSUPPORTED-IMPORT-FORM`；目录空 ⇒ `TYP-BROKEN-IMPORT`；环 ⇒ `TYP-IMPORT-CYCLE` ② 环检测/缓存键是 **canonicalize 后的目录**（否则认不出「入口包在环上」）；环上每包一条，每包只装一次 ③ 失败 import 每条 spec 都报，成功包诊断不重复 ④ 会话共用一张 `FileTable`，类型必须同一张 `TypeTable`（改这四处要一起看）
 - M4 检查器：类别投影 `rgoc-check/src/diag.rs`（26 类，穷尽 match）；`expr.rs` 已覆盖运算符/转换/索引切片/选择器；`lookup.rs` = 官方 `lookupFieldOrMethod` 逐深度 BFS；`selection.rs` 方法值去接收者/方法表达式接收者作首参
+- **`range` 面（Task 26）**：`stmt.rs::range_clause` 四段（求值 → `range_key_val` → 迭代变量个数 → 声明/赋值）；`RangeKV` **三态**（`Ok`/`Gated(Feat)`/`Bad`）—— 官方把 `requires go1.N` 拼进同一消息，而 C8 适配表 `^requires go1\.` 最高优先 ⇒ 门控落 `version` 类、拒绝落 `range` 类，**绝不能压成一个 `Option`**
+- ⚠️ **报点用 `Expr::start_pos()` 而非 `Expr::pos()`**：本仓 `Operation.pos` 存的是**运算符**位（`1 << 63` 会指到 `<<`）；range 操作数统一走 `version::pos_of_range_operand`
+- ⚠️ `stmt.rs::default_type` 只对「基本类型且未类型化」给默认型，其余必须返回**原类型**（早期用 `?` 吞掉非基本类型 ⇒ 方法表达式 `m1 := T.M` 登记成类型未知、`for range m1` 静默漏报）
 
 ## 环境硬事实
 - 构建/测试全在容器：`RGOC_TTY=0 scripts/in-container.sh bash -lc 'cd /work/rgoc && …'`（cwd 必须 `/work/rgoc`；探不到 daemon 即报错不降级）
@@ -51,7 +54,7 @@
 - clippy 炸点：`collapsible_if` → let-chain；`large_enum_variant` → 先 NonZero 实测；`doc_lazy_continuation` → 改措辞
 
 ## 关键设计硬事实（细节在 ledger / 契约）
-- **DiagCode 五件套**：变体按字典序声明 + ALL + `as_str` + 两个总数测试。现 **86** 码（LEX 23 + SYN 12 + TYP 36 + CHK 15）；代号**一律照官方实名**核 `src/internal/types/errors/codes.go` 与 `x/tools/.../errorcode.go`（计划稿点名的 `UndefinedIdent`/`RedeclaredInThisBlock`/`ImportNotFound` 官方**不存在**）。M4 每加一码要让 lex/parse/check 三处计数断言 + `category.rs` 快照同步 + `C8`/`M4-tests` 的 `R-4-N` 修订行
+- **DiagCode 五件套**：变体按字典序声明 + ALL + `as_str` + 两个总数测试。现 **88** 码（LEX 23 + SYN 12 + TYP 36 + CHK 17）；代号**一律照官方实名**核 `src/internal/types/errors/codes.go` 与 `x/tools/.../errorcode.go`（计划稿点名的 `UndefinedIdent`/`RedeclaredInThisBlock`/`ImportNotFound` 官方**不存在**）。M4 每加一码要让 lex/parse/check 三处计数断言 + `category.rs` 快照同步 + `C8`/`M4-tests` 的 `R-4-N` 修订行
 - **`is_exported` 用生成的 `is_upper`（类别 `Lu`）**，绝不用 Rust `char::is_uppercase`（derived `Uppercase` 比 Go `unicode.IsUpper` 多 120 码点，5 段）⇒ `Ⅰx` 会误判导出。`unicode_tables.rs` 是生成物（`tools/token-oracle/gen_unicode`），永不手改
 - **标签**：独立一趟（`rgoc-load/src/labels.rs`），`all` 是**体**级集合、每个函数体各跑一次（含函数字面量）⇒ 跨函数不可见；标签不进值作用域；`goto` 可前向 ⇒ 前向跳转表 + 收尾判 `UndeclaredLabel`/`JumpIntoBlock`。改 `check_labels` 调用点**两处都要改**
 - ⚠️ 标签**两层各报一次**：语法器 `checkBranches`（`SYN-LABEL-*` "defined"）+ 类型检查器（`TYP-*` "declared"）；断言时先滤 `TYP-*`
