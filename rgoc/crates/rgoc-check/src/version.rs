@@ -346,12 +346,17 @@ pub fn pos_of_new_call(call: &CallExpr) -> Pos {
     call.fun.pos()
 }
 
-/// `range` 门控的位置 = **被 range 的表达式**。
+/// `range` 门控的位置 = **被 range 的表达式的最左 token**。
 ///
 /// 官方 `softErrorf(&x, InvalidRangeExpr, "cannot range over %s: %s", …)`
-/// （`range.go:72`）；实测 `go1_22_21.go` 在 `14:16`（操作数 `10`），
-/// **不是** `range` 关键字（后者是 `14:10`）。
+/// （`range.go:72`）—— 位置来自 `operand.pos`，而它等于 `ast.Expr.Pos()`，
+/// 即**最左 token**（`ast.BinaryExpr.Pos() == X.Pos()`）。实测
+/// `go1_22_21.go` 在 `14:16`（操作数 `10`），**不是** `range` 关键字（`14:10`）。
+///
+/// ⚠️ 必须用 [`rgoc_ast::Expr::start_pos`] 而**不是** [`rgoc_ast::Expr::pos`]：
+/// 本仓 `Operation.pos` 存的是**运算符**位置，`1 << 63` 会给出 `<<` 那一列
+/// （实测 `task26-reject.go` 的 `for range 1 << 63`：官方 12、`pos()` 给 14）。
 #[must_use]
 pub fn pos_of_range_operand(r: &RangeClause) -> Pos {
-    r.x.pos()
+    r.x.start_pos()
 }

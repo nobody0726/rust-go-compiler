@@ -465,8 +465,8 @@ git commit -m "test(m4): check_corpus 两清单守卫（T-CK-93/A1）"
 - Consumes: Task 17/19（门控挂点）
 - Produces: range 诊断（`range`/`version` 类）；迭代变量型与个数
 
-- [ ] **Step 1: 写失败测试**（`spec/range.go`、`spec/range_int.go`、`go1_22_21.go` 邻域）
-- [ ] **Step 2..5: RED → 实现 → 不回归 → 提交**
+- [x] **Step 1: 写失败测试**（`spec/range.go`、`spec/range_int.go`、`go1_22_21.go` 邻域）
+- [x] **Step 2..5: RED → 实现 → 不回归 → 提交**
 
 ### Task 27: 复合字面量（`T-CK-37`）
 

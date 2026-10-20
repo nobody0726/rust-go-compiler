@@ -43,17 +43,18 @@ use rgoc_ast::{
     Expr, ForStmt, FuncDecl, IfStmt, RangeClause, ReturnStmt, SelectStmt, SimpleStmt, Stmt,
     SwitchStmt,
 };
-use rgoc_const::default_type_of;
+use rgoc_const::{BasicId, Sizes, default_type_of, representable};
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{ChanDir, Type, TypeId, underlying};
 
 use crate::check::Session;
 use crate::env::Env;
 use crate::expr::{
-    ExprChecker, all_boolean, all_numeric, basic_kind, expr_label, is_non_typeparam_interface,
-    operand_text, type_str,
+    ExprChecker, all_boolean, all_integer, all_numeric, basic_kind, expr_label,
+    is_non_typeparam_interface, is_untyped, operand_text, type_str,
 };
 use crate::operand::{Mode, Operand};
+use crate::version::{self, Feat};
 
 /// 包级函数体入口（`check_package` 在表达式面之后调用）。
 pub(crate) fn check_package_bodies(s: &mut Session<'_>) {
@@ -131,14 +132,18 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         }
     }
 
-    /// 无类型常量取**默认型**（`y := 1` 的 `y` 是 `int`）。
+    /// 无类型常量取**默认型**（`y := 1` 的 `y` 是 `int`）；其余返回自身。
+    ///
+    /// ⚠️ 非基本类型（签名 / 结构 / map / 指针 …）**必须**走 `Some(t)` 分支 ——
+    /// 早先这里对 `basic_kind` 用了 `?`，于是 `m1 := T.M` 把 `m1` 登记成
+    /// 「类型未知」，后续（`for range m1` / `m1 + 1`）全部静默。
+    /// 实测：`spec/range.go` 的 `for range m1`（方法表达式）因此漏报
+    /// （oracle `30:12 range`）。
     fn default_type(&mut self, x: &Operand) -> Option<TypeId> {
         let t = x.typ?;
-        let b = basic_kind(&*self.s.tt, t)?;
-        if b.is_untyped() {
-            Some(self.s.tt.add_basic(default_type_of(b)))
-        } else {
-            Some(t)
+        match basic_kind(&*self.s.tt, t) {
+            Some(b) if b.is_untyped() => Some(self.s.tt.add_basic(default_type_of(b))),
+            _ => Some(t),
         }
     }
 
@@ -554,6 +559,35 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         v: &mut Operand,
         ctx: &str,
     ) -> bool {
+        self.assign_lhs_impl(file, lhs, vpos, v, ctx, false)
+    }
+
+    /// 同 [`Self::assign_lhs`]，但末端走 [`Self::range_assign`] —— `range` 的
+    /// 迭代变量位要**额外**判未类型化常量的可表示性（`range.go:171` 的
+    /// `assignVar` 走的是完整 `assignment`，不只是可赋值性）。
+    fn assign_lhs_range(
+        &mut self,
+        file: FileId,
+        lhs: &Expr,
+        vpos: Pos,
+        v: &mut Operand,
+        ctx: &str,
+    ) -> bool {
+        self.assign_lhs_impl(file, lhs, vpos, v, ctx, true)
+    }
+
+    /// [`Self::assign_lhs`] / [`Self::assign_lhs_range`] 的公共体。
+    ///
+    /// `range_ctx` 只影响末端那一次判定（见两个包装的文档）。
+    fn assign_lhs_impl(
+        &mut self,
+        file: FileId,
+        lhs: &Expr,
+        vpos: Pos,
+        v: &mut Operand,
+        ctx: &str,
+        range_ctx: bool,
+    ) -> bool {
         let x = self.eval(file, lhs);
         if x.mode == Mode::Invalid {
             return true;
@@ -571,7 +605,12 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             return true;
         }
         let t = x.typ;
-        if !self.assign_to(v, vpos, t, ctx) && x.mode != Mode::Variable {
+        let ok = if range_ctx {
+            self.range_assign(v, vpos, t, ctx)
+        } else {
+            self.assign_to(v, vpos, t, ctx)
+        };
+        if !ok && x.mode != Mode::Variable {
             return true;
         }
         false
@@ -734,23 +773,376 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         self.env.pop();
     }
 
-    /// `range` 子句（迭代形态归 Task 26；这里只做「声明 / 赋值 + 求值」）。
+    /// `range` 子句（官方 `rangeStmt`，`range.go:26-197`；M4/Task 26）。
+    ///
+    /// 四段与官方逐条对应：
+    /// 1. **求值**被 range 的表达式（`range.go:38`）；
+    /// 2. **key/value 面** [`Self::range_key_val`]（官方 `rangeKeyVal`）——
+    ///    不可 range ⇒ `cannot range over …`；版本门控 ⇒ `version` 类别；
+    /// 3. **迭代变量个数**（官方 `range.go:76-82` 三个 `softErrorf`）；
+    /// 4. **声明 / 赋值**（官方 `range.go:100-194`）：`:=` 走 `initVar`，
+    ///    `=` 走 `assignVar`；整型 range 另有「迭代变量必须是整数」的复查
+    ///    （`go.dev/issues/67027`）。
+    ///
+    /// ⚠️ 官方在此**开 range 作用域**（`range.go:88`，在子句**之后**）。
+    /// 我们的 `for_stmt` 已在子句前开层 —— 两者对查找的差别只体现在
+    /// 「子句里声明的名字在子句内部可见」，而声明发生在求值之后，
+    /// 观察等价（`for i := range i` 的 `i` 仍解析到外层）。
     fn range_clause(&mut self, file: FileId, r: &RangeClause) {
-        let _ = self.eval(file, &r.x);
-        if r.is_define {
-            for e in &r.lhs {
-                if let Expr::Name(n) = e {
-                    self.env.declare(&n.value, Operand::variable(None));
+        // ── ① 求值（官方 `check.expr(nil, &x, rangeVar)`）──────────────
+        let x = self.eval(file, &r.x);
+        // 报点 = 操作数**最左 token**（官方 `operand.pos` = `ast.Expr.Pos()`）——
+        // 走 `version::pos_of_range_operand`，与门控位置同一个函数，免得两处漂移。
+        let x_pos = version::pos_of_range_operand(r);
+        let known = x.mode != Mode::Invalid && x.typ.is_some();
+
+        // ── ② key/value 面 + ③ 迭代变量个数 ───────────────────────────
+        let mut key: Option<TypeId> = None;
+        let mut val: Option<TypeId> = None;
+        if known {
+            let t = x.typ.unwrap_or_else(|| self.s.tt.invalid());
+            match self.range_key_val(file, t) {
+                RangeKV::Ok { key: k, val: v } => {
+                    key = k;
+                    val = v;
+                    // 官方 switch 的后三支（`range.go:76-82`）—— 互斥。
+                    let what = operand_text(&*self.s.tt, &x);
+                    if key.is_none() && !r.lhs.is_empty() {
+                        self.report_soft_at(
+                            r.lhs[0].start_pos(),
+                            DiagCode::ChkInvalidIterVar,
+                            format!("range over {what} permits no iteration variables"),
+                        );
+                    } else if val.is_none() && r.lhs.len() >= 2 {
+                        self.report_soft_at(
+                            r.lhs[1].start_pos(),
+                            DiagCode::ChkInvalidIterVar,
+                            format!("range over {what} permits only one iteration variable"),
+                        );
+                    } else if r.lhs.len() > 2 {
+                        self.report_soft_at(
+                            r.lhs[2].start_pos(),
+                            DiagCode::ChkInvalidIterVar,
+                            "range clause permits at most two iteration variables".to_owned(),
+                        );
+                    }
+                }
+                // 版本门控：官方把它并进 `cannot range over x: requires go1.N
+                // or later`（`range.go:72`），而 C8 适配表里 `requires go1\.`
+                // 是**最高优先**规则 ⇒ 类别 `version`（`go1_22_21.go` 实测
+                // `14:16 version`）。所以这里走 version 码，不报 range 码。
+                RangeKV::Gated(feat) => {
+                    let d =
+                        version::verify_version_soft(&self.s.pkg.versions, file, x_pos, feat, "");
+                    if let Some(d) = d {
+                        self.s.report(d);
+                    }
+                }
+                RangeKV::Bad(cause) => {
+                    let what = operand_text(&*self.s.tt, &x);
+                    let message = match cause {
+                        Some(c) => format!("cannot range over {what}: {c}"),
+                        None => format!("cannot range over {what}"),
+                    };
+                    self.report_soft_at(x_pos, DiagCode::ChkInvalidRangeExpr, message);
                 }
             }
-            return;
         }
-        for e in &r.lhs {
-            if is_blank(e) {
-                continue;
+
+        // 官方 `rangeOverInt := isInteger(x.typ())`
+        let over_int = known && x.typ.is_some_and(|t| all_integer(&*self.s.tt, t));
+
+        // ── ④ 声明 / 赋值 ────────────────────────────────────────────
+        if r.is_define {
+            // 短变量声明（`range.go:100-155`）。⚠️ 官方**总是**声明：
+            // 已有同名变量不影响（range 作用域是新的）；只有「一个非 `_`
+            // 名字都没有」才报 `no new variables`。
+            let mut vars: Vec<(String, Option<TypeId>)> = Vec::new();
+            for (i, lhs) in r.lhs.iter().enumerate() {
+                let ty = if over_int {
+                    // 官方 `initVar(obj, &x, "range clause")` ⇒ 默认型
+                    if i == 0 { self.default_type(&x) } else { None }
+                } else if i == 0 {
+                    key
+                } else {
+                    val
+                };
+                let ty = ty.filter(|t| !self.is_invalid_type(*t));
+                match lhs {
+                    Expr::Name(n) => {
+                        if over_int && i == 0 {
+                            // 可表示性：`for i := range maxUint` ⇒
+                            // `cannot use maxUint … as int value in range clause`
+                            let mut v = x.clone();
+                            self.range_assign(&mut v, x_pos, ty, "range clause");
+                        }
+                        if n.value != "_" {
+                            vars.push((n.value.clone(), ty));
+                        }
+                    }
+                    other => {
+                        let _ = self.eval(file, other);
+                        let label = expr_label(other).unwrap_or_else(|| "expression".to_owned());
+                        self.report(
+                            other.start_pos(),
+                            DiagCode::ChkInvalidAssign,
+                            format!("cannot declare {label}"),
+                        );
+                    }
+                }
             }
-            let _ = self.eval(file, e);
+            if vars.is_empty() {
+                self.report(
+                    r.pos,
+                    DiagCode::ChkNoNewVar,
+                    "no new variables on left side of :=".to_owned(),
+                );
+            } else {
+                for (name, ty) in vars {
+                    self.env.declare(&name, Operand::variable(ty));
+                }
+            }
+        } else if !r.lhs.is_empty() {
+            // 普通赋值（`range.go:156-185`）
+            for (i, lhs) in r.lhs.iter().enumerate() {
+                if is_blank(lhs) {
+                    continue;
+                }
+                if over_int {
+                    // 官方只可能有一个迭代变量（多余的那个已报 `permits only one`）
+                    if i != 0 {
+                        continue;
+                    }
+                    let mut v = x.clone();
+                    if !self.assign_lhs_range(file, lhs, x_pos, &mut v, "range clause") {
+                        // 赋值成功后 x 的类型被改成左值类型，必须仍是整数
+                        // （`go.dev/issues/67027`：`var f float64; f = range 10`）
+                        if let Some(lt) = self.eval(file, lhs).typ
+                            && !all_integer(&*self.s.tt, lt)
+                        {
+                            let desc = type_str(&*self.s.tt, lt);
+                            self.report_soft_at(
+                                lhs.start_pos(),
+                                DiagCode::ChkInvalidRangeExpr,
+                                format!("cannot use iteration variable of type {desc}"),
+                            );
+                        }
+                    }
+                } else {
+                    let ty = if i == 0 { key } else { val };
+                    let Some(ty) = ty.filter(|t| !self.is_invalid_type(*t)) else {
+                        continue;
+                    };
+                    let mut y = Operand::value(Some(ty));
+                    let at = lhs.start_pos();
+                    self.assign_lhs(file, lhs, at, &mut y, "assignment");
+                }
+            }
+        } else if over_int {
+            // 没有迭代变量时仍要判 x（官方 `range.go:186-194`）：
+            // `for range maxUint` ⇒ `as int value in range clause (overflows)`
+            let mut v = x.clone();
+            let target = self.default_type(&v);
+            self.range_assign(&mut v, x_pos, target, "range clause");
         }
+    }
+
+    /// 官方 `rangeKeyVal`（`range.go:205-287`）：被 range 表达式的 key/value 类型。
+    ///
+    /// 三种结局分开编码是**刻意的**：`Gated` 与 `Bad` 的**类别不同**
+    /// （`version` vs `range`），混成一个 `Option` 就分不出该报哪个码。
+    ///
+    /// 窄面（台账登记）：官方用 `commonUnder` 合并**类型参数**的项集
+    /// （`~int` 一族）；`Type::TypeParam` 在 M3 是「表示有位置、判定不做」
+    /// （`D-M3-2`）⇒ 这里按 `underlying` 单跳，泛型实参面不判（不报假错）。
+    fn range_key_val(&mut self, file: FileId, t: TypeId) -> RangeKV {
+        // `int` / `rune` 的号与两个门控判定都要在**取不可变借用之前**算好：
+        // `add_basic` 要 `&mut`，而下面的 match 一直持有 `&*self.s.tt`。
+        // `rune` 在本仓的 universe 里就是 `BasicId::Int32`（官方
+        // `universeRune = Universe.Lookup("rune").Type()`，同为 int32 别名，
+        // 只是名字叫 rune —— 消息面差异，类别/位置不受影响）。
+        let int_ty = self.s.tt.add_basic(BasicId::Int);
+        let rune_ty = self.s.tt.add_basic(BasicId::Int32);
+        let gated_int = !version::allow(&self.s.pkg.versions, file, Feat::RangeOverInt);
+        let gated_func = !version::allow(&self.s.pkg.versions, file, Feat::RangeOverFunc);
+        let tt = &*self.s.tt;
+        if matches!(tt.type_of(t), Type::Invalid) {
+            return RangeKV::Bad(None);
+        }
+        let u = underlying(tt, t);
+
+        // 只写通道不能 range（官方 `receive from send-only channel %s`）
+        if let Type::Chan {
+            dir: ChanDir::SendOnly,
+            ..
+        } = tt.type_of(u)
+        {
+            return RangeKV::Bad(Some(format!(
+                "receive from send-only channel {}",
+                type_str(tt, t)
+            )));
+        }
+
+        // `arrayPtrDeref`：`*[N]T` 当数组（`range.go:221`）
+        let r = array_ptr_deref(tt, u);
+
+        match tt.type_of(r) {
+            Type::Basic(b) => {
+                if b.is_string() {
+                    return RangeKV::Ok {
+                        key: Some(int_ty),
+                        val: Some(rune_ty),
+                    };
+                }
+                if b.is_integer() {
+                    // 1.22 门控（`range.go:227`）
+                    if gated_int {
+                        return RangeKV::Gated(Feat::RangeOverInt);
+                    }
+                    // 键类型 = **原类型**（`for i := range MyInt(10)` ⇒ `MyInt`）
+                    return RangeKV::Ok {
+                        key: Some(t),
+                        val: None,
+                    };
+                }
+                RangeKV::Bad(None)
+            }
+            Type::Array { elem, .. } => RangeKV::Ok {
+                key: Some(int_ty),
+                val: Some(*elem),
+            },
+            Type::Slice(elem) => RangeKV::Ok {
+                key: Some(int_ty),
+                val: Some(*elem),
+            },
+            Type::Map { key, elem } => RangeKV::Ok {
+                key: Some(*key),
+                val: Some(*elem),
+            },
+            Type::Chan { dir, elem } => {
+                debug_assert!(*dir != ChanDir::SendOnly);
+                RangeKV::Ok {
+                    key: Some(*elem),
+                    val: None,
+                }
+            }
+            Type::Signature(_) => {
+                // 1.23 门控（`range.go:242`）
+                if gated_func {
+                    return RangeKV::Gated(Feat::RangeOverFunc);
+                }
+                self.range_func_key_val(r)
+            }
+            _ => RangeKV::Bad(None),
+        }
+    }
+
+    /// `range over func` 的迭代器形态判据（官方 `range.go:245-284`）。
+    ///
+    /// 合法形态 = `func(yield func(K, V) bool)`：一参、无结果、参数是签名、
+    /// 该签名 ≤2 参、恰一个 `bool` 结果、非变参。
+    fn range_func_key_val(&mut self, t: TypeId) -> RangeKV {
+        const PFX: &str = "func must be func(yield func(...) bool)";
+        let bool_ty = self.s.tt.add_basic(BasicId::Bool);
+        let tt = &*self.s.tt;
+        let Type::Signature(sid) = tt.type_of(t) else {
+            return RangeKV::Bad(None);
+        };
+        let sig = tt.signature_def(*sid).clone();
+        let params = tuple_vars(tt, sig.params);
+        let results = tuple_vars(tt, sig.results);
+        if params.len() != 1 {
+            return RangeKV::Bad(Some(format!("{PFX}: wrong argument count")));
+        }
+        if !results.is_empty() {
+            return RangeKV::Bad(Some(format!("{PFX}: unexpected results")));
+        }
+        let yield_ty = params[0].1;
+        let Type::Signature(yid) = tt.type_of(underlying(tt, yield_ty)) else {
+            return RangeKV::Bad(Some(format!("{PFX}: argument is not func")));
+        };
+        let y = tt.signature_def(*yid).clone();
+        let yp = tuple_vars(tt, y.params);
+        let yr = tuple_vars(tt, y.results);
+        if yp.len() > 2 {
+            return RangeKV::Bad(Some(format!("{PFX}: yield func has too many parameters")));
+        }
+        // 官方 `Identical(cb.Results().At(0).Type(), universeBool)` ——
+        // **必须**是预声明的 `bool`，用户定义的 `type MyBool bool` 不算。
+        let one_bool = yr.len() == 1 && rgoc_types::identical(tt, yr[0].1, bool_ty).unwrap_or(true);
+        if !one_bool {
+            if yr.len() == 1 && all_boolean(&*self.s.tt, yr[0].1) {
+                return RangeKV::Bad(Some(format!(
+                    "{PFX}: yield func returns user-defined boolean, not bool"
+                )));
+            }
+            return RangeKV::Bad(Some(format!("{PFX}: yield func does not return bool")));
+        }
+        if y.variadic {
+            return RangeKV::Bad(Some(format!(
+                "yield func of type {} cannot be variadic",
+                type_str(tt, yield_ty)
+            )));
+        }
+        RangeKV::Ok {
+            key: yp.first().map(|(_, t)| *t),
+            val: yp.get(1).map(|(_, t)| *t),
+        }
+    }
+
+    /// 该 `TypeId` 是不是 `invalid`（官方 `Typ[Invalid]`）。
+    fn is_invalid_type(&self, t: TypeId) -> bool {
+        matches!(self.s.tt.type_of(t), Type::Invalid)
+    }
+
+    fn report_soft_at(&mut self, pos: Pos, code: DiagCode, message: String) {
+        self.s.report_soft(Diag { pos, code, message });
+    }
+
+    /// 官方 `assignment`（`assignments.go:24-118`）里**未类型化常量**的那一段
+    /// （`implicitTypeAndValue`，`assignments.go:70-84`）。
+    ///
+    /// Task 25 的 [`Self::assign_to`] 只判**可赋值性**；`untyped int → uint8`
+    /// 在类型层面是可赋值的，**可表示性**要单独判 —— 缺了这一段，
+    /// `var u8 uint8; for u8 = range 256` 会漏报（ocracle 实测 `85:16 assign`）。
+    ///
+    /// 报点与后缀照官方：`cannot use {x} as {T} value in {context} (overflows)`；
+    /// 类别仍走 `assign`（C8 适配表 `^cannot use .+ as .+` 在 `overflow` 规则之前）。
+    fn range_assign(
+        &mut self,
+        v: &mut Operand,
+        vpos: Pos,
+        target: Option<TypeId>,
+        ctx: &str,
+    ) -> bool {
+        if v.mode == Mode::Invalid {
+            return false;
+        }
+        let Some(t) = target else {
+            return true;
+        };
+        if let Some(vt) = v.typ
+            && is_untyped(&*self.s.tt, vt)
+            && let Some(val) = &v.val
+            && let Some(to) = basic_kind(&*self.s.tt, t)
+            && let Err(code) = representable(val, to, &Sizes::HOST_ARM64)
+        {
+            let suffix = if code == DiagCode::TypTruncatedFloat {
+                "(truncated)"
+            } else {
+                "(overflows)"
+            };
+            let desc = type_str(&*self.s.tt, t);
+            let what = operand_text(&*self.s.tt, v);
+            self.report(
+                vpos,
+                DiagCode::ChkInvalidAssign,
+                format!("cannot use {what} as {desc} value in {ctx} {suffix}"),
+            );
+            v.mode = Mode::Invalid;
+            return false;
+        }
+        self.assign_to(v, vpos, target, ctx)
     }
 
     fn switch_stmt(&mut self, file: FileId, sw: &SwitchStmt) {
@@ -967,6 +1359,37 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
 
 /// 元组的逐项表：`(名字, 类型)`（官方 `Tuple.vars`）。
 type TupleVars = Vec<(Option<String>, TypeId)>;
+
+/// `range` 的 key/value 判定（官方 `rangeKeyVal` 的三档结局；M4/Task 26）。
+///
+/// 为什么把「门控拒绝」单列一档：官方的门控拒绝也写成 `cannot range over x:
+/// requires go1.N or later`，但 C8 适配表把带 `requires go1\.` 的消息**最高优先**
+/// 归到 `version`（`go1_22_21.go` 实测 `14:16 version`），而普通拒绝归 `range`。
+/// 合成一个 `Bad` 就没法在调用面选对码。
+enum RangeKV {
+    /// 可 range；`None` ⇒ 该位置没有迭代变量。
+    Ok {
+        /// 键类型（官方 `key`）。
+        key: Option<TypeId>,
+        /// 值类型（官方 `val`）。
+        val: Option<TypeId>,
+    },
+    /// 版本门控拒绝（整型 1.22 / func 1.23）—— 报 `version` 类别。
+    Gated(Feat),
+    /// 不可 range；`Some(cause)` ⇒ 官方冒号后的原因。
+    Bad(Option<String>),
+}
+
+/// 官方 `arrayPtrDeref`：`*[N]T` 在 range 面按 `[N]T` 处理（`range.go:221`）。
+fn array_ptr_deref(tt: &rgoc_types::TypeTable, t: TypeId) -> TypeId {
+    if let Type::Pointer(p) = tt.type_of(t) {
+        let u = rgoc_types::underlying(tt, *p);
+        if matches!(tt.type_of(u), Type::Array { .. }) {
+            return u;
+        }
+    }
+    t
+}
 
 /// 元组元素的类型表（非元组 ⇒ `None`）。
 ///

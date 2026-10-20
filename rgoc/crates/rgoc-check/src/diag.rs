@@ -276,6 +276,14 @@ pub fn category_of(code: DiagCode) -> Category {
         ChkInvalidCase | ChkInvalidCond | ChkInvalidGoDefer | ChkInvalidSelectCase => {
             Category::Stmt
         }
+        // range 面（M4/Task 26）：官方 `InvalidRangeExpr` / `InvalidIterVar` 的
+        // 消息前缀 `cannot range over ` / `range over ` 与后缀
+        // `iteration variable` 经 C8 适配表全部落 `range`
+        // （`task26-reject.go` 5 行实证）。⚠️ 版本后缀 `requires go1.N or later`
+        // **不**走这两个码 —— 适配表里 `requires go1\.` 是最高优先规则
+        // （`go1_22_21.go` 实测 `14:16 version`），所以门控仍用
+        // `TypFeatureRequiresGoVersion`。
+        ChkInvalidRangeExpr | ChkInvalidIterVar => Category::Range,
         ChkMissingReturn => Category::Terminate,
         ChkNoNewVar => Category::Decl,
         ChkNotAType => Category::NotType,

@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：86 个码各有恰好一个类别（M4/Task 25 后 86）
-    assert_eq!(DiagCode::ALL.len(), 86, "码表总数（M4/Task 25 后 86）");
+    // 总数守恒：88 个码各有恰好一个类别（M4/Task 26 后 88）
+    assert_eq!(DiagCode::ALL.len(), 88, "码表总数（M4/Task 26 后 88）");
 }
 
 #[test]
@@ -167,7 +167,9 @@ fn t_ck_16_每类计数快照() {
     // slice 0→1、总数 72→74；M4/Task 24 新增 `ChkInvalidSelector` ⇒
     // selector 0→1、总数 74→75；M4/Task 25 新增 11 个语句面码 ⇒
     // assign 1→2、comma-ok 0→1、decl 8→9、not-type 1→2、ret 0→1、
-    // stmt 7→11、terminate 0→1、unused 2→3、总数 75→86）：
+    // stmt 7→11、terminate 0→1、unused 2→3、总数 75→86；
+    // M4/Task 26 新增 `ChkInvalidIterVar` / `ChkInvalidRangeExpr` ⇒
+    // range 0→2、总数 86→88）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 2),
@@ -183,6 +185,7 @@ fn t_ck_16_每类计数快照() {
         ("other", 3),
         ("overflow", 2),
         ("parse", 25),
+        ("range", 2),
         ("ret", 1),
         ("selector", 1),
         ("shift", 2),

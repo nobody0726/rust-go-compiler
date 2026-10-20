@@ -81,6 +81,11 @@ pub enum DiagCode {
     /// 逐向量对照见 `M4-tests.md` `T-CK-34` 与
     /// `.superpowers/sdd/M4-plan/probe/task23-reject.go`（oracle 实测 19 拒绝位）。
     ChkInvalidIndex,
+    /// `range` 的**迭代变量**面拒绝（M4/Task 26）—— 官方 `InvalidIterVar`
+    /// 三条（`range over x permits no iteration variables` /
+    /// `... permits only one iteration variable` /
+    /// `range clause permits at most two iteration variables`；类别面 `range`）。
+    ChkInvalidIterVar,
     /// 表达式的**运算符静态规则**拒绝（M4/Task 21）—— 官方
     /// `UndefinedOp` / `MismatchedTypes` / `UnaddressableOperand` /
     /// `InvalidIndirect` / `InvalidReceive` / 不可比（map/slice/func 只能与
@@ -93,6 +98,12 @@ pub enum DiagCode {
     /// `x (variable of type int) is not an interface`（官方 `InvalidSend` /
     /// `InvalidTypeSwitch`，经 C8 适配表同样落 `op-invalid`）。
     ChkInvalidOperation,
+    /// 不可 `range`（M4/Task 26）—— 官方 `InvalidRangeExpr`
+    /// （`cannot range over x ...` / `cannot use iteration variable of type T`；
+    /// 类别面 `range`）。版本门控的 `requires go1.N or later` 后缀**不**走本码
+    /// —— 官方同样消息经 C8 适配表的 `requires go1\.` 最高优先规则落 `version`
+    /// （`go1_22_21.go` 实测 `14:16 version`）。
+    ChkInvalidRangeExpr,
     /// `select` 子句面拒绝（M4/Task 25）—— 官方 `InvalidSelectCase`
     /// （`select case must be send or receive (possibly with assignment)`）与
     /// `DuplicateDefault`（`multiple defaults (first at ...)`）的**合并码**
@@ -547,13 +558,15 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 86] = [
+    pub const ALL: [DiagCode; 88] = [
         DiagCode::ChkInvalidAssign,
         DiagCode::ChkInvalidCase,
         DiagCode::ChkInvalidCond,
         DiagCode::ChkInvalidGoDefer,
         DiagCode::ChkInvalidIndex,
+        DiagCode::ChkInvalidIterVar,
         DiagCode::ChkInvalidOperation,
+        DiagCode::ChkInvalidRangeExpr,
         DiagCode::ChkInvalidSelectCase,
         DiagCode::ChkInvalidSelector,
         DiagCode::ChkInvalidSlice,
@@ -644,7 +657,9 @@ impl DiagCode {
             DiagCode::ChkInvalidCond => "CHK-INVALID-COND",
             DiagCode::ChkInvalidGoDefer => "CHK-INVALID-GO-DEFER",
             DiagCode::ChkInvalidIndex => "CHK-INVALID-INDEX",
+            DiagCode::ChkInvalidIterVar => "CHK-INVALID-ITER-VAR",
             DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
+            DiagCode::ChkInvalidRangeExpr => "CHK-INVALID-RANGE-EXPR",
             DiagCode::ChkInvalidSelectCase => "CHK-INVALID-SELECT-CASE",
             DiagCode::ChkInvalidSelector => "CHK-INVALID-SELECTOR",
             DiagCode::ChkInvalidSlice => "CHK-INVALID-SLICE",
