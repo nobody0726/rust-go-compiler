@@ -38,6 +38,7 @@ pub(crate) mod env;
 pub mod expr;
 pub mod initorder;
 pub mod lookup;
+pub mod main_check;
 pub mod operand;
 pub mod render;
 pub mod selection;

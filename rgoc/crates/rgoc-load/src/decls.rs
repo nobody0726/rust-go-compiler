@@ -440,6 +440,10 @@ impl Checker<'_> {
                     }
                     Decl::Func(d) => {
                         let (recv, t) = self.resolve_func_sig(d);
+                        // `func init` **不进包作用域**（M4/Task 34）⇒ 它的签名
+                        // 也不是 dump 根：官方 dump 从包作用域枚举对象，
+                        // `init` 不在里面。留着会让 `C7` 多一行 `signature`。
+                        let is_init = recv.is_none() && d.name.value == "init";
                         match recv {
                             // 方法：挂到接收者基类型上（Task 7 的**唯一**生产者，
                             // 消费者是 `rgoc-types::methodset`）。空名（`func (t T) _()`）
@@ -458,7 +462,7 @@ impl Checker<'_> {
                                 }
                             }
                         }
-                        if t != self.tt.invalid() {
+                        if t != self.tt.invalid() && !is_init {
                             self.roots.push(t);
                         }
                     }

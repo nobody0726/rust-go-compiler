@@ -386,6 +386,10 @@ pub fn check_package(
     // Task 30：先跑「折叠预演」，再按结果过滤装载面的 `const` 拒绝。
     let foldable = crate::constfold::fold_package_consts(&mut session);
     session.seed_filtered(load_diags, &foldable);
+    // Task 34：`main` / `init` 的形态与签名约束（装载面只管「不声明」）。
+    for d in crate::main_check::check(pkg) {
+        session.report_hard(d);
+    }
     crate::expr::check_package_decls(&mut session);
     crate::stmt::check_package_bodies(&mut session);
     // Task 33：初始化环。官方由 `initOrder()` 在类型检查末尾统一报

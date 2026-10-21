@@ -228,9 +228,8 @@ pub fn category_of(code: DiagCode) -> Category {
 
         // ── decl：声明面 ────────────────────────────────────────────────
         SynLabelDuplicate | TypBlankPkgName | TypDuplicateDecl | TypDuplicateLabel
-        | TypInvalidConstInit | TypMismatchedPkgName | TypRepeatedDecl | TypWrongAssignCount => {
-            Category::Decl
-        }
+        | TypInvalidConstInit | TypInvalidInitDecl | TypInvalidMainDecl | TypMismatchedPkgName
+        | TypRepeatedDecl | TypWrongAssignCount => Category::Decl,
         // 复合字面量形状面（M4/Task 27）：官方 `UntypedLit` / `InvalidLit` /
         // `MissingLitKey` / `MixedStructLit` 经 C8 适配表落 `decl`
         // （`^invalid composite literal type |missing type in composite
@@ -316,6 +315,12 @@ pub fn category_of(code: DiagCode) -> Category {
         // `Offsetof` —— 其余**显式拒绝**（`unsafe` 类别自此有码）。
         ChkUnsupportedUnsafe => Category::Unsafe,
         ChkWrongResultCount => Category::Ret,
+        // `main`/`init` 的**签名**面（M4/Task 34）：官方消息 `func %s must have
+        // no arguments and no return values` 含 `return values`，适配表里
+        // `ret` 规则（`check.go:260`）优先于 `decl` 规则（`:278`）⇒ 这里同落
+        // `ret`。**形态**面（`cannot declare` / `must have no type parameters` /
+        // `must have a body`）落 `decl`（见上面那组）。
+        TypInvalidInitSig | TypInvalidMainSig => Category::Ret,
 
         TypInvalidBlank => Category::NotType,
         TypInvalidTypeArg => Category::Implements,

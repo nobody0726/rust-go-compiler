@@ -116,11 +116,17 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     /// `unwrap_or_default()` ⇒ 结果表被清空 ⇒ **每个带结果的方法体都误报**
     /// `too many return values`（Task 33 实测：`check/init1.go` 6 行、
     /// `check/init2.go` 20 行假诊断，把真环诊断全淹了）。
-    fn func_sig(&self, f: &FuncDecl) -> Option<(TupleVars, TupleVars)> {
+    fn func_sig(&mut self, file: FileId, f: &FuncDecl) -> Option<(TupleVars, TupleVars)> {
         let t = if let Some(recv) = &f.recv {
             self.method_sig(&recv.type_, &f.name.value)?
+        } else if let Some(obj) = self.s.pkg.lookup(&f.name.value) {
+            obj.typ?
         } else {
-            self.s.pkg.lookup(&f.name.value)?.typ?
+            // 名字**不在**包作用域：`func init`（Task 34：官方有意不声明）、
+            // `func _`、以及重名声明里输掉的那个。它们的体照样要按**真实**
+            // 签名检查 —— 退回 AST 求签名，别用空结果表（那会把
+            // `func init() int { return 0 }` 误报成 too many return values）。
+            return self.ast_sig(file, f);
         };
         let tt = &*self.s.tt;
         match tt.type_of(underlying(tt, t)) {
@@ -130,6 +136,31 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             }
             _ => None,
         }
+    }
+
+    /// 直接从 AST 的 `FuncType` 求签名（作用域里查不到名字时的兜底）。
+    fn ast_sig(&mut self, file: FileId, f: &FuncDecl) -> Option<(TupleVars, TupleVars)> {
+        let Expr::FuncType(ft) = &f.type_ else {
+            return None;
+        };
+        let mut params: TupleVars = Vec::with_capacity(ft.params.len());
+        for p in &ft.params {
+            // 变参的末位类型是 **切片**（与装载面 `resolve_signature` 同口径）
+            let t = match &p.type_ {
+                Expr::DotsType(d) => {
+                    let elem = self.type_of_expr(file, &d.elem)?;
+                    self.s.tt.add_slice(elem)
+                }
+                other => self.type_of_expr(file, other)?,
+            };
+            params.push((p.name.as_ref().map(|n| n.value.clone()), t));
+        }
+        let mut results: TupleVars = Vec::with_capacity(ft.results.len());
+        for r in &ft.results {
+            let t = self.type_of_expr(file, &r.type_)?;
+            results.push((r.name.as_ref().map(|n| n.value.clone()), t));
+        }
+        Some((params, results))
     }
 
     /// 方法签名：接收者**基类型**的方法表里按名字取。
@@ -191,7 +222,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let Some(body) = &f.body else {
             return;
         };
-        let (params, results) = self.func_sig(f).unwrap_or_default();
+        let (params, results) = self.func_sig(file, f).unwrap_or_default();
         self.results = results.clone();
 
         // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）

@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：97 个码各有恰好一个类别（M4/Task 31 后 97）
-    assert_eq!(DiagCode::ALL.len(), 97, "码表总数（M4/Task 31 后 97）");
+    // 总数守恒：101 个码各有恰好一个类别（M4/Task 34 后 101）
+    assert_eq!(DiagCode::ALL.len(), 101, "码表总数（M4/Task 34 后 101）");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn t_ck_16_other_值域恰好是三个实现限制码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 34] = [
+    let vectors: [(DiagCode, Category); 38] = [
         (ChkDuplicateLitField, Category::Decl),
         (ChkDuplicateLitIndex, Category::Decl),
         (ChkInvalidLit, Category::Decl),
@@ -130,6 +130,10 @@ fn t_ck_16_抽样映射向量() {
         (ChkStructLitCount, Category::Assign),
         (ChkInvalidBuiltinArg, Category::Builtin),
         (ChkUnsupportedUnsafe, Category::Unsafe),
+        (TypInvalidInitDecl, Category::Decl),
+        (TypInvalidMainDecl, Category::Decl),
+        (TypInvalidInitSig, Category::Ret),
+        (TypInvalidMainSig, Category::Ret),
         (ChkInvalidIndex, Category::Index),
         (ChkInvalidOperation, Category::OpInvalid),
         (ChkInvalidSelector, Category::Selector),
@@ -193,7 +197,7 @@ fn t_ck_16_每类计数快照() {
         ("comma-ok", 2),
         ("convert", 2),
         ("cycle", 4),
-        ("decl", 12),
+        ("decl", 14),
         ("implements", 1),
         ("import", 3),
         ("index", 2),
@@ -203,7 +207,7 @@ fn t_ck_16_每类计数快照() {
         ("overflow", 2),
         ("parse", 25),
         ("range", 2),
-        ("ret", 1),
+        ("ret", 3),
         ("selector", 2),
         ("shift", 2),
         ("slice", 1),

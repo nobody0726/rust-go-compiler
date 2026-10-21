@@ -291,7 +291,7 @@ pub fn load_sources_into(
 
         // ④ 顶层声明名进**包作用域**（占位：类型与值留给 Task 24）
         for decl in &ast.decls {
-            collect_top_level_names(&mut pkg.scopes, pkg_scope, decl, &mut bag);
+            collect_top_level_names(&mut pkg.scopes, pkg_scope, decl, &pkg.name, &mut bag);
         }
 
         pkg.asts.push(ast);
@@ -328,30 +328,57 @@ fn collect_top_level_names(
     scopes: &mut ScopeTable,
     scope: ScopeId,
     decl: &Decl,
+    pkg_name: &str,
     bag: &mut DiagBag,
 ) {
+    // `init` / `main` 的**特殊地位**（M4/Task 34，官方 `go/types/resolver.go`）：
+    //
+    // * `init` **永远不进包作用域**（`resolver.go:437`：`don't declare init
+    //   functions in the package scope - they are invisible`）⇒ 同包多个 `init`
+    //   合法（不进作用域就不会「重名」），`init` 也不能被引用；
+    // * 非函数的 `init` / `main`（`package main` 里）⇒ 官方 `declarePkgObj`
+    //   直接 `return`（`resolver.go:111/118`）：**既不进作用域，也不报重名**；
+    //   诊断归检查器的 `main.rs`（`cannot declare … - must be func`）。
+    //
+    // 本层只负责「不声明」；消息与报点全部由 `rgoc-check::main` 统一出
+    // —— 否则装载面与检查面会各报一条（C8 保留重复行）。
+    let reserved = |name: &str| name == "init" || (name == "main" && pkg_name == "main");
     match decl {
         Decl::Import(_) => {}
-        Decl::Type(d) => declare(
-            scopes,
-            scope,
-            ObjKind::TypeName,
-            &d.name.value,
-            d.name.pos,
-            bag,
-        ),
+        Decl::Type(d) => {
+            if reserved(&d.name.value) {
+                return;
+            }
+            declare(
+                scopes,
+                scope,
+                ObjKind::TypeName,
+                &d.name.value,
+                d.name.pos,
+                bag,
+            );
+        }
         Decl::Const(d) => {
             for n in &d.names {
+                if reserved(&n.value) {
+                    continue;
+                }
                 declare(scopes, scope, ObjKind::Const, &n.value, n.pos, bag);
             }
         }
         Decl::Var(d) => {
             for n in &d.names {
+                if reserved(&n.value) {
+                    continue;
+                }
                 declare(scopes, scope, ObjKind::Var, &n.value, n.pos, bag);
             }
         }
         Decl::Func(d) => {
-            if d.recv.is_none() {
+            // ⚠️ **函数**只避 `init`：`func main` 官方照常进包作用域
+            // （`resolver.go:443`）⇒ 第二个 `func main` 要报「重名」。
+            // `main` 的 `reserved` 只对**非函数**声明生效（`declarePkgObj`）。
+            if d.recv.is_none() && d.name.value != "init" {
                 declare(scopes, scope, ObjKind::Func, &d.name.value, d.name.pos, bag);
             }
         }

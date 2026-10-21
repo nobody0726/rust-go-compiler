@@ -436,6 +436,22 @@ pub enum DiagCode {
     /// 「环里**全是值**」⇒ 这条（官方由 initorder 报）；「环里只有别名、没有定义型」
     /// ⇒ `TypInvalidDeclCycle`（官方由 `decl.go` 的 `cycle()` 报）。
     TypInvalidInitCycle,
+    /// **`init` 的声明形态**非法（M4/Task 34）—— 官方 `InvalidInitDecl`
+    ///
+    /// 三种触发面（`go/types/resolver.go:111` / `:427`）：
+    /// * `var init = 1`（非函数）⇒ `cannot declare init - must be func`；
+    /// * `func init[T any]()` ⇒ `func init must have no type parameters`；
+    /// * `func init()` 无体 ⇒ `func init must have a body`（官方 `MissingInitBody`，
+    ///   但 C8 侧与上面两条同落 `decl`，这里合成一个码 —— 码表按**类别**分家，
+    ///   消息仍逐字区分）。
+    TypInvalidInitDecl,
+    /// **`init` 的签名**非法（M4/Task 34）—— 官方 `InvalidInitDecl` 的签名面
+    ///
+    /// `func init(a int)` / `func init() int` ⇒ `func init must have no arguments
+    /// and no return values`。**单独成码**是因为 C8 类别不同：官方适配表的
+    /// `return values` 规则把这条落到 `ret`，而上面那条落 `decl`
+    /// （`tools/types-oracle/check.go:260` 在 `:278` 之前）。
+    TypInvalidInitSig,
     /// **实例化链**无界增长 —— 官方 `InvalidInstanceCycle`
     ///
     /// 官方形状（`go/types/mono.go:146`）是 `instantiation cycle:` 后跟逐层的
@@ -446,6 +462,17 @@ pub enum DiagCode {
     /// 见 `M4-design.md` D-M4-5）。与 [`Self::TypInvalidInitCycle`] 的分工：
     /// 后者是**初始化依赖图**的环，这条是**类型实例化链**的无界增长。
     TypInvalidInstanceCycle,
+    /// **`main` 的声明形态**非法（M4/Task 34）—— 官方 `InvalidMainDecl`
+    ///
+    /// 只在 `package main` 里触发（`go/types/resolver.go:118` / `:427`）：
+    /// * `var main = 1` ⇒ `cannot declare main - must be func`；
+    /// * `func main[T any]()` ⇒ `func main must have no type parameters`。
+    TypInvalidMainDecl,
+    /// **`main` 的签名**非法（M4/Task 34）—— 官方 `InvalidMainDecl` 的签名面
+    ///
+    /// `func main(a int)` / `func main() int` ⇒ `func main must have no arguments
+    /// and no return values`（C8 类别 `ret`，理由同 [`Self::TypInvalidInitSig`]）。
+    TypInvalidMainSig,
     /// 类型图里存在**非法的递归**（`type A [1]A`）—— 官方 `InvalidRecursiveType`
     ///
     /// 判据是「内存里装得下」：环只要**经过**指针/切片/映射/通道/函数就算合法
@@ -619,7 +646,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 97] = [
+    pub const ALL: [DiagCode; 101] = [
         DiagCode::ChkDuplicateLitField,
         DiagCode::ChkDuplicateLitIndex,
         DiagCode::ChkImpossibleAssert,
@@ -696,7 +723,11 @@ impl DiagCode {
         DiagCode::TypInvalidConversion,
         DiagCode::TypInvalidDeclCycle,
         DiagCode::TypInvalidInitCycle,
+        DiagCode::TypInvalidInitDecl,
+        DiagCode::TypInvalidInitSig,
         DiagCode::TypInvalidInstanceCycle,
+        DiagCode::TypInvalidMainDecl,
+        DiagCode::TypInvalidMainSig,
         DiagCode::TypInvalidRecursiveType,
         DiagCode::TypInvalidShiftCount,
         DiagCode::TypInvalidShiftOperand,
@@ -798,7 +829,11 @@ impl DiagCode {
             DiagCode::TypInvalidConversion => "TYP-INVALID-CONVERSION",
             DiagCode::TypInvalidDeclCycle => "TYP-INVALID-DECL-CYCLE",
             DiagCode::TypInvalidInitCycle => "TYP-INVALID-INIT-CYCLE",
+            DiagCode::TypInvalidInitDecl => "TYP-INVALID-INIT-DECL",
+            DiagCode::TypInvalidInitSig => "TYP-INVALID-INIT-SIG",
             DiagCode::TypInvalidInstanceCycle => "TYP-INVALID-INSTANCE-CYCLE",
+            DiagCode::TypInvalidMainDecl => "TYP-INVALID-MAIN-DECL",
+            DiagCode::TypInvalidMainSig => "TYP-INVALID-MAIN-SIG",
             DiagCode::TypUnsupportedPendingInstanceArg => "TYP-UNSUPPORTED-PENDING-INSTANCE-ARG",
             DiagCode::TypInvalidRecursiveType => "TYP-INVALID-RECURSIVE-TYPE",
             DiagCode::TypInvalidShiftCount => "TYP-INVALID-SHIFT-COUNT",
