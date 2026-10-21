@@ -17,3 +17,8 @@ rgoc-const = { path = "../rgoc-const" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
 rgoc-types = { path = "../rgoc-types" }
+
+[dev-dependencies]
+# `T-CK-76`（M4/Task 36）的 `EXP-16` 断言看的是 **AST 形状**（优先级是语法
+# 事实，诊断面观察不到）⇒ 测试要直接驱动 parser。
+rgoc-parse = { path = "../rgoc-parse" }

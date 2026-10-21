@@ -85,6 +85,7 @@ dependencies = [
  "rgoc-const",
  "rgoc-lex",
  "rgoc-load",
+ "rgoc-parse",
  "rgoc-types",
 ]
 
