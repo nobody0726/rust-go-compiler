@@ -30,6 +30,7 @@
 //! **没有触发者**的占位码按五件套纪律从 `DiagCode` 移除（`C8` §10 的
 //! R-4-2；`T-CK-16` 快照同步）。
 
+pub(crate) mod builtins;
 pub mod check;
 pub mod diag;
 pub(crate) mod env;

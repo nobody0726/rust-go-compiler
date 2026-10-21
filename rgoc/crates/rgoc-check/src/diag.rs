@@ -282,6 +282,11 @@ pub fn category_of(code: DiagCode) -> Category {
         // / `assignment mismatch` / `(not enough|too many) arguments in call`
         // 经 C8 适配表全部落 `assign`。
         ChkInvalidAssign => Category::Assign,
+        // 内建函数实参面（M4/Task 29）：官方 `InvalidBuiltinArg` /
+        // `InvalidAppend` / `InvalidCopy` 的消息前缀
+        // `^invalid argument: |^invalid append: |^invalid copy: ` 经 C8 适配表
+        // 落 `builtin`（`task29-builtins.go` 9 行 `builtin` 实证）。
+        ChkInvalidBuiltinArg => Category::Builtin,
         // `switch` 的 `invalid case` / `duplicate case`、非布尔条件、
         // `go`/`defer` 的 `discards result` / `requires function call`、
         // `select` 的 `select case must be` / `multiple defaults` 落 `stmt`。

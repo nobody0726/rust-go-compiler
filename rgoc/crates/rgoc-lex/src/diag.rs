@@ -76,6 +76,18 @@ pub enum DiagCode {
     /// 逐向量对照见 `M4-tests.md` `T-CK-35` 与
     /// `.superpowers/sdd/M4-plan/probe/task25-reject.go`（oracle 实测 36 拒绝位）。
     ChkInvalidAssign,
+    /// 内建函数的**实参面**拒绝（M4/Task 29）—— 官方 `InvalidBuiltinArg`
+    /// （`invalid argument: ...`）/ `InvalidAppend`（`invalid append: ...`）/
+    /// `InvalidCopy`（`invalid copy: ...`）的**合并码**（类别面 `builtin`）。
+    /// 同族但**不同类别**的成员不进本码：`invalid operation:` 前缀族
+    /// （`cannot close ...`、`complex(...) (mismatched types ...)`）归
+    /// [`DiagCode::ChkInvalidOperation`]；`cannot use ... as ... value in
+    /// argument to append` 归 [`DiagCode::ChkInvalidAssign`]；`make` 的尺寸面
+    /// （`must be integer` / `must not be negative` / `overflows int`）归
+    /// [`DiagCode::ChkInvalidIndex`]（与官方 `check.index` 同一条判据）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-41` 与
+    /// `.superpowers/sdd/M4-plan/probe/task29-builtins.go`（oracle 实测 14 拒绝位）。
+    ChkInvalidBuiltinArg,
     /// `switch` 的 case 面拒绝（M4/Task 25）—— 官方 `InvalidCase`（`invalid case
     /// x in switch on y (mismatched types ...)`）与 `DuplicateCase`
     /// （`duplicate case x (constant of type T) in expression switch`）的
@@ -598,11 +610,12 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 95] = [
+    pub const ALL: [DiagCode; 96] = [
         DiagCode::ChkDuplicateLitField,
         DiagCode::ChkDuplicateLitIndex,
         DiagCode::ChkImpossibleAssert,
         DiagCode::ChkInvalidAssign,
+        DiagCode::ChkInvalidBuiltinArg,
         DiagCode::ChkInvalidCase,
         DiagCode::ChkInvalidCond,
         DiagCode::ChkInvalidGoDefer,
@@ -703,6 +716,7 @@ impl DiagCode {
             DiagCode::ChkDuplicateLitIndex => "CHK-DUPLICATE-LIT-INDEX",
             DiagCode::ChkImpossibleAssert => "CHK-IMPOSSIBLE-ASSERT",
             DiagCode::ChkInvalidAssign => "CHK-INVALID-ASSIGN",
+            DiagCode::ChkInvalidBuiltinArg => "CHK-INVALID-BUILTIN-ARG",
             DiagCode::ChkInvalidCase => "CHK-INVALID-CASE",
             DiagCode::ChkInvalidCond => "CHK-INVALID-COND",
             DiagCode::ChkInvalidGoDefer => "CHK-INVALID-GO-DEFER",

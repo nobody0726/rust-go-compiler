@@ -150,10 +150,20 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         self.s.tt
     }
 
+    /// 类型表只读入口（`builtins.rs` 用）。
+    pub(crate) fn type_table(&self) -> &TypeTable {
+        self.s.tt
+    }
+
+    /// 类型表可写入口（`builtins.rs` 挂新类型用）。
+    pub(crate) fn tt_mut(&mut self) -> &mut TypeTable {
+        self.s.tt
+    }
+
     pub(crate) fn report(&mut self, pos: Pos, code: DiagCode, message: String) {
         self.s.report_hard(Diag { pos, code, message });
     }
-    fn type_text(&self, t: TypeId) -> String {
+    pub(crate) fn type_text(&self, t: TypeId) -> String {
         type_str(self.tt(), t)
     }
 
@@ -472,35 +482,12 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         }
     }
 
-    /// 内建的**结果面**（窄表；`M4-plan` Task 29 用真签名替换）。
-    ///
-    /// 只回答「这个内建调用有没有值 / 值的元数」，够 `go`/`defer` 与表达式
-    /// 语句判「结果被丢弃」；**不做**实参检查（那是 Task 29）。
+    /// 内建调用（Task 29 起由 [`crate::builtins`] 接管签名与静态约束）。
     fn call_builtin(&mut self, file: FileId, c: &CallExpr, fun: &Expr) -> Operand {
-        // 先求值实参：`len(undefinedName)` 的 `undefined` 已在装载面报过，
-        // 这里只保证 `x` 的表达式面照常走（与官方 `check.builtin` 同序）。
-        for a in &c.args {
-            let _ = self.expr(file, a);
-        }
         let Some(name) = expr_label(fun) else {
             return Operand::invalid();
         };
-        match name.as_str() {
-            // 有值且类型确定：`len`/`cap`/`copy` 恒 `int`。
-            "len" | "cap" | "copy" => {
-                let t = self.s.tt.add_basic(BasicId::Int);
-                Operand::value(Some(t))
-            }
-            // 有值、类型面归 Task 29（`append`/`min`/`max`/`make`/`new`/…）。
-            "append" | "min" | "max" | "complex" | "real" | "imag" | "recover" | "make" | "new" => {
-                Operand::value(None)
-            }
-            // 无返回值。
-            "close" | "delete" | "panic" | "print" | "println" | "clear" | "assert" | "trace" => {
-                Operand::no_value()
-            }
-            _ => Operand::invalid(),
-        }
+        crate::builtins::call_builtin(self, file, c, &name)
     }
 
     /// 元组条目（`Type::Invalid` / 非元组 ⇒ 空表 —— 签名残缺时不报假错）。
@@ -853,7 +840,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
 
     /// 官方 `isValidIndex`（`index.go:449`）：无类型常量 ⇒ `int`；
     /// 整数性 / 非负 / 可表示（超 `int` 范围 ⇒ `overflows int`）。
-    fn valid_index(&mut self, x: &mut Operand, pos: Pos) -> bool {
+    pub(crate) fn valid_index(&mut self, x: &mut Operand, pos: Pos) -> bool {
         if x.mode == Mode::Invalid {
             return false;
         }
@@ -908,7 +895,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 覆盖复合字面量类型位实际会出现的形态：名字、括号、数组 / 切片 /
     /// map / chan / 指针。匿名 `struct{…}` / `interface{…}` / `func(…)` 暂不接
     /// （`None` ⇒ 调用方 `invalid` 且**不报**，负向缺口由 `U-M4` 承担）。
-    fn type_expr(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
+    pub(crate) fn type_expr(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
         match e {
             Expr::Name(n) => {
                 let op = self.ident(file, n);
@@ -2119,7 +2106,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 官方 `convertUntyped`（`const.go:301`）：无类型操作数就地隐式转换。
     ///
     /// 失败 ⇒ 上报（错误位 = **操作数自身**）并置 invalid。
-    fn convert_untyped(&mut self, x: &mut Operand, target: TypeId, pos: Pos) {
+    pub(crate) fn convert_untyped(&mut self, x: &mut Operand, target: TypeId, pos: Pos) {
         let Some(t) = x.typ else { return };
         {
             let tt = self.tt();
@@ -2720,7 +2707,7 @@ pub(crate) fn all_integer(tt: &TypeTable, t: TypeId) -> bool {
 }
 
 /// 官方 `allOrdered = allBasic(t, IsOrdered)`（`= 整数 ∪ 浮点 ∪ 字符串`）。
-fn all_ordered(tt: &TypeTable, t: TypeId) -> bool {
+pub(crate) fn all_ordered(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(|b| b.is_integer() || b.is_float() || b.is_string())
 }
 
