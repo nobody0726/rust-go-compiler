@@ -243,6 +243,17 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 覆盖基本字面量（默认型）、括号、显式类型的复合字面量与名字链；
     /// 其余形态 ⇒ `None`（类型未知 ⇒ 各判定按「不判」处理，不造假诊断）。
     fn init_type_of(&mut self, file: FileId, name: &str) -> Option<TypeId> {
+        self.init_type_of_at(file, name, 0)
+    }
+
+    /// [`Self::init_type_of`] 的带深度版本。
+    ///
+    /// ⚠️ `depth` **必须**一路带下去：`var s1 = s1` 这种自引用会让
+    /// 「名字 → 初始化式 → 名字」无限递归（Task 33 实测：整进程栈溢出）。
+    fn init_type_of_at(&mut self, file: FileId, name: &str, depth: u32) -> Option<TypeId> {
+        if depth > 8 {
+            return None;
+        }
         let pkg = self.s.pkg;
         for (i, ast) in pkg.asts.iter().enumerate() {
             for decl in &ast.decls {
@@ -253,7 +264,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 let Some(value) = v.values.get(idx) else {
                     continue;
                 };
-                return self.init_expr_type(pkg.files[i], value, 0);
+                return self.init_expr_type(pkg.files[i], value, depth + 1);
             }
         }
         let _ = file;
@@ -288,7 +299,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                     return Some(t);
                 }
                 if obj.kind == ObjKind::Var {
-                    return self.init_type_of(file, &n.value);
+                    return self.init_type_of_at(file, &n.value, depth + 1);
                 }
                 None
             }

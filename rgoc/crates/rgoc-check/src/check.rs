@@ -388,5 +388,15 @@ pub fn check_package(
     session.seed_filtered(load_diags, &foldable);
     crate::expr::check_package_decls(&mut session);
     crate::stmt::check_package_bodies(&mut session);
+    // Task 33：初始化环。官方由 `initOrder()` 在类型检查末尾统一报
+    // （`InvalidInitCycle`），这里同样放在最后 —— 顺序面的图与表达式面无关，
+    // 但它读的是**整包**的 AST，早跑晚跑结果一样。
+    for c in crate::initorder::analyze(pkg).cycles {
+        session.report_hard(Diag {
+            pos: c.pos,
+            code: DiagCode::TypInvalidInitCycle,
+            message: c.message,
+        });
+    }
     session.into_checked()
 }

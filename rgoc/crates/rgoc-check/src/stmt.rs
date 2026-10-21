@@ -108,10 +108,20 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         cx.assignment(x, xpos, target, ctx)
     }
 
-    /// 包级函数的签名（方法名**不在**包作用域 ⇒ `None`，结果面就不判）。
-    fn func_sig(&self, name: &str) -> Option<(TupleVars, TupleVars)> {
-        let obj = self.s.pkg.lookup(name)?;
-        let t = obj.typ?;
+    /// 包级函数 / 方法的签名。
+    ///
+    /// 方法名**不在**包作用域 ⇒ 走接收者基类型的方法表
+    /// （`TypeTable::named_def(..).methods`，装载面 `add_named_method` 的唯一
+    /// 消费者面）。早先这里对方法一律返回 `None`，`func_decl` 又
+    /// `unwrap_or_default()` ⇒ 结果表被清空 ⇒ **每个带结果的方法体都误报**
+    /// `too many return values`（Task 33 实测：`check/init1.go` 6 行、
+    /// `check/init2.go` 20 行假诊断，把真环诊断全淹了）。
+    fn func_sig(&self, f: &FuncDecl) -> Option<(TupleVars, TupleVars)> {
+        let t = if let Some(recv) = &f.recv {
+            self.method_sig(&recv.type_, &f.name.value)?
+        } else {
+            self.s.pkg.lookup(&f.name.value)?.typ?
+        };
         let tt = &*self.s.tt;
         match tt.type_of(underlying(tt, t)) {
             Type::Signature(id) => {
@@ -120,6 +130,29 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             }
             _ => None,
         }
+    }
+
+    /// 方法签名：接收者**基类型**的方法表里按名字取。
+    ///
+    /// 接收者只可能是 `T` / `*T` / `T[P]` 三种写法（语法层已保证），
+    /// 所以取基类型名**不需要**完整求值 —— 直接读类型表达式。
+    fn method_sig(&self, recv_ty: &Expr, name: &str) -> Option<TypeId> {
+        let base = recv_base_name(recv_ty)?;
+        let t = self.s.pkg.lookup(base)?.typ?;
+        let tt = &*self.s.tt;
+        let nid = match tt.type_of(t) {
+            Type::Named(id) => *id,
+            Type::Alias(a) => match tt.type_of(tt.alias_rhs(*a)) {
+                Type::Named(id) => *id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        tt.named_def(nid)
+            .methods
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, sig)| *sig)
     }
 
     /// 类型表达式 → 类型（不是类型 ⇒ `None`）。
@@ -158,7 +191,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let Some(body) = &f.body else {
             return;
         };
-        let (params, results) = self.func_sig(&f.name.value).unwrap_or_default();
+        let (params, results) = self.func_sig(f).unwrap_or_default();
         self.results = results.clone();
 
         // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
@@ -1400,6 +1433,17 @@ fn tuple_elems(tt: &rgoc_types::TypeTable, x: &Operand) -> Option<Vec<TypeId>> {
     let t = rgoc_types::unalias(tt, t);
     match tt.type_of(t) {
         Type::Tuple(id) => Some(tt.tuple_def(*id).vars.iter().map(|(_, t)| *t).collect()),
+        _ => None,
+    }
+}
+
+/// 接收者类型表达式的**基类型名**（`T` / `*T` / `T[P]` / `(T)`）。
+fn recv_base_name(e: &Expr) -> Option<&str> {
+    match e {
+        Expr::Name(n) => Some(&n.value),
+        Expr::Paren(p) => recv_base_name(&p.x),
+        Expr::Unary(u) if u.op == rgoc_ast::Op::Mul => recv_base_name(&u.x),
+        Expr::Index(i) => recv_base_name(&i.x),
         _ => None,
     }
 }
