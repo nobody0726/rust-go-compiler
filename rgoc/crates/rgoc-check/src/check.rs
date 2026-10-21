@@ -292,8 +292,16 @@ impl<'a> Session<'a> {
     /// （`H` 是变量）、`const x = f()`、`const x = pkg.C` 这些检查面也判不了
     /// 的形态，装载诊断**照旧入流**（`T-TY-83` 正向不回归）。
     pub fn seed_filtered(&mut self, bag: DiagBag, foldable: &std::collections::BTreeSet<Pos>) {
+        // `import "unsafe"` 的装载拒绝（M4/Task 31）：`unsafe` 是**编译器
+        // 伪包**，标准库里没有源码目录，装载面只能报
+        // `TypUnsupportedImportForm`。检查面有白名单（`unsafe_pkg`），所以
+        // 那条诊断在检查面**不再转述**（装载面本身不改 —— `rgoc types` 照旧）。
+        let unsafe_imports = crate::unsafe_pkg::all_unsafe_import_positions(self.pkg);
         for d in bag.into_sorted() {
             if d.code == DiagCode::TypInvalidConstInit && foldable.contains(&d.pos) {
+                continue;
+            }
+            if d.code == DiagCode::TypUnsupportedImportForm && unsafe_imports.contains(&d.pos) {
                 continue;
             }
             self.report(RawDiag::hard(d));

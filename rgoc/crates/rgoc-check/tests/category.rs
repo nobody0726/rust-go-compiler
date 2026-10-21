@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：96 个码各有恰好一个类别（M4/Task 29 后 96）
-    assert_eq!(DiagCode::ALL.len(), 96, "码表总数（M4/Task 29 后 96）");
+    // 总数守恒：97 个码各有恰好一个类别（M4/Task 31 后 97）
+    assert_eq!(DiagCode::ALL.len(), 97, "码表总数（M4/Task 31 后 97）");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn t_ck_16_other_值域恰好是三个实现限制码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 33] = [
+    let vectors: [(DiagCode, Category); 34] = [
         (ChkDuplicateLitField, Category::Decl),
         (ChkDuplicateLitIndex, Category::Decl),
         (ChkInvalidLit, Category::Decl),
@@ -129,6 +129,7 @@ fn t_ck_16_抽样映射向量() {
         (ChkInvalidLitIndex, Category::Index),
         (ChkStructLitCount, Category::Assign),
         (ChkInvalidBuiltinArg, Category::Builtin),
+        (ChkUnsupportedUnsafe, Category::Unsafe),
         (ChkInvalidIndex, Category::Index),
         (ChkInvalidOperation, Category::OpInvalid),
         (ChkInvalidSelector, Category::Selector),
@@ -183,7 +184,8 @@ fn t_ck_16_每类计数快照() {
     // （`ChkInvalidLitIndex`）、selector 1→2（`ChkInvalidLitField`）、
     // 总数 88→94）；
     // M4/Task 28 新增 `ChkImpossibleAssert` ⇒ comma-ok 1→2、总数 94→95）；
-    // M4/Task 29 新增 `ChkInvalidBuiltinArg` ⇒ builtin 0→1、总数 95→96）：
+    // M4/Task 29 新增 `ChkInvalidBuiltinArg` ⇒ builtin 0→1、总数 95→96；
+    // M4/Task 31 新增 `ChkUnsupportedUnsafe` ⇒ unsafe 0→1、总数 96→97）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 3),
@@ -210,6 +212,7 @@ fn t_ck_16_每类计数快照() {
         ("type-arg", 3),
         ("undef", 3),
         ("unused", 3),
+        ("unsafe", 1),
         ("version", 3),
     ]);
     assert_eq!(counts, want, "每类计数快照");

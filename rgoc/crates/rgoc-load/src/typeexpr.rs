@@ -46,7 +46,7 @@
 use rgoc_ast::{
     ArrayType, ChanType, Expr, Field as AstField, FuncType, InterfaceType, MapType, Op, StructType,
 };
-use rgoc_const::Const;
+use rgoc_const::{BasicId, Const};
 use rgoc_lex::{Diag, DiagCode};
 use rgoc_types::{
     ChanDir, Field as TField, IfaceTSet, InterfaceId, ObjKind, Object, ScopeId, Type, TypeId,
@@ -125,6 +125,19 @@ impl Checker<'_> {
                 let _ = self.resolve_type(scope, &ix.index);
                 base
             }
+
+            // `unsafe.Pointer`（M4/Task 31）：`unsafe` 是**编译器伪包** ——
+            // 标准库里没有 `src/unsafe` 目录，装载面装不出它的对象表，所以
+            // 限定名一律 `invalid`（上面那个通配臂）。但 `Pointer` 不是包的
+            // 导出类型名，它是**预声明基本类型** `BasicId::UnsafePointer`
+            // （`C7` §4.1），所以这一条限定名可以就地认。
+            //
+            // ⚠️ 这里**不看**该文件有没有 `import "unsafe"`（`resolve_type`
+            // 只拿得到作用域）：官方对未导入的 `unsafe.Pointer` 会报
+            // `undefined: unsafe`，而装载面本来就把限定名静默降级成 `invalid`
+            // ⇒ 认下来**不比现状差**，且让 `var p unsafe.Pointer` 有了真类型
+            // （否则 `unsafe.Sizeof(p)` 算不出尺寸，Task 30 的折叠面跟着瞎）。
+            Expr::Selector(s) if is_unsafe_pointer(s) => self.tt.add_basic(BasicId::UnsafePointer),
 
             // 其余（限定名 `pkg.T`、二元并集、索引/切片/调用/字面量…）不是类型
             _ => self.tt.invalid(),
@@ -644,4 +657,11 @@ fn tag_text(lit: &rgoc_ast::BasicLit) -> Option<String> {
         Const::Str(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     }
+}
+
+/// `unsafe.Pointer` 这条限定名（`X` 是 `unsafe`、`Sel` 是 `Pointer`）。
+///
+/// 与 `rgoc-check::unsafe_pkg` 的白名单同名同拼写 —— 两处都改才算改了契约。
+fn is_unsafe_pointer(s: &rgoc_ast::SelectorExpr) -> bool {
+    matches!(&*s.x, Expr::Name(n) if n.value == "unsafe") && s.sel.value == "Pointer"
 }

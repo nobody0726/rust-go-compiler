@@ -41,6 +41,7 @@ pub mod operand;
 pub mod render;
 pub mod selection;
 pub mod stmt;
+pub(crate) mod unsafe_pkg;
 pub mod version;
 
 pub use check::{CheckOptions, CheckedPackage, Session, check_package};

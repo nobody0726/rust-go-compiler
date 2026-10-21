@@ -311,6 +311,10 @@ pub fn category_of(code: DiagCode) -> Category {
         // 不可能的类型断言（Task 28）：官方 `ImpossibleAssert` 落 `comma-ok`。
         ChkImpossibleAssert => Category::CommaOk,
         ChkUnusedExpr => Category::Unused,
+        // `unsafe` 白名单外成员（M4/Task 31）：`U-M4-06` / `D-M4-8` 的能力
+        // 边界码。官方全部接受，我方只接 `Pointer` / `Sizeof` / `Alignof` /
+        // `Offsetof` —— 其余**显式拒绝**（`unsafe` 类别自此有码）。
+        ChkUnsupportedUnsafe => Category::Unsafe,
         ChkWrongResultCount => Category::Ret,
 
         TypInvalidBlank => Category::NotType,

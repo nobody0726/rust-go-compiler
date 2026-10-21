@@ -631,9 +631,10 @@ fn t_a_66_diagcode_总数已更新() {
     //   ChkInvalidLitIndex / ChkStructLitCount）⇒ 共 94。
     // + M4/Task 28 新增 1 个（类型断言面：ChkImpossibleAssert）⇒ 共 95。
     // + M4/Task 29 新增 1 个（内建函数实参面：ChkInvalidBuiltinArg）⇒ 共 96。
+    // + M4/Task 31 新增 1 个（unsafe 白名单外成员：ChkUnsupportedUnsafe）⇒ 共 97。
     assert_eq!(
         DiagCode::ALL.len(),
-        96,
-        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）再 +1（Task 21 新增 ChkInvalidOperation）再 +2（Task 23 新增 ChkInvalidIndex / ChkInvalidSlice）再 +1（Task 24 新增 ChkInvalidSelector）再 +11（Task 25 语句面合并码）再 +2（Task 26 range 面）再 +6（Task 27 复合字面量面）再 +1（Task 28 断言面）再 +1（Task 29 内建实参面）"
+        97,
+        "M1 的 23 个 + M2 早先 3 个 + T-AP16 的 8 个 + T-AP20 的 1 个（NESTING）+ M3 的 31 个（TYP-）+ M4 的 4 个（CHK- 1 + TYP- 3）再 -1（Task 10 移除 TypUnsupportedConstraintIdentity）+ M4/Task 14 的 1 个（TypCannotInferTypeArgs）+ M4/Task 16 的 2 个（InvalidInstanceCycle / PendingInstanceArg）再 -1（Task 20 移除 ChkUnimplemented）再 +1（Task 21 新增 ChkInvalidOperation）再 +2（Task 23 新增 ChkInvalidIndex / ChkInvalidSlice）再 +1（Task 24 新增 ChkInvalidSelector）再 +11（Task 25 语句面合并码）再 +2（Task 26 range 面）再 +6（Task 27 复合字面量面）再 +1（Task 28 断言面）再 +1（Task 29 内建实参面）再 +1（Task 31 unsafe 白名单外）"
     );
 }

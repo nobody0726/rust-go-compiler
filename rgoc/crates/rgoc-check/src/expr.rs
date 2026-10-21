@@ -325,6 +325,17 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 内建 / 真调用的**实参检查**（个数、可赋值性、单值语境）也在这一层 ——
     /// 所谓「调用面」在官方就是 `call.go` 的一处逻辑，拆开会让位置口径分家。
     fn call(&mut self, file: FileId, c: &CallExpr) -> Operand {
+        // `unsafe.X(...)`（M4/Task 31）：`unsafe` 是编译器伪包，装载面装不出
+        // 它的对象表，所以调用面在**选择器求值之前**直接分派。
+        if let Expr::Selector(s) = &*c.fun
+            && let Expr::Name(n) = &*s.x
+            && n.value == crate::unsafe_pkg::PKG_NAME
+            && crate::unsafe_pkg::imports_unsafe(self.s.pkg, file)
+        {
+            let sel = s.sel.value.clone();
+            let sel_pos = s.sel.pos;
+            return crate::unsafe_pkg::call(self, file, c, &sel, sel_pos);
+        }
         let f = self.expr(file, &c.fun);
         if f.mode == Mode::TypeExpr {
             let Some(target) = f.typ else {
@@ -341,7 +352,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     }
 
     /// 官方 `Checker.conversion`（`conversions.go:20`）的窄面。
-    fn conversion(&mut self, file: FileId, c: &CallExpr, target: TypeId) -> Operand {
+    pub(crate) fn conversion(&mut self, file: FileId, c: &CallExpr, target: TypeId) -> Operand {
         // 实参数量 / `...` 归调用面（Task 23+/25）；窄面只接单实参。
         if c.args.len() != 1 || c.has_dots {
             return Operand::invalid();
@@ -1488,6 +1499,13 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 方法表达式的签名构造在 [`crate::selection`]。`pkg.Name`（`PkgName`
     /// 操作数建不出来 ⇒ `invalid`）与泛型接收者面 ⇒ 不报。
     fn selector(&mut self, file: FileId, e: &SelectorExpr) -> Operand {
+        // `unsafe.Pointer` 这种**类型名**用法（M4/Task 31）。
+        if let Expr::Name(n) = &*e.x
+            && n.value == crate::unsafe_pkg::PKG_NAME
+            && crate::unsafe_pkg::imports_unsafe(self.s.pkg, file)
+        {
+            return crate::unsafe_pkg::select(self, e);
+        }
         let mut x = self.expr(file, &e.x);
         let sel = e.sel.value.as_str();
         if x.mode == Mode::Invalid {

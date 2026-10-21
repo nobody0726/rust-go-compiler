@@ -187,6 +187,15 @@ pub enum DiagCode {
     ChkStructLitCount,
     /// 表达式语句的值没被使用（M4/Task 25）—— 官方 `UnusedExpr`
     /// （`x + 1 (value of type int) is not used`；类别面 `unused`）。
+    /// `unsafe` 白名单**外**的成员（M4/Task 31）—— 官方 `unsafe` 包的
+    /// `Add` / `Slice` / `SliceData` / `String` / `StringData` 等（类别面
+    /// `unsafe`）。
+    ///
+    /// 这是**能力边界码**（`U-M4-06` / `D-M4-8`）：官方全部接受，我方只接
+    /// `Pointer` / `Sizeof` / `Alignof` / `Offsetof` 四个白名单成员，其余
+    /// **显式拒绝**而不是静默接受 —— 「白名单项不得记为 pass，每项要有正向
+    /// 断言证明它确实被显式拒绝」（`M4-tests.md` §7.2 纪律）。
+    ChkUnsupportedUnsafe,
     ChkUnusedExpr,
     /// 返回值的**个数**不符（M4/Task 25）—— 官方 `WrongResultCount`
     /// （`not enough return values` / `too many return values`；类别面 `ret`）。
@@ -610,7 +619,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 96] = [
+    pub const ALL: [DiagCode; 97] = [
         DiagCode::ChkDuplicateLitField,
         DiagCode::ChkDuplicateLitIndex,
         DiagCode::ChkImpossibleAssert,
@@ -634,6 +643,7 @@ impl DiagCode {
         DiagCode::ChkNotAType,
         DiagCode::ChkSingleValueContext,
         DiagCode::ChkStructLitCount,
+        DiagCode::ChkUnsupportedUnsafe,
         DiagCode::ChkUnusedExpr,
         DiagCode::ChkWrongResultCount,
         DiagCode::BadChar,
@@ -735,6 +745,7 @@ impl DiagCode {
             DiagCode::ChkNotAType => "CHK-NOT-A-TYPE",
             DiagCode::ChkSingleValueContext => "CHK-SINGLE-VALUE-CONTEXT",
             DiagCode::ChkStructLitCount => "CHK-STRUCT-LIT-COUNT",
+            DiagCode::ChkUnsupportedUnsafe => "CHK-UNSUPPORTED-UNSAFE",
             DiagCode::ChkUnusedExpr => "CHK-UNUSED-EXPR",
             DiagCode::ChkWrongResultCount => "CHK-WRONG-RESULT-COUNT",
             DiagCode::BadChar => "LEX-BAD-CHAR",
