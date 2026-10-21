@@ -213,6 +213,16 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         match self.s.pkg.lookup_in_file(file, &n.value) {
             Some(obj) => {
                 let mut op = Operand::from_object(obj).unwrap_or_else(Operand::invalid);
+                // 装载面对「需类型信息」的 `const` 初始化式**不给值**
+                // （`D-M3-19`）⇒ 对象是「常量但无值」。检查面在 Task 30 里
+                // 自己折了一遍（`constfold`），命中就用折叠值顶替。
+                if op.mode == Mode::Constant
+                    && op.val.is_none()
+                    && let Some((t, v)) = self.s.consts.get(&n.value)
+                {
+                    op.typ = Some(*t);
+                    op.val = Some(v.clone());
+                }
                 // 装载面的 M3 缺口：`var x = expr` **不推类型**（只记声明了类型
                 // 的 var）。检查面就地补窄面推断 —— 否则 `var s = "a"` 之后的
                 // `s` 在索引 / 键位一律「类型未知」⇒ 静默漏报（Task 27 实测）。

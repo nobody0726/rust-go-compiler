@@ -265,20 +265,25 @@ fn t_ck_41_make_形状上界() {
     );
 }
 
-/// `len` / `cap` / `min` / `max` 的常量折叠面**暂不在本任务收口**：
-/// `rgoc-load` 的 const 初始化式只认字面量算式（`U-M3-08`），`const n =
-/// len("abc")` 仍被 `TypInvalidConstInit` 拒绝。折叠结果的消费面由
-/// Task 30（`T-CK-43`）随 `U-M3-08` 一并打开 —— 这里只钉住**当前边界**，
-/// 免得日后有人把「折叠没生效」误判成回归。
+/// `len` / `cap` / `min` / `max` 的**常量折叠**：折叠结果要能被 `const`
+/// 初始化式消费（`const n = len("abc")` + `[n]int`）。
+///
+/// 这条在 Task 29 落地时是**红**的（`U-M3-08`：装载面拒绝「需类型信息」的
+/// `const` 初始化式）；Task 30 的检查面折叠（`constfold`）把它打开 ——
+/// 现在的钉子见 `tests/const_fold.rs` 的 `T-CK-43`。这里保留**最小一条**
+/// 端到端守卫，防止折叠在后续任务里被悄悄拆掉。
 #[test]
-fn t_ck_42_常量折叠面_受_u_m3_08_限制() {
+fn t_ck_42_len_常量结果可被_const_消费() {
     const SRC3: &str = "package p\n\nconst n = len(\"abc\")\nvar a [n]int\nvar _ = a\n";
     let (mut tt, pkg, bag) = load(SRC3);
     let checked = check_package(&pkg, &mut tt, bag, &CheckOptions::default());
-    assert_eq!(
-        rows(&checked.render("t.go")),
-        vec!["3:11\tdecl"],
-        "`U-M3-08` 的当前边界（Task 30 打开后本行会变）"
+    assert!(
+        checked.diags.is_empty(),
+        "折叠结果必须能被 `const` 消费（`T-CK-43`），got {:?}",
+        checked
+            .diags
+            .iter()
+            .map(|r| (r.diag.pos.line, r.diag.pos.col, r.diag.code))
+            .collect::<Vec<_>>()
     );
-    assert_eq!(checked.diags[0].diag.code, DiagCode::TypInvalidConstInit);
 }

@@ -28,7 +28,7 @@
 //! 见 [`Session`] 的文档。入口是 [`check_package`]。
 
 use rgoc_ast::AstFile;
-use rgoc_lex::{Diag, DiagBag};
+use rgoc_lex::{Diag, DiagBag, DiagCode, Pos};
 use rgoc_load::Package;
 use rgoc_types::TypeTable;
 use rgoc_types::version::{Versions, pkg_versions};
@@ -232,6 +232,13 @@ pub struct Session<'a> {
     pub tt: &'a mut TypeTable,
     /// 装置选项。
     pub opts: &'a CheckOptions,
+    /// **检查面折叠出的包级常量**（M4/Task 30）：名字 → `(类型, 值)`。
+    ///
+    /// 装载面对「需类型信息」的 `const` 初始化式一律拒绝且**不给值**
+    /// （`D-M3-19`）；检查面能算 `len` / `cap` 的常量结果，折叠后写在这里，
+    /// 由 `expr` 的 `ident` 顶替装载面留下的「常量无值」。见
+    /// [`crate::constfold`]。
+    pub(crate) consts: std::collections::BTreeMap<String, (rgoc_types::TypeId, rgoc_const::Const)>,
     diags: Vec<RawDiag>,
     reported_any: bool,
 }
@@ -255,6 +262,7 @@ impl<'a> Session<'a> {
             pkg,
             tt,
             opts,
+            consts: std::collections::BTreeMap::new(),
             diags: Vec::new(),
             reported_any: false,
         }
@@ -269,6 +277,47 @@ impl<'a> Session<'a> {
         for d in bag.into_sorted() {
             self.report(RawDiag::hard(d));
         }
+    }
+
+    /// 装载诊断入流，**但丢掉检查面已经自己算出来的 `const` 拒绝**
+    /// （M4/Task 30）。
+    ///
+    /// `foldable` 是 [`crate::constfold::fold_package_consts`] 给出的
+    /// 「检查面能折成常量」的初始化式位置集合。装载面在那些位置报的
+    /// `TypInvalidConstInit` 是 `U-M3-08` 的**装载面**半边 —— 检查面已经
+    /// 有能力判了，就不该再转述一遍（否则 `const x = len("abc")` 在
+    /// `rgoc check` 面永远红）。
+    ///
+    /// 只丢**恰好这些位置**的 `TypInvalidConstInit`：`const I = H + 1`
+    /// （`H` 是变量）、`const x = f()`、`const x = pkg.C` 这些检查面也判不了
+    /// 的形态，装载诊断**照旧入流**（`T-TY-83` 正向不回归）。
+    pub fn seed_filtered(&mut self, bag: DiagBag, foldable: &std::collections::BTreeSet<Pos>) {
+        for d in bag.into_sorted() {
+            if d.code == DiagCode::TypInvalidConstInit && foldable.contains(&d.pos) {
+                continue;
+            }
+            self.report(RawDiag::hard(d));
+        }
+    }
+
+    /// 当前诊断条数（预演快照用）。
+    pub(crate) fn diag_len(&self) -> usize {
+        self.diags.len()
+    }
+
+    /// 当前 `reported_any` 位（预演快照用）。
+    pub(crate) fn reported_any(&self) -> bool {
+        self.reported_any
+    }
+
+    /// 回滚到快照（预演诊断丢弃用）。
+    ///
+    /// `reported_any` 必须一起回滚：它是 Cheap-trick 抑制的开关，预演把它
+    /// 置真会让主检查的「invalid operand / invalid type」抑制**提前生效**，
+    /// 从而静默吞掉本该报的诊断。
+    pub(crate) fn rollback_diags(&mut self, diag_mark: usize, reported_mark: bool) {
+        self.diags.truncate(diag_mark);
+        self.reported_any = reported_mark;
     }
 
     /// 上报一条原始诊断（**唯一入口**；Cheap-trick 在这里）。
@@ -326,7 +375,9 @@ pub fn check_package(
     opts: &CheckOptions,
 ) -> CheckedPackage {
     let mut session = Session::new(pkg, tt, opts);
-    session.seed(load_diags);
+    // Task 30：先跑「折叠预演」，再按结果过滤装载面的 `const` 拒绝。
+    let foldable = crate::constfold::fold_package_consts(&mut session);
+    session.seed_filtered(load_diags, &foldable);
     crate::expr::check_package_decls(&mut session);
     crate::stmt::check_package_bodies(&mut session);
     session.into_checked()
