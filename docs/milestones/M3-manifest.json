@@ -518,35 +518,45 @@
       "item": "`TYP-13` 接口实现判定",
       "why": "D-M3-2",
       "planned_phase": "M4",
-      "positive_evidence": "T-TY-82 正向（`//rgoc:cmp implements` ⇒ `[TYP-CMP-KIND-UNSUPPORTED]`）"
+      "positive_evidence": "T-TY-82 正向（`//rgoc:cmp implements` ⇒ `[TYP-CMP-KIND-UNSUPPORTED]`）",
+      "resolved_by": "M4",
+      "resolved_evidence": "T-CK-12/13；rgoc-types::implements"
     },
     {
       "id": "U-M3-02",
       "item": "`TYP-18` 可赋值性",
       "why": "D-M3-2",
       "planned_phase": "M4",
-      "positive_evidence": "T-TY-82 正向（`assignable`）"
+      "positive_evidence": "T-TY-82 正向（`assignable`）",
+      "resolved_by": "M4",
+      "resolved_evidence": "T-CK-11；rgoc-types::assignable（类型参数窄面留 U-M4-01）"
     },
     {
       "id": "U-M3-03",
       "item": "`TYP-19` 方法集",
       "why": "D-M3-2",
       "planned_phase": "M4",
-      "positive_evidence": "T-TY-82 正向（`methodset`）；`T-TY-28` 只做**表示**与方法集版同一性"
+      "positive_evidence": "T-TY-82 正向（`methodset`）；`T-TY-28` 只做**表示**与方法集版同一性",
+      "resolved_by": "M4",
+      "resolved_evidence": "T-CK-14；rgoc-types::methodset"
     },
     {
       "id": "U-M3-04",
       "item": "`TYP-23..26` 约束/实例化/推断/统一",
       "why": "D-M3-2",
       "planned_phase": "M4",
-      "positive_evidence": "T-TY-82 正向（`instance`）；语料里 15 例 DIFF 的**同一根因**（corpus-allowlist.txt）"
+      "positive_evidence": "T-TY-82 正向（`instance`）；语料里 15 例 DIFF 的**同一根因**（corpus-allowlist.txt）",
+      "resolved_by": "M4",
+      "resolved_evidence": "T-CK-21..25 / T-CK-81..85；判定面解除，dump 根集仍不产实例（T-CK-A3）"
     },
     {
       "id": "U-M3-05",
       "item": "**约束接口的同一性**",
       "why": "D-M3-13",
       "planned_phase": "M4 必须解除",
-      "positive_evidence": "T-TY-81 正反两侧（拒面**窄于**本项措辞：只在**两侧都是匿名接口**、且**至少一侧**含项集或 `comparable` 时拒；具名约束接口走具名分支按名字判，修订 R-32-1）"
+      "positive_evidence": "T-TY-81 正反两侧（拒面**窄于**本项措辞：只在**两侧都是匿名接口**、且**至少一侧**含项集或 `comparable` 时拒；具名约束接口走具名分支按名字判，修订 R-32-1）",
+      "resolved_by": "M4",
+      "resolved_evidence": "Task 10 identical 类型集版；cmp-basic 三条 reject 全拆"
     },
     {
       "id": "U-M3-06",
@@ -567,7 +577,9 @@
       "item": "需类型信息的 `const` 初始化式",
       "why": "D-M3-19",
       "planned_phase": "M4",
-      "positive_evidence": "T-TY-83 正向（`const x = len(\"abc\")` ⇒ `[TYP-INVALID-CONST-INIT]`）"
+      "positive_evidence": "T-TY-83 正向（`const x = len(\"abc\")` ⇒ `[TYP-INVALID-CONST-INIT]`）",
+      "resolved_by": "M4",
+      "resolved_evidence": "T-CK-43；rgoc-check::constfold（装载面仍拒）"
     },
     {
       "id": "U-M3-09",
@@ -741,5 +753,19 @@
       "scripts/check-ast-stdlib.sh",
       "tools/types-oracle/run-collide.sh（dump / --cmp / --corpus 三形态）"
     ]
+  },
+  "m4_sync": {
+    "synced_at": "2026-10-22",
+    "task": "M4/Task 40（CH-6）",
+    "flipped": [
+      "U-M3-01",
+      "U-M3-02",
+      "U-M3-03",
+      "U-M3-04",
+      "U-M3-05",
+      "U-M3-08"
+    ],
+    "revision": "M3-tests.md §5.2 R-32-2 / §6 R-6-1（追加式，历史行不改）",
+    "note": "U-M3-04 只解除判定面；dump 根集不产实例，T-CK-A3 的 15 例仍 DIFF（见 M4-report.md）。U-M3-08 只解除检查面。"
   }
 }

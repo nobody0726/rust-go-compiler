@@ -309,6 +309,28 @@
    走**具名类型**分支（同名同体 ⇒ 同一、异名 ⇒ 不同一），判定是**正确**的，不构成缺口。
    对撞时排除集按此口径断言（Task 34）。
 
+**修订 R-32-2（M4/Task 15 落地，M4/Task 40 落档，2026-10-22；**扩展**，不改上表任何一条）**
+
+`//rgoc:cmp` 的 kind 从 2 种扩到 **7 种**（新增 `assignable` / `implements` /
+`satisfies` / `methodset` / `instance`）。八条判定（两侧同批实现、同一份 fixture）：
+
+1. **kind 集合封闭七种**；拼错的名字仍走 `TYP-CMP-KIND-UNSUPPORTED`，且拒绝理由
+   列出全部七种（`T-TY-82` 在 M4 改写）。
+2. **`methodset` 是一元 kind**：其后**整段原文**是类型表达式；出现 `=>` ⇒ 格式错。
+   输出 `<行>\tmethodset\t<名字序列>`：名字按字节序升序、`,` 连接、空集写 `-`。
+3. **`instance` 语法**：`instance <F> => <a1, a2, …>`；右侧按**顶层逗号**切
+   （括号深度 + 引号状态），空实参 / 括号不配对 ⇒ 格式错。
+4. **`instance` 输出**：成功 = `<行>\tinstance\tok` + C7 **单根 dump** 的每一行
+   （每行前加一个 tab，不含 `# source:` 头）；失败 = `<行>\tinstance\treject:<category>`，
+   category 拼写唯一来源是 `rgoc_check::diag::Category::as_str()`。
+   实例失败**不产** `# reject` 行 ⇒ **不进排除集**（它是判定结果，两侧必须逐字一致）。
+5. **F 的解析面**：F 必须是本包声明的**泛型具名类型**的名字（两侧都按包作用域查名）；
+   不存在 / 非具名 / 非泛型 ⇒ **样本违规**（退出码 2），不是 `reject`。
+6. **实参先 `unalias`**：合成别名那一层不进实例体（与 `types.Unalias` 对齐）。
+7. **类别映射**：计数错 ⇒ `type-arg`；约束不满足 ⇒ `implements`。
+8. `assignable` / `implements` / `satisfies` 的 `Err(code)` ⇒ 裸 `reject` + `# reject`
+   行（排除集机制照旧）。
+
 ### 5.3 来源必须标注
 
 每条 golden / 对撞输出都要标注来源（fixture 路径 + `//rgoc:cmp` 行号），便于失败时定位到**具体那一对**。
@@ -332,6 +354,21 @@
 | U-M3-11 | 非法 UTF-8 字面量的 dump 分叉 | M2 `open_gaps` | 暴露时回填 |
 | U-M3-12 | `Pos::Ord` 按绝对坐标（非 rel） | M2 `open_gaps` | 未触发 |
 | U-M3-13 | 相对路径拼接 + `filepath.Clean` | M2 `open_gaps` | 需 SourceMap 目录信息 |
+
+> **纪律**：白名单项**不得**记为 pass；**每一项**都要有 `T-TY-8x` 的**正向**断言证明它**确实**被显式拒绝（或确实走的是文档约定的路径）。
+**修订 R-6-1（M4 翻转同步，M4/Task 40，2026-10-22；**追加**，上表历史行不改）**
+
+M4 把下表六项的**判定面**落地（`rgoc-types` / `rgoc-check` 的正式 API + 自有断言），
+白名单条目**保留原文**，只追加状态与指针：
+
+| # | M4 状态 | 证据 | 剩余面 |
+|---|---|---|---|
+| `U-M3-01` 接口实现判定 | **已解除** | `rgoc-types::implements`；`T-CK-12/13`；`//rgoc:cmp implements` 10 行逐字节 | — |
+| `U-M3-02` 可赋值性 | **已解除** | `rgoc-types::assignable`；`T-CK-11`；`//rgoc:cmp assignable` 12 行 | 类型参数窄面（`U-M4-01`） |
+| `U-M3-03` 方法集 | **已解除** | `rgoc-types::methodset`；`T-CK-14`；`//rgoc:cmp methodset` 7 行 | — |
+| `U-M3-04` 约束/实例化/推断/统一 | **判定面已解除** | `instantiate`/`unify`/`infer`；`T-CK-21..25`、`T-CK-81..85` | **dump 根集**不产实例（`T-CK-A3` 15 例仍 DIFF，见 `M4-report.md`） |
+| `U-M3-05` 约束接口的同一性 | **已解除** | `identical` 类型集版（Task 10）；`cmp-basic.go` 的 3 条 `reject` 标记全拆 | — |
+| `U-M3-08` 需类型信息的 `const` | **检查面已解除** | `rgoc-check::constfold`（`T-CK-43`）；`const x = len("abc")` 不再转述装载拒绝 | 装载面（`rgoc types`）仍拒 —— `D-M3-19` 未改 |
 
 > **纪律**：白名单项**不得**记为 pass；**每一项**都要有 `T-TY-8x` 的**正向**断言证明它**确实**被显式拒绝（或确实走的是文档约定的路径）。
 
