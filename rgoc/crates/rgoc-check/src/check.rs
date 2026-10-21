@@ -304,6 +304,16 @@ impl<'a> Session<'a> {
             if d.code == DiagCode::TypUnsupportedImportForm && unsafe_imports.contains(&d.pos) {
                 continue;
             }
+            // `--test-hooks`（`F13`）：官方 `DefPredeclaredTestFuncs`
+            // （`universe.go:232`）把 `assert` / `trace` 注入 universe ⇒
+            // 装载面报的 `undefined: assert|trace` 在检查面**不再转述**。
+            // 只在旗标打开时过滤（不开时那两条是**真**诊断）。
+            if self.opts.test_hooks
+                && d.code == DiagCode::TypUndeclaredName
+                && matches!(d.message.as_str(), "undefined: assert" | "undefined: trace")
+            {
+                continue;
+            }
             self.report(RawDiag::hard(d));
         }
     }

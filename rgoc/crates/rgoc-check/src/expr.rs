@@ -194,6 +194,20 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Selector(se) => self.selector(file, se),
             Expr::CompositeLit(cl) => self.composite_lit(file, cl, hint),
             Expr::TypeAssert(a) => self.type_assert(file, a),
+            // 类型表达式族（M4/Task 37 补）：`struct{…}` / `interface{…}` /
+            // `func(…)` 与已有的数组/切片/map/chan/指针同路 —— 它们出现在
+            // **值位置**时是类型操作数（官方 `exprOrType` 的 typexpr 分支）。
+            Expr::StructType(_)
+            | Expr::InterfaceType(_)
+            | Expr::FuncType(_)
+            | Expr::ArrayType(_)
+            | Expr::SliceType(_)
+            | Expr::MapType(_)
+            | Expr::ChanType(_)
+            | Expr::DotsType(_) => match self.type_expr(file, e) {
+                Some(t) => Operand::type_expr(t),
+                None => Operand::invalid(),
+            },
             _ => Operand::invalid(),
         }
     }
@@ -234,7 +248,16 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 }
                 op
             }
-            None => Operand::invalid(),
+            None => {
+                // `--test-hooks` 注入的 `assert` / `trace`（官方
+                // `DefPredeclaredTestFuncs`，`universe.go:232`）：它们**只在**
+                // 该旗标下存在于 universe，且是内建（不是普通函数）。
+                // 顺序：局部 → 包 → 本兜底 ⇒ 用户声明可遮蔽它们。
+                if self.s.opts.test_hooks && matches!(n.value.as_str(), "assert" | "trace") {
+                    return Operand::builtin();
+                }
+                Operand::invalid()
+            }
         }
     }
 
@@ -977,8 +1000,74 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 let t = self.type_expr(file, &u.x)?;
                 Some(self.s.tt.add_pointer(t))
             }
+            // `struct{…}`（M4/Task 37）：字段名 / 标签 / 嵌入三件套，字段类型递归。
+            Expr::StructType(st) => {
+                let mut fields = Vec::with_capacity(st.fields.len());
+                for f in &st.fields {
+                    let typ = self.type_expr(file, &f.type_)?;
+                    fields.push(rgoc_types::Field {
+                        name: f.name.as_ref().map(|n| n.value.clone()),
+                        typ,
+                        tag: f.tag.as_ref().map(|t| t.value.clone()),
+                        embedded: f.name.is_none(),
+                    });
+                }
+                let id = self.s.tt.add_struct(fields);
+                Some(self.s.tt.struct_type(id))
+            }
+            // `interface{…}`（M4/Task 37）：只接**方法集**形态；嵌入接口
+            // （无名字段）需要合并类型集 ⇒ 本阶段 `None`（`U-M4` 面）。
+            Expr::InterfaceType(it) => {
+                let mut methods = Vec::with_capacity(it.methods.len());
+                for f in &it.methods {
+                    let n = f.name.as_ref()?;
+                    let sig = self.type_expr(file, &f.type_)?;
+                    methods.push((n.value.clone(), sig));
+                }
+                let id = self
+                    .s
+                    .tt
+                    .add_interface(methods, None, rgoc_types::IfaceTSet::All);
+                Some(self.s.tt.interface_type(id))
+            }
+            // `func(…) …`（M4/Task 37）：变参 `...T` ⇒ 末参类型是 `[]T`。
+            Expr::FuncType(ft) => self.func_type_expr(file, ft),
+            // `...T` 单独出现只在参数表里，落到这里说明上下文不对。
+            Expr::DotsType(d) => self.type_expr(file, &d.elem),
             _ => None,
         }
+    }
+
+    /// 函数类型 → 签名 `TypeId`（官方 `check.typ` 的 `*FuncType` 分支窄面）。
+    fn func_type_expr(&mut self, file: FileId, ft: &rgoc_ast::FuncType) -> Option<TypeId> {
+        let mut variadic = false;
+        let mut params = Vec::with_capacity(ft.params.len());
+        for (i, p) in ft.params.iter().enumerate() {
+            let last = i + 1 == ft.params.len();
+            let (t, dots) = match &p.type_ {
+                Expr::DotsType(d) => (self.type_expr(file, &d.elem)?, true),
+                other => (self.type_expr(file, other)?, false),
+            };
+            if dots {
+                if !last {
+                    return None;
+                }
+                variadic = true;
+                let sl = self.s.tt.add_slice(t);
+                params.push((p.name.as_ref().map(|n| n.value.clone()), sl));
+            } else {
+                params.push((p.name.as_ref().map(|n| n.value.clone()), t));
+            }
+        }
+        let mut results = Vec::with_capacity(ft.results.len());
+        for p in &ft.results {
+            let t = self.type_expr(file, &p.type_)?;
+            results.push((p.name.as_ref().map(|n| n.value.clone()), t));
+        }
+        let pt = self.s.tt.add_tuple(params);
+        let rt = self.s.tt.add_tuple(results);
+        let sig = self.s.tt.add_signature(None, pt, rt, variadic);
+        Some(self.s.tt.signature_type(sig))
     }
 
     /// 官方 `compositeLit`（`literals.go:111`）的窄面（Task 27）。

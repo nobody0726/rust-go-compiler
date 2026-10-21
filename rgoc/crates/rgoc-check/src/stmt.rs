@@ -187,6 +187,16 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     }
 
     /// 类型表达式 → 类型（不是类型 ⇒ `None`）。
+    /// 类型表达式 → `TypeId`（转发到 [`ExprChecker::type_expr`]；含匿名
+    /// `struct{…}` / `interface{…}` / `func(…)`，M4/Task 37 补）。
+    fn type_expr(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
+        let mut cx = ExprChecker {
+            s: &mut *self.s,
+            env: Some(&self.env),
+        };
+        cx.type_expr(file, e)
+    }
+
     fn type_of_expr(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
         let x = self.eval(file, e);
         if x.mode == Mode::TypeExpr {
@@ -349,8 +359,12 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         for decl in &d.decls {
             match decl {
                 Decl::Var(v) => {
+                    // 显式类型走 `type_expr`（含匿名 `struct{…}` / `func(…)`），
+                    // 不走 `eval` —— 后者对类型字面量是 invalid（Task 37）。
                     let declared = match &v.type_ {
-                        Some(t) => self.type_of_expr(file, t),
+                        Some(t) => self
+                            .type_expr(file, t)
+                            .or_else(|| self.type_of_expr(file, t)),
                         None => None,
                     };
                     // 求值首值 ⇒ 无类型显式语句时用它的（默认）类型
@@ -368,7 +382,9 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 }
                 Decl::Const(c) => {
                     let declared = match &c.type_ {
-                        Some(t) => self.type_of_expr(file, t),
+                        Some(t) => self
+                            .type_expr(file, t)
+                            .or_else(|| self.type_of_expr(file, t)),
                         None => None,
                     };
                     for e in &c.values {
@@ -387,11 +403,23 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                     }
                 }
                 Decl::Type(t) => {
-                    let ty = self.type_of_expr(file, &t.type_);
-                    self.env.declare(
-                        &t.name.value,
-                        Operand::type_expr(ty.unwrap_or_else(|| self.s.tt.invalid())),
-                    );
+                    let under = self
+                        .type_expr(file, &t.type_)
+                        .or_else(|| self.type_of_expr(file, &t.type_));
+                    // 局部**具名**类型（`type S struct{…}`）必须建成 named：
+                    // 名字参与同一性，`S` 与结构相同的 `T` **不**可赋值
+                    // （官方 `typexpr.go` 的 `definedType`）。别名
+                    // （`type A = B`）不建 named，直接绑本体。
+                    let ty = match under {
+                        Some(u) if !t.alias => {
+                            let n = self.s.tt.add_named(&t.name.value);
+                            self.s.tt.set_named_underlying(n, u);
+                            self.s.tt.named_type(n)
+                        }
+                        Some(u) => u,
+                        None => self.s.tt.invalid(),
+                    };
+                    self.env.declare(&t.name.value, Operand::type_expr(ty));
                 }
                 // 体内的 `func` 声明（Go 不允许；语法面已报）
                 Decl::Func(f) => {
