@@ -54,7 +54,7 @@
 - clippy 炸点：`collapsible_if` → let-chain；`large_enum_variant` → 先 NonZero 实测；`doc_lazy_continuation` → 改措辞
 
 ## 关键设计硬事实（细节在 ledger / 契约）
-- **DiagCode 五件套**：变体按字典序声明 + ALL + `as_str` + 两个总数测试。现 **88** 码（LEX 23 + SYN 12 + TYP 36 + CHK 17）；代号**一律照官方实名**核 `src/internal/types/errors/codes.go` 与 `x/tools/.../errorcode.go`（计划稿点名的 `UndefinedIdent`/`RedeclaredInThisBlock`/`ImportNotFound` 官方**不存在**）。M4 每加一码要让 lex/parse/check 三处计数断言 + `category.rs` 快照同步 + `C8`/`M4-tests` 的 `R-4-N` 修订行
+- **DiagCode 五件套**：变体按字典序声明 + ALL + `as_str` + 两个总数测试。现 **103** 码（LEX 23 + SYN 12 + TYP 42 + CHK 26；M4 收口实测）；代号**一律照官方实名**核 `src/internal/types/errors/codes.go` 与 `x/tools/.../errorcode.go`（计划稿点名的 `UndefinedIdent`/`RedeclaredInThisBlock`/`ImportNotFound` 官方**不存在**）。M4 每加一码要让 lex/parse/check 三处计数断言 + `category.rs` 快照同步 + `C8`/`M4-tests` 的 `R-4-N` 修订行
 - **`is_exported` 用生成的 `is_upper`（类别 `Lu`）**，绝不用 Rust `char::is_uppercase`（derived `Uppercase` 比 Go `unicode.IsUpper` 多 120 码点，5 段）⇒ `Ⅰx` 会误判导出。`unicode_tables.rs` 是生成物（`tools/token-oracle/gen_unicode`），永不手改
 - **标签**：独立一趟（`rgoc-load/src/labels.rs`），`all` 是**体**级集合、每个函数体各跑一次（含函数字面量）⇒ 跨函数不可见；标签不进值作用域；`goto` 可前向 ⇒ 前向跳转表 + 收尾判 `UndeclaredLabel`/`JumpIntoBlock`。改 `check_labels` 调用点**两处都要改**
 - ⚠️ 标签**两层各报一次**：语法器 `checkBranches`（`SYN-LABEL-*` "defined"）+ 类型检查器（`TYP-*` "declared"）；断言时先滤 `TYP-*`
@@ -64,7 +64,21 @@
 - parser（M2）要点：`prec` 与 `form` 正交（判二元必须 `form == Plain`，`prec` 不进 followset）；节点位置取 `Expr::pos()`；`IfStmt.cond` 是 `Option`；深度守卫挂 `expr`/`stmt_or_nil`/`type_or_nil` 三条边，超限恰好 1 条 `SYN-NESTING-TOO-DEEP`
 - M3 遗留缺口（`M4 open_gaps` 承继）：import 名取路径最后一段 / 跨包 `lib.T` 解析（M4 两阶段）/ import 路径不转义解码 / `UndeclaredImportedName` 未做 / `//go:` 未知指令裁定归 noder 阶段
 
+## M4 收口（2026-10-22）—— **部分兑现**，别当完成读
+
+- **门禁**：`CH-1/4/5/6/7/9` `pass`；**`CH-2` `fail`（入选 75 仅 17 绿）**、**`CH-8` `fail`（`--check` 形态红）**、`CH-3` `partial`（语料 6 文件 0 行）。`phase_summary.status` 保持 `partial`。
+- **数字要成对记**：入选 75 = **17 绿**，其中**真实内容对齐只有 9**（另 8 个是「双侧零诊断」弱绿）；wave A 50 = **20 绿**，真实对齐**只有 3**。**报数只报 17/20 就是自欺** —— 弱绿只证明「不乱报」，不证明「查得出」。
+- **58 个红的形状**（精确）：假阴性 15 / 假阳性 3 / 过量 21 / 不足 19。过量与不足**同时存在** ⇒ 不是整体偏多或偏少，是**规则成片缺失 + 报点口径不一**。
+- **`A3` 结论是「0 例可提升」，但那是进步**：根因从「没有实例化」挪到了「**dump 根集不产实例**」（`var _ T[int]` 现场：oracle 5 条 / rgoc 4 条，差的那条是实例 `named`）。下一个接手的人不用再猜。
+- **纪律教训（本次新增，可复用）**：
+  1. **对账断言不能照抄上一个阶段**。M3 收口时门禁全绿，`manifest_m3.rs` 可以断言 `status == "pass"`；M4 有 `fail`/`partial`，照抄只剩「把 manifest 写成假的」或「把断言删了」两条路。正确解法是换成**可证伪的一致性**：`pass` 而证据自认「未兑现」⇒ 红；非 `pass` 必须在 `open_gaps` 点名；`done` 当且仅当全 `pass`。
+  2. **写断言时会被自己的断言抓到「空话证据」**：`positive_evidence` 写「同上」「白名单项不得记为 pass」这类没有落点的话，一律补成可追指针（`docs/…md §x` / `T-CK-xx`）。这一步别省 —— 它抓出的都是真的空话。
+  3. **不可达断言**：初版「pass 门禁名下的非 pass 测试项必须被 open_gaps 点名」与另一条**逻辑等价**，永远不触发；合成反例的「竟然通过了」当场抓住。合成反例不是形式，是唯一能证明断言有牙的东西。
+  4. **文档里的命令也可能是错的**：`M4-tests.md` §9.1 的裸形态 `scripts/in-container.sh cargo …` 从来跑不通（容器 `-w /work`，workspace 在 `rgoc/`）⇒ 走 `R-9-1` 修订，**判据不变、只改调用形态**。跑门禁前先确认「失败是缺行为还是调用形态错」。
+- **新增遗留**：`G-M4-37`（58 红收口）、`G-M4-38`（wave A 30 红）、`G-M4-39`（语法/词法级门控跨 crate）、`G-M4-40`（`--check` 形态红）、`G-M4-41`（`rgoc types --dump` 头里 `# source: rgoc` **重复一次**，M3 遗留；`C7` 规定 `#` 行被忽略 ⇒ 任何门禁都抓不到）。
+- **M5 的下手顺序**（按性价比）：赋值/转换矩阵 → 类型参数核心类型 → 递归接口同一性（`cycles1` 有 12 条**假阳性**会污染别处）→ 泛型判定面 → 语法级门控（跨 crate，风险最高）。
+
 ## 文档索引
 - `AGENTS.md`（入口）/ `docs/README.md`（索引）/ `docs/03-roadmap.md`（M0–M12）/ `docs/01-feature-set.md`
 - 契约 C1–C8（C8 = 检查诊断，M4）；manifest `M0–M4`；`M0-benchmarks.md` §6 环境陷阱；`GAP-01.md` 四维归属
-- 台账：`M1-plan/` `M2-plan/` `M3-plan/progress.md`（历史）+ `gates.sh`；**当前** `M4-plan/progress.md`（改代码前先读）
+- 台账：`M1-plan/` `M2-plan/` `M3-plan/progress.md`（历史）+ `gates.sh`；`M4-plan/progress.md`（M4 已收口，含 Task 37/38 侦察脚本 `t37-survey.sh` / `t44-okstrength.sh` —— **复用它们做逐文件 diff**）；**下一阶段** M5 开工前先读 `docs/milestones/M4-report.md` §4.3 + §12

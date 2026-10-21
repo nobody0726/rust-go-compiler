@@ -39,9 +39,10 @@
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |
 | M1 | [`milestones/M1-manifest.json`](./milestones/M1-manifest.json) | **机器可读事实** —— gate L1–L7 / 56 个测试 ID / unsupported / budget / GAP-01 | **已填实**（T-L21） |
 | M4 | [`milestones/M4-design.md`](./milestones/M4-design.md) | **怎么建 M4** —— 决策 D-M4-1~15、事实基线 F1–F18、**双腿判据**（marker verdict-only + 实跑位类对齐）、门禁 CH-1..9；含 builder-check 复审修订（B1/B2 + M1–M8/m1–m5） | **已确认**（2026-10-18；修订同日） |
-| M4 | [`milestones/M4-tests.md`](./milestones/M4-tests.md) | **怎么验 M4** —— 63 个 `T-CK-*`（甲37/乙5/丙8/丁5/反8）、类别枚举 26 类、语料三清单（入选 75 + 排除 16 + wave A 50）、修订 R-6-1/R-3-1/R-5-1/R-8-1 | **已冻结**（2026-10-18） |
-| M4 | [`milestones/M4-plan.md`](./milestones/M4-plan.md) | **怎么干 M4** —— **Task 1–44**（装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序） | ✅ **计划已产出**（执行未开始） |
-| M4 | [`milestones/M4-manifest.json`](./milestones/M4-manifest.json) | **机器可读事实（骨架）** —— gate CH-1..9（`pending`）/ 63 个 `test_ids` / `unsupported` 18（`U-M4-01..11` + M3 承接）/ 三清单 / `budget`（含 `effort_calendar`）/ `open_gaps` G-1..G-9 | 🟡 **骨架已产出**（Task 42 填实） |
+| M4 | [`milestones/M4-tests.md`](./milestones/M4-tests.md) | **怎么验 M4** —— 63 个 `T-CK-*`（甲37/乙5/丙8/丁5/反8）、类别枚举 26 类、语料三清单（入选 75 + 排除 16 + wave A 50）、修订 R-4-1..7 / R-9-1 | **已冻结**（2026-10-18） |
+| M4 | [`milestones/M4-plan.md`](./milestones/M4-plan.md) | **怎么干 M4** —— **Task 1–44**（装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序） | ✅ **全部执行**（2026-10-22） |
+| M4 | [`milestones/M4-manifest.json`](./milestones/M4-manifest.json) | **机器可读事实** —— gate CH-1..9（**6 pass / 1 partial / 2 fail**）/ 63 个 `test_ids` / `unsupported` 18 / 三清单 / `budget`（含 `measured`）/ `open_gaps` 14 条；由 `manifest_m4.rs` 对账（35 条合成反例） | ✅ **已填实**（2026-10-22） |
+| M4 | [`milestones/M4-report.md`](./milestones/M4-report.md) | **交付 A** —— 前端子集矩阵（9 行 × 四维）/ **三条分别声明**（range over func、loopvar、`unsafe`）/ `A3` 26 行复核 / wave A 处置 / 差距清单 / 接手指南 | ✅ **已产出**（2026-10-22） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 

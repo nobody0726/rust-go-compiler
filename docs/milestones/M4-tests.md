@@ -40,6 +40,7 @@
 | `R-4-5` | 2026-10-19 | Task 24 选择器面落地（后半）：新增 `CHK-INVALID-SELECTOR`（类别 `selector`；官方 `MissingFieldOrMethod`（`... undefined (type ...)` 句式）/ `AmbiguousSelector` / `InvalidMethodExpr` / `NonFieldSelector`（`operand for field selector`）四条消息的合并码）⇒ 码表 **74 → 75**（三处计数断言同步；`selector` 类首码）；查找 = 官方 `lookupFieldOrMethod` 逐深度 BFS（`seen` 遮蔽 / 同级碰撞 / 具名指针类型特例），方法值去接收者、方法表达式接收者作首参；`*T` 的 typexpr 臂接通（`(*T).M` 可达）；`pkg.Name` 与泛型接收者面不报 | `T-CK-34`（后半）落地实测（红：0/7；绿：7 行 + 接受向量零诊断） |
 | `R-4-6` | 2026-10-19 | Task 25 语句面落地：新增 **11** 个检查码 ⇒ 码表 **75 → 86**（三处计数断言同步）—— `CHK-INVALID-ASSIGN`（`assign`；`cannot use ... as ... value` / `assignment mismatch` / `cannot assign to` / 实参个数与逐参的合并码）、`CHK-WRONG-RESULT-COUNT`（`ret`）、`CHK-MISSING-RETURN`（`terminate`，报在体右花括号）、`CHK-NO-NEW-VAR`（`decl`，soft）、`CHK-SINGLE-VALUE-CONTEXT`（`comma-ok`）、`CHK-UNUSED-EXPR`（`unused`）、`CHK-NOT-A-TYPE`（`not-type`）、`CHK-INVALID-COND`/`CHK-INVALID-CASE`/`CHK-INVALID-GO-DEFER`/`CHK-INVALID-SELECT-CASE`（`stmt`）；逐元素赋值的报点在**右值**（官方 `assignment` 的 `x.pos`） | `T-CK-35` 落地实测（红：2/35 —— 只剩装载面两条 `SYN-BRANCH-FALLTHROUGH`；绿：35 行 + 接受向量零诊断） |
 | `R-4-7` | 2026-10-20 | Task 26 `range` 形态面落地：新增 **2** 个检查码 ⇒ 码表 **86 → 88**（三处计数断言同步；`range` 类自此有码）—— `CHK-INVALID-RANGE-EXPR`（官方 `InvalidRangeExpr`，含三个 `softErrorf` 的迭代变量个数面）与 `CHK-INVALID-ITER-VAR`（官方 `InvalidIterVar`）；**版本门控不走这两个码**（C8 适配表 `^requires go1\.` 最高优先 ⇒ `version` 类，实现上 `RangeKV::Gated` 与 `Bad` 分开编码）；`T-CK-36` 的报点口径由 `Expr::pos()` 改 `Expr::start_pos()`（本仓 `Operation.pos` 是运算符位），`T-CK-64` 的 range 两档同步 | `T-CK-36` 落地实测（红：0/16；绿：16 行 + 接受向量零诊断 + 门控两条 `6:12`/`8:12` 两侧一致） |
+| `R-9-1` | 2026-10-22 | §9.1 四条 cargo 命令的**调用形态**勘误：`scripts/in-container.sh` 的 `-w` 是 `/work`（仓库根），Cargo workspace 在 `rgoc/` ⇒ 裸形态必然 `could not find Cargo.toml in /work`。生效形态改为 `bash -lc 'cd rgoc && cargo …'`。**判据一字不变**（四条 exit 0、无 warning） | Task 43 实测（fmt 1.67 s / check 2.57 s / clippy 1.68 s / test 70.14 s；裸形态 exit 1/101/101/—） |
 
 ---
 
@@ -389,11 +390,23 @@ pass(file) = 腿①verdict ∧ 腿②逐字节一致 ∧ stderr==空 ∧ 重复�
 
 ### 9.1 四条 cargo 命令（判据不变）
 
+> ⚠️ **`R-9-1`（调用形态勘误，判据不变）**：容器入口的 `-w` 是 `/work`（**仓库根**），
+> 而 Cargo workspace 在 `rgoc/`。照抄下面「裸形态」会得到
+> ``error: could not find `Cargo.toml` in `/work` ``（`fmt` exit 1、`check`/`clippy` exit 101）
+> —— 那是**调用形态错**，不是判据失败。生效形态必须 `cd rgoc`。
+
 ```sh
-scripts/in-container.sh cargo fmt --all --check
-scripts/in-container.sh cargo check --workspace --all-targets
-scripts/in-container.sh cargo clippy --workspace --all-targets -- -D warnings
-scripts/in-container.sh cargo test --workspace --no-fail-fast
+# 生效形态（R-9-1）
+scripts/in-container.sh bash -lc 'cd rgoc && cargo fmt --all --check'
+scripts/in-container.sh bash -lc 'cd rgoc && cargo check --workspace --all-targets'
+scripts/in-container.sh bash -lc 'cd rgoc && cargo clippy --workspace --all-targets -- -D warnings'
+scripts/in-container.sh bash -lc 'cd rgoc && cargo test --workspace --no-fail-fast'
+
+# 原「裸形态」（R-9-1 前）—— 保留供追溯，勿直接使用
+# scripts/in-container.sh cargo fmt --all --check
+# scripts/in-container.sh cargo check --workspace --all-targets
+# scripts/in-container.sh cargo clippy --workspace --all-targets -- -D warnings
+# scripts/in-container.sh cargo test --workspace --no-fail-fast
 ```
 
 ### 9.2 对撞装置（五形态；`run-collide.sh`）
@@ -486,3 +499,4 @@ bash scripts/check-ast-stdlib.sh          # M2
 | `R-4-5` | 2026-10-19 | Task 24 选择器面落地（后半）：新增 `CHK-INVALID-SELECTOR`（类别 `selector`；官方 `MissingFieldOrMethod`（`... undefined (type ...)` 句式）/ `AmbiguousSelector` / `InvalidMethodExpr` / `NonFieldSelector`（`operand for field selector`）四条消息的合并码）⇒ 码表 **74 → 75**（三处计数断言同步；`selector` 类首码）；查找 = 官方 `lookupFieldOrMethod` 逐深度 BFS（`seen` 遮蔽 / 同级碰撞 / 具名指针类型特例），方法值去接收者、方法表达式接收者作首参；`*T` 的 typexpr 臂接通（`(*T).M` 可达）；`pkg.Name` 与泛型接收者面不报 | `T-CK-34`（后半）落地实测（红：0/7；绿：7 行 + 接受向量零诊断） |
 | `R-4-6` | 2026-10-19 | Task 25 语句面落地：新增 **11** 个检查码 ⇒ 码表 **75 → 86**（三处计数断言同步）—— `CHK-INVALID-ASSIGN`（`assign`；`cannot use ... as ... value` / `assignment mismatch` / `cannot assign to` / 实参个数与逐参的合并码）、`CHK-WRONG-RESULT-COUNT`（`ret`）、`CHK-MISSING-RETURN`（`terminate`，报在体右花括号）、`CHK-NO-NEW-VAR`（`decl`，soft）、`CHK-SINGLE-VALUE-CONTEXT`（`comma-ok`）、`CHK-UNUSED-EXPR`（`unused`）、`CHK-NOT-A-TYPE`（`not-type`）、`CHK-INVALID-COND`/`CHK-INVALID-CASE`/`CHK-INVALID-GO-DEFER`/`CHK-INVALID-SELECT-CASE`（`stmt`）；逐元素赋值的报点在**右值**（官方 `assignment` 的 `x.pos`） | `T-CK-35` 落地实测（红：2/35 —— 只剩装载面两条 `SYN-BRANCH-FALLTHROUGH`；绿：35 行 + 接受向量零诊断） |
 | `R-4-7` | 2026-10-20 | Task 26 `range` 形态面落地：新增 **2** 个检查码 ⇒ 码表 **86 → 88**（三处计数断言同步；`range` 类自此有码）—— `CHK-INVALID-RANGE-EXPR`（官方 `InvalidRangeExpr`，含三个 `softErrorf` 的迭代变量个数面）与 `CHK-INVALID-ITER-VAR`（官方 `InvalidIterVar`）；**版本门控不走这两个码**（C8 适配表 `^requires go1\.` 最高优先 ⇒ `version` 类，实现上 `RangeKV::Gated` 与 `Bad` 分开编码）；`T-CK-36` 的报点口径由 `Expr::pos()` 改 `Expr::start_pos()`（本仓 `Operation.pos` 是运算符位），`T-CK-64` 的 range 两档同步 | `T-CK-36` 落地实测（红：0/16；绿：16 行 + 接受向量零诊断 + 门控两条 `6:12`/`8:12` 两侧一致） |
+| `R-9-1` | 2026-10-22 | §9.1 四条 cargo 命令的**调用形态**勘误：`scripts/in-container.sh` 的 `-w` 是 `/work`（仓库根），Cargo workspace 在 `rgoc/` ⇒ 裸形态必然 `could not find Cargo.toml in /work`。生效形态改为 `bash -lc 'cd rgoc && cargo …'`。**判据一字不变**（四条 exit 0、无 warning） | Task 43 实测（fmt 1.67 s / check 2.57 s / clippy 1.68 s / test 70.14 s；裸形态 exit 1/101/101/—） |

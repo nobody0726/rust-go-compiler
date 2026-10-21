@@ -142,6 +142,12 @@
         "date": "2026-10-18",
         "content": "§8 CH-8 形态计数勘误：四 ⇒ 五（与 §9.2 对齐）；判据不变",
         "trigger": "设计复审（M4 对齐）"
+      },
+      {
+        "id": "R-9-1",
+        "date": "2026-10-22",
+        "content": "§9.1 四条 cargo 命令的调用形态勘误：容器 -w=/work（仓库根）而 workspace 在 rgoc/，裸形态必然 could not find Cargo.toml；生效形态改为 bash -lc 'cd rgoc && cargo …'。判据不变",
+        "trigger": "Task 43 实测（裸形态 exit 1/101/101；生效形态四条 exit 0）"
       }
     ]
   },
@@ -702,10 +708,21 @@
       "effort_note": "roadmap §6：6–12 人周 / 12 周日历；AI 代理形态不换算人周（沿 roadmap §6.1），以日历字段承载 roadmap §6.2 的「投入/日历期限」；止损切片见 M4-design §6.3"
     },
     "measured": {
-      "workspace_tests_passed": 1539,
+      "workspace_tests_passed": 1541,
       "workspace_tests_failed": 0,
-      "workspace_wall_s": 73,
-      "note": "Task 43 Step 1/3：容器内 `cargo test --workspace --no-fail-fast` 实测（含 doctest）；墙钟 1:12.93。四条 cargo 的其余三条见 M4-report.md §回归"
+      "workspace_suites": 136,
+      "wall_s": {
+        "fmt": 1.67,
+        "check": 2.57,
+        "clippy": 1.68,
+        "test": 70.14,
+        "selfcheck_m0": 0.7,
+        "selfcheck_m1": 0.13,
+        "selfcheck_ast_golden": 1.69,
+        "selfcheck_ast_testdata": 1.66,
+        "selfcheck_ast_stdlib": 11.7
+      },
+      "note": "Task 43：四条 cargo（R-9-1 生效形态）+ 五条既有自检，全部 exit 0；测试数含 doctest，136 个 suite 全 ok。裸形态的 exit 1/101 见 R-9-1"
     }
   },
   "open_gaps": {
@@ -788,6 +805,12 @@
         "item": "`run-collide.sh --check` 形态仍红（首例 check/cycles0.go）",
         "note": "装置本身无恙：dump(14)/cmp(7)/corpus(31) 三形态绿、oracle 侧 gofmt 与 go vet 干净、两侧 stderr 空、重复运行 sha256 确定；红在入选 75 的内容对齐，根因同 G-M4-37",
         "gate": "CH-8"
+      },
+      {
+        "id": "G-M4-41",
+        "item": "`rgoc types --dump` 输出头里 `# source: rgoc` 重复一次（M3 遗留，非 M4 引入）",
+        "note": "`types_cmd.rs` 自写一行头，而 `rgoc_types::dump` 的正文自带同一行；`cmp_cmd.rs` 用 strip_prefix 剥掉、`types_cmd.rs` 没剥。C7 规定 `#` 行为注释且两侧忽略 ⇒ 任何门禁都抓不到。证据：issue65854.go 两侧 dump 对照（oracle 5 条 / rgoc 4 条，且 rgoc 头部重复）。去向：M5 收口顺手修（一处 strip_prefix），本阶段不动 —— `rgoc types` 口径按 T-TY-83/T-CK-E2 不改",
+        "gate": "T-CK-E2"
       }
     ]
   },
@@ -809,9 +832,9 @@
       "bash tools/types-oracle/run-collide.sh --check go_source_code/src/internal/types/testdata",
       "bash tools/types-oracle/run-collide.sh --check --list tools/types-oracle/check-fixedbugs-waveA.txt go_source_code/src/internal/types/testdata"
     ],
-    "completed_tasks": "Task 1–36 完成；Task 37 部分（入选 75 实测 17 绿）；Task 38 部分（wave A 20/50，按 D-M4-14 显式降级）；Task 39–42 完成；Task 43–44 收尾中",
+    "completed_tasks": "Task 1–36 完成；Task 37 部分（入选 75 实测 17 绿 / 真实对齐 9）；Task 38 部分（wave A 20/50，真实对齐 3，按 D-M4-14 显式降级）；Task 39–44 完成",
     "workspace_tests": {
-      "passed": 1539,
+      "passed": 1541,
       "failed": 0
     }
   }
