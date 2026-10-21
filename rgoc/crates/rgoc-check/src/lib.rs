@@ -36,6 +36,7 @@ pub(crate) mod constfold;
 pub mod diag;
 pub(crate) mod env;
 pub mod expr;
+pub mod initorder;
 pub mod lookup;
 pub mod operand;
 pub mod render;
