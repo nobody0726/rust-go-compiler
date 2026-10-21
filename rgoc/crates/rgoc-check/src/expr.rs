@@ -1517,6 +1517,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         {
             return crate::unsafe_pkg::select(self, e);
         }
+        // `pkg.X`（M4/Task 35）：包名不是操作数模式，只能在这里被消费
+        // （官方 `call.go:698-700` 同一形状）。
+        if let Some(op) = crate::imports::select(self, file, e) {
+            return op;
+        }
         let mut x = self.expr(file, &e.x);
         let sel = e.sel.value.as_str();
         if x.mode == Mode::Invalid {

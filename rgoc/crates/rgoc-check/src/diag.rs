@@ -240,7 +240,16 @@ pub fn category_of(code: DiagCode) -> Category {
         ChkDuplicateLitField | ChkDuplicateLitIndex | ChkInvalidLit => Category::Decl,
 
         // ── undef / unused ─────────────────────────────────────────────
-        SynLabelUndefined | TypUndeclaredLabel | TypUndeclaredName => Category::Undef,
+        // `TypUndeclaredImportedName` 与 `TypUnexportedName` 都是官方 `pkg.X` 面的
+        // 两条独立码（M4/Task 35）：前者的消息 `undefined: pkg.X` 命中适配表的
+        // `^undefined: ` 规则；后者 `name X not exported by package Y` 官方**没有**
+        // 对应句式 —— 语义是「这个名字在这里不可见」，与 `undef` 同族，落同一类
+        // （C8 §4 的语义字典按**语义**投影，不按字面）。
+        SynLabelUndefined
+        | TypUndeclaredImportedName
+        | TypUndeclaredLabel
+        | TypUndeclaredName
+        | TypUnexportedName => Category::Undef,
         SynLabelUnused | TypUnusedLabel => Category::Unused,
 
         // ── cycle / import / version / shift ───────────────────────────

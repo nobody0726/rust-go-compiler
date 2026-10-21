@@ -70,6 +70,12 @@ use crate::package::Package;
 /// 都对应一条 [`DiagCode::TypUndeclaredName`]；同层重复声明对应
 /// [`DiagCode::TypDuplicateDecl`]。
 pub fn resolve_bodies(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
+    // ⚠️ 必须在 `mem::take(&mut pkg.asts)` **之前**算：`import_bindings` 要扫语法树
+    let bindings: std::collections::BTreeMap<rgoc_lex::FileId, Vec<(String, String)>> = pkg
+        .asts
+        .iter()
+        .map(|a| (a.pos.file, pkg.import_bindings(a.pos.file)))
+        .collect();
     // 与 `collect_decls` 同一个理由：`Checker` 要 `&mut` 借作用域表，
     // 而收尾还要写回 `pkg` 的字段。
     let asts = std::mem::take(&mut pkg.asts);
@@ -77,7 +83,7 @@ pub fn resolve_bodies(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) 
     // `file_scopes` 与 `asts` 同序（`load_sources` 同一个循环里 push 的）
     let file_scopes: Vec<ScopeId> = pkg.file_scopes.iter().map(|(_, s)| *s).collect();
 
-    let mut ck = Checker::for_bodies(tt, &mut scopes, bag, pkg.scope);
+    let mut ck = Checker::for_bodies(tt, &mut scopes, bag, pkg.scope, &pkg.imports, bindings);
     ck.walk_files(&asts, &file_scopes);
     drop(ck);
 
@@ -147,6 +153,8 @@ impl Checker<'_> {
     /// 逐文件走一遍：包级的**值**表达式 + 每个 `func` 的体。
     fn walk_files(&mut self, asts: &[AstFile], file_scopes: &[ScopeId]) {
         for (ast, &fscope) in asts.iter().zip(file_scopes) {
+            // 体内也可能写限定名类型（`var x lib.T`）⇒ 文件要显式切换
+            self.cur_file = Some(ast.pos.file);
             for decl in &ast.decls {
                 match decl {
                     // 包级 `var` 的**类型**已由 `collect_decls` 解析（`C7` §3 的根）

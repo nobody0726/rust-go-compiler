@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：101 个码各有恰好一个类别（M4/Task 34 后 101）
-    assert_eq!(DiagCode::ALL.len(), 101, "码表总数（M4/Task 34 后 101）");
+    // 总数守恒：103 个码各有恰好一个类别（M4/Task 35 后 103）
+    assert_eq!(DiagCode::ALL.len(), 103, "码表总数（M4/Task 35 后 103）");
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn t_ck_16_other_值域恰好是三个实现限制码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 38] = [
+    let vectors: [(DiagCode, Category); 40] = [
         (ChkDuplicateLitField, Category::Decl),
         (ChkDuplicateLitIndex, Category::Decl),
         (ChkInvalidLit, Category::Decl),
@@ -134,6 +134,9 @@ fn t_ck_16_抽样映射向量() {
         (TypInvalidMainDecl, Category::Decl),
         (TypInvalidInitSig, Category::Ret),
         (TypInvalidMainSig, Category::Ret),
+        // M4/Task 35：`pkg.X` 面两条独立码，同落 `undef`
+        (TypUndeclaredImportedName, Category::Undef),
+        (TypUnexportedName, Category::Undef),
         (ChkInvalidIndex, Category::Index),
         (ChkInvalidOperation, Category::OpInvalid),
         (ChkInvalidSelector, Category::Selector),
@@ -214,7 +217,7 @@ fn t_ck_16_每类计数快照() {
         ("stmt", 11),
         ("terminate", 1),
         ("type-arg", 3),
-        ("undef", 3),
+        ("undef", 5),
         ("unused", 3),
         ("unsafe", 1),
         ("version", 3),

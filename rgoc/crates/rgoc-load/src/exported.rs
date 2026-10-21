@@ -41,3 +41,27 @@ pub fn is_exported(name: &str) -> bool {
     // 空串 ⇒ `RuneError` ⇒ 假；非法字节同理（本仓的名字都是 `String`，不会有后者）。
     name.chars().next().is_some_and(is_upper)
 }
+
+/// 官方 `UnexportedName` 的**唯一措辞**（`go/types/call.go:749`）：
+/// `name %s not exported by package %s`。
+///
+/// 为什么把措辞放在这里而不是各写一遍：装载面（**类型位置** `pkg.T`）与检查面
+/// （**值位置** `pkg.X`）各报一次同一个诊断，措辞漂移会让「同一条官方错误」
+/// 在我们这里长出两个版本（M4/Task 35 的两处调用点见 `typeexpr.rs` /
+/// `rgoc-check/src/imports.rs`）。
+#[must_use]
+pub fn unexported_message(sel: &str, pkg_name: &str) -> String {
+    format!("name {sel} not exported by package {pkg_name}")
+}
+
+/// 官方 `UndeclaredImportedName` 的措辞（`go/types/call.go:728/741/743`）。
+///
+/// * 没有忽略大小写的近似名 ⇒ `undefined: pkg.sel`；
+/// * 有 ⇒ `undefined: pkg.sel (but have <那个名字>)`（官方只报**第一个**）。
+#[must_use]
+pub fn undeclared_imported_message(pkg: &str, sel: &str, hint: Option<&str>) -> String {
+    match hint {
+        Some(h) => format!("undefined: {pkg}.{sel} (but have {h})"),
+        None => format!("undefined: {pkg}.{sel}"),
+    }
+}

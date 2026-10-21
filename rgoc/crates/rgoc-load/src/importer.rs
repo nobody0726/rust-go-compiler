@@ -43,10 +43,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rgoc_ast::{Decl, ImportDecl};
-use rgoc_lex::{Diag, DiagBag, DiagCode, FileTable, Pos};
-use rgoc_types::TypeTable;
+use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, FileTable, Pos};
+use rgoc_types::{ObjKind, Object, ScopeId, TypeTable};
 
-use crate::package::{Package, Source, load_sources_into, read_sources};
+use crate::exported::is_exported;
+use crate::package::{
+    Package, Source, default_import_name, evaluate_package, imp_path, load_decls_only, read_sources,
+};
 
 /// import 链条的最大长度（**不含**入口包）—— `M3-design.md` §7.2 的「硬上限」。
 ///
@@ -195,19 +198,40 @@ struct Session<'a> {
 
 impl Session<'_> {
     /// 装载一个包（含它的直接依赖）。
+    ///
+    /// # 四步（M4/Task 35 把原来的「先求值、后 import」翻了过来）
+    ///
+    /// ```text
+    /// 阶段 A（load_decls_only）  解析 + 名字 —— 还没有类型
+    ///   ↓
+    /// resolve_imports            递归装载依赖（每个依赖自己走完这四步）
+    ///   ↓
+    /// stitch_imports             把 import 名缝进文件作用域（点导入 / 改名 / 冲突）
+    ///   ↓
+    /// 阶段 B（evaluate_package） 类型表达式 + 常量 + 体内
+    /// ```
+    ///
+    /// 为什么必须这个顺序：`lib.T` 是**类型表达式**，阶段 B 的 `lookup_type`
+    /// 要沿作用域链找 `lib` 与 `T`；而 `lib` 的对象与 `T` 的类型都只有在依赖
+    /// 装载完之后才存在。M3 的顺序（先求值本包、后 import）正是 `importer`
+    /// 模块文档第 4 条记的那个缺口，这里补齐。
     fn load_package(&mut self, files: &[PathBuf], lang: Option<&str>) -> Package {
         let (sources, skipped) = read_sources(files);
         let borrowed: Vec<Source<'_>> = sources
             .iter()
             .map(|(n, b)| (n.as_str(), b.as_slice()))
             .collect();
-        let (mut pkg, sub) = load_sources_into(self.tt, &mut self.file_table, &borrowed, lang);
+        let (mut pkg, mut sub) = load_decls_only(self.tt, &mut self.file_table, &borrowed, lang);
         pkg.skipped = skipped;
+        // 依赖先装载（递归；`pkg.imports` 在这一步填上）
+        self.resolve_imports(&mut pkg, lang);
+        // 再把 import 名缝进文件作用域 —— 必须早于阶段 B
+        stitch_imports(&mut pkg, &mut sub);
+        // 依赖齐了，本包才求值
+        evaluate_package(self.tt, &mut pkg, &mut sub);
         for d in sub.into_sorted() {
             self.bag.push(d);
         }
-        // 本包求值完了，才轮到它的直接依赖（模块文档第 4 条）
-        self.resolve_imports(&mut pkg, lang);
         pkg
     }
 
@@ -344,4 +368,199 @@ fn import_path(imp: &ImportDecl) -> Option<String> {
 /// `import` spec 的位置（有别名取别名，否则取 spec 本身）—— 与 Task 23 同一取法。
 fn import_pos(imp: &ImportDecl) -> Pos {
     imp.name.as_ref().map_or(imp.pos, |n| n.pos)
+}
+
+// ══════════════════════ 缝 import 名（M4/Task 35，`T-CK-74/75`）══════════════════
+
+/// 把一个包的 `import` **缝进文件作用域** —— 三种形态的名字进入规则。
+///
+/// # 与官方的对应（`go/types/resolver.go:262-334` + `:461-478`）
+///
+/// | 规则 | 官方 | 这里 |
+/// |---|---|---|
+/// | 无别名 ⇒ 用**被导入包自己的包名**（不是路径最后一段） | `name := imp.name` | 阶段 A 只能拿到路径最后一段（那时依赖还没装载）⇒ 这里**改名**（`Ruling 35-2`） |
+/// | 别名 `f` ⇒ 绑定 `f` | `name = d.spec.Name.Name` | 阶段 A 已绑好，这里只做冲突检查 |
+/// | `_` ⇒ **不绑定** | `declare` 对 `_` 早退 | 阶段 A 就没绑，这里跳过 |
+/// | `.` ⇒ 把被导入包的**导出名**注入本文件 | `:311-333`（`token.IsExported` 过滤 + `redeclared in this block`） | 同 |
+/// | `import init "x"` ⇒ 错 | `:288`（`InvalidInitDecl`） | 同 |
+/// | 文件层名字与**包层**同名 ⇒ 错 | `:461-478`（`already declared through import/dot-import of %s`） | 同 |
+///
+/// # 为什么拆成「先规划、后落地」
+///
+/// 规划阶段要**读** `pkg.imports`（被依赖包的导出表），落地阶段要**写**
+/// `pkg.scopes` —— 两者都在 `pkg` 里，同时借会打架。于是先把要注入的对象
+/// **克隆**出来（`Object` 是 `String + 几个 Option`，克隆很便宜），再统一写。
+///
+/// # 只对**已装载**的 import 报冲突
+///
+/// 官方在 import 失败时 `return`（`:278`），**不建** `PkgName` ⇒ 也不会有冲突。
+/// 我们的阶段 A 无论成败都先占了个临时名，所以这里只对 `pkg.imports` 里真有的
+/// 路径做改名 / 注入 / 冲突 —— 失败的那条留给 `resolve_imports` 的
+/// `TYP-UNSUPPORTED-IMPORT-FORM` / `TYP-BROKEN-IMPORT`。
+pub fn stitch_imports(pkg: &mut Package, bag: &mut DiagBag) {
+    let plans = plan_stitches(pkg);
+    // ── 落地：改名 / 点导入注入 ──────────────────────────────────────────
+    for (fscope, from, to, pos) in plans.renames {
+        let Some(mut obj) = pkg.scopes.remove(fscope, &from) else {
+            continue; // 阶段 A 没绑（`_` / `.` / 路径缺失）⇒ 没得改
+        };
+        obj.name.clone_from(&to);
+        if pkg.scopes.insert(fscope, obj).is_some() {
+            bag.push(Diag {
+                pos,
+                code: DiagCode::TypDuplicateDecl,
+                message: format!("{to} redeclared in this block"),
+            });
+        }
+    }
+    for (fscope, dot_pos, items) in plans.dots {
+        for obj in items {
+            let name = obj.name.clone();
+            if pkg.scopes.get(fscope).lookup_local(&name).is_some() {
+                // 官方 `:325`：`err.addf(d.spec.Name, "%s redeclared in this block", ...)`
+                bag.push(Diag {
+                    pos: dot_pos,
+                    code: DiagCode::TypDuplicateDecl,
+                    message: format!("{name} redeclared in this block"),
+                });
+                continue;
+            }
+            pkg.scopes.insert(fscope, obj);
+        }
+    }
+    // ── `import init "x"` ────────────────────────────────────────────────
+    for pos in plans.init_errs {
+        bag.push(Diag {
+            pos,
+            code: DiagCode::TypInvalidInitDecl,
+            message: "cannot import package as init - init must be a func".to_owned(),
+        });
+    }
+    // ── 文件层 × 包层同名（官方 `:461-478`）───────────────────────────────
+    for (fscope, name, qual) in plans.collisions {
+        let Some(alt_pos) = pkg
+            .scopes
+            .get(pkg.scope)
+            .lookup_local(&name)
+            .and_then(|o| o.pos)
+        else {
+            continue;
+        };
+        let msg = if pkg
+            .scopes
+            .get(fscope)
+            .lookup_local(&name)
+            .is_some_and(|o| o.kind == ObjKind::PkgName)
+        {
+            format!("{name} already declared through import of {qual}")
+        } else {
+            format!("{name} already declared through dot-import of {qual}")
+        };
+        bag.push(Diag {
+            pos: alt_pos,
+            code: DiagCode::TypDuplicateDecl,
+            message: msg,
+        });
+    }
+}
+
+/// `stitch_imports` 的**只读**规划结果。
+#[derive(Default)]
+struct Plans {
+    /// `(文件作用域, 临时名, 真名, 报点)` —— 无别名 import 的改名。
+    renames: Vec<(ScopeId, String, String, Pos)>,
+    /// `(文件作用域, 要注入的导出对象)` —— 点导入。
+    dots: Vec<(ScopeId, Pos, Vec<Object>)>,
+    /// `import init "x"` 的报点。
+    init_errs: Vec<Pos>,
+    /// `(文件作用域, 名字, 包限定串)` —— 与包层同名的候选。
+    collisions: Vec<(ScopeId, String, String)>,
+}
+
+/// 官方 `types.Package.String()`：`package <名字> ("<路径>")`。
+///
+/// 消息里那句 `already declared through import of %s` 的 `%s` 就是它
+/// （`pkg.Imported()` / `obj.Pkg()` 都渲染成这个形状）—— 探针实测：
+/// `lib already declared through import of package lib ("lib")`。
+fn pkg_qual(name: &str, path: &str) -> String {
+    format!("package {name} (\"{path}\")")
+}
+
+fn plan_stitches(pkg: &Package) -> Plans {
+    let mut plans = Plans::default();
+    // 每个文件：作用域 + 它的 import spec（声明序）
+    let files: Vec<(FileId, ScopeId)> = pkg
+        .asts
+        .iter()
+        .filter_map(|a| Some((a.pos.file, pkg.file_scope(a.pos.file)?)))
+        .collect();
+    for (fid, fscope) in files {
+        // `pkg.imports` 里真有的那几条：名字 → 路径
+        let mut bound: Vec<(String, String)> = Vec::new();
+        for ast in pkg.asts.iter().filter(|a| a.pos.file == fid) {
+            for decl in &ast.decls {
+                let Decl::Import(imp) = decl else { continue };
+                let Some(path) = imp_path(imp) else { continue };
+                let Some(dep) = pkg.imports.get(&path) else {
+                    continue; // 没装载成功 ⇒ 官方连 PkgName 都不建
+                };
+                let qual = pkg_qual(&dep.name, &path);
+                let explicit = imp.name.as_ref().map(|n| (n.value.as_str(), n.pos));
+                let pos = import_pos(imp);
+                match explicit {
+                    Some(("_", _)) => {}
+                    Some((".", dot_pos)) => {
+                        let items = dot_objects(dep);
+                        // 注入的每个名字都要过「文件层 × 包层」那道检查
+                        for o in &items {
+                            plans
+                                .collisions
+                                .push((fscope, o.name.clone(), qual.clone()));
+                        }
+                        plans.dots.push((fscope, dot_pos, items));
+                    }
+                    Some((name, _)) => bound.push((name.to_string(), path.clone())),
+                    None => {
+                        // 无别名：真名 = 被导入包的包名；与阶段 A 的临时名不同就改名
+                        let temp = default_import_name(&path);
+                        let real = if dep.name.is_empty() {
+                            temp.clone()
+                        } else {
+                            dep.name.clone()
+                        };
+                        if real != temp {
+                            plans.renames.push((fscope, temp, real.clone(), pos));
+                        }
+                        bound.push((real, path.clone()));
+                    }
+                }
+                // `import init "x"`：官方 `:288`，报在 spec 的名字位上
+                if imp.name.as_ref().is_some_and(|n| n.value == "init") {
+                    plans.init_errs.push(pos);
+                }
+            }
+        }
+        // 与包层同名的候选（只对**已装载**的绑定 —— 见函数文档末段）
+        for (name, path) in bound {
+            let qual = pkg
+                .imports
+                .get(&path)
+                .map_or_else(|| pkg_qual(&name, &path), |d| pkg_qual(&d.name, &path));
+            plans.collisions.push((fscope, name, qual));
+        }
+    }
+    plans
+}
+
+/// 点导入要注入的对象：被导入包**包作用域本层**的**导出**名（官方 `:311-333`）。
+///
+/// 顺序 = 名字字典序（`ScopeTable` 的 `BTreeMap` 序）—— 官方遍历 Go map 是
+/// 随机序，但它的诊断最后按位置排序，所以顺序不影响可观测结果；我们取确定序。
+fn dot_objects(dep: &Package) -> Vec<Object> {
+    let scope = dep.scopes.get(dep.scope);
+    scope
+        .names()
+        .filter(|n| is_exported(n))
+        .filter_map(|n| scope.lookup_local(n).cloned())
+        .collect()
 }

@@ -104,11 +104,13 @@ fn 代号表恰为冻结总数且无重复() {
     // M4/Task 31 再 +1（`ChkUnsupportedUnsafe` —— `unsafe` 白名单外成员；
     // `unsafe` 类别自此有码）⇒ 共 **97**；
     // M4/Task 34 再 +4（`main`/`init` 的形态与签名：`TypInvalidInitDecl` /
-    // `TypInvalidInitSig` / `TypInvalidMainDecl` / `TypInvalidMainSig`）⇒ 共 **101**。
+    // `TypInvalidInitSig` / `TypInvalidMainDecl` / `TypInvalidMainSig`）⇒ 共 **101**；
+    // M4/Task 35 再 +2（`pkg.X` 面：`TypUndeclaredImportedName` / `TypUnexportedName`）
+    // ⇒ 共 **103**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 101);
+    assert_eq!(DiagCode::ALL.len(), 103);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

@@ -252,6 +252,19 @@ impl ScopeTable {
         self.get_mut(id).insert(obj)
     }
 
+    /// 从本层**摘掉**一个名字；返回被摘掉的对象。
+    ///
+    /// 只有一个消费者：`import` 名的**改名**（M4/Task 35，`Ruling 35-2`）——
+    /// 阶段 A 只能拿到路径最后一段当临时名，真正的包名要等被依赖包装载完才知道。
+    /// 除此之外「从作用域里删名字」在 Go 语义里不存在（遮蔽是加一层，不是删）。
+    ///
+    /// # Panics
+    ///
+    /// 同 [`ScopeTable::get`]。
+    pub fn remove(&mut self, id: ScopeId, name: &str) -> Option<Object> {
+        self.get_mut(id).objects.remove(name)
+    }
+
     /// 只读句柄 —— 沿父链查名字的**唯一入口**。
     ///
     /// # Panics

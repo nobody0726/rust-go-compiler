@@ -557,6 +557,15 @@ pub enum DiagCode {
     /// ⚠️ 这条**不在转换语境**生效（那里是 `TypInvalidConversion`），
     /// 它服务**赋值/声明**语境：`const x int = 1.5` ⇒ 「1.5 truncated to integer」。
     TypTruncatedFloat,
+    /// `pkg.X` 里的 `X` 在**被导入包的包作用域**里不存在 —— 官方
+    /// `UndeclaredImportedName`（消息 `undefined: pkg.X`；忽略大小写撞上时
+    /// 是 `undefined: pkg.X (but have Y)`）
+    ///
+    /// 为什么是**独立码**而不是复用 [`Self::TypUndeclaredName`]：官方就是两条
+    /// （`go/types/call.go:728/741/743` vs `typexpr.go:30`），触发者不同
+    /// （前者要「`pkg` 是本文件的 import 名」这个前提）、报点不同（前者恒在
+    /// `.` 后的名字位）、类别相同（`undef`）。M4/Task 35 落地。
+    TypUndeclaredImportedName,
     /// `goto` 的标签在整个函数体里**找不到** —— 官方 `UndeclaredLabel`
     /// （消息 `label %s not declared`）
     ///
@@ -570,10 +579,20 @@ pub enum DiagCode {
     ///
     /// 官方两个来源：**类型位置** `go/types/typexpr.go:30`（`check.errorf(e, UndeclaredName, "undefined: %s", e.Name)`）、
     /// **值位置**由解析器收尾统一报（同一个代号）。另有一条 `UndeclaredImportedName`
-    /// 专管 `pkg.Sel`（消息 `undefined: pkg.Sel`）—— 那条**归 Task 27**（源码 import）。
+    /// 专管 `pkg.Sel`（消息 `undefined: pkg.Sel`）—— 那是上面那条独立码
+    /// （M4/Task 35 落地）。
     /// ⚠️ `M3-plan.md` Task 25 写的 `UndefinedIdent` 在官方**不存在** ⇒ 用官方名。
     /// 位置取**该标识符**处；每次**出现**都报（实测 `y = 1; _ = y` 报两条）。
     TypUndeclaredName,
+    /// 访问了被导入包的**非导出**名字 —— 官方 `UnexportedName`
+    /// （消息 `name %s not exported by package %s`，`go/types/call.go:749`）
+    ///
+    /// 判据是 [`crate::unicode_tables::is_upper`]（= 官方 `token.IsExported`，
+    /// 类别 `Lu`），**不是** Rust std 的 `char::is_uppercase`（多 120 个码点，
+    /// 见 `rgoc-load::exported` 的模块文档）。
+    /// 官方在这条之后**照常继续**（`// ok to continue`）—— 所以本码之后仍会
+    /// 用该对象的类型，不把操作数降级成 `invalid`。
+    TypUnexportedName,
     /// 请求了**本阶段尚不可判**的可赋值性形态 —— **官方没有对应代号**
     ///
     /// 触发者：`assignable`（M4/Task 6）的窄面（`Ruling 6-2`）—— 要**类型集
@@ -646,7 +665,7 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 101] = [
+    pub const ALL: [DiagCode; 103] = [
         DiagCode::ChkDuplicateLitField,
         DiagCode::ChkDuplicateLitIndex,
         DiagCode::ChkImpossibleAssert,
@@ -740,8 +759,10 @@ impl DiagCode {
         DiagCode::TypPackageRequiresNewerGo,
         DiagCode::TypRepeatedDecl,
         DiagCode::TypTruncatedFloat,
+        DiagCode::TypUndeclaredImportedName,
         DiagCode::TypUndeclaredLabel,
         DiagCode::TypUndeclaredName,
+        DiagCode::TypUnexportedName,
         DiagCode::TypUnsupportedAssignability,
         DiagCode::TypUnsupportedImportForm,
         DiagCode::TypUnsupportedPendingInstanceArg,
@@ -847,8 +868,10 @@ impl DiagCode {
             DiagCode::TypPackageRequiresNewerGo => "TYP-PACKAGE-REQUIRES-NEWER-GO",
             DiagCode::TypRepeatedDecl => "TYP-REPEATED-DECL",
             DiagCode::TypTruncatedFloat => "TYP-TRUNCATED-FLOAT",
+            DiagCode::TypUndeclaredImportedName => "TYP-UNDECLARED-IMPORTED-NAME",
             DiagCode::TypUndeclaredLabel => "TYP-UNDECLARED-LABEL",
             DiagCode::TypUndeclaredName => "TYP-UNDECLARED-NAME",
+            DiagCode::TypUnexportedName => "TYP-UNEXPORTED-NAME",
             DiagCode::TypUnsupportedAssignability => "TYP-UNSUPPORTED-ASSIGNABILITY",
             DiagCode::TypUnsupportedImportForm => "TYP-UNSUPPORTED-IMPORT-FORM",
             DiagCode::TypUnusedLabel => "TYP-UNUSED-LABEL",

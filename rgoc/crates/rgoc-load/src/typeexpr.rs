@@ -139,9 +139,103 @@ impl Checker<'_> {
             // （否则 `unsafe.Sizeof(p)` 算不出尺寸，Task 30 的折叠面跟着瞎）。
             Expr::Selector(s) if is_unsafe_pointer(s) => self.tt.add_basic(BasicId::UnsafePointer),
 
-            // 其余（限定名 `pkg.T`、二元并集、索引/切片/调用/字面量…）不是类型
+            // 限定名 `pkg.T`（M4/Task 35，`T-CK-74`）。
+            Expr::Selector(s) => self.resolve_qualified(s),
+
+            // 其余（二元并集、索引/切片/调用/字面量…）不是类型
             _ => self.tt.invalid(),
         }
+    }
+
+    /// `pkg.X` 出现在**类型位置**：先判 `pkg` 是不是本文件的 import 名，
+    /// 再按官方 `call.go:718-760` 的三条判据取对象。
+    ///
+    /// | 情形 | 官方 | 这里 |
+    /// |---|---|---|
+    /// | `pkg` 不是包名（普通变量的选择器） | 走字段/方法查找 | `None` 臂 ⇒ 交给 [`Expr::Selector`] 的默认 `invalid` |
+    /// | 包在、`X` 不在 | `undefined: pkg.X`（`UndeclaredImportedName`） | [`DiagCode::TypUndeclaredImportedName`] |
+    /// | 包在、`X` 在但**没导出** | `name X not exported by package Y`（`UnexportedName`） | [`DiagCode::TypUnexportedName`]（**照常取类型**，官方 `// ok to continue`） |
+    /// | 包在、`X` 在且导出 | 取该对象的类型 | 同 |
+    ///
+    /// 报点一律是 `s.sel`（`.` 后那个名字），与官方 `check.errorf(e.Sel, …)` 一致。
+    fn resolve_qualified(&mut self, s: &rgoc_ast::SelectorExpr) -> TypeId {
+        let Expr::Name(n) = &*s.x else {
+            return self.tt.invalid();
+        };
+        let Some((dep_name, obj)) = self.imported_member(&n.value, &s.sel.value) else {
+            return self.tt.invalid();
+        };
+        let Some(obj) = obj else {
+            let hint = self.imported_hint(&n.value, &s.sel.value);
+            self.bag.push(Diag {
+                pos: s.sel.pos,
+                code: DiagCode::TypUndeclaredImportedName,
+                message: crate::exported::undeclared_imported_message(
+                    &n.value,
+                    &s.sel.value,
+                    hint.as_deref(),
+                ),
+            });
+            return self.tt.invalid();
+        };
+        if !crate::exported::is_exported(&s.sel.value) {
+            self.bag.push(Diag {
+                pos: s.sel.pos,
+                code: DiagCode::TypUnexportedName,
+                message: crate::exported::unexported_message(&s.sel.value, &dep_name),
+            });
+        }
+        match obj.typ {
+            Some(t) => t,
+            None => self.tt.invalid(),
+        }
+    }
+
+    /// 忽略大小写的近似名（官方 `lookupIgnoringCase(sel, true)`：**只看导出名**）。
+    ///
+    /// `exported = true` 那个参数是官方 `call.go:739` 传的常量，含义是
+    /// 「候选必须是导出名」—— 因为非导出名对包外本来就不存在，提示它等于泄露。
+    fn imported_hint(&self, name: &str, sel: &str) -> Option<String> {
+        let file = self.cur_file?;
+        let path = self
+            .bindings
+            .get(&file)?
+            .iter()
+            .find(|(n, _)| n == name)?
+            .1
+            .clone();
+        let dep = self.imports.get(&path)?;
+        let lower = sel.to_lowercase();
+        dep.scopes
+            .get(dep.scope)
+            .names()
+            .filter(|n| crate::exported::is_exported(n))
+            .find(|n| n.to_lowercase() == lower)
+            .map(str::to_owned)
+    }
+
+    /// `name.sel` 是不是一个**限定名**：`name` 是本文件引入的包名。
+    ///
+    /// 返回 `(被导入包的包名, 该包作用域本层里 `sel` 的对象)`：
+    ///
+    /// * `None` 整体 ⇒ `name` **不是**包名 —— 调用方走普通选择器臂；
+    /// * `Some((_, None))` ⇒ 是包名、但包里没有 `sel`（调用方报 `undefined: pkg.X`）；
+    /// * `Some((pkg, Some(obj)))` ⇒ 找到了。
+    ///
+    /// ⚠️ 只查**包作用域本层**（`lookup_local`）：官方是 `pkg.scope.Lookup(sel)`，
+    /// 而 `Scope.Lookup` **不**沿父链走（universe 的 `int` 不是 `lib.int`）。
+    fn imported_member(&self, name: &str, sel: &str) -> Option<(String, Option<Object>)> {
+        let file = self.cur_file?;
+        let path = self
+            .bindings
+            .get(&file)?
+            .iter()
+            .find(|(n, _)| n == name)?
+            .1
+            .clone();
+        let dep = self.imports.get(&path)?;
+        let obj = dep.scopes.get(dep.scope).lookup_local(sel).cloned();
+        Some((dep.name.clone(), obj))
     }
 
     /// `[N]T` / `[...]T`。

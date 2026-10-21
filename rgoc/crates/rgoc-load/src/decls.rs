@@ -52,7 +52,7 @@ use rgoc_const::{
     BigInt, Const, ConstEnv, EvalOutcome, Sizes, eval_const_expr, expand_const_group_specs,
     representable,
 };
-use rgoc_lex::{Diag, DiagBag, DiagCode, Pos};
+use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, Pos};
 use rgoc_types::{
     BasicId, NamedId, ObjKind, Object, ScopeId, ScopeTable, Type, TypeId, TypeTable, valid_type,
 };
@@ -188,6 +188,24 @@ pub(crate) struct Checker<'a> {
     /// 已经报过 `undefined` 的**书写位置**（Task 25）——`Pos` 唯一标识一次书写，
     /// 见 [`crate::scope`] 的 `report_undefined`。
     pub(crate) undefined_reported: BTreeSet<Pos>,
+    /// **直接**依赖：`import` 路径 → 已装载的包（M4/Task 35）。
+    ///
+    /// 只读借自 `Package::imports` —— 会话在阶段 A 与阶段 B **之间**把它填好
+    /// （见 [`crate::importer::Session`] 的四步），所以这里一定是全的。
+    pub(crate) imports: &'a BTreeMap<String, Package>,
+    /// 每个文件引入的**包名 → 路径**（`Package::import_bindings` 的快照）。
+    ///
+    /// 为什么不每次现算：`pkg.X` 的解析在类型表达式里会递归很多次，而
+    /// `import_bindings` 要扫一遍语法树。
+    pub(crate) bindings: BTreeMap<FileId, Vec<(String, String)>>,
+    /// **正在求值的声明所属文件** —— `pkg.X` 要靠它找该文件的 import 名。
+    ///
+    /// 官方把这件事记在 `declInfo.file` 上（`check.objDecl` 里切 `check.scope`）；
+    /// 我们的 [`Item`] 自带 `pos`，所以从 `pos.file` 推得出来
+    /// （[`Checker::resolve_name`] 与 `pass2_resolve` 各设一次）。
+    pub(crate) cur_file: Option<FileId>,
+    /// 每个被接受文件 → 它的**文件作用域**（`import` 名与点导入注入的名字住这里）。
+    pub(crate) file_scopes: BTreeMap<FileId, ScopeId>,
 }
 
 impl Checker<'_> {
@@ -203,6 +221,8 @@ impl Checker<'_> {
         scopes: &'a mut ScopeTable,
         bag: &'a mut DiagBag,
         pkg_scope: ScopeId,
+        imports: &'a BTreeMap<String, Package>,
+        bindings: BTreeMap<FileId, Vec<(String, String)>>,
     ) -> Checker<'a> {
         Checker {
             tt,
@@ -219,7 +239,23 @@ impl Checker<'_> {
             roots: Vec::new(),
             untyped_cache: BTreeMap::new(),
             undefined_reported: BTreeSet::new(),
+            imports,
+            bindings,
+            cur_file: None,
+            file_scopes: BTreeMap::new(),
         }
+    }
+
+    /// 当前声明**所在文件**的作用域（`cur_file` 未知 ⇒ 退回包作用域）。
+    ///
+    /// 官方把「声明属于哪个文件」记在 `declInfo.file` 上，求值时把
+    /// `check.scope` 切到那个**文件作用域** —— 因为 `import` 名（含点导入
+    /// 注入的名字）**只在该文件可见**。`var x lib.T`、点导入后的 `var x T`
+    /// 都要靠它；用包作用域会看不见这些名字。
+    fn decl_scope(&self) -> ScopeId {
+        self.cur_file
+            .and_then(|f| self.file_scopes.get(&f).copied())
+            .unwrap_or(self.pkg_scope)
     }
 }
 
@@ -237,6 +273,13 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
     // 作用域表与语法树都**挪出来**：Checker 要 `&mut` 借它们，而收尾还要往
     // `pkg` 上写两个新字段 —— 一边借 `pkg` 一边写字段是编译不过的。
     // 挪走而不是 `Clone`：作用域表里有大对象，克隆一份再丢是纯浪费。
+    // ⚠️ 必须在 `mem::take(&mut pkg.asts)` **之前**算：`import_bindings` 要扫语法树
+    let bindings: BTreeMap<FileId, Vec<(String, String)>> = pkg
+        .asts
+        .iter()
+        .map(|a| (a.pos.file, pkg.import_bindings(a.pos.file)))
+        .collect();
+    let file_scopes: BTreeMap<FileId, ScopeId> = pkg.file_scopes.iter().copied().collect();
     let asts = std::mem::take(&mut pkg.asts);
     let mut scopes = std::mem::take(&mut pkg.scopes);
     let mut ck = Checker {
@@ -254,6 +297,10 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
         roots: Vec::new(),
         untyped_cache: BTreeMap::new(),
         undefined_reported: BTreeSet::new(),
+        imports: &pkg.imports,
+        bindings,
+        cur_file: None,
+        file_scopes,
     };
     ck.pass1_collect(&asts);
     ck.pass2_resolve(&asts);
@@ -402,7 +449,13 @@ impl Checker<'_> {
     /// 而它同时决定诊断的稳定顺序（诊断最后按位置排序，位置就是声明位置）。
     fn pass2_resolve(&mut self, asts: &[AstFile]) {
         for ast in asts {
+            // 本文件声明的**值**面（`var` 的写出类型、`func` 的签名）就地解析，
+            // 不经 `Item` ⇒ 文件要在这里显式切换（`pkg.X` 依赖它）。
+            self.cur_file = Some(ast.pos.file);
             for decl in &ast.decls {
+                // 每条声明都重设一次：`resolve_name` 的递归会把 `cur_file`
+                // 带到**别的文件**的条目上去（跨文件前向引用）
+                self.cur_file = Some(ast.pos.file);
                 match decl {
                     Decl::Import(_) => {}
                     Decl::Type(d) => {
@@ -429,7 +482,8 @@ impl Checker<'_> {
                     Decl::Var(d) => {
                         // 只在**写出了类型**时才有根（`var x = 1` 的 int 不来初始化式）
                         let Some(te) = &d.type_ else { continue };
-                        let t = self.resolve_type(self.pkg_scope, te);
+                        let scope = self.decl_scope();
+                        let t = self.resolve_type(scope, te);
                         for n in &d.names {
                             if n.value == "_" {
                                 continue;
@@ -583,6 +637,9 @@ impl Checker<'_> {
         let Some(item) = self.items.get(name).cloned() else {
             return;
         };
+        // `pkg.X` 要知道「这条声明写在哪个文件」—— 官方记在 `declInfo.file` 上，
+        // 我们这里从声明处位置推（`Pos` 自带 `FileId`）。
+        self.cur_file = Some(item.pos().file);
         self.states.insert(name.to_string(), State::InProgress);
         self.stack.push(name.to_string());
 
@@ -617,7 +674,9 @@ impl Checker<'_> {
         };
         // 类型参数作用域（`[T any]`）：本体与约束都在里面解析
         let (scope, tparam_ids) = if tparams.is_empty() {
-            (self.pkg_scope, Vec::new())
+            // 无类型参数 ⇒ 本体直接在该声明的**文件作用域**里解析
+            // （`import` 名与点导入注入的名字只在那里可见，M4/Task 35）
+            (self.decl_scope(), Vec::new())
         } else {
             self.declare_tparams(self.pkg_scope, &tparams)
         };
@@ -930,7 +989,8 @@ impl Checker<'_> {
             return Some(t);
         }
         let e = ty_expr?;
-        let t = self.resolve_type(self.pkg_scope, &e);
+        let scope = self.decl_scope();
+        let t = self.resolve_type(scope, &e);
         if let Some(Item::Const { ty, .. }) = self.items.get_mut(name) {
             *ty = Some(t);
         }

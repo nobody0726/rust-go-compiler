@@ -137,6 +137,72 @@ impl Package {
     pub fn file_count(&self) -> usize {
         self.files.len()
     }
+
+    /// 某个文件引入的**包名 → `import` 路径**（按声明序）。
+    ///
+    /// 不含 `.` / `_`（它们不引入包名）与**缺路径**的 spec（解析器已报错）。
+    /// 名字取「显式别名」，否则取路径最后一段 —— 这是**阶段 A** 的口径；
+    /// 真正的包名来自被依赖包的 `package` 子句，由
+    /// [`crate::importer::stitch_imports`] 在依赖装载后校正（`Ruling 35-2`）。
+    #[must_use]
+    pub fn import_bindings(&self, file: FileId) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let Some(ast) = self.asts.iter().find(|a| a.pos.file == file) else {
+            return out;
+        };
+        for decl in &ast.decls {
+            let Decl::Import(imp) = decl else { continue };
+            let Some(path) = imp_path(imp) else { continue };
+            if let Some(n) = &imp.name {
+                if n.value == "_" || n.value == "." {
+                    continue;
+                }
+                out.push((n.value.clone(), path));
+            } else {
+                // 真名优先取被依赖包的 `package` 子句（与 `stitch_imports` 的改名
+                // 同源）；依赖没装载时退回路径最后一段（阶段 A 的临时名）。
+                let name = self
+                    .imports
+                    .get(&path)
+                    .map(|d| d.name.clone())
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| default_import_name(&path));
+                out.push((name, path));
+            }
+        }
+        out
+    }
+
+    /// 某个文件的**点导入**路径（按声明序）。
+    #[must_use]
+    pub fn dot_imports(&self, file: FileId) -> Vec<String> {
+        let mut out = Vec::new();
+        let Some(ast) = self.asts.iter().find(|a| a.pos.file == file) else {
+            return out;
+        };
+        for decl in &ast.decls {
+            let Decl::Import(imp) = decl else { continue };
+            if imp.name.as_ref().is_some_and(|n| n.value == ".")
+                && let Some(p) = imp_path(imp)
+            {
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    /// 这个文件里名为 `name` 的 import 绑定指向哪个**已装载**的包。
+    ///
+    /// `None` ⇒ 这个名字不是包名 / 那个 import 没装载成功（环、失败、无 roots）。
+    #[must_use]
+    pub fn imported(&self, file: FileId, name: &str) -> Option<&Package> {
+        let path = self
+            .import_bindings(file)
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, p)| p)?;
+        self.imports.get(&path)
+    }
 }
 
 /// 一个待装载的**内存源文件**（`T-TY-52/61/66` 的单元测试走这条）。
@@ -197,7 +263,32 @@ pub fn load_sources(
 /// 为什么需要它：会话里入口包与被依赖包**必须共用一张 [`FileTable`]**，
 /// 否则每个包都从 `FileId(0)` 起编号，诊断位置（`Pos.file`）就会指错文件。
 /// `Package::file_table` 在会话末尾会被回填成**最终**那张表（见 [`crate::importer`]）。
+///
+/// 本函数 = [`load_decls_only`] + [`evaluate_package`]（两阶段背靠背）。
+/// 会话入口**不**走这里 —— 它要在两阶段**之间**插 import 解析（Task 35）。
 pub fn load_sources_into(
+    tt: &mut TypeTable,
+    file_table: &mut FileTable,
+    sources: &[Source<'_>],
+    lang: Option<&str>,
+) -> (Package, DiagBag) {
+    let (mut pkg, mut bag) = load_decls_only(tt, file_table, sources, lang);
+    // 单包入口的 `imports` 恒空 ⇒ 缝只对「`import init` / 已装载依赖」有事可做；
+    // 那正是官方的口径（import 失败时 `return`，连名字都不建）。
+    crate::importer::stitch_imports(&mut pkg, &mut bag);
+    evaluate_package(tt, &mut pkg, &mut bag);
+    (pkg, bag)
+}
+
+/// **阶段 A**：解析 + 包名一致性 + 三层作用域 + import 名 + 顶层名 + 版本表。
+///
+/// 做完这一步，`Package` 里**还没有类型与常量**（`Object::typ` / `Object::val`
+/// 全空，`type_roots` 也空）—— 那些要等 [`evaluate_package`]。
+///
+/// 为什么允许「半成品」存在：`pkg.imports` 只能在**名字都收齐之后**才解析
+/// （否则 `import` 语句的语义就要求先知道包名），而被依赖包的求值又要排在
+/// 本包求值**之前** —— 于是「收名字」与「求值」之间必须有一个可插入的接缝。
+pub fn load_decls_only(
     tt: &mut TypeTable,
     file_table: &mut FileTable,
     sources: &[Source<'_>],
@@ -307,16 +398,30 @@ pub fn load_sources_into(
     }
     pkg.versions = versions;
 
+    (pkg, bag)
+}
+
+/// **阶段 B**：声明求值（⑥）+ 体内作用域与名字引用（⑦）—— M4/Task 35。
+///
+/// 为什么把它从 [`load_sources_into`] 里拆出来：跨包限定名（`lib.T`）要能在
+/// **类型表达式**里解析，而那要求 `pkg.imports` 在求值之前就已填好。单包入口
+/// （[`load_sources_into`]）的 `imports` 恒空 ⇒ 拆开对它是**零语义变化**；
+/// 会话入口（[`crate::importer::load_with_imports`]）则按
+/// 「阶段 A → 解析 import（递归）→ **缝 import 名** → 阶段 B」四步走
+/// —— 这正是 M3 `importer` 模块文档第 4 条记的那个缺口（「先装载依赖、再求值本包」）。
+///
+/// 调用方**必须**先调 [`crate::importer::stitch_imports`]（若有 import）：
+/// 点导入把被依赖包的导出名注入**文件作用域**，而 ⑥ 的 `lookup_type` 要沿
+/// 作用域链找名字 —— 缝晚了就找不到。
+pub fn evaluate_package(tt: &mut TypeTable, pkg: &mut Package, bag: &mut DiagBag) {
     // ⑥ 声明收集与求值（Task 24）：类型表达式、常量、dump 根。
     //    放在版本之后是**有意的**：解析类型时要能问「这个文件允许哪些特性」
     //    （M3 还没有门控点，但顺序先按将来正确的形状摆）。
-    collect_decls(&mut pkg, tt, &mut bag);
+    collect_decls(pkg, tt, bag);
 
     // ⑦ 体内作用域与名字引用（Task 25）。放在最后：它要**读**包级对象的类型
     //    （`lookup_type` 只在对象已求值时才给得出东西），而包级求值在 ⑥ 才完成。
-    crate::scope::resolve_bodies(&mut pkg, tt, &mut bag);
-
-    (pkg, bag)
+    crate::scope::resolve_bodies(pkg, tt, bag);
 }
 
 /// 顶层声明的**名字**（不含 import —— 它们进文件作用域）。
@@ -412,9 +517,9 @@ fn declare(
 /// | 写法 | 引入 | 说明 |
 /// |---|---|---|
 /// | `import f "fmt"` | `f` | 显式别名 |
-/// | `import "fmt"` | `fmt` | ⚠️ **临时**取路径最后一段 —— 真正的包名来自被导入包的 `package` 子句（Task 27 解析 import 时才拿得到） |
+/// | `import "fmt"` | `fmt` | ⚠️ **临时**取路径最后一段 —— 真正的包名来自被导入包的 `package` 子句（Task 27 解析 import 时才拿得到；M4/Task 35 的 `stitch_imports` 负责校正，见 `Ruling 35-2`） |
 /// | `import _ "fmt"` | 不引入 | 空标识符 |
-/// | `import . "fmt"` | 不引入 | 点导入把**名字**注入本文件，不是引入一个包名（Task 27） |
+/// | `import . "fmt"` | 不引入 | 点导入把**名字**注入本文件（`stitch_imports`），不是引入一个包名 |
 fn import_name(imp: &ImportDecl) -> Option<String> {
     if let Some(n) = &imp.name {
         return match n.value.as_str() {
@@ -422,14 +527,28 @@ fn import_name(imp: &ImportDecl) -> Option<String> {
             other => Some(other.to_string()),
         };
     }
-    let path = imp.path.as_ref()?;
-    let trimmed = path.value.trim_matches(|c| c == '"' || c == '`');
-    // 版本后缀（`example.com/m/v2`）与末尾空段都不该当成包名，但**本任务不猜**：
-    // 只取最后一段，`/v2` 这类情形留给 Task 27（真正的包名来自被导入包）
-    let last = trimmed.rsplit('/').next().unwrap_or(trimmed);
+    imp_path(imp).map(|p| default_import_name(&p))
+}
+
+/// `import` 的路径文本（**只剥引号**，不做转义解码）。
+///
+/// 与 [`crate::importer`] 的 `import_path` 同口径 —— 两处都从同一份 AST 取，
+/// 差异只在于本函数不关心 `Pos`。
+pub(crate) fn imp_path(imp: &ImportDecl) -> Option<String> {
+    let lit = imp.path.as_ref()?;
+    let trimmed = lit.value.trim_matches(|c| c == '"' || c == '`');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
+/// 无别名的 `import` 的**临时**名字：路径最后一段（空 ⇒ 整个路径）。
+pub(crate) fn default_import_name(path: &str) -> String {
+    let last = path.rsplit('/').next().unwrap_or(path);
     if last.is_empty() {
-        None
+        path.to_string()
     } else {
-        Some(last.to_string())
+        last.to_string()
     }
 }
