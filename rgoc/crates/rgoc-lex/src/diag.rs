@@ -54,6 +54,16 @@ use crate::pos::Pos;
 /// 加新代号时：**插入到它字典序该在的位置**，然后让那条断言告诉你有没有放对。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum DiagCode {
+    /// 结构字面量的**重复字段名**（M4/Task 27）—— 官方 `DuplicateLitField` 的
+    /// `duplicate field name %s in struct literal` 成员（类别面 `decl`）。
+    /// 同一官方码的 `cannot specify (promoted|embedded) field ...` 成员落在
+    /// [`DiagCode::ChkInvalidLitField`]（官方消息经 C8 适配表的
+    /// `^cannot specify (promoted|embedded) field` 规则落 `selector`）。
+    ChkDuplicateLitField,
+    /// 数组 / 切片字面量的**重复下标**与 map 字面量的**重复键**（M4/Task 27）
+    /// —— 官方 `DuplicateLitKey`（`duplicate index %d in array or slice
+    /// literal` / `duplicate key %s in map literal`；类别面 `decl`）。
+    ChkDuplicateLitIndex,
     /// 赋值面拒绝（M4/Task 25）—— 官方 `IncompatibleAssign`（`cannot use ... as
     /// ... value in <语境>`）/ `UnassignableOperand`（`cannot assign to ...`）/
     /// `WrongAssignCount`（`assignment mismatch: N variables but M values`）/
@@ -86,6 +96,28 @@ pub enum DiagCode {
     /// `... permits only one iteration variable` /
     /// `range clause permits at most two iteration variables`；类别面 `range`）。
     ChkInvalidIterVar,
+    /// 复合字面量的**形状**拒绝（M4/Task 27）—— 官方 `UntypedLit`
+    /// （`missing type in composite literal`）、`InvalidLit`
+    /// （`invalid composite literal[s element] type %s`）、`MissingLitKey`
+    /// （`missing key in map literal`）与 `MixedStructLit`
+    /// （`mixture of field:value and value elements in struct literal`）的
+    /// **合并码**（类别面 `decl`）。
+    /// 逐向量对照见 `M4-tests.md` `T-CK-37` 与
+    /// `.superpowers/sdd/M4-plan/probe/task27-reject.go`（oracle 实测 22 拒绝位）。
+    ChkInvalidLit,
+    /// 结构字面量的**字段名面**拒绝（M4/Task 27）—— 官方 `InvalidLitField`
+    /// （`invalid field name %s in struct literal` / `invalid implicit pointer
+    /// indirection to reach %s`）、`MissingLitField` 查找失败族
+    /// （`unknown field %s ...` / `%s is not a field`）与 `DuplicateLitField`
+    /// 的 cannot-specify 成员（`cannot specify promoted field %s and enclosing
+    /// embedded field %s` / 反序变体）的**合并码**（类别面 `selector`）。
+    ChkInvalidLitField,
+    /// 复合字面量的**字面下标**面拒绝（M4/Task 27）—— 官方 `InvalidLitIndex`
+    /// （`index %s must be integer constant`）与 `OversizeArrayLit`
+    /// （`index %d is out of bounds (>= %d)` —— 位置元素越界；`[0:n]` 形态的
+    /// 键值越界归 [`DiagCode::ChkInvalidIndex`]（Task 23 的 `check.index` 面））
+    /// 的**合并码**（类别面 `index`）。
+    ChkInvalidLitIndex,
     /// 表达式的**运算符静态规则**拒绝（M4/Task 21）—— 官方
     /// `UndefinedOp` / `MismatchedTypes` / `UnaddressableOperand` /
     /// `InvalidIndirect` / `InvalidReceive` / 不可比（map/slice/func 只能与
@@ -133,6 +165,10 @@ pub enum DiagCode {
     /// （`multiple-value f() (value of type (int, string)) in single-value
     /// context`；类别面 `comma-ok`）。
     ChkSingleValueContext,
+    /// 结构字面量的**值元数**拒绝（M4/Task 27）—— 官方 `InvalidStructLit`
+    /// （`too many values in struct literal of type %s` / `too few values ...`
+    /// —— 后者是**键值**缺失的提示面；类别面 `assign`）。
+    ChkStructLitCount,
     /// 表达式语句的值没被使用（M4/Task 25）—— 官方 `UnusedExpr`
     /// （`x + 1 (value of type int) is not used`；类别面 `unused`）。
     ChkUnusedExpr,
@@ -558,13 +594,18 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 88] = [
+    pub const ALL: [DiagCode; 94] = [
+        DiagCode::ChkDuplicateLitField,
+        DiagCode::ChkDuplicateLitIndex,
         DiagCode::ChkInvalidAssign,
         DiagCode::ChkInvalidCase,
         DiagCode::ChkInvalidCond,
         DiagCode::ChkInvalidGoDefer,
         DiagCode::ChkInvalidIndex,
         DiagCode::ChkInvalidIterVar,
+        DiagCode::ChkInvalidLit,
+        DiagCode::ChkInvalidLitField,
+        DiagCode::ChkInvalidLitIndex,
         DiagCode::ChkInvalidOperation,
         DiagCode::ChkInvalidRangeExpr,
         DiagCode::ChkInvalidSelectCase,
@@ -574,6 +615,7 @@ impl DiagCode {
         DiagCode::ChkNoNewVar,
         DiagCode::ChkNotAType,
         DiagCode::ChkSingleValueContext,
+        DiagCode::ChkStructLitCount,
         DiagCode::ChkUnusedExpr,
         DiagCode::ChkWrongResultCount,
         DiagCode::BadChar,
@@ -652,12 +694,17 @@ impl DiagCode {
     /// 机器可读代号文本。**它是契约的一部分**，改动等于契约变更。
     pub fn as_str(self) -> &'static str {
         match self {
+            DiagCode::ChkDuplicateLitField => "CHK-DUPLICATE-LIT-FIELD",
+            DiagCode::ChkDuplicateLitIndex => "CHK-DUPLICATE-LIT-INDEX",
             DiagCode::ChkInvalidAssign => "CHK-INVALID-ASSIGN",
             DiagCode::ChkInvalidCase => "CHK-INVALID-CASE",
             DiagCode::ChkInvalidCond => "CHK-INVALID-COND",
             DiagCode::ChkInvalidGoDefer => "CHK-INVALID-GO-DEFER",
             DiagCode::ChkInvalidIndex => "CHK-INVALID-INDEX",
             DiagCode::ChkInvalidIterVar => "CHK-INVALID-ITER-VAR",
+            DiagCode::ChkInvalidLit => "CHK-INVALID-LIT",
+            DiagCode::ChkInvalidLitField => "CHK-INVALID-LIT-FIELD",
+            DiagCode::ChkInvalidLitIndex => "CHK-INVALID-LIT-INDEX",
             DiagCode::ChkInvalidOperation => "CHK-INVALID-OPERATION",
             DiagCode::ChkInvalidRangeExpr => "CHK-INVALID-RANGE-EXPR",
             DiagCode::ChkInvalidSelectCase => "CHK-INVALID-SELECT-CASE",
@@ -667,6 +714,7 @@ impl DiagCode {
             DiagCode::ChkNoNewVar => "CHK-NO-NEW-VAR",
             DiagCode::ChkNotAType => "CHK-NOT-A-TYPE",
             DiagCode::ChkSingleValueContext => "CHK-SINGLE-VALUE-CONTEXT",
+            DiagCode::ChkStructLitCount => "CHK-STRUCT-LIT-COUNT",
             DiagCode::ChkUnusedExpr => "CHK-UNUSED-EXPR",
             DiagCode::ChkWrongResultCount => "CHK-WRONG-RESULT-COUNT",
             DiagCode::BadChar => "LEX-BAD-CHAR",

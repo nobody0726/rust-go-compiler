@@ -46,6 +46,16 @@
 //! / `operand for field selector`（报在 `X` 位）。`*T` 的 typexpr 臂已接
 //! （`(*T).M` 可达）。`pkg.Name` 与泛型接收者面 ⇒ 不报。
 //!
+//! # 复合字面量面（Task 27；`T-CK-37`）
+//!
+//! 官方 `literals.go` 的 `compositeLit` / `indexedElts` 逐支对齐：结构体
+//! （键值 / 值两形态 + 提升字段 1.27 门控）、数组 / 切片（下标 + 重复 +
+//! 位置越界）、map（键赋值 + 重复键）、其余类型（`invalid composite literal
+//! type`）。嵌套字面量的类型提示走 [`ExprChecker::expr_hint`]（官方
+//! `genericExpr(x, e, hint)`）；`[...]T` 在元素检查后回填长度。
+//! 新码 4 个（`CHK-INVALID-LIT` / `CHK-DUPLICATE-LIT-FIELD` /
+//! `CHK-DUPLICATE-LIT-INDEX` / `CHK-INVALID-LIT-FIELD`；`T-CK-37` 22 行实证）。
+//!
 //! # 位置规则（oracle 探针 1–7 与官方源双证；`task21-reject.go` 53 行）
 //!
 //! | 情形 | 错误位 |
@@ -82,17 +92,17 @@
 //!   实际不可达；报出来反而会造出 oracle 没有的「other 类」行）。
 
 use rgoc_ast::{
-    BasicLit, CallExpr, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation, SelectorExpr,
-    SliceExpr,
+    BasicLit, CallExpr, CompositeLit, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation,
+    SelectorExpr, SliceExpr,
 };
 use rgoc_const::{
-    BasicId, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
+    BasicId, BigInt, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
     fold_unary_typed, representable,
 };
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{
-    ChanDir, ConstId, Type, TypeId, TypeTable, assignable, comparable, convertible, identical,
-    unalias, underlying,
+    ChanDir, ConstId, ObjKind, Type, TypeId, TypeTable, assignable, comparable, convertible,
+    identical, unalias, underlying,
 };
 
 use crate::check::Session;
@@ -146,16 +156,26 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// [`Self::call`] 里接（Task 22），索引 / 切片在 [`Self::index_expr`] /
     /// [`Self::slice_expr`]（Task 23），选择器在 [`Self::selector`]（Task 24）。
     pub(crate) fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
+        self.expr_hint(file, e, None)
+    }
+
+    /// 带**元素类型提示**的表达式求值（官方 `genericExpr(x, e, hint)`）。
+    ///
+    /// 只有复合字面量吃 `hint`（嵌套字面量省略类型时，元素类型由外层给）；
+    /// 其余形态一律退回 [`Self::expr`]。`hint` 为 `None` 且字面量也没有类型
+    /// ⇒ 官方 `UntypedLit`。
+    pub(crate) fn expr_hint(&mut self, file: FileId, e: &Expr, hint: Option<TypeId>) -> Operand {
         match e {
             Expr::Name(n) => self.ident(file, n),
             Expr::BasicLit(l) => self.literal(l),
-            Expr::Paren(p) => self.expr(file, &p.x),
+            Expr::Paren(p) => self.expr_hint(file, &p.x, hint),
             Expr::Unary(o) => self.unary(file, o),
             Expr::Binary(o) => self.binary(file, o),
             Expr::Call(c) => self.call(file, c),
             Expr::Index(ix) => self.index_expr(file, ix),
             Expr::Slice(sx) => self.slice_expr(file, sx),
             Expr::Selector(se) => self.selector(file, se),
+            Expr::CompositeLit(cl) => self.composite_lit(file, cl, hint),
             _ => Operand::invalid(),
         }
     }
@@ -173,8 +193,78 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             return op.clone();
         }
         match self.s.pkg.lookup_in_file(file, &n.value) {
-            Some(obj) => Operand::from_object(obj).unwrap_or_else(Operand::invalid),
+            Some(obj) => {
+                let mut op = Operand::from_object(obj).unwrap_or_else(Operand::invalid);
+                // 装载面的 M3 缺口：`var x = expr` **不推类型**（只记声明了类型
+                // 的 var）。检查面就地补窄面推断 —— 否则 `var s = "a"` 之后的
+                // `s` 在索引 / 键位一律「类型未知」⇒ 静默漏报（Task 27 实测）。
+                if op.mode == Mode::Variable
+                    && op.typ.is_none()
+                    && let Some(t) = self.init_type_of(file, &n.value)
+                {
+                    op.typ = Some(t);
+                }
+                op
+            }
             None => Operand::invalid(),
+        }
+    }
+
+    /// `var x = <初始化式>` 的**窄面**类型推断（只在装载面没给类型时用）。
+    ///
+    /// 覆盖基本字面量（默认型）、括号、显式类型的复合字面量与名字链；
+    /// 其余形态 ⇒ `None`（类型未知 ⇒ 各判定按「不判」处理，不造假诊断）。
+    fn init_type_of(&mut self, file: FileId, name: &str) -> Option<TypeId> {
+        let pkg = self.s.pkg;
+        for (i, ast) in pkg.asts.iter().enumerate() {
+            for decl in &ast.decls {
+                let Decl::Var(v) = decl else { continue };
+                let Some(idx) = v.names.iter().position(|n| n.value == name) else {
+                    continue;
+                };
+                let Some(value) = v.values.get(idx) else {
+                    continue;
+                };
+                return self.init_expr_type(pkg.files[i], value, 0);
+            }
+        }
+        let _ = file;
+        None
+    }
+
+    /// [`Self::init_type_of`] 的表达式面（`depth` 防环）。
+    fn init_expr_type(&mut self, file: FileId, e: &Expr, depth: u32) -> Option<TypeId> {
+        if depth > 8 {
+            return None;
+        }
+        match e {
+            Expr::BasicLit(l) => {
+                let kind = match l.kind {
+                    LitKind::Int => BasicId::UntypedInt,
+                    LitKind::Float => BasicId::UntypedFloat,
+                    LitKind::Imag => BasicId::UntypedComplex,
+                    LitKind::Rune => BasicId::UntypedRune,
+                    LitKind::String => BasicId::UntypedString,
+                };
+                let d = default_type_of(kind);
+                Some(self.s.tt.add_basic(d))
+            }
+            Expr::Paren(p) => self.init_expr_type(file, &p.x, depth + 1),
+            Expr::CompositeLit(cl) => {
+                let te = cl.type_.as_ref()?;
+                self.type_expr(file, te)
+            }
+            Expr::Name(n) => {
+                let obj = self.s.pkg.lookup_in_file(file, &n.value)?;
+                if let Some(t) = obj.typ {
+                    return Some(t);
+                }
+                if obj.kind == ObjKind::Var {
+                    return self.init_type_of(file, &n.value);
+                }
+                None
+            }
+            _ => None,
         }
     }
 
@@ -803,8 +893,519 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         true
     }
 
-    // ────────────────────────────── 选择器 ──────────────────────────────
+    // ────────────────────────────── 复合字面量 ──────────────────────────────
 
+    /// 类型表达式 → `TypeId`（官方 `check.typ` 的**窄面**）。
+    ///
+    /// 覆盖复合字面量类型位实际会出现的形态：名字、括号、数组 / 切片 /
+    /// map / chan / 指针。匿名 `struct{…}` / `interface{…}` / `func(…)` 暂不接
+    /// （`None` ⇒ 调用方 `invalid` 且**不报**，负向缺口由 `U-M4` 承担）。
+    fn type_expr(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
+        match e {
+            Expr::Name(n) => {
+                let op = self.ident(file, n);
+                if op.mode == Mode::TypeExpr {
+                    op.typ
+                } else {
+                    None
+                }
+            }
+            Expr::Paren(p) => self.type_expr(file, &p.x),
+            Expr::ArrayType(a) => {
+                let elem = self.type_expr(file, &a.elem)?;
+                let len = match &a.len {
+                    None => None,
+                    Some(le) => {
+                        let op = self.expr(file, le);
+                        if op.mode != Mode::Constant {
+                            return None;
+                        }
+                        let v = op.val.clone().unwrap_or(Const::Unknown);
+                        let n = const_as_i64(&v)?;
+                        Some(self.s.tt.consts_mut().add(Const::Int(BigInt::from_i64(n))))
+                    }
+                };
+                Some(self.s.tt.add_array(len, elem))
+            }
+            Expr::SliceType(s) => {
+                let elem = self.type_expr(file, &s.elem)?;
+                Some(self.s.tt.add_slice(elem))
+            }
+            Expr::MapType(m) => {
+                let key = self.type_expr(file, &m.key)?;
+                let val = self.type_expr(file, &m.value)?;
+                Some(self.s.tt.add_map(key, val))
+            }
+            Expr::ChanType(c) => {
+                let elem = self.type_expr(file, &c.elem)?;
+                let dir = match c.dir {
+                    None => ChanDir::SendRecv,
+                    Some(rgoc_ast::ChanDir::SendOnly) => ChanDir::SendOnly,
+                    Some(rgoc_ast::ChanDir::RecvOnly) => ChanDir::RecvOnly,
+                };
+                Some(self.s.tt.add_chan(dir, elem))
+            }
+            // `*T`（一元 `*` 的 typexpr 臂）。
+            Expr::Unary(u) if u.op == Op::Mul => {
+                let t = self.type_expr(file, &u.x)?;
+                Some(self.s.tt.add_pointer(t))
+            }
+            _ => None,
+        }
+    }
+
+    /// 官方 `compositeLit`（`literals.go:111`）的窄面（Task 27）。
+    ///
+    /// `hint` = 外层复合字面量给的**元素类型**（嵌套字面量省略类型时用）。
+    /// `*T` 的提示 ⇒ `base` 取 `T`（`&T{}` 的隐式取址），但结果类型仍是 `*T`。
+    fn composite_lit(&mut self, file: FileId, e: &CompositeLit, hint: Option<TypeId>) -> Operand {
+        // ① 类型：显式 > 提示 > `UntypedLit`。
+        //    `[...]T` 单独一路（先占 `len = None` 的数组，元素检查后回填）。
+        let mut dots_elem: Option<TypeId> = None;
+        let (typ, base) = match &e.type_ {
+            Some(te) => {
+                if let Expr::ArrayType(a) = &**te
+                    && a.len.is_none()
+                {
+                    let Some(elem) = self.type_expr(file, &a.elem) else {
+                        return Operand::invalid();
+                    };
+                    dots_elem = Some(elem);
+                    let t = self.s.tt.add_array(None, elem);
+                    (t, t)
+                } else {
+                    let Some(t) = self.type_expr(file, te) else {
+                        // 类型表达式面未接（匿名 struct 等）：静默 invalid。
+                        return Operand::invalid();
+                    };
+                    (t, t)
+                }
+            }
+            None => match hint {
+                Some(h) => {
+                    let base = {
+                        let tt = self.tt();
+                        match tt.type_of(underlying(tt, h)) {
+                            Type::Pointer(inner) => *inner,
+                            _ => h,
+                        }
+                    };
+                    (h, base)
+                }
+                None => {
+                    self.report(
+                        e.pos,
+                        DiagCode::ChkInvalidLit,
+                        "missing type in composite literal".to_string(),
+                    );
+                    return Operand::invalid();
+                }
+            },
+        };
+
+        // ② 按 base 的底层分类。
+        enum Shape {
+            Struct(Vec<rgoc_types::Field>),
+            Array { len: i64, elem: TypeId },
+            Slice(TypeId),
+            Map { key: TypeId, elem: TypeId },
+            Other,
+        }
+        let shape = {
+            let tt = self.tt();
+            match tt.type_of(underlying(tt, base)) {
+                Type::Struct(id) => Shape::Struct(tt.struct_def(*id).fields.clone()),
+                Type::Array { len, elem } => Shape::Array {
+                    len: arr_len(tt, *len),
+                    elem: *elem,
+                },
+                Type::Slice(elem) => Shape::Slice(*elem),
+                Type::Map { key, elem } => Shape::Map {
+                    key: *key,
+                    elem: *elem,
+                },
+                _ => Shape::Other,
+            }
+        };
+
+        match shape {
+            Shape::Struct(fields) => {
+                if !e.elems.is_empty() {
+                    if matches!(e.elems[0], Expr::KeyValue(_)) {
+                        self.struct_lit_keyed(file, e, base, &fields);
+                    } else {
+                        self.struct_lit_values(file, e, base, &fields);
+                    }
+                }
+            }
+            Shape::Array { len, elem } => {
+                let n = self.indexed_elts(file, &e.elems, elem, len);
+                if dots_elem.is_some() {
+                    // `[...]T`：回填长度（官方 `utyp.len = n`）。
+                    let cid = self.s.tt.consts_mut().add(Const::Int(BigInt::from_i64(n)));
+                    let t = self.s.tt.add_array(Some(cid), elem);
+                    return Operand::value(Some(t));
+                }
+            }
+            Shape::Slice(elem) => {
+                self.indexed_elts(file, &e.elems, elem, -1);
+            }
+            Shape::Map { key, elem } => self.map_lit(file, e, key, elem),
+            Shape::Other => {
+                // 官方 default 支：先「用掉」元素，再报无效类型。
+                for el in &e.elems {
+                    let eval = match el {
+                        Expr::KeyValue(kv) => &kv.value,
+                        _ => el,
+                    };
+                    let _ = self.expr(file, eval);
+                }
+                let t = self.type_text(typ);
+                // 官方报在 `e`（`ast.CompositeLit.Pos()` = **类型起点**；本仓
+                // `CompositeLit.pos` 存的是 `{`，见 `parser.go` 的 `pos` 口径）。
+                let at = e.type_.as_ref().map_or(e.pos, |te| te.start_pos());
+                self.report(
+                    at,
+                    DiagCode::ChkInvalidLit,
+                    format!("invalid composite literal type {t}"),
+                );
+                return Operand::invalid();
+            }
+        }
+
+        Operand::value(Some(typ))
+    }
+
+    /// 结构体字面量的**键值形态**（官方 `literals.go:157-207`）。
+    fn struct_lit_keyed(
+        &mut self,
+        file: FileId,
+        e: &CompositeLit,
+        base: TypeId,
+        fields: &[rgoc_types::Field],
+    ) {
+        // `visited`：已用过的字段路径 + 字段名（官方的 `trie[*Var]`）。
+        let mut visited: Vec<(Vec<usize>, String)> = Vec::new();
+        for el in &e.elems {
+            let Expr::KeyValue(kv) = el else {
+                // 键值形态里混进值元素：报在**该元素**上。
+                self.report(
+                    el.start_pos(),
+                    DiagCode::ChkInvalidLit,
+                    "mixture of field:value and value elements in struct literal".to_string(),
+                );
+                continue;
+            };
+            // 官方先求值 value（`check.genericExpr(x, kv.Value, nil)`）。
+            let mut x = self.expr_hint(file, &kv.value, None);
+
+            let Expr::Name(key) = &*kv.key else {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!(
+                        "invalid field name {} in struct literal",
+                        expr_label(&kv.key).unwrap_or_else(|| "?".to_string())
+                    ),
+                );
+                continue;
+            };
+            let name = key.value.as_str();
+
+            // 查找（官方 `lookupFieldOrMethod(utyp, false, pkg, name, false)`）。
+            let (found, index, indirect) = {
+                let tt = self.tt();
+                let r = lookup_field_or_method(tt, base, false, name);
+                (r.obj, r.index, r.indirect)
+            };
+            let Some(found) = found else {
+                let msg = if index.is_some() {
+                    format!("ambiguous selector {name}")
+                } else {
+                    let t = self.type_text(base);
+                    format!("unknown field {name} in struct literal of type {t}")
+                };
+                self.report(kv.key.start_pos(), DiagCode::ChkInvalidLitField, msg);
+                continue;
+            };
+            let Found::Field { typ: ftyp } = found else {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!("{name} is not a field"),
+                );
+                continue;
+            };
+            let Some(path) = index else {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!("unknown field {name} in struct literal"),
+                );
+                continue;
+            };
+            // 提升字段键的 1.27 门控（`literals.go:194`）。
+            if path.len() > 1 {
+                let subject = format!(
+                    "{} in struct literal of type {}",
+                    self.field_path_text(fields, &path),
+                    self.type_text(base)
+                );
+                if let Some(raw) = crate::version::verify_version_soft(
+                    &self.s.pkg.versions,
+                    file,
+                    kv.key.start_pos(),
+                    crate::version::Feat::PromotedFieldKey,
+                    &subject,
+                ) {
+                    self.s.report(raw);
+                    // 官方 `continue`：门控拒绝后不再走后面的判定。
+                    continue;
+                }
+            }
+            if indirect {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!("invalid implicit pointer indirection to reach {name}"),
+                );
+                continue;
+            }
+            // 赋值面（官方 `check.assignment(x, etyp, "struct literal")`）。
+            self.assignment(&mut x, kv.value.start_pos(), Some(ftyp), "struct literal");
+            // 重复面（官方 `visited.insert`）。
+            let dup = visited
+                .iter()
+                .find(|(p, _)| p == &path)
+                .map(|(_, n)| n.clone());
+            if let Some(prev) = dup {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkDuplicateLitField,
+                    format!("duplicate field name {prev} in struct literal"),
+                );
+            } else if let Some((_, enclosing)) = visited
+                .iter()
+                .find(|(p, _)| p.len() < path.len() && path.starts_with(p))
+            {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!(
+                        "cannot specify promoted field {name} and enclosing embedded field {enclosing}"
+                    ),
+                );
+            } else if let Some((_, enclosed)) = visited
+                .iter()
+                .find(|(p, _)| path.len() < p.len() && p.starts_with(&path))
+            {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLitField,
+                    format!("cannot specify embedded field {name} and enclosed promoted field {enclosed}"),
+                );
+            }
+            visited.push((path, name.to_string()));
+        }
+    }
+
+    /// 结构体字面量的**值形态**（官方 `literals.go:209-240`）。
+    fn struct_lit_values(
+        &mut self,
+        file: FileId,
+        e: &CompositeLit,
+        base: TypeId,
+        fields: &[rgoc_types::Field],
+    ) {
+        for (i, el) in e.elems.iter().enumerate() {
+            if let Expr::KeyValue(kv) = el {
+                self.report(
+                    kv.key.start_pos(),
+                    DiagCode::ChkInvalidLit,
+                    "mixture of field:value and value elements in struct literal".to_string(),
+                );
+                continue;
+            }
+            let mut x = self.expr_hint(file, el, None);
+            if i >= fields.len() {
+                let t = self.type_text(base);
+                self.report(
+                    el.start_pos(),
+                    DiagCode::ChkStructLitCount,
+                    format!("too many values in struct literal of type {t}"),
+                );
+                break;
+            }
+            let ftyp = fields[i].typ;
+            self.assignment(&mut x, el.start_pos(), Some(ftyp), "struct literal");
+        }
+        if e.elems.len() < fields.len() {
+            let t = self.type_text(base);
+            self.report(
+                e.rbrace,
+                DiagCode::ChkStructLitCount,
+                format!("too few values in struct literal of type {t}"),
+            );
+        }
+    }
+
+    /// 官方 `indexedElts`（`literals.go:349`）：数组 / 切片字面量的下标与元素。
+    ///
+    /// 返回字面量长度（`max index + 1`），供 `[...]T` 回填。
+    fn indexed_elts(&mut self, file: FileId, elts: &[Expr], elem: TypeId, length: i64) -> i64 {
+        let mut visited: Vec<i64> = Vec::new();
+        let mut index: i64 = 0;
+        let mut max: i64 = 0;
+        for el in elts {
+            let mut valid = false;
+            let mut eval = el;
+            if let Expr::KeyValue(kv) = el {
+                let (ok, i) = self.lit_index(file, &kv.key, length);
+                if ok {
+                    if i >= 0 {
+                        index = i;
+                        valid = true;
+                    } else {
+                        let k = expr_label(&kv.key).unwrap_or_else(|| "?".to_string());
+                        self.report(
+                            kv.key.start_pos(),
+                            DiagCode::ChkInvalidLitIndex,
+                            format!("index {k} must be integer constant"),
+                        );
+                    }
+                }
+                eval = &kv.value;
+            } else if length >= 0 && index >= length {
+                // 官方 `OversizeArrayLit`（位置元素越界）—— 本仓 `CHK-INVALID-LIT-INDEX`。
+                self.report(
+                    el.start_pos(),
+                    DiagCode::ChkInvalidLitIndex,
+                    format!("index {index} is out of bounds (>= {length})"),
+                );
+            } else {
+                valid = true;
+            }
+            if valid {
+                if visited.contains(&index) {
+                    self.report(
+                        el.start_pos(),
+                        DiagCode::ChkDuplicateLitIndex,
+                        format!("duplicate index {index} in array or slice literal"),
+                    );
+                }
+                visited.push(index);
+            }
+            index += 1;
+            if index > max {
+                max = index;
+            }
+            let mut x = self.expr_hint(file, eval, Some(elem));
+            self.assignment(
+                &mut x,
+                eval.start_pos(),
+                Some(elem),
+                "array or slice literal",
+            );
+        }
+        max
+    }
+
+    /// 官方 `check.index`（`index.go:420`）的字面量键面：
+    /// 返回 `(类型有效, 下标值)`；`-1` = 非常量 / 未知（调用方报
+    /// `must be integer constant`）。越界与非法下标在内部报（类别 `index`）。
+    fn lit_index(&mut self, file: FileId, key: &Expr, max: i64) -> (bool, i64) {
+        let mut x = self.expr(file, key);
+        if !self.valid_index(&mut x, key.start_pos()) {
+            return (false, -1);
+        }
+        if x.mode != Mode::Constant {
+            return (true, -1);
+        }
+        let val = x.val.clone().unwrap_or(Const::Unknown);
+        if val == Const::Unknown {
+            return (true, -1);
+        }
+        let Some(v) = const_as_i64(&val) else {
+            return (true, -1);
+        };
+        if max >= 0 && v >= max {
+            self.report(
+                key.start_pos(),
+                DiagCode::ChkInvalidIndex,
+                format!(
+                    "invalid argument: index {} out of bounds [0:{max}]",
+                    const_text(&val)
+                ),
+            );
+            return (false, -1);
+        }
+        (true, v)
+    }
+
+    /// map 字面量（官方 `literals.go:287-330`）。
+    fn map_lit(&mut self, file: FileId, e: &CompositeLit, key_typ: TypeId, elem: TypeId) {
+        let mut visited: Vec<Const> = Vec::new();
+        for el in &e.elems {
+            let Expr::KeyValue(kv) = el else {
+                self.report(
+                    el.start_pos(),
+                    DiagCode::ChkInvalidLit,
+                    "missing key in map literal".to_string(),
+                );
+                continue;
+            };
+            let mut k = self.expr_hint(file, &kv.key, Some(key_typ));
+            self.assignment(&mut k, kv.key.start_pos(), Some(key_typ), "map literal");
+            if k.mode == Mode::Invalid {
+                continue;
+            }
+            if k.mode == Mode::Constant {
+                let val = k.val.clone().unwrap_or(Const::Unknown);
+                if val != Const::Unknown {
+                    if visited.contains(&val) {
+                        self.report(
+                            kv.key.start_pos(),
+                            DiagCode::ChkDuplicateLitIndex,
+                            format!("duplicate key {} in map literal", const_text(&val)),
+                        );
+                        continue;
+                    }
+                    visited.push(val);
+                }
+            }
+            let mut v = self.expr_hint(file, &kv.value, Some(elem));
+            self.assignment(&mut v, kv.value.start_pos(), Some(elem), "map literal");
+        }
+    }
+
+    /// 官方 `fieldPath(utyp, index)`：`S.a` 形态（只进人读消息；`C8` 不比文本）。
+    fn field_path_text(&self, fields: &[rgoc_types::Field], path: &[usize]) -> String {
+        let tt = self.tt();
+        let mut names: Vec<String> = Vec::new();
+        let mut cur: &[rgoc_types::Field] = fields;
+        for &i in path {
+            let Some(f) = cur.get(i) else { break };
+            let base = match tt.type_of(unalias(tt, f.typ)) {
+                Type::Pointer(p) => *p,
+                _ => f.typ,
+            };
+            let name = f
+                .name
+                .clone()
+                .unwrap_or_else(|| match tt.type_of(unalias(tt, base)) {
+                    Type::Named(id) => tt.named_def(*id).name.clone(),
+                    _ => "?".to_string(),
+                });
+            names.push(name);
+            cur = match tt.type_of(underlying(tt, base)) {
+                Type::Struct(id) => &tt.struct_def(*id).fields,
+                _ => &[],
+            };
+        }
+        names.join(".")
+    }
+
+    // ────────────────────────────── 选择器 ──────────────────────────────
     /// 官方 `selector`（`call.go:686`）的窄面。
     ///
     /// 查找在 [`lookup_field_or_method`]（官方 `lookup.go`），方法值 /

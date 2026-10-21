@@ -231,6 +231,14 @@ pub fn category_of(code: DiagCode) -> Category {
         | TypInvalidConstInit | TypMismatchedPkgName | TypRepeatedDecl | TypWrongAssignCount => {
             Category::Decl
         }
+        // 复合字面量形状面（M4/Task 27）：官方 `UntypedLit` / `InvalidLit` /
+        // `MissingLitKey` / `MixedStructLit` 经 C8 适配表落 `decl`
+        // （`^invalid composite literal type |missing type in composite
+        // literal|mixture of field|missing key in map literal`）；
+        // **重复面**（`duplicate field name` / `duplicate index` /
+        // `duplicate key`）落同族 `^duplicate (method|key|index|field name) `
+        // ⇒ 同 `decl`（`task27-reject.go` 22 行实证）。
+        ChkDuplicateLitField | ChkDuplicateLitIndex | ChkInvalidLit => Category::Decl,
 
         // ── undef / unused ─────────────────────────────────────────────
         SynLabelUndefined | TypUndeclaredLabel | TypUndeclaredName => Category::Undef,
@@ -257,12 +265,16 @@ pub fn category_of(code: DiagCode) -> Category {
         // 选择器面（Task 24）：官方 `MissingFieldOrMethod` / `AmbiguousSelector`
         // / `InvalidMethodExpr` / `NonFieldSelector` 落 `selector`
         // （C8 适配表；`task24-reject.go` 7 行实证）。
-        ChkInvalidSelector => Category::Selector,
+        // 字面量字段名面（Task 27）：官方 `InvalidLitField` / `MissingLitField`
+        // / `DuplicateLitField` 的 cannot-specify 成员经适配表
+        // （`^invalid field name |^unknown field |^cannot specify (promoted|
+        // embedded) field `）同落 `selector`（`task27-reject.go` 3 行实证）。
+        ChkInvalidLitField | ChkInvalidSelector => Category::Selector,
         // 索引 / 切片面（Task 23）：官方 `NonIndexableOperand` / `InvalidIndex`
         // 与 `NonSliceableOperand` / `InvalidSliceExpr`（`3-index slice of
         // string`）/ `SwappedSliceIndices` 分别落 `index` / `slice`
         // （C8 适配表；`task23-reject.go` 19 行实证）。
-        ChkInvalidIndex => Category::Index,
+        ChkInvalidIndex | ChkInvalidLitIndex => Category::Index,
         ChkInvalidSlice => Category::Slice,
 
         // ── 语句静态规则面（M4/Task 25；`task25-reject.go` 36 行实证）──────
@@ -288,6 +300,9 @@ pub fn category_of(code: DiagCode) -> Category {
         ChkNoNewVar => Category::Decl,
         ChkNotAType => Category::NotType,
         ChkSingleValueContext => Category::CommaOk,
+        // 结构字面量值元数（Task 27）：官方 `InvalidStructLit` 的
+        // `too many|too few values in struct literal` 经适配表落 `assign`。
+        ChkStructLitCount => Category::Assign,
         ChkUnusedExpr => Category::Unused,
         ChkWrongResultCount => Category::Ret,
 

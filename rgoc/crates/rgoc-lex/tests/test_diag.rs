@@ -95,11 +95,14 @@ fn 代号表恰为冻结总数且无重复() {
     // `ChkNoNewVar` / `ChkNotAType` / `ChkSingleValueContext` / `ChkUnusedExpr` /
     // `ChkWrongResultCount`）⇒ 共 **86**；M4/Task 26 再 +2
     // （`ChkInvalidIterVar` / `ChkInvalidRangeExpr` —— range 迭代变量面与
-    // 不可 range 面的合名；`range` 类别自此有码）⇒ 共 **88**。
+    // 不可 range 面的合名；`range` 类别自此有码）⇒ 共 **88**；M4/Task 27 再 +6
+    // （复合字面量面：`ChkDuplicateLitField` / `ChkDuplicateLitIndex` /
+    // `ChkInvalidLit` / `ChkInvalidLitField` / `ChkInvalidLitIndex` /
+    // `ChkStructLitCount`）⇒ 共 **94**。
     //
     // ⚠️ 这个数字是「漏代号」的对照面；`LEX-` / `SYN-` 子表另有与 Go 镜像表
     // 逐字一致的断言（`diag_code_的码表与_go_侧映射表逐字一致`），改子表时两边同改。
-    assert_eq!(DiagCode::ALL.len(), 88);
+    assert_eq!(DiagCode::ALL.len(), 94);
     let mut s = DiagCode::ALL;
     s.sort();
     for w in s.windows(2) {

@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：88 个码各有恰好一个类别（M4/Task 26 后 88）
-    assert_eq!(DiagCode::ALL.len(), 88, "码表总数（M4/Task 26 后 88）");
+    // 总数守恒：94 个码各有恰好一个类别（M4/Task 27 后 94）
+    assert_eq!(DiagCode::ALL.len(), 94, "码表总数（M4/Task 27 后 94）");
 }
 
 #[test]
@@ -121,7 +121,13 @@ fn t_ck_16_other_值域恰好是三个实现限制码() {
 #[test]
 fn t_ck_16_抽样映射向量() {
     use DiagCode::*;
-    let vectors: [(DiagCode, Category); 26] = [
+    let vectors: [(DiagCode, Category); 32] = [
+        (ChkDuplicateLitField, Category::Decl),
+        (ChkDuplicateLitIndex, Category::Decl),
+        (ChkInvalidLit, Category::Decl),
+        (ChkInvalidLitField, Category::Selector),
+        (ChkInvalidLitIndex, Category::Index),
+        (ChkStructLitCount, Category::Assign),
         (ChkInvalidIndex, Category::Index),
         (ChkInvalidOperation, Category::OpInvalid),
         (ChkInvalidSelector, Category::Selector),
@@ -169,17 +175,22 @@ fn t_ck_16_每类计数快照() {
     // assign 1→2、comma-ok 0→1、decl 8→9、not-type 1→2、ret 0→1、
     // stmt 7→11、terminate 0→1、unused 2→3、总数 75→86；
     // M4/Task 26 新增 `ChkInvalidIterVar` / `ChkInvalidRangeExpr` ⇒
-    // range 0→2、总数 86→88）：
+    // range 0→2、总数 86→88；
+    // M4/Task 27 新增 6 个复合字面量面码 ⇒
+    // assign 2→3（`ChkStructLitCount`）、decl 9→12（`ChkInvalidLit` +
+    // `ChkDuplicateLitField` + `ChkDuplicateLitIndex`）、index 1→2
+    // （`ChkInvalidLitIndex`）、selector 1→2（`ChkInvalidLitField`）、
+    // 总数 88→94）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
-        ("assign", 2),
+        ("assign", 3),
         ("comma-ok", 1),
         ("convert", 2),
         ("cycle", 4),
-        ("decl", 9),
+        ("decl", 12),
         ("implements", 1),
         ("import", 3),
-        ("index", 1),
+        ("index", 2),
         ("not-type", 2),
         ("op-invalid", 2),
         ("other", 3),
@@ -187,7 +198,7 @@ fn t_ck_16_每类计数快照() {
         ("parse", 25),
         ("range", 2),
         ("ret", 1),
-        ("selector", 1),
+        ("selector", 2),
         ("shift", 2),
         ("slice", 1),
         ("stmt", 11),
