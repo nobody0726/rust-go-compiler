@@ -56,6 +56,13 @@
 //! 新码 4 个（`CHK-INVALID-LIT` / `CHK-DUPLICATE-LIT-FIELD` /
 //! `CHK-DUPLICATE-LIT-INDEX` / `CHK-INVALID-LIT-FIELD`；`T-CK-37` 22 行实证）。
 //!
+//! # 类型断言面（Task 28；`T-CK-38`）
+//!
+//! `v.(T)`：操作数必须是接口（否则 `… is not an interface`，`op-invalid`）；
+//! 目标是接口 ⇒ 不做静态判定；否则要求**目标实现源接口**（`implements(T, I)`），
+//! 失败报 `impossible type assertion`（`comma-ok`，码 `CHK-IMPOSSIBLE-ASSERT`）。
+//! 结果模式 `commaok`（官方同形）。
+//!
 //! # 位置规则（oracle 探针 1–7 与官方源双证；`task21-reject.go` 53 行）
 //!
 //! | 情形 | 错误位 |
@@ -92,8 +99,8 @@
 //!   实际不可达；报出来反而会造出 oracle 没有的「other 类」行）。
 
 use rgoc_ast::{
-    BasicLit, CallExpr, CompositeLit, Decl, Expr, IndexExpr, LitKind, Name, Op, Operation,
-    SelectorExpr, SliceExpr,
+    AssertExpr, BasicLit, CallExpr, CompositeLit, Decl, Expr, IndexExpr, LitKind, Name, Op,
+    Operation, SelectorExpr, SliceExpr,
 };
 use rgoc_const::{
     BasicId, BigInt, Const, Sizes, const_from_literal, default_type_of, fold_binary, fold_compare,
@@ -102,7 +109,7 @@ use rgoc_const::{
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{
     ChanDir, ConstId, ObjKind, Type, TypeId, TypeTable, assignable, comparable, convertible,
-    identical, unalias, underlying,
+    identical, implements, unalias, underlying,
 };
 
 use crate::check::Session;
@@ -176,6 +183,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Slice(sx) => self.slice_expr(file, sx),
             Expr::Selector(se) => self.selector(file, se),
             Expr::CompositeLit(cl) => self.composite_lit(file, cl, hint),
+            Expr::TypeAssert(a) => self.type_assert(file, a),
             _ => Operand::invalid(),
         }
     }
@@ -1403,6 +1411,77 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             };
         }
         names.join(".")
+    }
+
+    // ────────────────────────────── 类型断言 ──────────────────────────────
+
+    /// 官方 `rawExpr` 的 `*ast.TypeAssertExpr` 支（`expr.go:1091`）。
+    ///
+    /// 三步：操作数必须是接口（否则 `invalid operation: … is not an interface`）
+    /// → 目标类型可解析 → `assertableTo`（目标是接口时**不做**静态判定；
+    /// 否则要求目标类型实现源接口）。结果模式 `commaok`（官方同形）。
+    ///
+    /// 窄面（台账登记）：类型参数操作数、`x.(type)` 在 type switch 之外、
+    /// 类型表达式面未接的形态 —— 一律 `invalid` 且**不报**。
+    fn type_assert(&mut self, file: FileId, e: &AssertExpr) -> Operand {
+        let x = self.expr(file, &e.x);
+        if x.mode == Mode::Invalid {
+            return Operand::invalid();
+        }
+        let Some(te) = &e.type_ else {
+            // `x.(type)` 只允许出现在 type switch 守卫里（守卫面归 Task 25）。
+            return Operand::invalid();
+        };
+        let Some(xt) = x.typ else {
+            return Operand::invalid();
+        };
+        // 类型参数操作数：官方 `cannot use type assertion on type parameter value`
+        // —— `D-M3-2` 窄面（表示有位置、判定不做），不报。
+        {
+            let tt = self.tt();
+            if matches!(tt.type_of(unalias(tt, xt)), Type::TypeParam(_)) {
+                return Operand::invalid();
+            }
+        }
+        let is_iface = {
+            let tt = self.tt();
+            matches!(tt.type_of(underlying(tt, xt)), Type::Interface(_))
+        };
+        if !is_iface {
+            let what = operand_text(self.tt(), &x);
+            self.report(
+                e.x.start_pos(),
+                DiagCode::ChkInvalidOperation,
+                format!("invalid operation: {what} is not an interface"),
+            );
+            return Operand::invalid();
+        }
+        let Some(target) = self.type_expr(file, te) else {
+            return Operand::invalid();
+        };
+        let target_is_iface = {
+            let tt = self.tt();
+            matches!(tt.type_of(underlying(tt, target)), Type::Interface(_))
+        };
+        if !target_is_iface {
+            let ok = {
+                let tt = self.tt();
+                implements(tt, target, xt, false).unwrap_or(true)
+            };
+            if !ok {
+                let (t_txt, v_txt) = {
+                    let tt = self.tt();
+                    (type_str(tt, target), type_str(tt, xt))
+                };
+                self.report(
+                    e.x.start_pos(),
+                    DiagCode::ChkImpossibleAssert,
+                    format!("impossible type assertion: {t_txt} does not implement {v_txt}"),
+                );
+                return Operand::invalid();
+            }
+        }
+        Operand::comma_ok(target)
     }
 
     // ────────────────────────────── 选择器 ──────────────────────────────

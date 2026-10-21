@@ -303,6 +303,8 @@ pub fn category_of(code: DiagCode) -> Category {
         // 结构字面量值元数（Task 27）：官方 `InvalidStructLit` 的
         // `too many|too few values in struct literal` 经适配表落 `assign`。
         ChkStructLitCount => Category::Assign,
+        // 不可能的类型断言（Task 28）：官方 `ImpossibleAssert` 落 `comma-ok`。
+        ChkImpossibleAssert => Category::CommaOk,
         ChkUnusedExpr => Category::Unused,
         ChkWrongResultCount => Category::Ret,
 

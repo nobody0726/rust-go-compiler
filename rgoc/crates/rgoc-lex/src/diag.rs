@@ -64,6 +64,10 @@ pub enum DiagCode {
     /// —— 官方 `DuplicateLitKey`（`duplicate index %d in array or slice
     /// literal` / `duplicate key %s in map literal`；类别面 `decl`）。
     ChkDuplicateLitIndex,
+    /// **不可能的类型断言**（M4/Task 28）—— 官方 `ImpossibleAssert`
+    /// （`impossible type assertion: T\n\tT does not implement I (missing
+    /// method M)`；类别面 `comma-ok`）。
+    ChkImpossibleAssert,
     /// 赋值面拒绝（M4/Task 25）—— 官方 `IncompatibleAssign`（`cannot use ... as
     /// ... value in <语境>`）/ `UnassignableOperand`（`cannot assign to ...`）/
     /// `WrongAssignCount`（`assignment mismatch: N variables but M values`）/
@@ -594,9 +598,10 @@ impl DiagCode {
     ///
     /// 供遍历式断言使用 —— 让「漏了一个代号」这件事有地方可查，
     /// 而不是靠人工维护一份可能过期的清单。
-    pub const ALL: [DiagCode; 94] = [
+    pub const ALL: [DiagCode; 95] = [
         DiagCode::ChkDuplicateLitField,
         DiagCode::ChkDuplicateLitIndex,
+        DiagCode::ChkImpossibleAssert,
         DiagCode::ChkInvalidAssign,
         DiagCode::ChkInvalidCase,
         DiagCode::ChkInvalidCond,
@@ -696,6 +701,7 @@ impl DiagCode {
         match self {
             DiagCode::ChkDuplicateLitField => "CHK-DUPLICATE-LIT-FIELD",
             DiagCode::ChkDuplicateLitIndex => "CHK-DUPLICATE-LIT-INDEX",
+            DiagCode::ChkImpossibleAssert => "CHK-IMPOSSIBLE-ASSERT",
             DiagCode::ChkInvalidAssign => "CHK-INVALID-ASSIGN",
             DiagCode::ChkInvalidCase => "CHK-INVALID-CASE",
             DiagCode::ChkInvalidCond => "CHK-INVALID-COND",

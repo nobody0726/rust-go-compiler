@@ -95,8 +95,8 @@ fn t_ck_16_投影穷尽_全部码落进枚举() {
             "{code:?} 投影到 {cat:?}，不在 26 类枚举内"
         );
     }
-    // 总数守恒：94 个码各有恰好一个类别（M4/Task 27 后 94）
-    assert_eq!(DiagCode::ALL.len(), 94, "码表总数（M4/Task 27 后 94）");
+    // 总数守恒：95 个码各有恰好一个类别（M4/Task 28 后 95）
+    assert_eq!(DiagCode::ALL.len(), 95, "码表总数（M4/Task 28 后 95）");
 }
 
 #[test]
@@ -180,11 +180,12 @@ fn t_ck_16_每类计数快照() {
     // assign 2→3（`ChkStructLitCount`）、decl 9→12（`ChkInvalidLit` +
     // `ChkDuplicateLitField` + `ChkDuplicateLitIndex`）、index 1→2
     // （`ChkInvalidLitIndex`）、selector 1→2（`ChkInvalidLitField`）、
-    // 总数 88→94）：
+    // 总数 88→94）；
+    // M4/Task 28 新增 `ChkImpossibleAssert` ⇒ comma-ok 1→2、总数 94→95）：
     // 改动 `category_of` 或新增码 ⇒ 这里逐项对账。
     let want: BTreeMap<&'static str, usize> = BTreeMap::from([
         ("assign", 3),
-        ("comma-ok", 1),
+        ("comma-ok", 2),
         ("convert", 2),
         ("cycle", 4),
         ("decl", 12),
