@@ -8,8 +8,8 @@
 # 「候选 == 入选 ∪ 排除」由 T-EX-41 两向断言（Task 46 落地）。
 
 go_source_code/test/index0.go	runoutput	runoutput 形态：跑第一段把输出写成第二段源码再编译运行 —— 动态编译，M5 不做	M5-design.md §1.3 / F5
-go_source_code/test/rotate0.go	runoutput	同上	M5-design.md §1.3 / F5
-go_source_code/test/rotate1.go	runoutput	同上	M5-design.md §1.3 / F5
-go_source_code/test/rotate2.go	runoutput	同上	M5-design.md §1.3 / F5
-go_source_code/test/rotate3.go	runoutput	同上	M5-design.md §1.3 / F5
+go_source_code/test/rotate0.go	runoutput	rotate0.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
+go_source_code/test/rotate1.go	runoutput	rotate1.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
+go_source_code/test/rotate2.go	runoutput	rotate2.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
+go_source_code/test/rotate3.go	runoutput	rotate3.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
 go_source_code/test/reflectmethod2.go	stdlib	import "reflect" —— 标准库 import 不在 M5 支持面	U-M5-01 / F17
