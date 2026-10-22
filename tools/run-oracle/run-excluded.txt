@@ -1,0 +1,15 @@
+# M5 排除清单（`run-excluded.txt`）—— 与 `run-candidates.txt` 互补。
+#
+# 格式：<相对路径>	<类别>	<理由>	<指针>
+# 类别：runoutput | stdlib | nondet | unsupported | rule
+#
+# 纪律（M5-tests.md §11.2）：候选 → 排除只能按 §6.3 的四条判据，
+# 逐行理由 + 指针；不许为了让数字好看移出。
+# 「候选 == 入选 ∪ 排除」由 T-EX-41 两向断言（Task 46 落地）。
+
+go_source_code/test/index0.go	runoutput	runoutput 形态：跑第一段把输出写成第二段源码再编译运行 —— 动态编译，M5 不做	M5-design.md §1.3 / F5
+go_source_code/test/rotate0.go	runoutput	同上	M5-design.md §1.3 / F5
+go_source_code/test/rotate1.go	runoutput	同上	M5-design.md §1.3 / F5
+go_source_code/test/rotate2.go	runoutput	同上	M5-design.md §1.3 / F5
+go_source_code/test/rotate3.go	runoutput	同上	M5-design.md §1.3 / F5
+go_source_code/test/reflectmethod2.go	stdlib	import "reflect" —— 标准库 import 不在 M5 支持面	U-M5-01 / F17
