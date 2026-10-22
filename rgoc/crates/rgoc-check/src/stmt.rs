@@ -30,8 +30,9 @@
 //! * **函数字面量的体**不在这里走（`Expr::FuncLit`）：它的参数/结果类型没有
 //!   已解析的签名可依，归 Task 27 的复合字面量/字面量面一并接；
 //! * `range` 只接「变量声明 / 赋值 + 求值」（迭代形态归 Task 26）；
-//! * 复合赋值只判**两侧类型匹配**（官方 `binary` 的完整谓词与常量折叠在
-//!   `expr.rs`；这里复用同样的谓词，但不再造 `1` 字面量去做 `++` 的折叠）；
+//! * 复合赋值**不再**自建近似：M5/Task 5 起走 `expr.rs` 的
+//!   [`ExprChecker::binary_assign`]（官方 `stmt.go:524` 的 `binary(…, nil, …)`）
+//!   + `assignVar`，于是移位计数类型、未类型化常量截断、除零、`&^=` 全部对齐；
 //! * `switch` 的 tag 不做「可比性」判定（`InvalidExprSwitch`，归 Task 28）；
 //! * `break`/`continue`/`goto`/`fallthrough` 的**位置合法性**在 M2 的
 //!   `checkBranches`（`SYN-BRANCH-*`）与 M3 的 `labels`（`TYP-*`）已报 ——
@@ -40,7 +41,7 @@
 
 use rgoc_ast::{
     AssignOp, AssignStmt, BlockStmt, CallStmt, CallTok, CaseClause, CommClause, Decl, DeclStmt,
-    Expr, ForStmt, FuncDecl, IfStmt, RangeClause, ReturnStmt, SelectStmt, SimpleStmt, Stmt,
+    Expr, ForStmt, FuncDecl, IfStmt, Op, RangeClause, ReturnStmt, SelectStmt, SimpleStmt, Stmt,
     SwitchStmt,
 };
 use rgoc_const::{BasicId, Sizes, default_type_of, representable};
@@ -50,7 +51,7 @@ use rgoc_types::{ChanDir, Type, TypeId, underlying};
 use crate::check::Session;
 use crate::env::Env;
 use crate::expr::{
-    ExprChecker, all_boolean, all_integer, all_numeric, basic_kind, expr_label,
+    At, BinSrc, ExprChecker, all_boolean, all_integer, all_numeric, basic_kind, expr_label,
     is_non_typeparam_interface, is_untyped, operand_text, type_str,
 };
 use crate::operand::{Mode, Operand};
@@ -529,7 +530,24 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         }
     }
 
-    /// 复合赋值（`x += y`）：官方走 `binary` 再 `assignVar`。
+    /// 复合赋值（`x op= y`）：官方 `stmt.go:518-530` —— 先按**隐式二元运算**
+    /// 走 `binary`（`e == nil`），再走 `assignVar`。
+    ///
+    /// # M5/Task 5 的修正
+    ///
+    /// 这里是自建近似（「两侧类型匹配 + 谓词 `op_defined`」），与官方两处分歧，
+    /// 都由 `ken/shift.go` / 一组探针实测暴露：
+    ///
+    /// ① **移位**：`i <<= c`（`c` 为 `uint`）被误报
+    ///    `mismatched types int and uint`。官方对移位**只要求计数是整数**，
+    ///    不要求与左操作数同类型（`F3-D`；`go_spec`「The right operand in a shift
+    ///    expression must have integer type or be an untyped constant representable
+    ///    by a value of type uint」）。近似实现把移位当普通二元运算判同型 ⇒ 假阳性。
+    /// ② **可转换的未类型化常量**：`i += 1.5` 官方报 `convert` @ **右操作数**
+    ///    （`matchTypes` → `convertUntyped` 截断），近似报 `op-invalid` @ 左操作数。
+    ///
+    /// 改走 [`ExprChecker::binary_assign`] 后两处自动对齐 —— 也顺带接上了
+    /// 除零、常量折叠、`&^=` 等原先漏掉的面。
     fn compound_assign(&mut self, file: FileId, a: &AssignStmt) {
         let (Some(lhs), Some(rhs)) = (a.lhs.first(), a.rhs.first()) else {
             return;
@@ -539,33 +557,29 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         if x.mode == Mode::Invalid || y.mode == Mode::Invalid {
             return;
         }
-        let (Some(tx), Some(ty)) = (x.typ, y.typ) else {
-            return;
-        };
-        let sym = compound_sym(a.op);
+        let Some(op) = base_op(a.op) else { return };
         let lx = expr_label(lhs).unwrap_or_else(|| "expression".to_owned());
         let ly = expr_label(rhs).unwrap_or_else(|| "expression".to_owned());
-        let sx = type_str(&*self.s.tt, tx);
-        let sy = type_str(&*self.s.tt, ty);
-
-        if !op_defined(a.op, &*self.s.tt, tx) {
-            self.report(
-                lhs.start_pos(),
-                DiagCode::ChkInvalidOperation,
-                format!("invalid operation: {lx} {sym} {ly} (operator {sym} not defined on {sx})"),
-            );
+        let xpos = lhs.start_pos();
+        let ypos = rhs.start_pos();
+        let mut v = {
+            let mut cx = ExprChecker {
+                s: &mut *self.s,
+                env: Some(&self.env),
+            };
+            let src = BinSrc::Assign {
+                lhs: lx,
+                rhs: ly,
+                sym: compound_sym(a.op),
+            };
+            let (xa, ya) = (At { op: x, pos: xpos }, At { op: y, pos: ypos });
+            cx.binary_core(xa, ya, op, src, xpos)
+        };
+        if v.mode == Mode::Invalid {
             return;
         }
-        // 两侧类型匹配（未类型化常量按可赋值性换算）
-        let same = rgoc_types::identical(&*self.s.tt, tx, ty).unwrap_or(true)
-            || rgoc_types::assignable(&*self.s.tt, ty, tx).unwrap_or(true);
-        if !same {
-            self.report(
-                lhs.start_pos(),
-                DiagCode::ChkInvalidOperation,
-                format!("invalid operation: {lx} {sym} {ly} (mismatched types {sx} and {sy})"),
-            );
-        }
+        // 官方 `assignVar(s.Lhs[0], nil, &x, "assignment")`：可赋值性 + 左值性。
+        self.assign_lhs(file, lhs, xpos, &mut v, "assignment");
     }
 
     /// 纯 `=`（官方 `assignVars`）。
@@ -1644,40 +1658,47 @@ fn valid_comm(s: &SimpleStmt) -> bool {
     }
 }
 
-/// 复合赋值的符号文本（`+=` …）。
+/// 复合赋值的**基础**符号文本（`+`、`<<` …；`=` 由消息侧拼）。
+///
+/// 官方 `assignOp`（`stmt.go:165`）靠 token 枚举相邻性算
+/// `op + (token.ADD - token.ADD_ASSIGN)`；本仓 `AssignOp` 直接存基础运算符
+/// （`rgoc-ast/src/aux.rs:71`），所以这里只做映射。`Assign` / `Define` /
+/// `Inc` / `Dec` 不是复合赋值 —— 由 [`base_op`] 先挡掉，这里退 `"="` 只为穷尽。
 fn compound_sym(op: AssignOp) -> &'static str {
     match op {
-        AssignOp::Add => "+=",
-        AssignOp::Sub => "-=",
-        AssignOp::Mul => "*=",
-        AssignOp::Quo => "/=",
-        AssignOp::Rem => "%=",
-        AssignOp::And => "&=",
-        AssignOp::Or => "|=",
-        AssignOp::Xor => "^=",
-        AssignOp::Shl => "<<=",
-        AssignOp::Shr => ">>=",
-        AssignOp::AndNot => "&^=",
+        AssignOp::Add => "+",
+        AssignOp::Sub => "-",
+        AssignOp::Mul => "*",
+        AssignOp::Quo => "/",
+        AssignOp::Rem => "%",
+        AssignOp::And => "&",
+        AssignOp::Or => "|",
+        AssignOp::Xor => "^",
+        AssignOp::Shl => "<<",
+        AssignOp::Shr => ">>",
+        AssignOp::AndNot => "&^",
         _ => "=",
     }
 }
 
-/// 复合赋值的运算符谓词（官方 `binary` 的 `allNumeric` / `allString` /
-/// `allInteger` 三档；判的是**左操作数**）。
-fn op_defined(op: AssignOp, tt: &rgoc_types::TypeTable, t: TypeId) -> bool {
-    let Some(b) = basic_kind(tt, t) else {
-        return false;
-    };
-    use rgoc_const::BasicId as B;
-    let _ = B::Int;
-    match op {
-        AssignOp::Add => b.is_numeric() || b.is_string(),
-        AssignOp::Sub | AssignOp::Mul | AssignOp::Quo => b.is_numeric(),
-        AssignOp::Rem => b.is_integer(),
-        AssignOp::And | AssignOp::Or | AssignOp::Xor | AssignOp::AndNot => b.is_integer(),
-        AssignOp::Shl | AssignOp::Shr => b.is_integer(),
-        _ => true,
-    }
+/// 复合赋值的**基础**运算符（官方 `assignOp`）。
+///
+/// `Assign` / `Define` / `Inc` / `Dec` 不是复合赋值 ⇒ `None`（官方 `ILLEGAL`）。
+fn base_op(op: AssignOp) -> Option<Op> {
+    Some(match op {
+        AssignOp::Add => Op::Add,
+        AssignOp::Sub => Op::Sub,
+        AssignOp::Mul => Op::Mul,
+        AssignOp::Quo => Op::Quo,
+        AssignOp::Rem => Op::Rem,
+        AssignOp::And => Op::And,
+        AssignOp::Or => Op::Or,
+        AssignOp::Xor => Op::Xor,
+        AssignOp::Shl => Op::Shl,
+        AssignOp::Shr => Op::Shr,
+        AssignOp::AndNot => Op::AndNot,
+        AssignOp::Assign | AssignOp::Define | AssignOp::Inc | AssignOp::Dec => return None,
+    })
 }
 
 // ═══════════════════════════ 终止语句（官方 `return.go`）═══════════════════════════

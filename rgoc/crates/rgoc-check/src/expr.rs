@@ -133,6 +133,42 @@ pub(crate) fn check_package_decls(s: &mut Session<'_>) {
     }
 }
 
+/// 带位置的求值结果（操作数 + 它自己的源码位置）。
+///
+/// 官方的 `operand` 结构体自带 `expr ast.Expr`，位置从它取（`x.Pos()`）；本仓的
+/// [`Operand`] 只有 `pos: Option<Pos>` 且并非所有产地都填，所以二元 / 移位的内部
+/// 路径显式配一个位置 —— 报点全靠它，不能靠猜。
+#[derive(Clone)]
+pub(crate) struct At {
+    pub op: Operand,
+    pub pos: Pos,
+}
+
+/// 二元运算的**来源形态** —— 官方 `binary(x, e, lhs, rhs, op, opPos)` 里那个
+/// 可以为 `nil` 的 `e`（`expr.go:780` 注释原文：「it may be nil for non-constant
+/// expressions (when invoked for an assignment operation where the binary
+/// expression is implicit)」）。
+///
+/// 两态的分歧只在**报错消息**（`expr.go:819` vs `:821`）：
+/// 真二元表达式用整条表达式文本，复合赋值用 `lhs op= rhs` 形态。
+/// 位置在两种形态下都落在**左操作数**（官方 `posn = x` 与 `posn = e` 的区别只
+/// 影响列号：`e` 的起点与 `x` 的起点在二元表达式里相同，所以这里统一用 `xpos`）。
+pub(crate) enum BinSrc {
+    /// `x op y`：真二元表达式（官方 `e != nil`）。
+    ///
+    /// 官方消息带整条表达式的**源码文本**（`%s` 打 `e`）；本仓没有源码文本
+    /// 设施，消息退化成 `mismatched types A and B` —— 消息只进人读面，
+    /// `(行,列,类别)` 才是对账面（见 [`operand_text`] 的注释）。
+    Expr,
+    /// `x op= y`：复合赋值的隐式二元运算（官方 `e == nil`）。
+    Assign {
+        lhs: String,
+        rhs: String,
+        /// 基础运算符的源码形态（`+`、`<<` 等；消息里要拼成 `lhs sym= rhs`）。
+        sym: &'static str,
+    },
+}
+
 /// 表达式检查器：持会话（诊断流 + 类型表 + 被检查包）。
 ///
 /// `env` 是**语句面**（Task 25）的局部作用域栈：包级初始化式检查时为 `None`，
@@ -1902,22 +1938,51 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             return Operand::invalid();
         };
         let y = self.expr(file, rhs);
+        let (x, y) = (
+            At {
+                op: x,
+                pos: e.x.pos(),
+            },
+            At {
+                op: y,
+                pos: rhs.pos(),
+            },
+        );
+        self.binary_core(x, y, e.op, BinSrc::Expr, e.pos)
+    }
+
+    /// 官方 `binary` 的**核心**：两侧操作数已求值。
+    ///
+    /// `src` 区分两种调用形态（官方靠 `e == nil` 区分）：
+    ///
+    /// * `BinSrc::Expr` —— 真二元表达式 `x op y`；
+    /// * `BinSrc::Assign` —— 复合赋值 `x op= y` 的**隐式**二元运算
+    ///   （官方 `stmt.go:524` 的 `check.binary(&x, nil, lhs, rhs, op, s.TokPos)`）。
+    ///   此时不匹配消息走 `expr.go:821` 的 `lhs op= rhs` 形态。
+    ///
+    /// 这条路径是 M5/Task 5 引入的：`stmt.rs` 原先**自己**实现了一份「两侧类型
+    /// 匹配 + 谓词」的近似，把 `i <<= c`（`c` 为 `uint`）判成
+    /// `mismatched types int and uint` —— 而官方对移位**只要求计数是整数**，
+    /// 不要求与左操作数同类型（`F3-D`）。近似实现与官方分歧的第二处是
+    /// `i += 1.5`：官方报 `convert` @ 右操作数（`convertUntyped` 截断），
+    /// 近似报 `op-invalid` @ 左操作数。改走 `binary` 后两处自动对齐。
+    pub(crate) fn binary_core(&mut self, x: At, y: At, op: Op, src: BinSrc, epos: Pos) -> Operand {
+        let (xpos, ypos) = (x.pos, y.pos);
+        let (x, y) = (x.op, y.op);
         // 官方：x 无效 ⇒ 原样返回；y 无效 ⇒ x 置 invalid。
         if !is_valid_op(&x) || !is_valid_op(&y) {
             return Operand::invalid();
         }
-        if matches!(e.op, Op::Shl | Op::Shr) {
-            return self.shift(x, y, e);
+        if matches!(op, Op::Shl | Op::Shr) {
+            return self.shift(At { op: x, pos: xpos }, At { op: y, pos: ypos }, op, epos);
         }
-        let xpos = e.x.pos();
-        let ypos = rhs.pos();
         let (mut x, mut y) = (x, y);
         self.match_types(&mut x, &mut y, xpos, ypos);
         if !is_valid_op(&x) {
             return Operand::invalid();
         }
-        if is_comparison(e.op) {
-            return self.comparison(&x, &y, e.op, xpos, ypos);
+        if is_comparison(op) {
+            return self.comparison(&x, &y, op, xpos, ypos);
         }
         let (Some(tx), Some(ty)) = (x.typ, y.typ) else {
             return Operand::invalid();
@@ -1931,17 +1996,19 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 let tt = self.tt();
                 (type_str(tt, tx), type_str(tt, ty))
             };
-            self.report(
-                xpos,
-                DiagCode::ChkInvalidOperation,
-                format!("invalid operation: mismatched types {a} and {b}"),
-            );
+            let msg = match &src {
+                BinSrc::Expr => format!("invalid operation: mismatched types {a} and {b}"),
+                BinSrc::Assign { lhs, rhs, sym } => {
+                    format!("invalid operation: {lhs} {sym}= {rhs} (mismatched types {a} and {b})")
+                }
+            };
+            self.report(xpos, DiagCode::ChkInvalidOperation, msg);
             return Operand::invalid();
         }
         // 官方 `binaryOpPredicates`（`expr.go:96`）。
         let ok = {
             let tt = self.tt();
-            match e.op {
+            match op {
                 Op::Add => all_numeric(tt, tx) || all_string(tt, tx),
                 Op::Sub | Op::Mul | Op::Quo => all_numeric(tt, tx),
                 // 官方 `binaryOpPredicates`：`REM` 只对整数定义（`f % 2` 是 op-invalid）。
@@ -1952,11 +2019,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             }
         };
         if !ok {
-            return self.op_not_defined(e.op, xpos, tx);
+            return self.op_not_defined(op, xpos, tx);
         }
         // 除零（官方 `binary` 的 QUO/REM 守卫；条件含 `allInteger(x)`。
         // 复合除法下溢面暂缓 —— 台账登记）。
-        if matches!(e.op, Op::Quo | Op::Rem) && self.divisor_zero(&x, &y) {
+        if matches!(op, Op::Quo | Op::Rem) && self.divisor_zero(&x, &y) {
             self.report(
                 ypos,
                 DiagCode::TypDivByZero,
@@ -1971,9 +2038,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             if xv == Const::Unknown || yv == Const::Unknown {
                 return Operand::constant(tx, Const::Unknown);
             }
-            let val = fold_binary(e.op, &xv, &yv);
+            let val = fold_binary(op, &xv, &yv);
             let mut out = Operand::constant(tx, val);
-            self.overflow_check(&mut out, Some(e.op), false, e.pos, xpos);
+            self.overflow_check(&mut out, Some(op), false, epos, xpos);
             return out;
         }
         // 官方：`x.mode_ = value`，类型不变。
@@ -2001,9 +2068,14 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     // ────────────────────────────── 移位 ──────────────────────────────
 
     /// 官方 `shift`（`expr.go:618`）。
-    fn shift(&mut self, x: Operand, y: Operand, e: &Operation) -> Operand {
-        let xpos = e.x.pos();
-        let ypos = e.y.as_deref().map_or(e.pos, Expr::pos);
+    ///
+    /// 官方签名带 `e ast.Expr` / `op token.Token`，但函数体只用 `e` 的**位置**
+    /// （`x`/`y` 的报点 + 折叠溢出的报点）与 `op`（折叠）。这里直接收
+    /// `xpos` / `ypos` / `epos`（`epos` = **运算符**位置，溢出报在它上面），
+    /// 于是同一条路径同时服务真二元表达式与复合赋值（`i <<= c`，官方 `e == nil`）。
+    fn shift(&mut self, x: At, y: At, op: Op, epos: Pos) -> Operand {
+        let (xpos, ypos) = (x.pos, y.pos);
+        let (x, y) = (x.op, y.op);
         let Some(xt) = x.typ else {
             return Operand::invalid();
         };
@@ -2097,9 +2169,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             };
             // 官方：非常量整值左操作数（`2.0`）的结果类型修正为 `untyped int`。
             let t = self.integer_result_type(xt);
-            let val = fold_binary(e.op, &xv, &yv);
+            let val = fold_binary(op, &xv, &yv);
             let mut out = Operand::constant(t, val);
-            self.overflow_check(&mut out, Some(e.op), false, e.pos, xpos);
+            self.overflow_check(&mut out, Some(op), false, epos, xpos);
             return out;
         }
 
@@ -2797,6 +2869,9 @@ pub(crate) fn expr_label(e: &Expr) -> Option<String> {
         Expr::Name(n) => Some(n.value.clone()),
         Expr::Selector(s) => expr_label(&s.x).map(|b| format!("{b}.{}", s.sel.value)),
         Expr::Paren(p) => expr_label(&p.x),
+        // 字面量的源码文本（官方 `ExprString` 同样直接回原文本）。
+        // M5/Task 5 补：此前 `s += 1` 的消息退化成 `s += expression`。
+        Expr::BasicLit(l) => Some(l.value.clone()),
         _ => None,
     }
 }
