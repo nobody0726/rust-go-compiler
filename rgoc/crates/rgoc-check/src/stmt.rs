@@ -282,7 +282,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             Stmt::Block(b) => self.block(file, b),
             Stmt::Expr(e) => {
                 let x = self.eval(file, &e.x);
-                self.expr_stmt(Some(&e.x), &x, e.pos);
+                self.expr_stmt(file, Some(&e.x), &x, e.pos);
             }
             Stmt::Send(sd) => self.send(file, sd.chan.as_ref(), sd.value.as_ref(), sd.pos),
             Stmt::Decl(d) => self.decl_stmt(file, d),
@@ -304,10 +304,26 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     }
 
     /// 表达式语句：官方 `stmt.go:432` —— 只有**调用**与**接收**能当语句。
-    fn expr_stmt(&mut self, x_ast: Option<&Expr>, x: &Operand, pos: Pos) {
+    fn expr_stmt(&mut self, file: FileId, x_ast: Option<&Expr>, x: &Operand, pos: Pos) {
         // 接收语句（`<-ch`）合法；调用（`novalue`）合法。
         if let Some(e) = x_ast
             && is_receive(e)
+        {
+            return;
+        }
+        // 调用语句：**结果被丢弃也合法**（官方 `stmt.go:439-461`：`rawExpr` 对
+        // 函数/方法调用返回 `statement` 这一 `exprKind`，于是 `switch x.mode()`
+        // 的 `default` 分支直接 `return`，不看结果个数）。
+        //
+        // M5/Task 2 修：原先只放行 `Mode::NoValue`（无结果调用），有结果的调用
+        // 当语句会被报成 `value of type T is not used` —— `divmod.go:126`、
+        // `escape3.go:16`、`ken/rob1.go:64` 三个语料文件共 7 行的形态。
+        //
+        // ⚠️ **转换不是调用**：`int(x)` 也是 `Expr::Call`，官方对它返回
+        // `conversion` 而不是 `statement` ⇒ 仍报 `is not used`。所以这里必须
+        // 用**被调方是不是类型表达式**来区分，不能只看语法形状。
+        if let Some(e) = x_ast
+            && self.is_call_stmt(file, e)
         {
             return;
         }
@@ -319,6 +335,58 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 self.report(at, DiagCode::ChkUnusedExpr, format!("{what} is not used"));
             }
         }
+    }
+
+    /// 语法上是调用、且**被调方不是类型表达式** ⇒ 合法的表达式语句。
+    ///
+    /// 括号可嵌套（官方 `rawExpr` 会穿过 `ParenExpr`），所以递归剥括号。
+    fn is_call_stmt(&self, file: FileId, e: &Expr) -> bool {
+        match e {
+            Expr::Paren(p) => self.is_call_stmt(file, &p.x),
+            Expr::Call(c) => !self.is_type_expr_ast(file, &c.fun),
+            _ => false,
+        }
+    }
+
+    /// **只读**判定：这个表达式在类型位置上是类型表达式吗（`T` / `pkg.T` / `[]T` / `*T` / `T[P]` …）。
+    ///
+    /// 与 [`crate::expr::ExprChecker::expr`] 的区别：这里**不求值、不报错**，
+    /// 只查名字的对象种类 —— 因为它在「已经求值过一次」之后被调用（表达式语句
+    /// 的结果操作数已经算好），再求值一次会把诊断重复上报。
+    fn is_type_expr_ast(&self, file: FileId, e: &Expr) -> bool {
+        match e {
+            Expr::Paren(p) => self.is_type_expr_ast(file, &p.x),
+            // 类型字面量族
+            Expr::ArrayType(_)
+            | Expr::StructType(_)
+            | Expr::FuncType(_)
+            | Expr::InterfaceType(_)
+            | Expr::MapType(_)
+            | Expr::ChanType(_) => true,
+            // `*T`（一元 `*`）
+            Expr::Unary(u) => u.op == rgoc_ast::Op::Mul && self.is_type_expr_ast(file, &u.x),
+            // `T` / `pkg.T` / `T[int]`
+            Expr::Name(n) => self.peek_mode(file, &n.value) == Some(Mode::TypeExpr),
+            Expr::Selector(s) => match &*s.x {
+                Expr::Name(n) => self.peek_mode(file, &n.value) == Some(Mode::TypeExpr),
+                _ => false,
+            },
+            Expr::Index(i) => self.is_type_expr_ast(file, &i.x),
+            _ => false,
+        }
+    }
+
+    /// 名字 → 操作数模式（**只读**；与 [`crate::expr`] 的 `ident` 同一查找序：
+    /// 局部作用域 → 文件 → 包 → universe）。
+    fn peek_mode(&self, file: FileId, name: &str) -> Option<Mode> {
+        if let Some(op) = self.env.lookup(name) {
+            return Some(op.mode);
+        }
+        self.s
+            .pkg
+            .lookup_in_file(file, name)
+            .and_then(Operand::from_object)
+            .map(|op| op.mode)
     }
 
     // ─────────────────────────── 发送 / 局部声明 ───────────────────────────
@@ -1438,7 +1506,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             SimpleStmt::Empty => {}
             SimpleStmt::Expr(e) => {
                 let x = self.eval(file, &e.x);
-                self.expr_stmt(Some(&e.x), &x, e.pos);
+                self.expr_stmt(file, Some(&e.x), &x, e.pos);
             }
             SimpleStmt::Send(sd) => self.send(file, sd.chan.as_ref(), sd.value.as_ref(), sd.pos),
             SimpleStmt::Assign(a) => self.assign(file, a),
