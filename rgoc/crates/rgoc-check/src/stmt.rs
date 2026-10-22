@@ -642,9 +642,20 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                     continue;
                 }
                 let mut v = vals[i].0.clone();
-                let target = match self.local(&name_of(lhs)) {
-                    Some(op) => op.typ,
-                    None => None,
+                let is_new = fresh.get(i).is_some_and(|(_, n)| *n);
+                // ⚠️ 只有**非新**变量才走 `assignVar`（官方 `initVars`：
+                // `if obj != nil { assignVar } else { declare }`）。
+                //
+                // M5/Task 5 修正：原先无条件 `self.local(…)`，而 `local` 是
+                // **沿栈查**（`Env::lookup`）—— 于是内层块里 `p := …` 会取到
+                // **外层**同名 `p` 的类型去判可赋值性，误报
+                // `cannot use … as … value in assignment`。
+                // 语料形态：`convert4.go:73` 的 `if p := (*Int4)(ii); …`，
+                // 外层是 `var p *[]byte`（第 61 行）。
+                let target = if is_new {
+                    None
+                } else {
+                    self.local(&name_of(lhs)).and_then(|op| op.typ)
                 };
                 // 已有变量：官方走 `assignVars`（报点在**右值**）；
                 // 新变量下面按右侧类型登记。
