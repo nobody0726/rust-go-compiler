@@ -43,6 +43,10 @@
 | M4 | [`milestones/M4-plan.md`](./milestones/M4-plan.md) | **怎么干 M4** —— **Task 1–44**（装置 → 判定 → 泛型/门控 → `rgoc-check` → 收口；含预算与降级序） | ✅ **全部执行**（2026-10-22） |
 | M4 | [`milestones/M4-manifest.json`](./milestones/M4-manifest.json) | **机器可读事实** —— gate CH-1..9（**6 pass / 1 partial / 2 fail**）/ 63 个 `test_ids` / `unsupported` 18 / 三清单 / `budget`（含 `measured`）/ `open_gaps` 14 条；由 `manifest_m4.rs` 对账（35 条合成反例） | ✅ **已填实**（2026-10-22） |
 | M4 | [`milestones/M4-report.md`](./milestones/M4-report.md) | **交付 A** —— 前端子集矩阵（9 行 × 四维）/ **三条分别声明**（range over func、loopvar、`unsafe`）/ `A3` 26 行复核 / wave A 处置 / 差距清单 / 接手指南 | ✅ **已产出**（2026-10-22） |
+| M5 | [`milestones/M5-design.md`](./milestones/M5-design.md) | **怎么建 M5** —— 决策 D-M5-1~15（**显式帧栈** / **复用检查器会话取类型** / **P0 前置收口**）、事实基线 F1–F20（80 候选 / 69 接受 / 5 族根因 / 官方合并流判据）、门禁 EX-1..9 | **待确认**（2026-10-22 起草） |
+| M5 | [`milestones/M5-tests.md`](./milestones/M5-tests.md) | **怎么验 M5** —— 70 个 `T-EX-*`（甲40/乙8/丙8/丁6/反8）、**合并流逐字节**判据、`print/println` 字节表、语料两清单（候选 80 + 排除 6；入选待 P0 后冻结）、修订 R-6-1 / R-4-1 | **判据面已冻结**（2026-10-22） |
+| M5 | [`milestones/M5-plan.md`](./milestones/M5-plan.md) | **怎么干 M5** —— **Task 1–52**（P0 前置收口 → 契约与 HIR → 求值内核 → 复合值与内建 → 闭包与接口 → 异常 → 集成收口） | **待执行**（2026-10-22） |
+| M5 | [`milestones/M5-manifest.json`](./milestones/M5-manifest.json) | **机器可读事实（骨架）** —— gate EX-1..9（全 `pending`）/ 70 个 `test_ids` / `unsupported` 12 / 三清单 / `budget` / `open_gaps` 3 条；由 `manifest_m5.rs` 对账（M5/Task 50） | 🟡 **骨架**（待 Task 50 填实） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 

@@ -1,0 +1,865 @@
+{
+  "stage": "M5",
+  "name": "HIR 与顺序解释器（顺序语义基线）",
+  "generated_at": "2026-10-22T00:00:00Z",
+  "filled_at": null,
+  "fill_task": "M5-plan.md Task 50（按 M5-tests.md §10 的映射逐字段填实）",
+  "status": "planned",
+  "scope": "顺序解释闭环：HIR lowering + 显式帧栈 + 显式求值栈 + 四类赋值语义 + 内建 + 闭包/接口动态语义 + defer/panic/recover + 初始化执行；验收 = 自有 fixture（甲 40）+ 官方 test/ 与 test/ken 语料对撞（乙 8）+ 装置与 CLI（丙 8）+ P0 前置（丁 6）+ 变异反向验证（反 8）",
+  "docs": {
+    "design": "docs/milestones/M5-design.md（D-M5-1..15 / F1–F20 / §12 变更记录）",
+    "tests": "docs/milestones/M5-tests.md（判据面已冻结；R-6-1 入选清单分两次冻结 / R-4-1 浮点补钉）",
+    "plan": "docs/milestones/M5-plan.md（Task 1–52；进度台账 .superpowers/sdd/M5-plan/progress.md，不入库）",
+    "contracts": [
+      "docs/contracts/C9-values-and-output.md（Task 9 新建：值表示/输出字节/退出码）",
+      "docs/contracts/C3-hir.md（Task 52 升正式：§2 四项待验证全部有答案）"
+    ]
+  },
+  "crates": [
+    "rgoc/crates/rgoc-hir（重写：program/stmt/expr/place/lower/dump/diag）",
+    "rgoc/crates/rgoc-hir-spike（新：现 rgoc-hir 的 spike 版迁移，保 SM-M0-NATIVE-HELLO）",
+    "rgoc/crates/rgoc-interp（新：value/eval/frame/call/ops/print/init/exc/budget/builtin）",
+    "rgoc/crates/rgoc-check（Session 7 个入口 pub + P0 四族规则修复）",
+    "rgoc/crates/rgoc-driver（run / hir 子命令 + manifest_m5.rs）",
+    "tools/run-oracle（新：官方 testdir run 语义复刻 + run-collide.sh --run）",
+    "scripts/mutation-m5-notes.md（新）"
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
+    "candidate": {
+      "file": "tools/run-oracle/run-candidates.txt",
+      "count": 80,
+      "definition": "顶层 + ken/ 的 .go，首 80 行内出现 // run 或 // runoutput，零 import，不含 go 语句/chan/select/sync./time."
+    },
+    "excluded": {
+      "file": "tools/run-oracle/run-excluded.txt",
+      "count": 6,
+      "note": "5 个 runoutput（index0/rotate0..3，动态编译）+ reflectmethod2.go（import reflect，U-M5-01）"
+    },
+    "selected": {
+      "file": "tools/run-oracle/run-selected.txt",
+      "count": null,
+      "note": "R-6-1：P0 收口后追加冻结；预期 ≈70；入选 < 60 时如实报，不补数"
+    },
+    "complement_assert": "候选 80 == 入选 ∪ 排除（两向；T-EX-41）"
+  },
+  "gate": {
+    "EX-1": {
+      "name": "HIR 与 lowering 闭环",
+      "status": "pending",
+      "definition": "节点穷尽 + 未支持显式拒绝 + 诊断一致性守卫 + dump 确定性",
+      "test_ids": [
+        "T-EX-01",
+        "T-EX-02",
+        "T-EX-03",
+        "T-EX-04",
+        "T-EX-05",
+        "T-EX-06"
+      ]
+    },
+    "EX-2": {
+      "name": "函数、帧与初始化",
+      "status": "pending",
+      "definition": "递归 1000 层/多值/变参/命名返回/单包 init 序/双包 init 序",
+      "test_ids": [
+        "T-EX-17",
+        "T-EX-18",
+        "T-EX-19",
+        "T-EX-20",
+        "T-EX-21",
+        "T-EX-39",
+        "T-EX-40"
+      ]
+    },
+    "EX-3": {
+      "name": "复合值与内建",
+      "status": "pending",
+      "definition": "值语义 10 组正反 + 内建全集 + print 格式表",
+      "test_ids": [
+        "T-EX-10",
+        "T-EX-11",
+        "T-EX-12",
+        "T-EX-13",
+        "T-EX-14",
+        "T-EX-15",
+        "T-EX-16",
+        "T-EX-23",
+        "T-EX-24"
+      ]
+    },
+    "EX-4": {
+      "name": "闭包与接口",
+      "status": "pending",
+      "definition": "捕获/生命周期/loopvar/方法值/typed nil/断言/type switch/泛型",
+      "test_ids": [
+        "T-EX-25",
+        "T-EX-26",
+        "T-EX-27",
+        "T-EX-28",
+        "T-EX-29",
+        "T-EX-30",
+        "T-EX-31",
+        "T-EX-32",
+        "T-EX-33"
+      ]
+    },
+    "EX-5": {
+      "name": "defer/panic/recover",
+      "status": "pending",
+      "definition": "时机/LIFO/直接调用限制/命名返回值/嵌套/未捕获",
+      "test_ids": [
+        "T-EX-34",
+        "T-EX-35",
+        "T-EX-36",
+        "T-EX-37",
+        "T-EX-38"
+      ]
+    },
+    "EX-6": {
+      "name": "顺序语料闭环",
+      "status": "pending",
+      "definition": "两清单守卫 + 入选全绿 + 三方差分 + ken 专项 + 确定性",
+      "test_ids": [
+        "T-EX-41",
+        "T-EX-42",
+        "T-EX-43",
+        "T-EX-44",
+        "T-EX-45",
+        "T-EX-46",
+        "T-EX-47",
+        "T-EX-48"
+      ]
+    },
+    "EX-7": {
+      "name": "显式帧与资源上限",
+      "status": "pending",
+      "definition": "三道上限响亮失败 + 1000 层递归通过（语义不依赖 Rust 栈）",
+      "test_ids": [
+        "T-EX-52",
+        "T-EX-17"
+      ]
+    },
+    "EX-8": {
+      "name": "四条 cargo + 既有自检",
+      "status": "pending",
+      "definition": "四条 exit 0 + 五条自检 + M4 的 63 条 T-CK 不回退",
+      "test_ids": [
+        "T-EX-53",
+        "T-EX-54",
+        "T-EX-62"
+      ]
+    },
+    "EX-9": {
+      "name": "反向验证 + 交付 B",
+      "status": "pending",
+      "definition": "8 条变异实证变红并复原 + M5-report.md（措辞为「候选」）",
+      "test_ids": [
+        "T-EX-63",
+        "T-EX-64",
+        "T-EX-65",
+        "T-EX-66",
+        "T-EX-67",
+        "T-EX-68",
+        "T-EX-69",
+        "T-EX-70"
+      ]
+    }
+  },
+  "coverage": {
+    "roadmap_M5_items": {
+      "1": {
+        "sentence": "HIR lowering、环境/调用帧、按值/按引用捕获、可寻址性、多返回值",
+        "ids": [
+          "T-EX-01",
+          "T-EX-02",
+          "T-EX-03",
+          "T-EX-04",
+          "T-EX-05",
+          "T-EX-17",
+          "T-EX-18",
+          "T-EX-19",
+          "T-EX-25"
+        ]
+      },
+      "2": {
+        "sentence": "基础值、数组/struct 拷贝、指针、slice 共享底层、不可变 string、Go map 语义适配",
+        "ids": [
+          "T-EX-07",
+          "T-EX-08",
+          "T-EX-09",
+          "T-EX-10",
+          "T-EX-11",
+          "T-EX-12",
+          "T-EX-13",
+          "T-EX-14",
+          "T-EX-15",
+          "T-EX-16",
+          "T-EX-23"
+        ]
+      },
+      "3": {
+        "sentence": "内建、接口动态值/方法调用/断言/type switch、typed nil、method value 和闭包",
+        "ids": [
+          "T-EX-23",
+          "T-EX-25",
+          "T-EX-26",
+          "T-EX-27",
+          "T-EX-28",
+          "T-EX-29",
+          "T-EX-30",
+          "T-EX-31"
+        ]
+      },
+      "4": {
+        "sentence": "解释执行包变量/init/main；defer/panic/recover：直接调用限制、命名返回值、嵌套 panic",
+        "ids": [
+          "T-EX-34",
+          "T-EX-35",
+          "T-EX-36",
+          "T-EX-37",
+          "T-EX-38",
+          "T-EX-39",
+          "T-EX-40"
+        ]
+      },
+      "5": {
+        "sentence": "泛型解释子集可单态化；loopvar 捕获语义直接测试；range over func 未支持时显式拒绝",
+        "ids": [
+          "T-EX-27",
+          "T-EX-32",
+          "T-EX-33"
+        ]
+      }
+    },
+    "sub_stages": {
+      "M5a": "EX-1",
+      "M5b": "EX-2",
+      "M5c": "EX-3",
+      "M5d": "EX-4",
+      "M5e": "EX-5",
+      "M5f": "EX-6"
+    }
+  },
+  "test_ids": [
+    {
+      "id": "T-EX-01",
+      "leg": "甲",
+      "name": "HIR 节点覆盖",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-02",
+      "leg": "甲",
+      "name": "未支持构造显式拒绝",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-03",
+      "leg": "甲",
+      "name": "lowering 诊断一致性守卫",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-04",
+      "leg": "甲",
+      "name": "hir --dump 确定性",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-05",
+      "leg": "甲",
+      "name": "Place 全形态",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-06",
+      "leg": "甲",
+      "name": "常量收敛与任意精度",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-07",
+      "leg": "甲",
+      "name": "整数算术",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-08",
+      "leg": "甲",
+      "name": "浮点与复数",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-09",
+      "leg": "甲",
+      "name": "比较与短路",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-10",
+      "leg": "甲",
+      "name": "字符串",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-11",
+      "leg": "甲",
+      "name": "数组拷贝（正反）",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-12",
+      "leg": "甲",
+      "name": "结构体拷贝与嵌入",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-13",
+      "leg": "甲",
+      "name": "slice 别名与增长",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-14",
+      "leg": "甲",
+      "name": "map 语义",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-15",
+      "leg": "甲",
+      "name": "指针",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-16",
+      "leg": "甲",
+      "name": "类型转换矩阵",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-17",
+      "leg": "甲",
+      "name": "函数、递归、变参",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-18",
+      "leg": "甲",
+      "name": "多返回值",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-19",
+      "leg": "甲",
+      "name": "命名返回值与裸 return",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-20",
+      "leg": "甲",
+      "name": "调用语句丢弃结果",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-21",
+      "leg": "甲",
+      "name": "控制流",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-22",
+      "leg": "甲",
+      "name": "range 四形态",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-23",
+      "leg": "甲",
+      "name": "内建全集",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-24",
+      "leg": "甲",
+      "name": "print/println 格式表",
+      "source": "O",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-25",
+      "leg": "甲",
+      "name": "闭包捕获（按变量）",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-26",
+      "leg": "甲",
+      "name": "闭包生命周期",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-27",
+      "leg": "甲",
+      "name": "loopvar（1.22）",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-28",
+      "leg": "甲",
+      "name": "方法值/方法表达式",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-29",
+      "leg": "甲",
+      "name": "接口与 typed nil",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-30",
+      "leg": "甲",
+      "name": "类型断言",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-31",
+      "leg": "甲",
+      "name": "type switch",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-32",
+      "leg": "甲",
+      "name": "泛型单态化",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-33",
+      "leg": "甲",
+      "name": "泛型超出面拒绝",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-34",
+      "leg": "甲",
+      "name": "defer 时机与 LIFO",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-35",
+      "leg": "甲",
+      "name": "recover 直接调用限制",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-36",
+      "leg": "甲",
+      "name": "命名返回值 + recover",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-37",
+      "leg": "甲",
+      "name": "嵌套 panic",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-38",
+      "leg": "甲",
+      "name": "未捕获 panic",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-39",
+      "leg": "甲",
+      "name": "单包初始化执行",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-40",
+      "leg": "甲",
+      "name": "双包初始化顺序",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-41",
+      "leg": "乙",
+      "name": "候选清单守卫",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-42",
+      "leg": "乙",
+      "name": "入选清单逐文件对撞",
+      "source": "O",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-43",
+      "leg": "乙",
+      "name": "go run 三方差分",
+      "source": "O",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-44",
+      "leg": "乙",
+      "name": "ken 子集专项",
+      "source": "O",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-45",
+      "leg": "乙",
+      "name": "runoutput 排除理由",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-46",
+      "leg": "乙",
+      "name": "不确定性守卫",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-47",
+      "leg": "乙",
+      "name": "排除清单逐行理由",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-48",
+      "leg": "乙",
+      "name": "重复运行确定性",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-49",
+      "leg": "丙",
+      "name": "run 退出码表",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-50",
+      "leg": "丙",
+      "name": "合并流保真",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-51",
+      "leg": "丙",
+      "name": "--dump-hir 通道分离",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-52",
+      "leg": "丙",
+      "name": "三道上限各自响亮失败",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-53",
+      "leg": "丙",
+      "name": "四条 cargo",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-54",
+      "leg": "丙",
+      "name": "五条既有自检不回退",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-55",
+      "leg": "丙",
+      "name": "manifest 对账",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-56",
+      "leg": "丙",
+      "name": "语料只读",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-57",
+      "leg": "丁",
+      "name": "A 族：多值调用",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-58",
+      "leg": "丁",
+      "name": "B 族：调用语句结果丢弃",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-59",
+      "leg": "丁",
+      "name": "C 族：&T{...}",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-60",
+      "leg": "丁",
+      "name": "D 族：移位/转换/make",
+      "source": "S",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-61",
+      "leg": "丁",
+      "name": "接受率 79/80",
+      "source": "O",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-62",
+      "leg": "丁",
+      "name": "M4 判据不回退",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-63",
+      "leg": "反",
+      "name": "数组赋值改成共享 Rc",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-64",
+      "leg": "反",
+      "name": "slice 赋值改成深拷贝",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-65",
+      "leg": "反",
+      "name": "defer 参数改成执行时求值",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-66",
+      "leg": "反",
+      "name": "recover 放宽为任意 defer",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-67",
+      "leg": "反",
+      "name": "帧栈改成 Rust 递归",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-68",
+      "leg": "反",
+      "name": "合并流改成只比 stdout",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-69",
+      "leg": "反",
+      "name": "未支持构造改成静默跳过",
+      "source": "H",
+      "status": "pending"
+    },
+    {
+      "id": "T-EX-70",
+      "leg": "反",
+      "name": "无 .out 当成不比",
+      "source": "H",
+      "status": "pending"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U-M5-01",
+      "item": "标准库 import（含 reflect）",
+      "why": "roadmap §0.2 按明确包清单逐步加入",
+      "planned_phase": "后续 wave",
+      "positive_evidence": "T-EX-61：reflectmethod2.go 是唯一例外且在排除清单"
+    },
+    {
+      "id": "U-M5-02",
+      "item": "地址数值（&x 的十六进制）",
+      "why": "不可复现（F10 实测）",
+      "planned_phase": "不承诺",
+      "positive_evidence": "T-EX-46：含地址输出的文件被显式排除并留理由"
+    },
+    {
+      "id": "U-M5-03",
+      "item": "未捕获 panic 的 goroutine traceback",
+      "why": "实现细节（F18）",
+      "planned_phase": "不承诺",
+      "positive_evidence": "T-EX-38：只断言 panic: <值> 前缀 + 退出码 2"
+    },
+    {
+      "id": "U-M5-04",
+      "item": "map 迭代序与官方一致",
+      "why": "官方故意随机",
+      "planned_phase": "不承诺",
+      "positive_evidence": "T-EX-14：range over map 只断言集合相等"
+    },
+    {
+      "id": "U-M5-05",
+      "item": "goroutine / channel / select / go 语句",
+      "why": "roadmap §M5「不做」",
+      "planned_phase": "M8a–M8c",
+      "positive_evidence": "T-EX-02：显式拒绝（HIR-UNSUPPORTED-*）"
+    },
+    {
+      "id": "U-M5-06",
+      "item": "range over func（PIPE-16b）",
+      "why": "roadmap §M5 第 5 条",
+      "planned_phase": "M8d",
+      "positive_evidence": "T-EX-02：显式拒绝"
+    },
+    {
+      "id": "U-M5-07",
+      "item": "unsafe 的执行面",
+      "why": "M4 白名单只到静态求值",
+      "planned_phase": "M6+",
+      "positive_evidence": "M4 的 U-M4-06 承接；M5 执行面无触发者"
+    },
+    {
+      "id": "U-M5-08",
+      "item": "panic(nil) 的 Go 1.21+ 语义",
+      "why": "简化为 panic: nil",
+      "planned_phase": "不承诺",
+      "positive_evidence": "T-EX-38 的一个 case"
+    },
+    {
+      "id": "U-M5-09",
+      "item": "求值顺序（EXP-27）的 codegen 面",
+      "why": "roadmap §5 归属 M6",
+      "planned_phase": "M6",
+      "positive_evidence": "解释器顺序由 T-EX-09/T-EX-18 覆盖"
+    },
+    {
+      "id": "U-M5-10",
+      "item": "泛型字典/shape 共享（RT-POLY-05）",
+      "why": "只做单态化",
+      "planned_phase": "M12",
+      "positive_evidence": "T-EX-32/T-EX-33"
+    },
+    {
+      "id": "U-M5-11",
+      "item": "print/println 的非法操作数拒绝（M4 缺口，F11）",
+      "why": "拒绝面缺口，不阻塞执行",
+      "planned_phase": "M4 收口",
+      "positive_evidence": "F11 实测（println(S{1}) 两侧判定不一致）；登记为 M4 backlog"
+    },
+    {
+      "id": "U-M5-12",
+      "item": "close（chan 内建）",
+      "why": "依赖 U-M5-05",
+      "planned_phase": "M8b",
+      "positive_evidence": "T-EX-02：显式拒绝"
+    }
+  ],
+  "budget": {
+    "effort_calendar": {
+      "start": "2026-10-22",
+      "max_calendar_weeks": 12,
+      "note": "roadmap §6.1：M5 全部子阶段合计 6–12 人周；本仓按任务数折算，不换算人周"
+    },
+    "resource_limits": {
+      "frame_depth": 1000,
+      "eval_stack_depth": 10000,
+      "steps": 100000000,
+      "wall_clock_sec": 10
+    },
+    "batch_budget": {
+      "smoke": "<=5min",
+      "milestone": "<=30min",
+      "full": "<=2h"
+    }
+  },
+  "open_gaps": [
+    {
+      "id": "G-M5-01",
+      "item": "入选清单未冻结（R-6-1）",
+      "blocking": "EX-6",
+      "plan": "Task 46（P0 收口后）"
+    },
+    {
+      "id": "G-M5-02",
+      "item": "print/println 浮点边界未补钉（NaN/Inf/-0/float32 舍入）",
+      "blocking": "EX-3",
+      "plan": "Task 25 RED 期用 go run 对撞补钉（R-4-1）"
+    },
+    {
+      "id": "G-M5-03",
+      "item": "D 族修复可能牵出类型参数核心类型（G-M4-37）",
+      "blocking": "EX-6",
+      "plan": "Task 5 失效条件：成片则相关文件进排除"
+    }
+  ],
+  "phase_summary": {
+    "status": "planned",
+    "gates_pass": 0,
+    "gates_total": 9,
+    "note": "未执行。状态字段由 manifest_m5.rs 对账，禁止在门禁未全绿时写 done。"
+  }
+}
