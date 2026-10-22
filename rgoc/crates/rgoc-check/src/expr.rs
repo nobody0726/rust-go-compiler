@@ -378,7 +378,15 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             return self.conversion(file, c, target);
         }
         match f.mode {
-            Mode::Value => self.call_value(file, c, f.typ),
+            // `Variable` = 函数类型的**变量**（形参、局部、全局、字段）。
+            //
+            // M5/Task 2 修正：原先只认 `Value`（= `ObjKind::Func` 的**声明**函数），
+            // 于是 `f()`（`f func(int, byte) (byte, int)`）掉进下面那条 `_` 分支
+            // 变成 `invalid` —— 单结果调用会**静默通过**（假阴性），多结果调用
+            // 则被报成 `assignment mismatch: 2 variables but f returns 1 value`
+            // （`method5.go:103` 的实测形态）。官方 `call` 对**任何**非类型表达式
+            // 的操作数都按其类型走 `arguments`，不区分「声明函数」与「函数值」。
+            Mode::Value | Mode::Variable => self.call_value(file, c, f.typ),
             Mode::Builtin => self.call_builtin(file, c, &c.fun),
             // 无效 / 类型族函数位 / 其他：不报（转换之外的类型族归 Task 23+）。
             _ => Operand::invalid(),
@@ -485,6 +493,29 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             let x = self.expr(file, a);
             args.push(x);
         }
+        // 实参位（展开后与 `args` 等长；未展开时就是源实参的起点）
+        let mut arg_pos: Vec<Pos> = c.args.iter().map(|a| a.pos()).collect();
+
+        // ①.5 单实参是**多值调用** ⇒ 展开成逐个实参（官方 `call.go` 的
+        //      `arguments`：`f(g())` 当 `g` 返回 n 个值时，各返回值按位置
+        //      成为 `f` 的实参）。
+        //
+        //      M5/Task 2 补：原先没有这一支，`swap(swap(a, b))` 会先被算成
+        //      1 个实参、再报 `not enough arguments in call to swap`
+        //      （`simassign.go:75` 的实测形态）。
+        if args.len() == 1
+            && let Some(t) = args[0].typ
+        {
+            let elems = self.tuple_vars(t);
+            if !elems.is_empty() {
+                let at = c.args[0].pos();
+                args = elems
+                    .into_iter()
+                    .map(|(_, t)| Operand::value(Some(t)))
+                    .collect();
+                arg_pos = vec![at; args.len()];
+            }
+        }
 
         // ② 个数（官方 `call.go:531-555`）。
         let npars = params.len();
@@ -492,7 +523,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         if !variadic_ok && args.len() != npars {
             let (at, qualifier) = if args.len() > npars {
                 // 多的第一个实参位。
-                (c.args[npars].pos(), "too many")
+                (*arg_pos.get(npars).unwrap_or(&c.rparen), "too many")
             } else {
                 // 官方 `atPos(call.Rparen)`：`)` 位。
                 (c.rparen, "not enough")
@@ -510,11 +541,13 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         // ③ 逐参可赋值性（变参末尾不展开 —— 窄面）
         if !sig.variadic {
             for (i, p) in params.iter().enumerate() {
-                let Some(arg) = c.args.get(i) else { break };
+                let Some(at) = arg_pos.get(i).copied() else {
+                    break;
+                };
                 let mut x = args[i].clone();
                 self.assignment(
                     &mut x,
-                    arg.pos(),
+                    at,
                     Some(p.1),
                     &format!(
                         "argument to {}",
