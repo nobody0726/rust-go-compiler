@@ -1763,7 +1763,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 self.finish_unary(e, x)
             }
             Op::Mul => self.deref(x, xpos),
-            Op::And => self.addr(x, xpos),
+            Op::And => self.addr(x, xpos, is_composite_lit(&e.x)),
             Op::Arrow => self.recv(x, xpos),
             _ => Operand::invalid(),
         }
@@ -1832,12 +1832,20 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         }
     }
 
-    /// 官方 `&`（`expr.go:137`）：只允许 `variable`（复合字面量面未接入）。
-    fn addr(&mut self, x: Operand, xpos: Pos) -> Operand {
+    /// 官方 `&`（`expr.go:137`）：`variable`，**外加复合字面量**。
+    ///
+    /// 规范原文（`go_spec.html` §Address operators）：「As an exception to the
+    /// addressability requirement, `x` may also be a (possibly parenthesized)
+    /// composite literal.」——所以 `&T{…}` 合法，`&f()` 不合法。
+    ///
+    /// M5/Task 4 补：原先只放行 `Mode::Variable`，`&T{1}` 会被报成
+    /// `cannot take address of T`（`compos.go:16`、`ddd.go:189/222`、
+    /// `method7.go:62` 的形态）。
+    fn addr(&mut self, x: Operand, xpos: Pos, composite: bool) -> Operand {
         let Some(t) = x.typ else {
             return Operand::invalid();
         };
-        if x.mode != Mode::Variable {
+        if x.mode != Mode::Variable && !composite {
             let desc = self.type_text(t);
             self.report(
                 xpos,
@@ -2890,4 +2898,16 @@ pub(crate) fn is_non_typeparam_interface(tt: &TypeTable, t: TypeId) -> bool {
         return false;
     }
     matches!(tt.type_of(underlying(tt, t)), Type::Interface(_))
+}
+
+/// `x` 是不是（可能带括号的）**复合字面量**。
+///
+/// 只服务 `&` 的「可寻址性例外」一条（`go_spec` §Address operators）；
+/// 不参与其它判定 —— 复合字面量在别处就是普通的 `value`。
+fn is_composite_lit(e: &Expr) -> bool {
+    match e {
+        Expr::Paren(p) => is_composite_lit(&p.x),
+        Expr::CompositeLit(_) => true,
+        _ => false,
+    }
 }
