@@ -593,3 +593,261 @@ fn t_ssa_28_跨块交换是并行的() {
     assert_eq!(args_t, vec![two, one], "then 边：a←2, b←1（并行交换）");
     assert_eq!(args_e, vec![one, two], "else 边：a←1, b←2（没交换）");
 }
+
+// ── Task 23：for 三形态与回边 ────────────────────────────────────────
+
+extern crate rgoc_ssa;
+
+fn cfg_of(f: &SsaFunc) -> rgoc_ssa::cfg::Cfg {
+    rgoc_ssa::cfg::Cfg::build(f)
+}
+
+/// 找「有 2 条以上前驱」的块（回边的循环头）。
+fn headers(f: &SsaFunc) -> Vec<BlockId> {
+    let c = cfg_of(f);
+    (0..f.blocks.len())
+        .map(|i| BlockId(i as u32))
+        .filter(|b| c.preds(*b).len() >= 2)
+        .collect()
+}
+
+#[test]
+fn t_ssa_17_for_空条件死循环_回边存在() {
+    let (program, mut tt) = program_of(
+        "for-ever",
+        "package main\n\nfunc f(n int) {\n\tfor {\n\t\tn = n\n\t}\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    let hs = headers(f);
+    assert_eq!(hs.len(), 1, "恰有一个循环头（2 条前驱）：{hs:?}");
+    let c = cfg_of(f);
+    let preds = c.preds(hs[0]);
+    assert_eq!(preds.len(), 2, "前驱 = preheader + latch：{preds:?}");
+    // `for{}` 无出口：函数尾不可达，且没有「第三个」块从 header 出去
+    assert!(
+        matches!(
+            &f.blocks[hs[0].index()].term,
+            rgoc_ssa::ir::Term::Goto { .. }
+        ),
+        "无条件的 for 头不该是 if：{:?}",
+        f.blocks[hs[0].index()].term
+    );
+}
+
+#[test]
+fn t_ssa_17_for_单条件是_if_头() {
+    let (program, mut tt) = program_of(
+        "for-cond",
+        "package main\n\nfunc f(n int) int {\n\ts := 0\n\tfor n > 0 {\n\t\ts = s + n\n\t\tn = n - 1\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let hs = headers(f);
+    assert_eq!(hs.len(), 1, "一个循环头：{hs:?}");
+    let h = hs[0];
+    assert!(
+        matches!(f.blocks[h.index()].term, rgoc_ssa::ir::Term::If { .. }),
+        "循环头的终止符必须是 if：{:?}",
+        f.blocks[h.index()].term
+    );
+    // 出口：header 的 else 边
+    let (_, exit) = match &f.blocks[h.index()].term {
+        rgoc_ssa::ir::Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(cfg_of(f).preds(exit), vec![h], "出口只有循环头一条前驱");
+}
+
+#[test]
+fn t_ssa_17_for_三句式带_latch_且携带_i() {
+    let (program, mut tt) = program_of(
+        "for-three",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 3; i++ {\n\t\ts = s + i\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let hs = headers(f);
+    assert_eq!(hs.len(), 1, "一个循环头：{hs:?}");
+    let h = hs[0];
+    // 携带值：`s` 与 `i`（都在循环里被改，且进入循环时已有值）
+    assert_eq!(
+        f.blocks[h.index()].params.len(),
+        2,
+        "循环头该有 2 个参数（s / i）：{}\n{}",
+        f.blocks[h.index()].params.len(),
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // preheader 的 args 与 latch 的 args 都得是 2 个（V7 已查，这里再钉一次语义）
+    let c = cfg_of(f);
+    for p in c.preds(h) {
+        let args = c.edge_args(*p, h);
+        assert_eq!(args.len(), 2, "b{}→b{} 要传 2 个实参：{args:?}", p.0, h.0);
+    }
+}
+
+#[test]
+fn t_ssa_17_循环体里声明的槽不当携带值() {
+    // `x := i` 每轮新建 ⇒ 不能出现在循环头参数里。
+    // 若把它当携带值，回边就会传入「上一轮的 x」—— 类型对、值可疑，
+    // 而且大部分 fixture 仍绿（这正是设计 §8 说的「静默错」型）。
+    let (program, mut tt) = program_of(
+        "for-fresh-local",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 3; i++ {\n\t\tx := i\n\t\ts = s + x\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    let h = headers(f)[0];
+    assert_eq!(
+        f.blocks[h.index()].params.len(),
+        2,
+        "只有 s 与 i 携带，x 不携带：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_17_循环里写堆时_mem_令牌要携带() {
+    // 循环里经指针写 ⇒ 堆根的 mem 必须在循环头合流（否则循环后的写与循环里的写
+    // 在 mem 链上失去先后关系）。
+    let (program, mut tt) = program_of(
+        "for-heap-mem",
+        "package main\n\nfunc f(p *int) {\n\tfor i := 0; i < 3; i++ {\n\t\t*p = i\n\t}\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let h = headers(f)[0];
+    // 携带：i（槽）+ 堆根的 mem
+    assert_eq!(
+        f.blocks[h.index()].params.len(),
+        2,
+        "i 与堆 mem 各一个参数：{}\n{}",
+        f.blocks[h.index()].params.len(),
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+/// 一个值定义在哪个块（块参数或指令结果）。
+fn def_block(f: &SsaFunc, v: ValueId) -> BlockId {
+    for (i, b) in f.blocks.iter().enumerate() {
+        if b.params.contains(&v) {
+            return BlockId(i as u32);
+        }
+        for ins in &b.instrs {
+            let dst = match ins {
+                Instr::Const { dst, .. }
+                | Instr::Copy { dst, .. }
+                | Instr::Bin { dst, .. }
+                | Instr::Un { dst, .. }
+                | Instr::Convert { dst, .. }
+                | Instr::AddrOf { dst, .. }
+                | Instr::Field { dst, .. }
+                | Instr::Index { dst, .. }
+                | Instr::Slice { dst, .. }
+                | Instr::Composite { dst, .. }
+                | Instr::Make { dst, .. }
+                | Instr::Load { dst, .. }
+                | Instr::Store { dst, .. } => Some(*dst),
+                Instr::Call { dsts, .. } => {
+                    if dsts.contains(&v) {
+                        Some(v)
+                    } else {
+                        None
+                    }
+                }
+            };
+            if dst == Some(v) {
+                return BlockId(i as u32);
+            }
+        }
+    }
+    panic!("v{} 没有定义点", v.0);
+}
+
+#[test]
+fn t_ssa_17_回边传的是本轮算出的新值() {
+    // 这条打的是「回边把 header 参数原样传回」这种**看起来对**的错：
+    // 类型对、个数对、verifier 绿，但循环体等于没执行（死循环或算错）。
+    let (program, mut tt) = program_of(
+        "for-backedge",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 3; i++ {\n\t\ts = s + i\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok());
+    let h = headers(f)[0];
+    let c = cfg_of(f);
+    // 回边 = 前驱里不是「入口块」的那个（preheader 是 b0）
+    let latch = *c
+        .preds(h)
+        .iter()
+        .find(|p| p.index() != 0)
+        .expect("没有回边前驱");
+    let args = c.edge_args(latch, h);
+    assert_eq!(args.len(), 2);
+    for (k, a) in args.iter().enumerate() {
+        let db = def_block(f, *a);
+        assert_ne!(
+            db, h,
+            "第 {k} 个回边实参 v{} 定义在循环头本身 ⇒ 等于把参数原样传回（循环体白跑）",
+            a.0
+        );
+        assert!(
+            db == latch || c.preds(latch).contains(&db) || db == c.preds(h)[0],
+            "第 {k} 个回边实参 v{} 定义在 b{}，不在本轮路径上",
+            a.0,
+            db.0
+        );
+    }
+}
+
+#[test]
+fn t_ssa_17_循环之后读到的是合流值() {
+    // `return s` 里的 `s` 必须是**循环头的参数**（初值与回边的合流点），
+    // 而不是循环前的那个值。若出口状态取错，函数会返回初值 —— 类型对、
+    // verifier 绿、单测里「循环了几次」没人看，于是静默算错。
+    let (program, mut tt) = program_of(
+        "for-exit-value",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 3; i++ {\n\t\ts = s + i\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok());
+    let h = headers(f)[0];
+    let exit = match &f.blocks[h.index()].term {
+        rgoc_ssa::ir::Term::If { else_, .. } => else_.0,
+        other => panic!("循环头不是 if：{other:?}"),
+    };
+    let ret = match &f.blocks[exit.index()].term {
+        rgoc_ssa::ir::Term::Return(vs) => vs.clone(),
+        other => panic!("出口块不是 return：{other:?}"),
+    };
+    assert_eq!(ret.len(), 1);
+    assert_eq!(
+        def_block(f, ret[0]),
+        h,
+        "返回值必须定义在循环头（合流点），实际在 b{}\n{}",
+        def_block(f, ret[0]).0,
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}

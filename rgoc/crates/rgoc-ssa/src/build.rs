@@ -81,10 +81,10 @@ fn build_func(
     program: &Program,
     tt: &mut TypeTable,
 ) -> Result<SsaFunc, Reject> {
-    let (definite, unsafe_slots) = definite_slots(tt, f);
+    let unsafe_slots = unsafe_slots_of(f);
     // 需要根的槽 = 取址 ∪ 部分写 ∪ **读前可能未赋值**
     let mut rooted: BTreeSet<SlotId> = scan_rooted(tt, &f.body);
-    rooted.extend(unsafe_slots);
+    rooted.extend(unsafe_slots.iter().copied());
     rooted.remove(&BLANK_SLOT);
 
     let ng = program.globals.len();
@@ -96,7 +96,13 @@ fn build_func(
         roots.push(Root::Slot(*s));
     }
 
-    let promoted: BTreeSet<SlotId> = definite.difference(&rooted).copied().collect();
+    // 提升 = 全部槽 − 有根的 − 读前可能未赋值的。
+    // 「全部槽」按 `slot_types` 的长度取：不这么写就得另找一张槽清单，
+    // 而 `slot_types` 本来就是「槽 → 类型」的全集（`Func::nslots` 与它同长）。
+    let promoted: BTreeSet<SlotId> = (0..f.slot_types.len())
+        .map(|i| SlotId(i as u32))
+        .filter(|s| !rooted.contains(s) && !unsafe_slots.contains(s))
+        .collect();
 
     let mut fb = Fb {
         tt,
@@ -532,25 +538,34 @@ struct Def<'a> {
     must: BTreeSet<SlotId>,
 }
 
-/// 返回 `(确定赋值的槽, 读到过未定义值的槽)`。
+/// 返回「**读到过尚未写过的值**」的槽。
 ///
-/// 第二个集合是**必须留在内存里**的另一半：读点找不到定义 ⇒ 只能靠帧初始化
-/// 的零值。它和「取址 / 部分写」一起构成根表（三者的道理不同，结果一样：
-/// 这个槽不能提升）。
-fn definite_slots(_tt: &TypeTable, f: &Func) -> (BTreeSet<SlotId>, BTreeSet<SlotId>) {
+/// # 判据为什么是「读前未写」而不是「函数末尾已写」
+///
+/// 初版用的是后者（`must` 在函数末尾的集合），被 `for i := 0; i < 3; i++ { x := i }`
+/// 打穿：循环体的推进**不传出循环**（循环可能 0 次），所以 `x` 永远不在末尾的 `must` 里，
+/// 于是 `x` 既不提升也没有根 —— 构建器在读 `x` 时 panic。
+///
+/// 但 `x` 是**循环体内声明、循环体内使用**的槽，它「循环结束后有没有值」根本无关紧要。
+/// 正确的判据只需要一条：**每一次读，都保证在此前写过**。满足这条就能提升
+/// （提升后每个读点都在支配它的位置上找到定义）；不满足就只能留在内存里，
+/// 由帧初始化的零值表兜底。
+///
+/// 于是「循环体里推进出来的 `must` 传不传出循环」不再影响判据 —— 它只影响
+/// **读点判定**（首轮确实可能未定义），那正是我们要的保守方向。
+///
+/// # 保守的代价
+///
+/// `for i := 0; i < 3; i++ { a = 1 }; print(a)` 里的 `a` 会被判成「读前未写」
+/// （循环可能 0 次）⇒ 留在内存。正确，只是少提升一个槽。
+fn unsafe_slots_of(f: &Func) -> BTreeSet<SlotId> {
     let mut d = Def {
         f,
         unsafe_slots: BTreeSet::new(),
         must: f.params.iter().copied().collect(),
     };
     d.stmts(&f.body.stmts);
-    let definite = d
-        .must
-        .difference(&d.unsafe_slots)
-        .copied()
-        .filter(|s| *s != BLANK_SLOT)
-        .collect();
-    (definite, d.unsafe_slots)
+    d.unsafe_slots
 }
 
 impl Def<'_> {
@@ -1190,6 +1205,200 @@ impl Fb<'_> {
         BlockId((self.blocks.len() - 1) as u32)
     }
 
+    /// 三句式 `for`（`for{}` / `for cond{}` / `for init;cond;post{}`）与回边（`Task 23`）。
+    ///
+    /// # 块布局
+    ///
+    /// ```text
+    ///   preheader:  ... init ...            （`init` 只跑一次）
+    ///               goto header (carried…)
+    ///   header:     params = [carried…]     ← 回边的目标，也是「不变式」
+    ///               if cond -> body | exit
+    ///   body:       ...
+    ///               goto latch | header
+    ///   latch:      ... post ...            （只有三句式才有）
+    ///               goto header (carried…)
+    ///   exit:       ...                     （`for{}` 没有）
+    /// ```
+    ///
+    /// # 为什么 header 的参数必须在建 body **之前**定
+    ///
+    /// body 里读 `i` 必须读 header 的参数；如果等 body 建完再补参数，body 里
+    /// 已经写死了循环前的 `ValueId`，只能回头重写一遍 —— 那是最容易漏的情形
+    /// （漏一处就变成「循环里读的是初值」，而且大部分 fixture 仍绿）。
+    /// 所以先 [`scan_loop_effects`] 静态算出会被改的东西。
+    ///
+    /// # 传哪些槽
+    ///
+    /// 「循环里被赋值 **且** 进入循环时已有当前值」的槽。第二个条件很重要：
+    /// 循环体里 `x := 1` 声明的槽每轮都是新的，不能当循环携带值。
+    ///
+    /// # 传哪些 mem
+    ///
+    /// 循环里**可能被写**的根，各传一个 mem 令牌。这是 mem 的「phi」：
+    /// 进循环时是循环前的令牌，回边是上一轮的令牌。不传的后果不是算错，
+    /// 而是「循环后的写」与「循环里的写」在 mem 链上失去先后关系 ——
+    /// 那是 `V6` 想保证的东西，等于给后续 pass 埋了一个静默的无序。
+    ///
+    /// # `loopvars`（Go 1.22 per-iteration）不需要特判
+    ///
+    /// 那条语义只对**闭包捕获**可见（每轮换新 `Cell`），而 M6 在构建期就拒绝闭包
+    /// （`SSA-UNSUPPORTED-CLOSURE`）⇒ 这里没有可观察差异。如实记进报告，不假装实现了。
+    fn stmt_for(
+        &mut self,
+        init: Option<&Stmt>,
+        cond: Option<&Expr>,
+        post: Option<&Stmt>,
+        body: &HirBlock,
+    ) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+
+        // ── ① 静态算出「循环里会改什么」，据此定 header 的参数
+        let eff = scan_loop_effects(self.tt, &self.slot_root, body, post);
+        let carried: Vec<SlotId> = eff
+            .slots
+            .iter()
+            .copied()
+            .filter(|s| self.val.contains_key(s))
+            .collect();
+        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
+        if eff.calls {
+            for i in 0..self.globals.len() {
+                wroots.insert(RootId(i as u32));
+            }
+        }
+        if eff.heap || eff.calls {
+            let h = self.heap_root();
+            wroots.insert(h);
+        }
+        wroots.retain(|r| r.index() < self.roots.len() || *r == self.heap_root());
+
+        let header = self.new_block();
+        let mut params: Vec<ValueId> = Vec::new();
+        let mut slot_param: BTreeMap<SlotId, ValueId> = BTreeMap::new();
+        for s in &carried {
+            let t = self.slot_typ(*s);
+            let p = self.new_value(t);
+            params.push(p);
+            slot_param.insert(*s, p);
+        }
+        let mut root_param: BTreeMap<RootId, ValueId> = BTreeMap::new();
+        for r in &wroots {
+            let m = self.mem_of(*r); // 在 preheader 里取（没有就建种子）
+            let t = self.ptr_ty_of(*r);
+            let p = self.new_value(t);
+            params.push(p);
+            root_param.insert(*r, p);
+            let _ = m;
+        }
+        // 实参：槽取当前值、根取当前 mem 令牌（顺序与 params 一致）
+        let mut args: Vec<ValueId> = Vec::new();
+        for s in &carried {
+            let v = self.val[s];
+            args.push(v);
+        }
+        for r in &wroots {
+            let m = self.mem_of(*r);
+            args.push(m);
+        }
+        self.blocks[header.index()].params = params;
+        self.set_term(Term::Goto { to: header, args });
+
+        // ── ② header 的入口状态 = 循环前的状态，但携带项换成 header 自己的参数
+        let mut hval = self.val.clone();
+        for (s, p) in &slot_param {
+            hval.insert(*s, *p);
+        }
+        let mut hmem = self.mem.clone();
+        for (r, p) in &root_param {
+            hmem.insert(*r, *p);
+        }
+        self.cur = header;
+        self.terminated = false;
+        self.val = hval.clone();
+        self.mem = hmem.clone();
+
+        // ── ③ 条件（在 header 里求值）与两条出边
+        let body_b = self.new_block();
+        let exit_b = if cond.is_some() {
+            Some(self.new_block())
+        } else {
+            None
+        };
+        match cond {
+            Some(c) => {
+                let cv = self.expr(c);
+                self.set_term(Term::If {
+                    cond: cv,
+                    then_: (body_b, Vec::new()),
+                    else_: (exit_b.expect("有 cond 就有 exit"), Vec::new()),
+                });
+            }
+            None => {
+                self.set_term(Term::Goto {
+                    to: body_b,
+                    args: Vec::new(),
+                });
+            }
+        }
+
+        // ── ④ 循环体：从 header 状态起建（含 cond 求值产生的值）
+        let state = (self.val.clone(), self.mem.clone());
+        self.cur = body_b;
+        self.terminated = false;
+        self.val = state.0;
+        self.mem = state.1;
+        self.stmts(&body.stmts);
+
+        // ── ⑤ 落空 ⇒ 走 post（若有）再回边
+        if !self.terminated {
+            let tail = self.cur;
+            if let Some(p) = post {
+                let latch = self.new_block();
+                self.blocks[tail.index()].term = Term::Goto {
+                    to: latch,
+                    args: Vec::new(),
+                };
+                self.cur = latch;
+                self.terminated = false;
+                self.stmt(p);
+            }
+            if !self.terminated {
+                let tail = self.cur;
+                let mut back: Vec<ValueId> = Vec::new();
+                for s in &carried {
+                    // 循环体里该槽可能被「只在一条分支里赋值」—— 那时映射里没有它，
+                    // 取 header 参数（等于「本轮没改」），保守且正确。
+                    back.push(self.val.get(s).copied().unwrap_or(slot_param[s]));
+                }
+                for r in &wroots {
+                    back.push(self.mem.get(r).copied().unwrap_or(root_param[r]));
+                }
+                self.blocks[tail.index()].term = Term::Goto {
+                    to: header,
+                    args: back,
+                };
+            }
+        }
+
+        // ── ⑥ 循环之后
+        match exit_b {
+            Some(e) => {
+                self.cur = e;
+                self.terminated = false;
+                // 出口看到的是 header 的参数（phi）—— 这正是回边与初值合并的结果
+                self.val = hval;
+                self.mem = hmem;
+            }
+            None => {
+                // `for{}` 没有出口（`break` 由 Task 25 的 labeled 跳转处理）
+                self.terminated = true;
+            }
+        }
+    }
+
     /// `if` / `else` 与汇合块的块参数（`Task 22`）。
     ///
     /// # 并行交接为什么不靠「并行拷贝」
@@ -1396,8 +1605,15 @@ impl Fb<'_> {
                 then,
                 els,
             } => self.stmt_if(init.as_deref(), cond, then, els.as_deref()),
+            Stmt::For {
+                init,
+                cond,
+                post,
+                body,
+                ..
+            } => self.stmt_for(init.as_deref(), cond.as_ref(), post.as_deref(), body),
             other => todo!(
-                "M6/Task 23–30：语句 `{}` 的构建还没实现",
+                "M6/Task 24–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)
             ),
         }
@@ -1499,5 +1715,301 @@ fn stmt_kind_name(s: &Stmt) -> &'static str {
         Stmt::Block(_) => "block",
         Stmt::Defer { .. } => "defer",
         Stmt::Empty => "empty",
+    }
+}
+
+// ── 循环影响扫描（Task 23）───────────────────────────────────────────
+
+/// 循环里「可能被改」的东西。
+///
+/// # 为什么必须在建 header **之前**算出来
+///
+/// 循环头块的参数决定**循环体的入口状态**：body 里读 `i`，读到的必须是 header
+/// 的参数，而不是循环前的那个值。所以「哪些东西要成为参数」不能等 body 建完
+/// 再回头补 —— 那时 body 里已经写死了旧的 `ValueId`。
+///
+/// 这与 `if` 的汇合块相反（那里汇合块**后建**，因为两侧的映射建完才知道）。
+/// 两条路的差别是结构性的：`if` 是「先有两条路，再合并」，`for` 是「先定不变式，
+/// 再跑一条回头路」。
+#[derive(Default)]
+struct LoopEffects {
+    /// 被赋值 / 短声明的槽（含循环体内部声明的 —— 调用方会用「是否已在入口映射里」过滤）。
+    slots: BTreeSet<SlotId>,
+    /// 被直接写的根（`g = 1`、`arr[i] = 1`、`s.f = 1`）。
+    roots: BTreeSet<RootId>,
+    /// 经指针 / slice / map 的写 ⇒ 堆根被动过。
+    heap: bool,
+    /// 循环里有调用 ⇒ 保守认为**所有全局根与堆根**都可能被写。
+    ///
+    /// 这是唯一一处「用保守换简单」：真正的做法是看被调方的 `Effect::writes`，
+    /// 而那要求跨函数摘要（M6 单包可以做到，但 `Call` 的 effect 目前是构建期
+    /// 从 `may_panic` 推的粗粒度摘要）。保守的代价只是多几个 mem 参数。
+    calls: bool,
+}
+
+fn scan_loop_effects(
+    tt: &TypeTable,
+    sr: &BTreeMap<SlotId, RootId>,
+    body: &HirBlock,
+    post: Option<&Stmt>,
+) -> LoopEffects {
+    let mut e = LoopEffects::default();
+    eff_block(tt, sr, body, &mut e);
+    if let Some(p) = post {
+        eff_stmt(tt, sr, p, &mut e);
+    }
+    e
+}
+
+fn eff_block(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, b: &HirBlock, e: &mut LoopEffects) {
+    for s in &b.stmts {
+        eff_stmt(tt, sr, s, e);
+    }
+}
+
+fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut LoopEffects) {
+    match s {
+        Stmt::Assign { lhs, rhs, .. } => {
+            for x in rhs {
+                eff_expr(tt, sr, x, e);
+            }
+            for p in lhs {
+                eff_place(tt, sr, p, e);
+            }
+        }
+        Stmt::ShortDecl { slots, rhs } => {
+            for x in rhs {
+                eff_expr(tt, sr, x, e);
+            }
+            for s in slots {
+                e.slots.insert(*s);
+            }
+        }
+        Stmt::Expr(x) => eff_expr(tt, sr, x, e),
+        Stmt::If {
+            init,
+            cond,
+            then,
+            els,
+        } => {
+            if let Some(i) = init {
+                eff_stmt(tt, sr, i, e);
+            }
+            eff_expr(tt, sr, cond, e);
+            eff_block(tt, sr, then, e);
+            if let Some(x) = els {
+                eff_stmt(tt, sr, x, e);
+            }
+        }
+        Stmt::For {
+            init,
+            cond,
+            post,
+            body,
+            ..
+        } => {
+            if let Some(i) = init {
+                eff_stmt(tt, sr, i, e);
+            }
+            if let Some(c) = cond {
+                eff_expr(tt, sr, c, e);
+            }
+            if let Some(p) = post {
+                eff_stmt(tt, sr, p, e);
+            }
+            eff_block(tt, sr, body, e);
+        }
+        Stmt::Range {
+            key,
+            value,
+            x,
+            body,
+            ..
+        } => {
+            eff_expr(tt, sr, x, e);
+            if let Some(p) = key {
+                eff_place(tt, sr, p, e);
+            }
+            if let Some(p) = value {
+                eff_place(tt, sr, p, e);
+            }
+            eff_block(tt, sr, body, e);
+        }
+        Stmt::Switch {
+            init, tag, cases, ..
+        } => {
+            if let Some(i) = init {
+                eff_stmt(tt, sr, i, e);
+            }
+            if let Some(t) = tag {
+                eff_expr(tt, sr, t, e);
+            }
+            for c in cases {
+                for x in &c.exprs {
+                    eff_expr(tt, sr, x, e);
+                }
+                eff_block(tt, sr, &c.body, e);
+            }
+        }
+        Stmt::TypeSwitch { init, x, cases, .. } => {
+            if let Some(i) = init {
+                eff_stmt(tt, sr, i, e);
+            }
+            eff_expr(tt, sr, x, e);
+            for c in cases {
+                if let Some(b) = c.bind {
+                    e.slots.insert(b);
+                }
+                eff_block(tt, sr, &c.body, e);
+            }
+        }
+        Stmt::Return(es) => {
+            for x in es {
+                eff_expr(tt, sr, x, e);
+            }
+        }
+        Stmt::Branch { .. } | Stmt::Empty => {}
+        Stmt::Labeled { stmt, .. } => eff_stmt(tt, sr, stmt, e),
+        Stmt::Block(b) => eff_block(tt, sr, b, e),
+        Stmt::Defer { call } => eff_expr(tt, sr, call, e),
+    }
+}
+
+fn eff_expr(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, x: &Expr, e: &mut LoopEffects) {
+    match &x.kind {
+        ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
+        ExprKind::Field { base, .. } => eff_expr(tt, sr, base, e),
+        ExprKind::Index { base, index, .. } => {
+            eff_expr(tt, sr, base, e);
+            eff_expr(tt, sr, index, e);
+        }
+        ExprKind::Slice {
+            base, lo, hi, max, ..
+        } => {
+            eff_expr(tt, sr, base, e);
+            for o in [lo, hi, max].into_iter().flatten() {
+                eff_expr(tt, sr, o, e);
+            }
+        }
+        ExprKind::Deref(y) => eff_expr(tt, sr, y, e),
+        ExprKind::Addr(p) => eff_place(tt, sr, p, e),
+        ExprKind::AddrOf(y) => eff_expr(tt, sr, y, e),
+        ExprKind::Unary { x, .. } => eff_expr(tt, sr, x, e),
+        ExprKind::Binary { x, y, .. } => {
+            eff_expr(tt, sr, x, e);
+            eff_expr(tt, sr, y, e);
+        }
+        ExprKind::Call { args, .. } => {
+            e.calls = true;
+            for a in args {
+                eff_expr(tt, sr, a, e);
+            }
+        }
+        ExprKind::Convert { x, .. } => eff_expr(tt, sr, x, e),
+        ExprKind::Composite(c) => {
+            for it in &c.items {
+                match it {
+                    CompositeItem::Value(y) => eff_expr(tt, sr, y, e),
+                    CompositeItem::Key(k, v) => {
+                        eff_expr(tt, sr, k, e);
+                        eff_expr(tt, sr, v, e);
+                    }
+                    CompositeItem::Field(_, y) | CompositeItem::Index(_, y) => {
+                        eff_expr(tt, sr, y, e)
+                    }
+                }
+            }
+        }
+        ExprKind::FuncLit(_) => {}
+        ExprKind::Bound { recv, .. } => eff_expr(tt, sr, recv, e),
+        ExprKind::TypeAssert { x, .. } => eff_expr(tt, sr, x, e),
+        ExprKind::Make { args, .. } => {
+            // `make` 分配堆 ⇒ 堆根被动过（值本身是新分配的，但 mem 顺序要接上）
+            e.heap = true;
+            for a in args {
+                eff_expr(tt, sr, a, e);
+            }
+        }
+        ExprKind::New(_) => e.heap = true,
+        ExprKind::Builtin { args, .. } => {
+            // `append` / `delete` / `copy` 都会写堆；`len`/`cap` 不会。
+            // 不做逐个判断：保守一次，代价只是多一个 mem 参数。
+            e.calls = true;
+            for a in args {
+                eff_expr(tt, sr, a, e);
+            }
+        }
+    }
+}
+
+fn eff_place(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, p: &Place, e: &mut LoopEffects) {
+    match p {
+        Place::Slot(s) => {
+            e.slots.insert(*s);
+            if let Some(&r) = sr.get(s) {
+                e.roots.insert(r);
+            }
+        }
+        Place::Global(g) => {
+            e.roots.insert(RootId(g.0));
+        }
+        Place::Field { .. } | Place::Index { .. } | Place::Deref(_) => {
+            match place_base_root(tt, sr, p) {
+                Some(r) => {
+                    e.roots.insert(r);
+                }
+                None => e.heap = true,
+            }
+            // 底座表达式里的调用也要算
+            eff_place_inner_exprs(tt, sr, p, e);
+        }
+    }
+}
+
+/// 写一个 place 动的是哪个根的存储（`None` ⇒ 堆，或者本函数管不到）。
+fn place_base_root(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, p: &Place) -> Option<RootId> {
+    match p {
+        Place::Slot(s) => sr.get(s).copied(),
+        Place::Global(g) => Some(RootId(g.0)),
+        Place::Field { base, .. } => place_base_root(tt, sr, base),
+        // `Place::Index` 的底座是**表达式**（`arr[i]` 里 `arr` 是 `Expr`），
+        // 不是 `Place` —— 这与 `Place::Field` 的底座是 `Place` 不同。
+        Place::Index { base, .. } => expr_base_root(tt, sr, base),
+        Place::Deref(_) => None,
+    }
+}
+
+/// 一个**表达式**落在哪个根的存储里（`None` ⇒ 堆，或者本函数管不到）。
+fn expr_base_root(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, x: &Expr) -> Option<RootId> {
+    match &x.kind {
+        ExprKind::Slot(s) => sr.get(s).copied(),
+        ExprKind::Global(g) => Some(RootId(g.0)),
+        ExprKind::Field { base, .. } => expr_base_root(tt, sr, base),
+        ExprKind::Index { base, .. } => {
+            if is_array(tt, base.typ) {
+                expr_base_root(tt, sr, base)
+            } else {
+                None
+            }
+        }
+        // `*p` / 调用结果 / 复合字面量 / `make`：存储不在本函数的槽里
+        _ => None,
+    }
+}
+
+fn eff_place_inner_exprs(
+    tt: &TypeTable,
+    sr: &BTreeMap<SlotId, RootId>,
+    p: &Place,
+    e: &mut LoopEffects,
+) {
+    match p {
+        Place::Slot(_) | Place::Global(_) => {}
+        Place::Field { base, .. } => eff_place_inner_exprs(tt, sr, base, e),
+        Place::Index { base, index } => {
+            eff_expr(tt, sr, base, e);
+            eff_expr(tt, sr, index, e);
+        }
+        Place::Deref(x) => eff_expr(tt, sr, x, e),
     }
 }
