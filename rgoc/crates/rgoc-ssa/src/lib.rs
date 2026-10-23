@@ -17,3 +17,4 @@
 
 pub mod dump;
 pub mod ir;
+pub mod testsupport;
