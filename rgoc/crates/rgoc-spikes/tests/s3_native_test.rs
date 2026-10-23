@@ -6,7 +6,7 @@
 //! - **需要 clang 与真实运行**的（`s3_native_e2e.rs`）：测 T-S3-02/03。
 //!   分开是因为前者必须是「不依赖外部工具」的那一半 —— 否则换机器就会一片红。
 
-use rgoc_hir::{FuncDecl, Stmt, Stream, Val};
+use rgoc_hir_spike::{FuncDecl, Stmt, Stream, Val};
 use rgoc_spikes::fixtures::s3_hello;
 use rgoc_spikes::native::{CodegenError, gen_asm};
 use rgoc_spikes::native_records::{SIX_ITEMS, records, render_records};
@@ -204,7 +204,7 @@ fn 整数实参也能生成() {
         body: vec![Stmt::Print {
             newline: true,
             stream: Stream::Stdout,
-            args: vec![Val::Int(rgoc_hir::value::BigInt::from_i64(7))],
+            args: vec![Val::Int(rgoc_hir_spike::value::BigInt::from_i64(7))],
         }],
     };
     let asm = gen_asm(&f).expect("应能生成");

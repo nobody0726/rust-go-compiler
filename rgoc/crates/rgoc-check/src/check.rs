@@ -239,6 +239,20 @@ pub struct Session<'a> {
     /// 由 `expr` 的 `ident` 顶替装载面留下的「常量无值」。见
     /// [`crate::constfold`]。
     pub(crate) consts: std::collections::BTreeMap<String, (rgoc_types::TypeId, rgoc_const::Const)>,
+    /// **局部具名类型**的 `TypeId`（M5/Task 15）。
+    ///
+    /// # 为什么必须记忆化
+    ///
+    /// `Decl::Type` 的处理会给每个局部 `type S struct{…}` **新建**一个 named
+    /// 类型（名字参与同一性，`S` 与结构相同的 `T` 不可赋值）。而 lowering 要在
+    /// 检查**之后**再按 `expr_in` 复查同一个表达式（`D-M5-2`：类型一律来自
+    /// `Operand`），若那时又新建一个 named，两个 `TypeId` 的同一性判断就会
+    /// 分叉 —— `var x S` 的槽类型与 `S{…}` 的类型不再是同一个。
+    ///
+    /// 键 = `(文件, 行, 列)`（`Decl::Type` 的 `pos`）。检查期填、lowering 期读，
+    /// 同一份 AST 的同一个声明因此只有**一个** `TypeId`。
+    pub(crate) local_types:
+        std::collections::BTreeMap<(rgoc_lex::FileId, u32, u32), rgoc_types::TypeId>,
     diags: Vec<RawDiag>,
     reported_any: bool,
 }
@@ -263,9 +277,21 @@ impl<'a> Session<'a> {
             tt,
             opts,
             consts: std::collections::BTreeMap::new(),
+            local_types: std::collections::BTreeMap::new(),
             diags: Vec::new(),
             reported_any: false,
         }
+    }
+
+    /// 查一个**局部具名类型**在检查期定下的 `TypeId`（M5/Task 15）。
+    ///
+    /// `None` ⇒ 检查期没见过这条声明（例如 lowering 拿到的是另一个文件 / 另一份
+    /// AST）。lowering 据此报 `HIR-MISSING-TYPE`，**不**自己新建类型（`D-M5-2`）。
+    #[must_use]
+    pub fn local_type_at(&self, pos: rgoc_lex::Pos) -> Option<rgoc_types::TypeId> {
+        self.local_types
+            .get(&(pos.file, pos.line, pos.col))
+            .copied()
     }
 
     /// 装载诊断入流（作为硬错误；顺序在检查诊断之前）。
@@ -392,6 +418,34 @@ pub fn check_package(
     load_diags: DiagBag,
     opts: &CheckOptions,
 ) -> CheckedPackage {
+    check_package_with(pkg, tt, load_diags, opts, |_| ()).0
+}
+
+/// 与 [`check_package`] 同序，但在**收流之前**把活会话交给调用方。
+///
+/// # 为什么需要它（M5/Task 23）
+///
+/// lowering 必须**复用同一个检查会话**（`D-M5-2`：类型一律来自
+/// `Operand.typ`，不许自己推），而 lowering 自身也可能报诊断
+/// （`HIR-*` 之外的「拿不到类型」会走会话的上报层）。若先 `into_checked()`
+/// 再 lowering，那些诊断就丢了 —— 于是 `rgoc run` 会在「静态检查明明有错」
+/// 的情况下照样跑起来。
+///
+/// 所以顺序是：检查 → **调用方 lowering** → 收流。返回的
+/// [`CheckedPackage`] 因此**包含 lowering 期产生的诊断**。
+///
+/// # 生命周期
+///
+/// `pkg` / `tt` / `opts` 必须活得一样长（`'p`）：[`crate::Session`] 三个字段
+/// 共享一个生命周期，`rgoc_hir::lower` 的签名也要求 `&'p Package` 与
+/// `&mut Session<'p>` 同源。
+pub fn check_package_with<'p, T>(
+    pkg: &'p Package,
+    tt: &'p mut TypeTable,
+    load_diags: DiagBag,
+    opts: &'p CheckOptions,
+    f: impl FnOnce(&mut Session<'p>) -> T,
+) -> (CheckedPackage, T) {
     let mut session = Session::new(pkg, tt, opts);
     // Task 30：先跑「折叠预演」，再按结果过滤装载面的 `const` 拒绝。
     let foldable = crate::constfold::fold_package_consts(&mut session);
@@ -412,5 +466,6 @@ pub fn check_package(
             message: c.message,
         });
     }
-    session.into_checked()
+    let out = f(&mut session);
+    (session.into_checked(), out)
 }

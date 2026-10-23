@@ -230,6 +230,17 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::Selector(se) => self.selector(file, se),
             Expr::CompositeLit(cl) => self.composite_lit(file, cl, hint),
             Expr::TypeAssert(a) => self.type_assert(file, a),
+            // 函数字面量：**值**是它的签名类型。
+            //
+            // M4 刻意不查字面量的体（`stmt.rs` 的「刻意不做」第 1 条），所以
+            // 这里只给类型、不重查体 —— 否则会与 `check_package_bodies` 的
+            // 覆盖范围打架。M5 的 lowering 需要这个类型（D-M5-2）：没有它
+            // `f := func(){}` / `func(){}()` 一律 `invalid`，lowering 直接
+            // 报 `HIR-MISSING-TYPE` 而拒跑（`closure1.go` / `func6.go` 实测）。
+            Expr::FuncLit(fl) => match self.type_expr(file, &fl.type_) {
+                Some(t) => Operand::value(Some(t)),
+                None => Operand::invalid(),
+            },
             // 类型表达式族（M4/Task 37 补）：`struct{…}` / `interface{…}` /
             // `func(…)` 与已有的数组/切片/map/chan/指针同路 —— 它们出现在
             // **值位置**时是类型操作数（官方 `exprOrType` 的 typexpr 分支）。
@@ -2984,5 +2995,133 @@ fn is_composite_lit(e: &Expr) -> bool {
         Expr::Paren(p) => is_composite_lit(&p.x),
         Expr::CompositeLit(_) => true,
         _ => false,
+    }
+}
+
+// ═══ 开面（M5/Task 13，`D-M5-2`）════════════════════════════════════════════
+//
+// lowering 持**同一个会话**边 lower 边取 `Operand`（`M5-design.md` §3.1）。
+// 这里把 `ExprChecker` 的 7 个入口原样转发成 `Session` 的方法 —— **只开可见性，
+// 不改语义**（`T-EX-01..06` 的守卫靠「开面不引入行为变化」）。
+//
+// 为什么需要 `expr_in`：lowering 有自己的局部作用域（槽表），而
+// `ExprChecker::ident` 要一份 `Env` 才能认出「这个 `x` 是哪个局部」。
+// 少这一层，`x + 1` 在 lowering 里就是「类型未知」⇒ `HIR-MISSING-TYPE`。
+
+impl Session<'_> {
+    /// 表达式求值（**无**局部作用域；包级初始化式与类型表达式用）。
+    pub fn expr(&mut self, file: FileId, e: &Expr) -> Operand {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.expr(file, e)
+    }
+
+    /// 表达式求值（带局部作用域）。
+    pub fn expr_in(&mut self, file: FileId, e: &Expr, env: &crate::env::Env) -> Operand {
+        let mut cx = ExprChecker {
+            s: self,
+            env: Some(env),
+        };
+        cx.expr(file, e)
+    }
+
+    /// 带元素类型提示的表达式求值（复合字面量的嵌套省略类型用）。
+    pub fn expr_hint_in(
+        &mut self,
+        file: FileId,
+        e: &Expr,
+        hint: Option<TypeId>,
+        env: &crate::env::Env,
+    ) -> Operand {
+        let mut cx = ExprChecker {
+            s: self,
+            env: Some(env),
+        };
+        cx.expr_hint(file, e, hint)
+    }
+
+    /// 表达式求值 **并按 `want` 做隐式转换**（`convertUntyped`）。
+    ///
+    /// 为什么需要这个入口：`binary_core` 的 `match_types` 把无类型操作数
+    /// 就地转成另一侧的类型，但**只改它手里的局部副本**，不回写子表达式节点。
+    /// lowering 事后单独求值子表达式（`expr_in`）看到的是「裸」类型 ——
+    /// `s2 == 45` 里 `45` 仍是 `untyped int`，于是 lowering 折出 `Int(45)`，
+    /// 与 `float64` 的 `45.0` 比较永远不等（`ken/simpconv.go` 实测）。
+    ///
+    /// 让检查器来做这一步，而不是让 lowering 自己判「该转成什么」：
+    /// 转换规则（可表示性、截断、`untyped` 提升）全部留在 `convert_untyped`
+    /// 一处，`D-M5-2` 的「lowering 不自己推类型」不被破坏。
+    ///
+    /// 不能转换时原样返回（`convert_untyped` 自身是 noop 或置 invalid），
+    /// 调用方据此决定是否采用结果。
+    pub fn expr_as(
+        &mut self,
+        file: FileId,
+        e: &Expr,
+        want: TypeId,
+        env: &crate::env::Env,
+    ) -> Operand {
+        let pos = e.pos();
+        let mut cx = ExprChecker {
+            s: self,
+            env: Some(env),
+        };
+        let mut op = cx.expr(file, e);
+        cx.convert_untyped(&mut op, want, pos);
+        op
+    }
+
+    /// 类型表达式 → `TypeId`（`None` ⇒ 不是类型或判不出来）。
+    pub fn type_expr_of(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.type_expr(file, e)
+    }
+
+    /// 带**局部作用域**的类型表达式 → `TypeId`（M5/Task 15）。
+    ///
+    /// [`Self::type_expr_of`] 的 `env: None` 只够看包级作用域；函数体里的
+    /// `var x X`（`X` 是局部 `type X struct{…}`）与 `var p *T`（`T` 局部）
+    /// 都解析不出来 —— 于是 `D-M5-2` 要求的那条路（类型只从会话取）会直接
+    /// 断在 lowering 里（`closure2.go` / `range3.go` 实测）。
+    pub fn type_expr_in(
+        &mut self,
+        file: FileId,
+        e: &Expr,
+        env: &crate::env::Env,
+    ) -> Option<TypeId> {
+        let mut cx = ExprChecker {
+            s: self,
+            env: Some(env),
+        };
+        cx.type_expr(file, e)
+    }
+
+    /// 转换 `T(x)` 的判定（官方 `Checker.conversion`）。
+    pub fn conversion_of(&mut self, file: FileId, c: &CallExpr, target: TypeId) -> Operand {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.conversion(file, c, target)
+    }
+
+    /// 可赋值性判定（失败 ⇒ `false`，诊断已上报）。
+    pub fn assignment_to(
+        &mut self,
+        x: &mut Operand,
+        xpos: Pos,
+        target: Option<TypeId>,
+        context: &str,
+    ) -> bool {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.assignment(x, xpos, target, context)
+    }
+
+    /// 索引合法性（官方 `isValidIndex`）。
+    pub fn valid_index_of(&mut self, x: &mut Operand, pos: Pos) -> bool {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.valid_index(x, pos)
+    }
+
+    /// 无类型操作数就地隐式转换（官方 `convertUntyped`）。
+    pub fn convert_untyped_to(&mut self, x: &mut Operand, target: TypeId, pos: Pos) {
+        let mut cx = ExprChecker { s: self, env: None };
+        cx.convert_untyped(x, target, pos);
     }
 }

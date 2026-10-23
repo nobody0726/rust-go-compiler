@@ -456,16 +456,18 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                             .or_else(|| self.type_of_expr(file, t)),
                         None => None,
                     };
-                    for e in &c.values {
-                        let _ = self.eval(file, e);
-                    }
-                    for n in &c.names {
+                    // 值也要留下（M5/Task 15）：lowering 复查 `A != 0` 时若拿到
+                    // `val: None`，常量就折不出来，只能退化成运行期读一个不存在的
+                    // 槽（`const8.go` 的局部 `iota` 组实测）。
+                    let vals: Vec<Option<rgoc_const::Const>> =
+                        c.values.iter().map(|e| self.eval(file, e).val).collect();
+                    for (i, n) in c.names.iter().enumerate() {
                         self.env.declare(
                             &n.value,
                             Operand {
                                 mode: Mode::Constant,
                                 typ: declared,
-                                val: None,
+                                val: vals.get(i).cloned().flatten(),
                                 pos: Some(n.pos),
                             },
                         );
@@ -479,14 +481,28 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                     // 名字参与同一性，`S` 与结构相同的 `T` **不**可赋值
                     // （官方 `typexpr.go` 的 `definedType`）。别名
                     // （`type A = B`）不建 named，直接绑本体。
-                    let ty = match under {
-                        Some(u) if !t.alias => {
-                            let n = self.s.tt.add_named(&t.name.value);
-                            self.s.tt.set_named_underlying(n, u);
-                            self.s.tt.named_type(n)
+                    //
+                    // **记忆化**（M5/Task 15）：同一份 AST 的同一个 `Decl::Type`
+                    // 只许有一个 `TypeId` —— 检查期建、lowering 期读。否则
+                    // lowering 按 `expr_in` 复查 `var x S` 时会再建一个 named，
+                    // 两个 id 的同一性判断分叉（`range3.go` 的局部 `MyInt`、
+                    // `closure2.go` 的局部 `X` 实测）。
+                    let key = (t.pos.file, t.pos.line, t.pos.col);
+                    let ty = match self.s.local_types.get(&key).copied() {
+                        Some(cached) => cached,
+                        None => {
+                            let ty = match under {
+                                Some(u) if !t.alias => {
+                                    let n = self.s.tt.add_named(&t.name.value);
+                                    self.s.tt.set_named_underlying(n, u);
+                                    self.s.tt.named_type(n)
+                                }
+                                Some(u) => u,
+                                None => self.s.tt.invalid(),
+                            };
+                            self.s.local_types.insert(key, ty);
+                            ty
                         }
-                        Some(u) => u,
-                        None => self.s.tt.invalid(),
                     };
                     self.env.declare(&t.name.value, Operand::type_expr(ty));
                 }
@@ -584,7 +600,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
 
     /// 纯 `=`（官方 `assignVars`）。
     fn assign_vars(&mut self, file: FileId, a: &AssignStmt) {
-        let vals = self.assign_rhs(file, &a.rhs);
+        let vals = self.assign_rhs(file, &a.rhs, a.lhs.len());
         let l = a.lhs.len();
         if vals.len() != l {
             self.assign_error(a.pos, &a.rhs, l, vals.len());
@@ -631,7 +647,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         }
 
         // ② 右侧求值（此时新变量还**不在**作用域里）
-        let vals = self.assign_rhs(file, &a.rhs);
+        let vals = self.assign_rhs(file, &a.rhs, a.lhs.len());
         let l = a.lhs.len();
         if vals.len() != l {
             self.assign_error(a.pos, &a.rhs, l, vals.len());
@@ -681,11 +697,17 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
 
     /// 右侧求值 + 多值展开（官方 `initVars` 的 n:1 面）。
     ///
+    /// `want` 是**左侧变量个数**，只用于判断逗号-ok 是否成立；
+    /// 传 `0` 表示这一面不允许逗号-ok（`return` 语句：Go 里
+    /// `return m[k]` 不能给两个结果值，官方同样只认多值调用）。
+    ///
     /// 返回 `(操作数, 位置)` 序列：
     /// * 单值明细逐项求值；
     /// * 唯一一项且是**多值调用** ⇒ 展开成元组的各元素；
+    /// * 唯一一项、左侧恰好两个、且操作数是逗号-ok 模式（map 索引 /
+    ///   类型断言）⇒ 展开成 `(值, bool)`；
     /// * 其余（含元组出现在多值位置）⇒ 单值语境报错并标 `invalid`。
-    fn assign_rhs(&mut self, file: FileId, rhs: &[Expr]) -> Vec<(Operand, Pos)> {
+    fn assign_rhs(&mut self, file: FileId, rhs: &[Expr], want: usize) -> Vec<(Operand, Pos)> {
         if rhs.len() != 1 {
             return rhs
                 .iter()
@@ -699,13 +721,30 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let e = &rhs[0];
         let x = self.eval(file, e);
         let pos = e.start_pos();
-        match tuple_elems(&*self.s.tt, &x) {
-            Some(elems) => elems
+        if let Some(elems) = tuple_elems(&*self.s.tt, &x) {
+            return elems
                 .into_iter()
                 .map(|t| (Operand::value(Some(t)), pos))
-                .collect(),
-            None => vec![(x, pos)],
+                .collect();
         }
+        // 逗号-ok：`v, ok := m[k]` / `v, ok := i.(T)`。
+        //
+        // 官方在 `initVars`/`assignVars` 里对「右侧一项、左侧两项」单开一支，
+        // 按模式（`mapindex` / `commaok`）补一个 `bool`。这里同形：第二个
+        // 值的类型固定是 `bool`，第一个值是操作数自己的类型。
+        if want == 2
+            && matches!(x.mode, Mode::MapIndex | Mode::CommaOk | Mode::CommaErr)
+            && let Some(t) = x.typ
+        {
+            let ok = Operand::value(Some(self.bool_type()));
+            return vec![(Operand::value(Some(t)), pos), (ok, pos)];
+        }
+        vec![(x, pos)]
+    }
+
+    /// 预声明 `bool` 的类型 id。
+    fn bool_type(&mut self) -> TypeId {
+        self.s.tt.add_basic(rgoc_const::BasicId::Bool)
     }
 
     /// 官方 `assignError`：报点 = **右侧第一个**表达式。
@@ -871,7 +910,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             return;
         }
 
-        let vals = self.assign_rhs(file, &r.results);
+        let vals = self.assign_rhs(file, &r.results, 0);
         if vals.len() != n {
             let (at, qualifier) = if vals.len() > n {
                 (vals[n].1, "too many")

@@ -34,7 +34,7 @@ pub(crate) mod builtins;
 pub mod check;
 pub(crate) mod constfold;
 pub mod diag;
-pub(crate) mod env;
+pub mod env;
 pub mod expr;
 pub mod imports;
 pub mod initorder;

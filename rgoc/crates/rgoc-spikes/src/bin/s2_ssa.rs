@@ -14,7 +14,7 @@
 use std::io::Write;
 use std::process::ExitCode;
 
-use rgoc_hir::Stream;
+use rgoc_hir_spike::Stream;
 use rgoc_spikes::fixtures::sum_expr;
 use rgoc_spikes::interp::check_t_s1_01;
 use rgoc_spikes::ssa::{eval, lower_expr_program};

@@ -13,8 +13,8 @@
 //!    对照 **T-C-04**（`printbig.go`）的冻结期望 `-9223372036854775808\n9223372036854775807\n`。
 //! 3. [`s3_hello`] —— 输出 `hello` 的 native 函数体。S3 据此生成 arm64 汇编。
 
-use rgoc_hir::value::BigInt;
-use rgoc_hir::{BinOp, Const, Expr, FuncDecl, Program, Stmt, Stream, Val};
+use rgoc_hir_spike::value::BigInt;
+use rgoc_hir_spike::{BinOp, Const, Expr, FuncDecl, Program, Stmt, Stream, Val};
 
 /// fixture 的位置标签文件名。位置是**手写**的 —— `rgoc-hir` 不做源码位置跟踪（M1/M2 的活）。
 pub const FIXTURE_FILE: &str = "s1_fixture";
@@ -106,7 +106,7 @@ pub fn s1_const_edges() -> Vec<(Expr, String, bool)> {
 /// 与 S1 的差别**在类型层面**：这里声明 [`Stream::Stdout`]，而 S1 声明 [`Stream::Stderr`]。
 /// 这不是随意选择 —— Go 内建 `println` 实测走 stderr（`M0-tests.md` §5.1 修订 R1），
 /// 而 T-S3-03 要求的是「真实 Go 程序输出 hello」的效果，对应 `os.Stdout`。
-/// 做成两个枚举值（`rgoc_hir::Stream`）就是为了让编译器**无法**把两者混为一谈。
+/// 做成两个枚举值（`rgoc_hir_spike::Stream`）就是为了让编译器**无法**把两者混为一谈。
 pub fn s3_hello() -> FuncDecl {
     FuncDecl {
         name: "main".to_string(),
@@ -129,7 +129,7 @@ fn int(v: i64) -> Expr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rgoc_hir::Val;
+    use rgoc_hir_spike::Val;
 
     #[test]
     fn 固定输入的求值结果是_3() {

@@ -5,7 +5,7 @@
 //!
 //! `03` §4 第 6 条要求「固定 HIR/SSA 函数 → arm64 汇编 → `clang` → 可运行程序」。
 //! 若汇编是手写的，这一步就退化成了「手写一个能跑的 asm 文件」，**验证不到 codegen**。
-//! 所以本文件从 [`rgoc_hir::FuncDecl`] 出发生成指令序列；手写汇编只出现在**测试的对照**里。
+//! 所以本文件从 [`rgoc_hir_spike::FuncDecl`] 出发生成指令序列；手写汇编只出现在**测试的对照**里。
 //!
 //! # 明确不做的事（`03` §2 / §4 的砍项）
 //!
@@ -78,7 +78,7 @@ pub struct Artifact {
 }
 
 /// 从固定 HIR 生成 arm64 汇编。
-pub fn gen_asm(f: &rgoc_hir::FuncDecl) -> Result<String, CodegenError> {
+pub fn gen_asm(f: &rgoc_hir_spike::FuncDecl) -> Result<String, CodegenError> {
     if f.name != "main" {
         return Err(CodegenError::NotMain(f.name.clone()));
     }
@@ -92,7 +92,7 @@ pub fn gen_asm(f: &rgoc_hir::FuncDecl) -> Result<String, CodegenError> {
     // 计数器在函数中段出错时容易漏加，而下标天然与语句一一对应。
     // 顺带保证「每条 print 拿到的 label 唯一」，这正是多条 print 不冲突的依据。
     for (label_id, stmt) in f.body.iter().enumerate() {
-        let rgoc_hir::Stmt::Print {
+        let rgoc_hir_spike::Stmt::Print {
             newline,
             stream,
             args,
@@ -108,7 +108,7 @@ pub fn gen_asm(f: &rgoc_hir::FuncDecl) -> Result<String, CodegenError> {
 
         // 渲染成字节。这与 S1/S2 共用 `Val::render` 的规则，
         // 但 S3 走的是**真实 write 系统调用**而非内建 print 家族 ——
-        // 差别是流（stdout/stderr，见 rgoc_hir::Stream）而非渲染方式。
+        // 差别是流（stdout/stderr，见 rgoc_hir_spike::Stream）而非渲染方式。
         let mut bytes = val.render();
         if *newline {
             bytes.push('\n');
@@ -124,8 +124,8 @@ pub fn gen_asm(f: &rgoc_hir::FuncDecl) -> Result<String, CodegenError> {
         data.push_str(&format!("\t.text_len_{label} = {}\n", text_bytes.len()));
 
         let fd = match stream {
-            rgoc_hir::Stream::Stdout => FD_STDOUT,
-            rgoc_hir::Stream::Stderr => FD_STDERR,
+            rgoc_hir_spike::Stream::Stdout => FD_STDOUT,
+            rgoc_hir_spike::Stream::Stderr => FD_STDERR,
         };
 
         // 代码：write(fd, label, len) 然后 exit_group(0)
@@ -351,12 +351,12 @@ mod tests {
         assert!(s3.contains("mov x0, #1"), "S3 走 stdout：{s3}");
 
         // 构造一个走 stderr 的函数，确认 fd 不同 —— 这是 stream 字段存在的意义
-        let err_fn = rgoc_hir::FuncDecl {
+        let err_fn = rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
-            body: vec![rgoc_hir::Stmt::Print {
+            body: vec![rgoc_hir_spike::Stmt::Print {
                 newline: true,
-                stream: rgoc_hir::Stream::Stderr,
-                args: vec![rgoc_hir::Val::Str("x".to_string())],
+                stream: rgoc_hir_spike::Stream::Stderr,
+                args: vec![rgoc_hir_spike::Val::Str("x".to_string())],
             }],
         };
         let e = gen_asm(&err_fn).expect("应能生成");
@@ -373,14 +373,14 @@ mod tests {
 
     #[test]
     fn 多值_被显式拒绝而不是悄悄只取第一个() {
-        let f = rgoc_hir::FuncDecl {
+        let f = rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
-            body: vec![rgoc_hir::Stmt::Print {
+            body: vec![rgoc_hir_spike::Stmt::Print {
                 newline: true,
-                stream: rgoc_hir::Stream::Stdout,
+                stream: rgoc_hir_spike::Stream::Stdout,
                 args: vec![
-                    rgoc_hir::Val::Str("a".to_string()),
-                    rgoc_hir::Val::Str("b".to_string()),
+                    rgoc_hir_spike::Val::Str("a".to_string()),
+                    rgoc_hir_spike::Val::Str("b".to_string()),
                 ],
             }],
         };
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn 非_main_被拒绝() {
-        let f = rgoc_hir::FuncDecl {
+        let f = rgoc_hir_spike::FuncDecl {
             name: "helper".to_string(),
             body: vec![],
         };
@@ -401,9 +401,9 @@ mod tests {
 
     #[test]
     fn 非_print_语句被拒绝() {
-        let f = rgoc_hir::FuncDecl {
+        let f = rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
-            body: vec![rgoc_hir::Stmt::Return(rgoc_hir::Val::Void)],
+            body: vec![rgoc_hir_spike::Stmt::Return(rgoc_hir_spike::Val::Void)],
         };
         assert!(matches!(gen_asm(&f), Err(CodegenError::UnsupportedStmt(_))));
     }

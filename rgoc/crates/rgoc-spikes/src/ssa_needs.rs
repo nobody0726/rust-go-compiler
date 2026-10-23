@@ -18,7 +18,7 @@
 /// 一条需求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Need {
-    /// 稳定代号（排序与引用用，理由同 `rgoc_hir::Diag` 的 `code`）。
+    /// 稳定代号（排序与引用用，理由同 `rgoc_hir_spike::Diag` 的 `code`）。
     pub id: &'static str,
     /// 需求名。
     pub title: &'static str,
@@ -62,7 +62,7 @@ pub fn needs() -> Vec<Need> {
             id: "S2-NEED-CALL",
             title: "调用边界",
             trigger: "println(1+2) —— 参数在进入内建之前就已是值",
-            why: "M0 的 HIR 把内建实参存成**已求值的 `Val`**（`rgoc_hir::Stmt::Print`），\
+            why: "M0 的 HIR 把内建实参存成**已求值的 `Val`**（`rgoc_hir_spike::Stmt::Print`），\
                   于是调用边界画在 HIR 层，S2 的图里**看不到调用**。\
                   真实编译里调用边界是三件事的重合：① 传参约定（栈/寄存器）、\
                   ② 调用点之后的控制流（被调用方可能不返回）、③ 结果的接收方式。\

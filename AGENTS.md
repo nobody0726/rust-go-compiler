@@ -20,7 +20,7 @@
 | 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0–M3 四个里程碑全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-driver`** 七条正式 crate（`rgoc-hir` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1282 条测试全绿**、M0 自检 **231 条断言**全过、M1 自检全过；`M1` / `M2` / `M3` 三份 manifest 均已填实。
+**一句话状态**：**M0–M3 四个里程碑全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-driver`** 七条正式 crate（`rgoc-hir` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1282 条测试全绿**、M0 自检 **232 条断言**全过、M1 自检全过；`M1` / `M2` / `M3` 三份 manifest 均已填实。
 
 **M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
 
@@ -76,7 +76,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │   └── image.lock                    ←     镜像锁定信息（E1；含「image id 不可复现」的说明）
 ├── scripts/                          ← 入口脚本（11 个）+ 1 份人读记录
 │   ├── in-container.sh               ←     统一容器入口（daemon 探测 + 卷 bootstrap + 参数透传）
-│   ├── check-m0-consistency.py       ←     M0 一致性自检（231 条断言，退出码即结论；**宿主**跑，要用 docker CLI）
+│   ├── check-m0-consistency.py       ←     M0 一致性自检（232 条断言，退出码即结论；**宿主**跑，要用 docker CLI）
 │   ├── check-m1-consistency.py       ←     M1 阶段一致性自检（28 条断言，退出码即结论）
 │   ├── check-lex-golden.sh           ←     M1 腿乙门禁（151 条 golden；宿主侧转派进容器）
 │   ├── check-ast-golden.sh           ←     M2 腿丙门禁（31 文件对撞 + golden 齐性守卫）

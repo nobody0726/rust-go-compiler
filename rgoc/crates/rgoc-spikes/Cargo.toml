@@ -10,4 +10,4 @@ description = "SPIKE-ONLY：三个架构 spike 的隔离载体。正式实现落
 workspace = true
 
 [dependencies]
-rgoc-hir = { path = "../rgoc-hir" }
+rgoc-hir-spike = { path = "../rgoc-hir-spike" }

@@ -21,7 +21,7 @@
 //! | `max` / `min` | 1 | ✔ | 公共类型 |
 //! | `new` | 1 | | `*T` |
 //! | `print` / `println` | 0 | ✔ | 无值 |
-//! | `recover` | 0 | | 无值 |
+//! | `recover` | 0 | | `any`（`interface{}`；官方签名 `func() any`） |
 //! | `assert` | 1 | | 无值（**仅** `--test-hooks`） |
 //! | `trace` | 0 | ✔ | 无值（**仅** `--test-hooks`） |
 //!
@@ -115,7 +115,21 @@ pub(crate) fn call_builtin(
             }
             Operand::no_value()
         }
-        "recover" => Operand::no_value(),
+        "recover" => {
+            // `recover()` 的类型是 `any`（官方 `universe.go`：`recover` 的
+            // 签名是 `func() any`）。原先给 `Operand::no_value()` 是错的：
+            // `err := recover(); err == nil` 里 `err` 因此拿到「无值」，
+            // 判等报 `operator == not defined on untyped_nil`
+            // （`closure4.go` / `convert4.go` / `defernil.go` / `method.go` 实测）。
+            //
+            // 这里直接造 `interface{}` 本体：`any` 是它的别名，
+            // `identical` 走 unalias 后完全相同。
+            let id =
+                cx.s.tt
+                    .add_interface(Vec::new(), None, rgoc_types::IfaceTSet::All);
+            let t = cx.s.tt.interface_type(id);
+            Operand::value(Some(t))
+        }
         "assert" => {
             let _ = cx.expr(file, &c.args[0]);
             Operand::no_value()
@@ -814,8 +828,29 @@ fn make(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
 }
 
 fn new(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
-    let Some(t) = cx.type_expr(file, &c.args[0]) else {
+    if let Some(t) = cx.type_expr(file, &c.args[0]) {
+        let p = cx.tt_mut().add_pointer(t);
+        return Operand::value(Some(p));
+    }
+    // `new(expr)`（Go 1.26 起的形态，`newexpr.go` 实测）：实参不是类型，而是
+    // 一个**值**；结果是 `*T`，`T` 是该值的类型（无类型常量取默认型）。
+    //
+    // 旧实现只认类型，`new(123)` 直接 `invalid`，于是 `*p` 报
+    // `cannot indirect invalid type`，整个文件连静态面都过不去。
+    let op = cx.expr(file, &c.args[0]);
+    let Some(t) = op.typ else {
         return Operand::invalid();
+    };
+    // 无类型常量取**默认型**（`new(123)` ⇒ `*int`，官方 `defaultType`）。
+    let t = {
+        let under = rgoc_types::underlying(cx.s.tt, rgoc_types::unalias(cx.s.tt, t));
+        match cx.s.tt.type_of(under) {
+            rgoc_types::Type::Basic(b) if b.is_untyped() => {
+                let d = rgoc_const::default_type_of(*b);
+                cx.tt_mut().add_basic(d)
+            }
+            _ => t,
+        }
     };
     let p = cx.tt_mut().add_pointer(t);
     Operand::value(Some(p))

@@ -5,9 +5,9 @@
 //! 分开的原因：混在一起时，一旦 bin 写错了流，测试会通过 ——
 //! 因为库里的 `stdout` 字段本来就是空串，跟实际写没写 stdout 无关。
 
-use rgoc_hir::Stream;
-use rgoc_hir::value::BigInt;
-use rgoc_hir::{Diag, Pos, Program, Stmt, Val};
+use rgoc_hir_spike::Stream;
+use rgoc_hir_spike::value::BigInt;
+use rgoc_hir_spike::{Diag, Pos, Program, Stmt, Val};
 use rgoc_spikes::interp::{check_t_s1_01, check_t_s1_02, check_t_s1_03, interpret, render_records};
 
 #[test]
@@ -72,7 +72,7 @@ fn 常量折叠丢位会被_check_03_抓出来() {
     // （类型层面就不允许），所以这里退一步验证 check 本身不是恒真：
     // 构造一个渲染与期望不符的 Program，走 interpret 看它是否报出。
     let bogus = Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Print {
                 newline: true,
@@ -91,7 +91,7 @@ fn 常量折叠丢位会被_check_03_抓出来() {
 #[test]
 fn 没有_main_时给出诊断而不是_panic() {
     let p = Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "not_main".to_string(),
             body: vec![],
         }],
@@ -105,7 +105,7 @@ fn 没有_main_时给出诊断而不是_panic() {
 #[test]
 fn 子集外的_return_被显式拒绝而不是忽略() {
     let p = Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![
                 Stmt::Print {
@@ -134,7 +134,7 @@ fn print_不加空格与换行_println_都加() {
     // 规范只把 print/println 列为内建名，**没有规定分隔符**。第一版实现对两者
     // 都用了 `join(" ")`，被这里抓到（`print` 应无分隔符）。
     let mk = |newline: bool| Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Print {
                 newline,
@@ -166,7 +166,7 @@ fn 多操作数的四种组合与_oracle_逐字节一致() {
     //   print()             → ""
     //   println()           → "\n"
     let mk = |newline: bool, args: Vec<Val>| Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Print {
                 newline,
@@ -196,7 +196,7 @@ fn 多操作数的四种组合与_oracle_逐字节一致() {
 #[test]
 fn 空参数列表不产生多余字符() {
     let p = Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Print {
                 newline: true,
@@ -214,7 +214,7 @@ fn 空参数列表不产生多余字符() {
 fn 诊断按_c1_规则排序() {
     // 子集外形状产生多条诊断时，顺序必须确定（E6 可复现性的前提）
     let p = Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Return(Val::Void), Stmt::Return(Val::Void)],
         }],

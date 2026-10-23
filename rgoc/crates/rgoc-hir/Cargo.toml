@@ -4,9 +4,15 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "SPIKE-ONLY：三个架构 spike 共享的最小 HIR。M5 由正式 HIR 替换。"
+description = "正式 HIR（M5）：可执行的中间表示 + lowering + 中性 dump。"
 
 [lints]
 workspace = true
 
 [dependencies]
+rgoc-ast = { path = "../rgoc-ast" }
+rgoc-check = { path = "../rgoc-check" }
+rgoc-const = { path = "../rgoc-const" }
+rgoc-lex = { path = "../rgoc-lex" }
+rgoc-load = { path = "../rgoc-load" }
+rgoc-types = { path = "../rgoc-types" }

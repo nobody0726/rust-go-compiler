@@ -3,16 +3,16 @@
 //! 重点是**交叉验证真的在验证**：既要比结果一致，也要能证明「如果 S2 走的是
 //! 搬运 HIR 求值结果那条路，测试会红」。
 
-use rgoc_hir::Stream;
-use rgoc_hir::value::BigInt;
-use rgoc_hir::{BinOp, Expr, Stmt, Val};
+use rgoc_hir_spike::Stream;
+use rgoc_hir_spike::value::BigInt;
+use rgoc_hir_spike::{BinOp, Expr, Stmt, Val};
 use rgoc_spikes::fixtures::{big_shift_expr, s1_program, sum_expr};
 use rgoc_spikes::interp::check_t_s1_01;
 use rgoc_spikes::ssa::{Instr, LowerError, SsaFunc, eval, lower, lower_expr_program};
 use rgoc_spikes::ssa_needs::{needs, render_gap, render_needs, verifier_gap};
 
 fn int(v: i64) -> Expr {
-    Expr::Const(rgoc_hir::Const::Big(BigInt::from_i64(v)))
+    Expr::Const(rgoc_hir_spike::Const::Big(BigInt::from_i64(v)))
 }
 
 #[test]
@@ -145,8 +145,8 @@ fn 从_hir_program_lowering_也能得到可求值的图() {
 #[test]
 fn lowering_失败分类明确_不是_panic() {
     // 无 main
-    let p = rgoc_hir::Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+    let p = rgoc_hir_spike::Program {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "helper".to_string(),
             body: vec![],
         }],
@@ -154,8 +154,8 @@ fn lowering_失败分类明确_不是_panic() {
     assert_eq!(lower(&p), Err(LowerError::NoMain));
 
     // 子集外语句
-    let p = rgoc_hir::Program {
-        funcs: vec![rgoc_hir::FuncDecl {
+    let p = rgoc_hir_spike::Program {
+        funcs: vec![rgoc_hir_spike::FuncDecl {
             name: "main".to_string(),
             body: vec![Stmt::Return(Val::Void)],
         }],
@@ -211,7 +211,7 @@ fn 求值遇到负移位量显式报错() {
 fn 求值遇到非整数操作数显式报错() {
     let e = Expr::Bin {
         op: BinOp::Add,
-        lhs: Box::new(Expr::Const(rgoc_hir::Const::Str("x".to_string()))),
+        lhs: Box::new(Expr::Const(rgoc_hir_spike::Const::Str("x".to_string()))),
         rhs: Box::new(int(1)),
     };
     let f = lower_expr_program("main", &[e], true, Stream::Stderr).expect("lowering 应成功");
@@ -227,8 +227,8 @@ fn 多参数与_print_的形态与_s1_一致() {
         let f = lower_expr_program("main", &two, newline, Stream::Stderr).expect("lowering 应成功");
         let s2 = eval(&f).expect("求值应成功");
         // 与 S1 对同样输入的解释结果比
-        let prog = rgoc_hir::Program {
-            funcs: vec![rgoc_hir::FuncDecl {
+        let prog = rgoc_hir_spike::Program {
+            funcs: vec![rgoc_hir_spike::FuncDecl {
                 name: "main".to_string(),
                 body: vec![Stmt::Print {
                     newline,

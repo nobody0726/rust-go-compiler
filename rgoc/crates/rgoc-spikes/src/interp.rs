@@ -11,12 +11,12 @@
 //!    报 `cannot use big (untyped int constant ...) (overflows)` —— Go 也是「先任意精度、
 //!    后按类型收敛」。见 `T-S1-03`。
 //! 2. **内建调用边界**：`Stmt::Print` 的实参是**已求值的 `Val`** 而非 `Expr`。
-//!    边界画在 HIR 里（`rgoc_hir::Stmt`），解释器只负责按 print 家族渲染。
+//!    边界画在 HIR 里（`rgoc_hir_spike::Stmt`），解释器只负责按 print 家族渲染。
 //! 3. **输出流走法**：`print` / `println` 写 **stderr**（实测 go1.27.1，`od -c` 逐字节，
 //!    stdout 长度为 0）。**stdout 必须精确为空** —— 这条断言不是形式主义，
 //!    它挡的是「实现顺手也往 stdout 写了一份」这种错误。
 
-use rgoc_hir::{Diag, DiagBag, Pos, Program, Stmt, Stream, Val};
+use rgoc_hir_spike::{Diag, DiagBag, Pos, Program, Stmt, Stream, Val};
 
 // 本文件在 rgoc-spikes **内部**，故引用同 crate 的模块要用 `crate::`。
 // （写成 `rgoc_spikes::` 只有在 tests/ 与 bin/ 里才成立 —— 三个位置的可见性规则各不相同。）
@@ -92,7 +92,7 @@ pub fn interpret(p: &Program) -> Result<RunOutput, Vec<Diag>> {
                 };
                 // **按 stream 写对应的流**。不写死 stderr：S3 的 fixture 要写 stdout，
                 // 而把「永远写 stderr」和「永远写 stdout」都是把某个 fixture 的需求
-                // 错当成语言规则 —— 参见 `rgoc_hir::Stream` 的文档。
+                // 错当成语言规则 —— 参见 `rgoc_hir_spike::Stream` 的文档。
                 match stream {
                     Stream::Stderr => stderr.push_str(&text),
                     Stream::Stdout => stdout.push_str(&text),

@@ -105,6 +105,8 @@ dependencies = [
  "rgoc-check",
  "rgoc-const",
  "rgoc-harness",
+ "rgoc-hir",
+ "rgoc-interp",
  "rgoc-lex",
  "rgoc-load",
  "rgoc-parse",
@@ -119,6 +121,27 @@ version = "0.0.0"
 [[package]]
 name = "rgoc-hir"
 version = "0.0.0"
+dependencies = [
+ "rgoc-ast",
+ "rgoc-check",
+ "rgoc-const",
+ "rgoc-lex",
+ "rgoc-load",
+ "rgoc-types",
+]
+
+[[package]]
+name = "rgoc-hir-spike"
+version = "0.0.0"
+
+[[package]]
+name = "rgoc-interp"
+version = "0.0.0"
+dependencies = [
+ "rgoc-const",
+ "rgoc-hir",
+ "rgoc-types",
+]
 
 [[package]]
 name = "rgoc-lex"
@@ -148,7 +171,7 @@ dependencies = [
 name = "rgoc-spikes"
 version = "0.0.0"
 dependencies = [
- "rgoc-hir",
+ "rgoc-hir-spike",
 ]
 
 [[package]]

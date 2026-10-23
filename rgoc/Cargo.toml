@@ -31,6 +31,8 @@ members = [
     "crates/rgoc-driver",
     "crates/rgoc-harness",
     "crates/rgoc-hir",
+    "crates/rgoc-hir-spike",
+    "crates/rgoc-interp",
     "crates/rgoc-lex",
     "crates/rgoc-load",
     "crates/rgoc-parse",

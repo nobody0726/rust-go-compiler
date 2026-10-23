@@ -30,29 +30,29 @@ use crate::operand::Operand;
 
 /// 局部作用域栈（每层一个名字表）。
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Env {
+pub struct Env {
     /// 栈底 = 函数层（参数 / 命名结果），往上依次是块。
     scopes: Vec<BTreeMap<String, Operand>>,
 }
 
 impl Env {
     /// 空栈（调用方必须先 [`Env::push`] 一层再声明）。
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self { scopes: Vec::new() }
     }
 
     /// 开一层。
-    pub(crate) fn push(&mut self) {
+    pub fn push(&mut self) {
         self.scopes.push(BTreeMap::new());
     }
 
     /// 关一层（栈空时是 no-op —— 调用方的 push/pop 必须配对，这里只是不炸）。
-    pub(crate) fn pop(&mut self) {
+    pub fn pop(&mut self) {
         self.scopes.pop();
     }
 
     /// 在当前层声明一个名字（`_` 不绑定；同层重复由 M3 报，这里**不覆盖**）。
-    pub(crate) fn declare(&mut self, name: &str, op: Operand) {
+    pub fn declare(&mut self, name: &str, op: Operand) {
         if name == "_" {
             return;
         }
@@ -62,12 +62,12 @@ impl Env {
     }
 
     /// 沿栈查（内层优先）。
-    pub(crate) fn lookup(&self, name: &str) -> Option<&Operand> {
+    pub fn lookup(&self, name: &str) -> Option<&Operand> {
         self.scopes.iter().rev().find_map(|s| s.get(name))
     }
 
     /// **本层**是否已有该名字（短变量声明判「新变量」用；不看外层）。
-    pub(crate) fn has_local(&self, name: &str) -> bool {
+    pub fn has_local(&self, name: &str) -> bool {
         self.scopes.last().is_some_and(|s| s.contains_key(name))
     }
 }

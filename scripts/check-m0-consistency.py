@@ -915,13 +915,24 @@ def main() -> int:
 
     # Phase 3 的两个 crate 必须在磁盘上（登记与产物脱节也要抓）
     check("phase_plan.phase3 的两个 crate 都在磁盘上",
-          (REPO_ROOT / "rgoc/crates/rgoc-hir").is_dir()
+          (REPO_ROOT / "rgoc/crates/rgoc-hir-spike").is_dir()
           and (REPO_ROOT / "rgoc/crates/rgoc-spikes").is_dir(),
-          "rgoc-hir / rgoc-spikes")
-    # SPIKE-ONLY 标注必须在 crate 里（D-M0-11 / D-M0-14：M5 替换时可整块删）
-    hir_src = (REPO_ROOT / "rgoc/crates/rgoc-hir/src/lib.rs").read_text(encoding="utf-8")
-    check("rgoc-hir 标注了 SPIKE-ONLY（D-M0-11）",
+          "rgoc-hir-spike / rgoc-spikes")
+    # SPIKE-ONLY 标注必须在**spike 那个** crate 里（D-M0-11 / D-M0-14）。
+    #
+    # ⚠️ 2026-10-23 改：原先查的是 `rgoc/crates/rgoc-hir`。M5 的 `D-M5-4` 把 spike HIR
+    # 整体改名成 `rgoc-hir-spike`，把 `rgoc-hir` 这个名字让给正式实现 —— 这正是
+    # D-M0-11 写的「M5 替换时可整块删」。所以判据跟着**产物**走：spike 仍须自报家门，
+    # 而正式 HIR **必须不再**带 SPIKE-ONLY（否则「替换完成」就成了空话）。
+    # 两条一起查，强度比原来那一条更高：原来只要求「有个 crate 自称 spike」，
+    # 现在要求「spike 的搬到了 spike 家，正式的不许冒充」。
+    hir_src = (REPO_ROOT / "rgoc/crates/rgoc-hir-spike/src/lib.rs").read_text(encoding="utf-8")
+    check("rgoc-hir-spike 标注了 SPIKE-ONLY（D-M0-11）",
           "SPIKE-ONLY" in hir_src,
+          "rgoc/crates/rgoc-hir-spike/src/lib.rs")
+    formal_src = (REPO_ROOT / "rgoc/crates/rgoc-hir/src/lib.rs").read_text(encoding="utf-8")
+    check("正式 rgoc-hir 不再自称 SPIKE-ONLY（D-M5-4 已替换）",
+          "SPIKE-ONLY" not in formal_src,
           "rgoc/crates/rgoc-hir/src/lib.rs")
     # T-S1-01 修订 R1 必须落在 M0-tests.md 里（否则代码与契约脱节）
     mtests = (REPO_ROOT / "docs/milestones/M0-tests.md").read_text(encoding="utf-8")

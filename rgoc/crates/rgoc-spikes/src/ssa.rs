@@ -32,8 +32,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::interp::RunOutput;
-use rgoc_hir::value::BigInt;
-use rgoc_hir::{BinOp, Const, Expr, Program, Stmt, Stream, Val};
+use rgoc_hir_spike::value::BigInt;
+use rgoc_hir_spike::{BinOp, Const, Expr, Program, Stmt, Stream, Val};
 
 /// 一个 SSA 值。
 ///
@@ -97,7 +97,7 @@ pub struct SsaFunc {
     /// 函数名。
     pub name: String,
     /// 块表。用 `BTreeMap` 而非 `HashMap` —— **顺序必须确定**，
-    /// 否则 E6「重复三次结果一致」会随机失败（同 `rgoc_hir::DiagBag` 的理由）。
+    /// 否则 E6「重复三次结果一致」会随机失败（同 `rgoc_hir_spike::DiagBag` 的理由）。
     pub blocks: BTreeMap<String, Block>,
     /// 入口块名。
     pub entry: String,
@@ -401,7 +401,7 @@ pub fn eval(f: &SsaFunc) -> Result<RunOutput, String> {
         // print：直接拼接
         rendered.concat()
     };
-    // 按 fixture 声明的流写。不写死 stderr —— 理由同 `rgoc_hir::Stream` 的文档。
+    // 按 fixture 声明的流写。不写死 stderr —— 理由同 `rgoc_hir_spike::Stream` 的文档。
     match f.print_stream {
         Stream::Stderr => stderr.push_str(&text),
         Stream::Stdout => stdout.push_str(&text),

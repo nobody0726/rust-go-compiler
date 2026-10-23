@@ -1,0 +1,15 @@
+[package]
+name = "rgoc-interp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "顺序解释器（M5）：显式帧栈 + 显式求值栈 + 值语义。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-const = { path = "../rgoc-const" }
+rgoc-hir = { path = "../rgoc-hir" }
+rgoc-types = { path = "../rgoc-types" }
