@@ -90,6 +90,7 @@
   ③ 重建 **`.superpowers/sdd/M5-plan/progress.md`**（逐任务 44✅/5🟡/1❌ + 8 条 Ruling + 接手须知）；④ README/plan 状态回写、manifest 数字对齐 1608/150、新增 `G-M5-07..10`。
 - **仍然欠**：`G-M5-07`（`C3` 升正式，仍 7 处「待验证」）、`G-M5-08`（`GAP-01` 无 M5 行）、`G-M5-09`（`03-roadmap`/`AGENTS.md` 状态未回写）、`G-M5-10`（**Task 7 的 P0 变异没做** —— `T-EX-57..60` 只有正向证据）。
 - `M5-plan.md` 的 149 个 `- [ ]` **从未维护**，已在头部声明「真实状态看 progress.md / M5-report.md」，别把空框读成没做。
+- ⚠️ **`manifest.measured` 是自报，不是证据**：收口期实跑才发现 `cargo fmt --all --check` 本来是**红的**（`manifest_m5.rs` 从未格式化，8 处 diff），而 manifest 写着「fmt exit 0」。**`cargo test` 全绿不覆盖 fmt**。已修（`f203b61`）并记进 `M5-report.md` §5 第 7 条。收口必须自己跑四条。
 
 ## 文档索引
 - `AGENTS.md`（入口）/ `docs/README.md`（索引）/ `docs/03-roadmap.md`（M0–M12）/ `docs/01-feature-set.md`
