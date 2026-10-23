@@ -87,8 +87,13 @@
 - **门禁**：manifest 自报 `EX-3/5/6/7/9 pass`、`EX-1/2/4/8 partial` ⇒ `status = partial`，`open_gaps = G-M5-01..10`（诚实）
 - **2026-10-23 收口补做（本人）**：① 把 Task 7–52 的 12.4k 行未提交产出切成 **5 个 commit**（`8a2df91` hir+interp / `5e9ac28` driver run / `b01c146` 四腿测试 / `9361dc7` run-oracle / `51496a4` manifest+变异记录）；
   ② 补写 **`docs/contracts/C9-values-and-output.md`**（从实现逐条核对，7 条不变量 + 字节表 + 退出码 + 资源上限 + 三件不承诺）与 **`docs/milestones/M5-report.md`**（交付 B：覆盖矩阵 / 三条分别声明 / 偏离登记 / 缺口 / 接手指南）；
-  ③ 重建 **`.superpowers/sdd/M5-plan/progress.md`**（逐任务 44✅/5🟡/1❌ + 8 条 Ruling + 接手须知）；④ README/plan 状态回写、manifest 数字对齐 1608/150、新增 `G-M5-07..10`。
-- **仍然欠**：`G-M5-07`（`C3` 升正式，仍 7 处「待验证」）、`G-M5-08`（`GAP-01` 无 M5 行）、`G-M5-09`（`03-roadmap`/`AGENTS.md` 状态未回写）、`G-M5-10`（**Task 7 的 P0 变异没做** —— `T-EX-57..60` 只有正向证据）。
+  ③ 重建 **`.superpowers/sdd/M5-plan/progress.md`**（逐任务 51✅/1🟡/0❌ + 8 条 Ruling + 接手须知）；④ README/plan 状态回写、manifest 数字对齐 1608/150、新增 `G-M5-07..10`。
+- **2026-10-23 二次收口（本人）**：`G-M5-07..10` **全部关闭**，记在 manifest 的 `closed_gaps`：
+  `G-M5-10` 补做 **P0 四条变异**（`T-EX-57..60` 各改回原状 → 实证变红 → 复原，4/4；`mutation-m5-notes.md` 新增一节）；
+  `G-M5-07` `C3` **升正式**（§2 四项改成「已定」：`spread`/`Place` 五形态/`Closure.captured`/登记时求值）；
+  `G-M5-08` `GAP-01` 新增 **M5 节**（`PIPE-10/14/15/16/16c/24` + `RT-CMP-01/02/03/04/07` + `RT-MEM/SCH/POLY` 的「不涉及」）；
+  `G-M5-09` `03-roadmap` 与 `AGENTS.md` 状态回写（crate 7→10、测试 1282→1608、`rgoc-hir-spike`）。
+  ⇒ **Task 1–52 = 51 ✅ / 1 🟡（Task 41 泛型边界，内容缺口）/ 0 ❌**；`open_gaps` 只剩 `G-M5-01..06`。
 - `M5-plan.md` 的 149 个 `- [ ]` **从未维护**，已在头部声明「真实状态看 progress.md / M5-report.md」，别把空框读成没做。
 - ⚠️ **`manifest.measured` 是自报，不是证据**：收口期实跑才发现 `cargo fmt --all --check` 本来是**红的**（`manifest_m5.rs` 从未格式化，8 处 diff），而 manifest 写着「fmt exit 0」。**`cargo test` 全绿不覆盖 fmt**。已修（`f203b61`）并记进 `M5-report.md` §5 第 7 条。收口必须自己跑四条。
 
