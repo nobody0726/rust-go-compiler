@@ -10,3 +10,5 @@ description = "SSA 中间表示（M6）：IR / 构建 / CFG / 支配 / verifier 
 workspace = true
 
 [dependencies]
+rgoc-hir = { path = "../rgoc-hir" }
+rgoc-types = { path = "../rgoc-types" }

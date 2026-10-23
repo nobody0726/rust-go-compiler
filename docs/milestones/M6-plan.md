@@ -171,11 +171,11 @@
 - Test: `rgoc/crates/rgoc-ssa/tests/ir_shape.rs`
 
 **Interfaces:**
-- Produces: 完整 `Instr`（12 变体）/ `Term`（5 变体）/ `Root`（3）/ `Effect` / `CalleeRef`（4）/ `Block` / `SsaFunc`（`value_types`），字段与 `M6-design.md` §3.2 逐字一致
+- Produces: 完整 `Instr`（**14** 变体）/ `Term`（5）/ `Root`（3）/ `Effect` / `CalleeRef`（4）/ `Block` / `SsaFunc`（`value_types`），字段与 `M6-design.md` §3.2 逐字一致
 - Consumes: `rgoc_hir::{FuncId, GlobalId, SlotId}`、`rgoc_types::TypeId`、`rgoc_const::Const`
 
 - [ ] 按设计抄形状（字段名不许改：`dsts` / `params` / `slot_root` / `value_types` / `writes_all`）
-- [ ] `T-SSA-01`：一张**变体穷尽表**（`Instr` 12 / `Term` 5 / `Root` 3 / `CalleeRef` 4），用 `match` + `_ => unreachable!()` 之外的方式断言 —— 新增变体必须让测试红（例如 `const N_INSTR: usize = 12` 与实际计数比对）
+- [ ] `T-SSA-01`：一张**变体穷尽表**（`Instr` 14 / `Term` 5 / `Root` 3 / `CalleeRef` 4），用 `match` + `_ => unreachable!()` 之外的方式断言 —— 新增变体必须让测试红（例如 `const N_INSTR: usize = 12` 与实际计数比对）
 - [ ] Commit：`feat(ssa): IR 类型定稿（Task 7）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test ir_shape`；改一个变体名后测试必红（手工验一次并记台账）

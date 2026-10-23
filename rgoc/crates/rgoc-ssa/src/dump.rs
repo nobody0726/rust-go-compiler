@@ -36,7 +36,9 @@ pub fn dump_module(m: &Module) -> String {
     for f in &m.funcs {
         out.push_str(&format!(
             "# func {} blocks={} values={}\n",
-            f.name, f.blocks, f.values
+            f.name,
+            f.block_count(),
+            f.value_count()
         ));
     }
     out
