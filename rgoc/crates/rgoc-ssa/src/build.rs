@@ -87,6 +87,25 @@ fn build_func(
     rooted.extend(unsafe_slots.iter().copied());
     rooted.remove(&BLANK_SLOT);
 
+    // 含 `goto` ⇒ **一律不提升**，所有槽进内存。
+    //
+    // 理由（`R-25-1`）：`goto` 是**非结构化**跳转，目标块的参数在「跳到它的
+    // 那条边」出现时往往还没定（前向 goto 更是一个块都还没有）。如果把这个槽
+    // 提升成 SSA 值，回边就必须把新值当块参数送进去 —— 而参数表那时已经建好，
+    // 加不进去。于是「循环里更新的值在回边处丢失」，且类型/支配全对、verifier 全绿。
+    //
+    // 全走内存之后，值住在帧里，任何跳转都不需要携带值语义；mem 令牌仍然按
+    // 标签块的参数传递（`ssa_exec` 是顺序执行，帧本身是共享的，所以 mem 只影响
+    // 优化面，不影响运行结果）。
+    //
+    // 代价：含 `goto` 的函数纯值化全丢（语料里这类函数很少，`ken/label.go` 是典型）。
+    let goto_mode = has_goto(&f.body);
+    if goto_mode {
+        for i in 0..f.slot_types.len() {
+            rooted.insert(SlotId(i as u32));
+        }
+    }
+
     let ng = program.globals.len();
     // 根表顺序固定：先全局（按 GlobalId），再槽（按 SlotId 升序）—— dump 的 r<k> 靠它稳定
     let mut roots: Vec<Root> = (0..ng).map(|i| Root::Global(GlobalId(i as u32))).collect();
@@ -99,10 +118,14 @@ fn build_func(
     // 提升 = 全部槽 − 有根的 − 读前可能未赋值的。
     // 「全部槽」按 `slot_types` 的长度取：不这么写就得另找一张槽清单，
     // 而 `slot_types` 本来就是「槽 → 类型」的全集（`Func::nslots` 与它同长）。
-    let promoted: BTreeSet<SlotId> = (0..f.slot_types.len())
-        .map(|i| SlotId(i as u32))
-        .filter(|s| !rooted.contains(s) && !unsafe_slots.contains(s))
-        .collect();
+    let promoted: BTreeSet<SlotId> = if goto_mode {
+        BTreeSet::new()
+    } else {
+        (0..f.slot_types.len())
+            .map(|i| SlotId(i as u32))
+            .filter(|s| !rooted.contains(s) && !unsafe_slots.contains(s))
+            .collect()
+    };
 
     let mut fb = Fb {
         tt,
@@ -120,6 +143,9 @@ fn build_func(
         terminated: false,
         bool_ty: None,
         fallthrough: None,
+        labels: BTreeMap::new(),
+        regions: Vec::new(),
+        goto_mode,
     };
     fb.entry_params();
 
@@ -144,6 +170,30 @@ use rgoc_hir::{
 };
 
 use crate::ir::{Root, RootId};
+
+/// 函数体里有没有 `goto`（含嵌在任何语句里的）。
+///
+/// 只看 `BranchKind::Goto`：`break`/`continue` **不**触发「不提升」模式 ——
+/// 它们的目标（循环的 `exit` / `latch`）在跳转发生时就已有确定的参数布局，
+/// 可以正常携带值（`Task 25`）。
+fn has_goto(b: &HirBlock) -> bool {
+    b.stmts.iter().any(stmt_has_goto)
+}
+
+fn stmt_has_goto(s: &Stmt) -> bool {
+    match s {
+        Stmt::Branch { kind, .. } => matches!(kind, BranchKind::Goto),
+        Stmt::Assign { .. } | Stmt::ShortDecl { .. } | Stmt::Expr(_) | Stmt::Return(_) => false,
+        Stmt::If { then, els, .. } => has_goto(then) || els.as_deref().is_some_and(stmt_has_goto),
+        Stmt::For { body, .. } => has_goto(body),
+        Stmt::Range { body, .. } => has_goto(body),
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| has_goto(&c.body)),
+        Stmt::TypeSwitch { cases, .. } => cases.iter().any(|c| has_goto(&c.body)),
+        Stmt::Labeled { stmt, .. } => stmt_has_goto(stmt),
+        Stmt::Block(b) => has_goto(b),
+        Stmt::Defer { .. } | Stmt::Empty => false,
+    }
+}
 
 /// 扫描结果：两类「不能提升成纯值」的槽。
 ///
@@ -828,6 +878,54 @@ impl Def<'_> {
 
 // ── 函数体构建器（Task 20 起）────────────────────────────────────────
 
+/// 一个块入口处的状态：`(槽 → 当前值, 根 → 当前 mem 令牌)`。
+///
+/// 别名是必须的 —— 不写它，`Option<(BlockId, (BTreeMap<..>, BTreeMap<..>))>`
+/// 这种签名会被 `clippy::type_complexity` 拦（而且读起来也确实累）。
+type BlockState = (BTreeMap<SlotId, ValueId>, BTreeMap<RootId, ValueId>);
+
+/// 一个跳转目标块的参数布局：**槽在前、mem 在后**（`Task 25`）。
+#[derive(Clone, Default)]
+struct ParamLayout {
+    slots: Vec<SlotId>,
+    roots: Vec<RootId>,
+}
+
+/// `goto` 的标签位置。
+struct LabelSite {
+    /// 目标块（`goto` 先出现时懒建）。
+    block: Option<BlockId>,
+    /// 在块参数定下来之前跳进来的那些边。
+    incoming: Vec<BranchOut>,
+    /// 块参数定下来之后填上；有它就意味着「可以立即跳」。
+    layout: Option<ParamLayout>,
+}
+
+/// 循环上下文（`break` / `continue` 的目标）。
+struct LoopCtx {
+    label: Option<String>,
+    /// `header` / `latch` / `exit` 共用的参数布局。
+    layout: ParamLayout,
+    /// `exit`（`for{}` 没 `break` 时不建，所以是 `None`）。
+    break_target: Option<BlockId>,
+    /// `for{}` 且 `break` 先出现时，先记着，收尾再建 `exit`。
+    break_pending: Vec<BranchOut>,
+    /// `continue` 总是后补（目标可能是 `latch`，那时还没建）。
+    continues: Vec<BranchOut>,
+}
+
+/// `switch` 上下文（`break` 的目标是它自己的合流块）。
+struct SwitchCtx {
+    label: Option<String>,
+    breaks: Vec<BranchOut>,
+}
+
+/// 可被 `break` / `continue` 指到的区域。
+enum Region {
+    Loop(LoopCtx),
+    Switch(SwitchCtx),
+}
+
 /// 一条「落到汇合点」的分支的状态快照。
 struct BranchOut {
     /// 分支的尾块（还没有终止符）。
@@ -867,6 +965,12 @@ struct Fb<'a> {
     bool_ty: Option<TypeId>,
     /// 当前 `case` 体的 `fallthrough` 目标（`Task 24`）；不在 case 体里时是 `None`。
     fallthrough: Option<BlockId>,
+    /// `goto` 的标签位置（`Task 25`）。
+    labels: BTreeMap<String, LabelSite>,
+    /// `break` / `continue` 的区域栈（最内层在末尾）。
+    regions: Vec<Region>,
+    /// 本函数含 `goto` ⇒ **不提升**（见 `build_func` 的说明），标签块按「全部根」定参数。
+    goto_mode: bool,
 }
 
 impl Fb<'_> {
@@ -1248,6 +1352,288 @@ impl Fb<'_> {
         BlockId((self.blocks.len() - 1) as u32)
     }
 
+    /// `if` / `else` 与汇合块的块参数（`Task 22`）。
+    fn stmt_if(&mut self, init: Option<&Stmt>, cond: &Expr, then: &HirBlock, els: Option<&Stmt>) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+        let c = self.expr(cond);
+        let then_b = self.new_block();
+        let else_b = self.new_block();
+        self.set_term(Term::If {
+            cond: c,
+            then_: (then_b, Vec::new()),
+            else_: (else_b, Vec::new()),
+        });
+
+        let base = (self.val.clone(), self.mem.clone());
+        let mut outs = Vec::new();
+
+        // ── then 支
+        self.cur = then_b;
+        self.terminated = false;
+        self.val = base.0.clone();
+        self.mem = base.1.clone();
+        self.stmts(&then.stmts);
+        if !self.terminated {
+            outs.push(BranchOut {
+                block: self.cur,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
+
+        // ── else 支
+        self.cur = else_b;
+        self.terminated = false;
+        self.val = base.0;
+        self.mem = base.1;
+        if let Some(e) = els {
+            self.stmt(e);
+        }
+        if !self.terminated {
+            outs.push(BranchOut {
+                block: self.cur,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
+
+        self.join_branches(outs);
+    }
+
+    /// 三句式 `for`（`for{}` / `for cond{}` / `for init;cond;post{}`）与回边（`Task 23`）。
+    ///
+    /// # 块布局
+    ///
+    /// ```text
+    ///   preheader:  ... init ...            （`init` 只跑一次）
+    ///               goto header (carried…)
+    ///   header:     params = [carried…]     ← 回边的目标，也是「不变式」
+    ///               if cond -> body | exit
+    ///   body:       ...
+    ///               goto latch | header
+    ///   latch:      ... post ...            （只有三句式才有；没有 `continue` 且体必终止时不建）
+    ///               goto header (carried…)
+    ///   exit:       ...                     （`for{}` 且没有 `break` 时不建）
+    /// ```
+    ///
+    /// # header / latch / exit 共用**一套参数布局**
+    ///
+    /// 三者都是「跳转目标」，而跳转要送值。共用同一份 `ParamLayout`（槽在前、mem 在后）
+    /// 让 `break` / `continue` / 回边都走同一个 `args_for`，不必各自记一套顺序。
+    /// 代价是 `exit` 多几个参数（只有一个前驱时也算），换来的是「任何跳转都能算实参」。
+    ///
+    /// # 为什么 header 的参数必须在建 body **之前**定
+    ///
+    /// body 里读 `i` 必须读 header 的参数；如果等 body 建完再补参数，body 里
+    /// 已经写死了循环前的 `ValueId`，只能回头重写一遍 —— 那是最容易漏的情形
+    /// （漏一处就变成「循环里读的是初值」，而且大部分 fixture 仍绿）。
+    /// 所以先 [`scan_loop_effects`] 静态算出会被改的东西。
+    ///
+    /// # 传哪些槽
+    ///
+    /// 「循环里被赋值 **且** 进入循环时已有当前值」的槽。第二个条件很重要：
+    /// 循环体里 `x := 1` 声明的槽每轮都是新的，不能当循环携带值。
+    ///
+    /// # 传哪些 mem
+    ///
+    /// 循环里**可能被写**的根，各传一个 mem 令牌。这是 mem 的「phi」：
+    /// 进循环时是循环前的令牌，回边是上一轮的令牌。不传的后果不是算错，
+    /// 而是「循环后的写」与「循环里的写」在 mem 链上失去先后关系 ——
+    /// 那是 `V6` 想保证的东西，等于给后续 pass 埋了一个静默的无序。
+    ///
+    /// # `break` / `continue` 的目标（`Task 25`）
+    ///
+    /// * `break` → `exit`（`for{}` 的 exit 是懒建的：没有 `break` 就一个死块都不建）
+    /// * `continue` → `latch`（有 post 时）或 `header`（没有 post 时）。
+    ///   `latch` 也是懒建的（体必终止且没有 `continue` 时，post 根本跑不到）。
+    ///
+    /// # `loopvars`（Go 1.22 per-iteration）不需要特判
+    ///
+    /// 那条语义只对**闭包捕获**可见（每轮换新 `Cell`），而 M6 在构建期就拒绝闭包
+    /// （`SSA-UNSUPPORTED-CLOSURE`）⇒ 这里没有可观察差异。如实记进报告，不假装实现了。
+    fn stmt_for(
+        &mut self,
+        init: Option<&Stmt>,
+        cond: Option<&Expr>,
+        post: Option<&Stmt>,
+        body: &HirBlock,
+        label: Option<&str>,
+    ) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+
+        // ── ① 静态算出「循环里会改什么」，据此定 header 的参数
+        let eff = scan_loop_effects(self.tt, &self.slot_root, body, post);
+        let carried: Vec<SlotId> = eff
+            .slots
+            .iter()
+            .copied()
+            .filter(|s| self.val.contains_key(s))
+            .collect();
+        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
+        if eff.calls {
+            for i in 0..self.globals.len() {
+                wroots.insert(RootId(i as u32));
+            }
+        }
+        if eff.heap || eff.calls {
+            let h = self.heap_root();
+            wroots.insert(h);
+        }
+        let layout = ParamLayout {
+            slots: carried.clone(),
+            roots: wroots.into_iter().collect(),
+        };
+
+        let base = (self.val.clone(), self.mem.clone());
+        let header = self.new_block();
+        let hstate = self.layout_params(header, &layout);
+        let pre_args = self.args_for(self.cur, &layout, &base.0, &base.1);
+        self.set_term(Term::Goto {
+            to: header,
+            args: pre_args,
+        });
+
+        // ── ② header 的入口状态 = 循环前的状态，但携带项换成 header 自己的参数
+        self.cur = header;
+        self.terminated = false;
+        let hs = Self::state_with(&base, (hstate.0.clone(), hstate.1.clone()));
+        self.val = hs.0.clone();
+        self.mem = hs.1.clone();
+
+        // ── ③ 出口块：有条件时必有（cond 假直接出去）；`for{}` 时靠 break 才需要
+        let body_b = self.new_block();
+        let mut exit_pre: Option<(BlockId, BlockState)> = None;
+        if cond.is_some() {
+            let e = self.new_block();
+            let st = self.layout_params(e, &layout);
+            exit_pre = Some((e, st));
+        }
+
+        // ── ④ 条件（在 header 里求值）
+        match cond {
+            Some(c) => {
+                let cv = self.expr(c);
+                let e = exit_pre.as_ref().expect("有 cond 就有 exit").0;
+                let pass = layout
+                    .slots
+                    .iter()
+                    .map(|s| hstate.0[s])
+                    .chain(layout.roots.iter().map(|r| hstate.1[r]))
+                    .collect();
+                self.set_term(Term::If {
+                    cond: cv,
+                    then_: (body_b, Vec::new()),
+                    else_: (e, pass),
+                });
+            }
+            None => {
+                self.set_term(Term::Goto {
+                    to: body_b,
+                    args: Vec::new(),
+                });
+            }
+        }
+
+        // ── ⑤ 循环体（把 region 压栈，`break`/`continue` 才知道目标）
+        let idx = self.regions.len();
+        self.regions.push(Region::Loop(LoopCtx {
+            label: label.map(ToString::to_string),
+            layout: layout.clone(),
+            break_target: exit_pre.as_ref().map(|(b, _)| *b),
+            break_pending: Vec::new(),
+            continues: Vec::new(),
+        }));
+        let state = (self.val.clone(), self.mem.clone());
+        self.cur = body_b;
+        self.terminated = false;
+        self.val = state.0;
+        self.mem = state.1;
+        self.stmts(&body.stmts);
+        let body_falls = !self.terminated;
+        let Region::Loop(ctx) = self.regions.remove(idx) else {
+            unreachable!("刚压进去的是 Loop")
+        };
+
+        // ── ⑥ latch（有 post 时）：体落空或有 `continue` 才需要
+        let need_latch = post.is_some() && (body_falls || !ctx.continues.is_empty());
+        let mut latch: Option<(BlockId, BlockState)> = None;
+        let cont_target = if need_latch {
+            let l = self.new_block();
+            let st = self.layout_params(l, &layout);
+            latch = Some((l, st));
+            l
+        } else {
+            header
+        };
+        // 补 `continue` 的实参（它们在建 body 时还不知道目标是 latch 还是 header）
+        for c in &ctx.continues {
+            let args = self.args_for(c.block, &layout, &c.val, &c.mem);
+            self.blocks[c.block.index()].term = Term::Goto {
+                to: cont_target,
+                args,
+            };
+        }
+        if body_falls {
+            let args = self.args_for(self.cur, &layout, &self.val.clone(), &self.mem.clone());
+            self.set_term(Term::Goto {
+                to: cont_target,
+                args,
+            });
+        }
+
+        // ── ⑦ post（在 latch 里）
+        if let Some((l, st)) = latch {
+            self.cur = l;
+            self.terminated = false;
+            let ls = Self::state_with(&base, st);
+            self.val = ls.0;
+            self.mem = ls.1;
+            if let Some(p) = post {
+                self.stmt(p);
+            }
+            if !self.terminated {
+                let args = self.args_for(self.cur, &layout, &self.val.clone(), &self.mem.clone());
+                self.set_term(Term::Goto { to: header, args });
+            }
+        }
+
+        // ── ⑧ 出口：`for{}` 的 exit 到这一步才知道要不要建
+        let exit_final = match exit_pre {
+            Some((b, st)) => Some((b, st)),
+            None => {
+                if ctx.break_pending.is_empty() {
+                    None
+                } else {
+                    let b = self.new_block();
+                    let st = self.layout_params(b, &layout);
+                    Some((b, st))
+                }
+            }
+        };
+        if !ctx.break_pending.is_empty() {
+            let b = exit_final.as_ref().expect("有 break 就有 exit").0;
+            for out in &ctx.break_pending {
+                let args = self.args_for(out.block, &layout, &out.val, &out.mem);
+                self.blocks[out.block.index()].term = Term::Goto { to: b, args };
+            }
+        }
+
+        match exit_final {
+            Some((b, st)) => {
+                self.cur = b;
+                self.terminated = false;
+                let es = Self::state_with(&base, st);
+                self.val = es.0;
+                self.mem = es.1;
+            }
+            None => self.terminated = true,
+        }
+    }
+
     /// 表达式 `switch`（`Task 24`）。
     ///
     /// # 树形，不是链
@@ -1271,7 +1657,18 @@ impl Fb<'_> {
     ///
     /// 它的语义是「直接进入下一个 case 的体」（**不**重测下一个 case 的表达式），
     /// 所以目标是 `bodies[i+1]`，而不是下一个测试块。
-    fn stmt_switch(&mut self, init: Option<&Stmt>, tag: Option<&Expr>, cases: &[Case]) {
+    ///
+    /// # `break` 是「跳进合流点的一条分支」
+    ///
+    /// case 体里的 `break` 与「体落空」在结构上是同一件事：都是一条通往 `join` 的边。
+    /// 所以 `break` 只记一条 `BranchOut`，由 `join_branches` 统一补实参与块参数。
+    fn stmt_switch(
+        &mut self,
+        init: Option<&Stmt>,
+        tag: Option<&Expr>,
+        cases: &[Case],
+        label: Option<&str>,
+    ) {
         if let Some(i) = init {
             self.stmt(i);
         }
@@ -1289,6 +1686,11 @@ impl Fb<'_> {
         };
 
         // ── 各 case 体：**都从入口状态起建**（case 之间没有落空关系）
+        let idx = self.regions.len();
+        self.regions.push(Region::Switch(SwitchCtx {
+            label: label.map(ToString::to_string),
+            breaks: Vec::new(),
+        }));
         let mut outs: Vec<BranchOut> = Vec::new();
         for (i, c) in cases.iter().enumerate() {
             self.cur = bodies[i];
@@ -1317,6 +1719,10 @@ impl Fb<'_> {
                 mem: self.mem.clone(),
             });
         }
+        let Region::Switch(ctx) = self.regions.remove(idx) else {
+            unreachable!("刚压进去的是 Switch")
+        };
+        outs.extend(ctx.breaks);
 
         // ── 合流点
         let join = self.join_branches(outs);
@@ -1409,276 +1815,228 @@ impl Fb<'_> {
         }
     }
 
-    /// 三句式 `for`（`for{}` / `for cond{}` / `for init;cond;post{}`）与回边（`Task 23`）。
+    /// 带标签的普通语句（`L: x = 1`）—— `goto` 的唯一合法目标（`Task 25`）。
     ///
-    /// # 块布局
+    /// `M5` 的 lowering 已经把 `L: for/switch` 的标签转交给循环/`switch` 自己的
+    /// `label` 字段，所以这里只会收到**非循环**的标签。
     ///
-    /// ```text
-    ///   preheader:  ... init ...            （`init` 只跑一次）
-    ///               goto header (carried…)
-    ///   header:     params = [carried…]     ← 回边的目标，也是「不变式」
-    ///               if cond -> body | exit
-    ///   body:       ...
-    ///               goto latch | header
-    ///   latch:      ... post ...            （只有三句式才有）
-    ///               goto header (carried…)
-    ///   exit:       ...                     （`for{}` 没有）
-    /// ```
+    /// # 前向 `goto` 靠「先占块、后补参数」
     ///
-    /// # 为什么 header 的参数必须在建 body **之前**定
+    /// `goto L` 出现在 `L:` 之前时，目标块的参数还不知道有哪些 —— 它取决于
+    /// 有几条边进来、各自带什么状态。所以先建一个空块占位、记下跳转时的状态，
+    /// 等真正走到 `L:` 时再用 `join_into` 一次性定参数并回填所有边。
     ///
-    /// body 里读 `i` 必须读 header 的参数；如果等 body 建完再补参数，body 里
-    /// 已经写死了循环前的 `ValueId`，只能回头重写一遍 —— 那是最容易漏的情形
-    /// （漏一处就变成「循环里读的是初值」，而且大部分 fixture 仍绿）。
-    /// 所以先 [`scan_loop_effects`] 静态算出会被改的东西。
-    ///
-    /// # 传哪些槽
-    ///
-    /// 「循环里被赋值 **且** 进入循环时已有当前值」的槽。第二个条件很重要：
-    /// 循环体里 `x := 1` 声明的槽每轮都是新的，不能当循环携带值。
-    ///
-    /// # 传哪些 mem
-    ///
-    /// 循环里**可能被写**的根，各传一个 mem 令牌。这是 mem 的「phi」：
-    /// 进循环时是循环前的令牌，回边是上一轮的令牌。不传的后果不是算错，
-    /// 而是「循环后的写」与「循环里的写」在 mem 链上失去先后关系 ——
-    /// 那是 `V6` 想保证的东西，等于给后续 pass 埋了一个静默的无序。
-    ///
-    /// # `loopvars`（Go 1.22 per-iteration）不需要特判
-    ///
-    /// 那条语义只对**闭包捕获**可见（每轮换新 `Cell`），而 M6 在构建期就拒绝闭包
-    /// （`SSA-UNSUPPORTED-CLOSURE`）⇒ 这里没有可观察差异。如实记进报告，不假装实现了。
-    fn stmt_for(
-        &mut self,
-        init: Option<&Stmt>,
-        cond: Option<&Expr>,
-        post: Option<&Stmt>,
-        body: &HirBlock,
-    ) {
-        if let Some(i) = init {
-            self.stmt(i);
-        }
-
-        // ── ① 静态算出「循环里会改什么」，据此定 header 的参数
-        let eff = scan_loop_effects(self.tt, &self.slot_root, body, post);
-        let carried: Vec<SlotId> = eff
-            .slots
-            .iter()
-            .copied()
-            .filter(|s| self.val.contains_key(s))
-            .collect();
-        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
-        if eff.calls {
-            for i in 0..self.globals.len() {
-                wroots.insert(RootId(i as u32));
+    /// 反向 `goto`（标签在后面已经建好）直接按布局送实参，不走这条路径。
+    fn stmt_labeled(&mut self, name: &str, inner: &Stmt) {
+        let b = match self.labels.get(name).and_then(|x| x.block) {
+            Some(b) => b,
+            None => {
+                let nb = self.new_block();
+                self.labels.insert(
+                    name.to_string(),
+                    LabelSite {
+                        block: Some(nb),
+                        incoming: Vec::new(),
+                        layout: None,
+                    },
+                );
+                nb
             }
-        }
-        if eff.heap || eff.calls {
-            let h = self.heap_root();
-            wroots.insert(h);
-        }
-        wroots.retain(|r| r.index() < self.roots.len() || *r == self.heap_root());
-
-        let header = self.new_block();
-        let mut params: Vec<ValueId> = Vec::new();
-        let mut slot_param: BTreeMap<SlotId, ValueId> = BTreeMap::new();
-        for s in &carried {
-            let t = self.slot_typ(*s);
-            let p = self.new_value(t);
-            params.push(p);
-            slot_param.insert(*s, p);
-        }
-        let mut root_param: BTreeMap<RootId, ValueId> = BTreeMap::new();
-        for r in &wroots {
-            let m = self.mem_of(*r); // 在 preheader 里取（没有就建种子）
-            let t = self.ptr_ty_of(*r);
-            let p = self.new_value(t);
-            params.push(p);
-            root_param.insert(*r, p);
-            let _ = m;
-        }
-        // 实参：槽取当前值、根取当前 mem 令牌（顺序与 params 一致）
-        let mut args: Vec<ValueId> = Vec::new();
-        for s in &carried {
-            let v = self.val[s];
-            args.push(v);
-        }
-        for r in &wroots {
-            let m = self.mem_of(*r);
-            args.push(m);
-        }
-        self.blocks[header.index()].params = params;
-        self.set_term(Term::Goto { to: header, args });
-
-        // ── ② header 的入口状态 = 循环前的状态，但携带项换成 header 自己的参数
-        let mut hval = self.val.clone();
-        for (s, p) in &slot_param {
-            hval.insert(*s, *p);
-        }
-        let mut hmem = self.mem.clone();
-        for (r, p) in &root_param {
-            hmem.insert(*r, *p);
-        }
-        self.cur = header;
-        self.terminated = false;
-        self.val = hval.clone();
-        self.mem = hmem.clone();
-
-        // ── ③ 条件（在 header 里求值）与两条出边
-        let body_b = self.new_block();
-        let exit_b = if cond.is_some() {
-            Some(self.new_block())
-        } else {
-            None
         };
-        match cond {
-            Some(c) => {
-                let cv = self.expr(c);
-                self.set_term(Term::If {
-                    cond: cv,
-                    then_: (body_b, Vec::new()),
-                    else_: (exit_b.expect("有 cond 就有 exit"), Vec::new()),
-                });
-            }
-            None => {
-                self.set_term(Term::Goto {
-                    to: body_b,
-                    args: Vec::new(),
-                });
-            }
-        }
-
-        // ── ④ 循环体：从 header 状态起建（含 cond 求值产生的值）
-        let state = (self.val.clone(), self.mem.clone());
-        self.cur = body_b;
-        self.terminated = false;
-        self.val = state.0;
-        self.mem = state.1;
-        self.stmts(&body.stmts);
-
-        // ── ⑤ 落空 ⇒ 走 post（若有）再回边
+        let mut outs: Vec<BranchOut> = self
+            .labels
+            .get_mut(name)
+            .map(|x| std::mem::take(&mut x.incoming))
+            .unwrap_or_default();
         if !self.terminated {
-            let tail = self.cur;
-            if let Some(p) = post {
-                let latch = self.new_block();
-                self.blocks[tail.index()].term = Term::Goto {
-                    to: latch,
-                    args: Vec::new(),
-                };
-                self.cur = latch;
-                self.terminated = false;
-                self.stmt(p);
-            }
-            if !self.terminated {
-                let tail = self.cur;
-                let mut back: Vec<ValueId> = Vec::new();
-                for s in &carried {
-                    // 循环体里该槽可能被「只在一条分支里赋值」—— 那时映射里没有它，
-                    // 取 header 参数（等于「本轮没改」），保守且正确。
-                    back.push(self.val.get(s).copied().unwrap_or(slot_param[s]));
-                }
-                for r in &wroots {
-                    back.push(self.mem.get(r).copied().unwrap_or(root_param[r]));
-                }
-                self.blocks[tail.index()].term = Term::Goto {
-                    to: header,
-                    args: back,
-                };
-            }
+            outs.push(BranchOut {
+                block: self.cur,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
         }
-
-        // ── ⑥ 循环之后
-        match exit_b {
-            Some(e) => {
-                self.cur = e;
-                self.terminated = false;
-                // 出口看到的是 header 的参数（phi）—— 这正是回边与初值合并的结果
-                self.val = hval;
-                self.mem = hmem;
+        if outs.is_empty() {
+            // 既不可达、也没人跳进来 ⇒ 整段都是死代码。**不建块**（死块会被 `V8` 拒）。
+            // 已知边界：此后若有 `goto` 指向它，会报「标签不可达」（语料里没有这种写法）。
+            self.terminated = true;
+            return;
+        }
+        let (layout, val, mem) = if self.goto_mode {
+            // 固定布局：**全部根**、没有槽（goto 模式下没有槽被提升）。
+            // 反向 `goto` 与这里的入边都用同一份布局，谁都不会漏送。
+            let layout = ParamLayout {
+                slots: Vec::new(),
+                roots: (0..self.roots.len()).map(|i| RootId(i as u32)).collect(),
+            };
+            let (v, m) = self.layout_params(b, &layout);
+            for o in &outs {
+                let args = self.args_for(o.block, &layout, &o.val, &o.mem);
+                self.blocks[o.block.index()].term = Term::Goto { to: b, args };
             }
-            None => {
-                // `for{}` 没有出口（`break` 由 Task 25 的 labeled 跳转处理）
+            (layout, v, m)
+        } else {
+            self.join_into(b, outs)
+        };
+        if let Some(x) = self.labels.get_mut(name) {
+            x.layout = Some(layout);
+        }
+        self.cur = b;
+        self.terminated = false;
+        self.val = val;
+        self.mem = mem;
+        self.stmt(inner);
+    }
+
+    /// `break [L]`。
+    fn do_break(&mut self, label: Option<&str>) {
+        let Some(idx) = self.find_region(label, false) else {
+            todo!("M6/Task 25：`break` 没有可跳的目标（标签 {label:?}）")
+        };
+        let target = match &self.regions[idx] {
+            Region::Loop(l) => l.break_target,
+            Region::Switch(_) => None,
+        };
+        match &self.regions[idx] {
+            Region::Switch(_) => {
+                let out = BranchOut {
+                    block: self.cur,
+                    val: self.val.clone(),
+                    mem: self.mem.clone(),
+                };
+                if let Region::Switch(s) = &mut self.regions[idx] {
+                    s.breaks.push(out);
+                }
                 self.terminated = true;
             }
+            Region::Loop(l) => match target {
+                Some(b) => {
+                    let layout = l.layout.clone();
+                    let args =
+                        self.args_for(self.cur, &layout, &self.val.clone(), &self.mem.clone());
+                    self.set_term(Term::Goto { to: b, args });
+                }
+                None => {
+                    let out = BranchOut {
+                        block: self.cur,
+                        val: self.val.clone(),
+                        mem: self.mem.clone(),
+                    };
+                    if let Region::Loop(l) = &mut self.regions[idx] {
+                        l.break_pending.push(out);
+                    }
+                    self.terminated = true;
+                }
+            },
         }
     }
 
-    /// `if` / `else` 与汇合块的块参数（`Task 22`）。
-    ///
-    /// # 并行交接为什么不靠「并行拷贝」
-    ///
-    /// 块参数的**实参是 SSA 值**（`Term::Goto { args }` 里就是 `ValueId`），
-    /// 落地时一次性交给目标块的参数 —— 边上的 `args` 没有先后，所以
-    /// `a, b = b, a` 交换天然正确（两个 arg 分别是交换前的两个值）。
-    /// 真正的「并行赋值」风险在**求值器**（`ssa_exec` 必须一次性写参数）
-    /// 与 **copy 传播 pass**（不许把块的参数替换成实参），不在这里。
-    ///
-    /// # 什么时候不需要块参数
-    ///
-    /// 两侧的当前值**相同**（同一个 `ValueId`）就不建参数 —— 多建一个参数
-    /// 会让 dump 里多出一串无意义的 `v_k = ...`，也白白拉长活跃区间。
-    ///
-    /// # 一条边终止（`return` / `panic`）
-    ///
-    /// 汇合块只剩一条前驱，这时**不需要参数**（没有「两个来源」要合并），
-    /// 直接把落空那一侧的当前值映射接续下去。两侧都终止 ⇒ 汇合块根本不存在
-    /// （`builder` 不产出死块，`V8` 会拒）。
-    fn stmt_if(
-        &mut self,
-        init: Option<&Stmt>,
-        cond: &Expr,
-        then: &rgoc_hir::Block,
-        els: Option<&Stmt>,
-    ) {
-        if let Some(i) = init {
-            self.stmt(i);
+    /// `continue [L]`。目标（`latch` 还是 `header`）要到循环收尾才知道，所以**总是**记下来后补。
+    fn do_continue(&mut self, label: Option<&str>) {
+        let Some(idx) = self.find_region(label, true) else {
+            todo!("M6/Task 25：`continue` 没有可跳的循环（标签 {label:?}）")
+        };
+        let out = BranchOut {
+            block: self.cur,
+            val: self.val.clone(),
+            mem: self.mem.clone(),
+        };
+        if let Region::Loop(l) = &mut self.regions[idx] {
+            l.continues.push(out);
         }
-        let c = self.expr(cond);
-        let then_b = self.new_block();
-        let else_b = self.new_block();
-        self.set_term(Term::If {
-            cond: c,
-            then_: (then_b, Vec::new()),
-            else_: (else_b, Vec::new()),
+        self.terminated = true;
+    }
+
+    /// `goto L`。
+    fn do_goto(&mut self, name: &str) {
+        // 标签可能还没出现（前向 `goto`）：先给它占个位置。
+        if !self.labels.contains_key(name) {
+            self.labels.insert(
+                name.to_string(),
+                LabelSite {
+                    block: None,
+                    incoming: Vec::new(),
+                    layout: None,
+                },
+            );
+        }
+        let layout = self.labels.get(name).and_then(|x| x.layout.clone());
+        if let Some(layout) = layout {
+            // 反向 goto：目标已建好，直接按布局送实参（含自环）
+            let b = self
+                .labels
+                .get(name)
+                .and_then(|x| x.block)
+                .expect("有 layout 就一定有块");
+            let args = self.args_for(self.cur, &layout, &self.val.clone(), &self.mem.clone());
+            self.set_term(Term::Goto { to: b, args });
+            return;
+        }
+        let b = match self.labels.get(name).and_then(|x| x.block) {
+            Some(b) => b,
+            None => {
+                let nb = self.new_block();
+                if let Some(x) = self.labels.get_mut(name) {
+                    x.block = Some(nb);
+                }
+                nb
+            }
+        };
+        let out = BranchOut {
+            block: self.cur,
+            val: self.val.clone(),
+            mem: self.mem.clone(),
+        };
+        // 先落终止符（实参等 `L:` 处定完布局再补）
+        self.set_term(Term::Goto {
+            to: b,
+            args: Vec::new(),
         });
-
-        let base = (self.val.clone(), self.mem.clone());
-
-        // ── then 支
-        self.cur = then_b;
-        self.terminated = false;
-        (self.val, self.mem) = base.clone();
-        self.stmts(&then.stmts);
-        let mut outs = Vec::new();
-        if !self.terminated {
-            outs.push(BranchOut {
-                block: self.cur,
-                val: self.val.clone(),
-                mem: self.mem.clone(),
-            });
+        if let Some(x) = self.labels.get_mut(name) {
+            x.incoming.push(out);
         }
+    }
 
-        // ── else 支
-        self.cur = else_b;
-        self.terminated = false;
-        (self.val, self.mem) = base;
-        if let Some(e) = els {
-            self.stmt(e);
+    /// 找最内层的 region（`loop_only` 时只看循环）。
+    fn find_region(&self, label: Option<&str>, loop_only: bool) -> Option<usize> {
+        for (i, r) in self.regions.iter().enumerate().rev() {
+            let (lab, is_loop) = match r {
+                Region::Loop(l) => (l.label.as_deref(), true),
+                Region::Switch(s) => (s.label.as_deref(), false),
+            };
+            match label {
+                Some(want) => {
+                    if lab == Some(want) && (!loop_only || is_loop) {
+                        return Some(i);
+                    }
+                }
+                None => {
+                    if !loop_only || is_loop {
+                        return Some(i);
+                    }
+                }
+            }
         }
-        if !self.terminated {
-            outs.push(BranchOut {
-                block: self.cur,
-                val: self.val.clone(),
-                mem: self.mem.clone(),
-            });
-        }
-
-        self.join_branches(outs);
+        None
     }
 
     /// 把若干条落空的分支合到**新建的汇合块**上（`Task 22` 的两路与 `Task 24` 的 N 路共用）。
     ///
     /// `outs` 为空 ⇒ 全部终止 ⇒ 不建块（`V8` 会拒死块）。
+    fn join_branches(&mut self, outs: Vec<BranchOut>) -> Option<BlockId> {
+        if outs.is_empty() {
+            self.terminated = true;
+            return None;
+        }
+        let join = self.new_block();
+        let (_, val, mem) = self.join_into(join, outs);
+        self.cur = join;
+        self.terminated = false;
+        self.val = val;
+        self.mem = mem;
+        Some(join)
+    }
+
+    /// 把若干条分支合到**已有的**块 `join` 上：定块参数、回填每条边的实参，返回布局与合流状态。
     ///
     /// # 两块内容都要合：值与 **mem**
     ///
@@ -1688,12 +2046,16 @@ impl Fb<'_> {
     /// 实测：`if c { *p = 1 }; return *p` 在只合值时会被 `V6` 抓（合流块里的 `Load`
     /// 用的 mem 不支配），一旦 mem 也被合上就绿。判据是
     /// `t_ssa_07_if_之后_mem_必须合流`（断言 load 的 mem 定义在汇合块上）。
-    fn join_branches(&mut self, outs: Vec<BranchOut>) -> Option<BlockId> {
-        if outs.is_empty() {
-            self.terminated = true;
-            return None;
-        }
-        let join = self.new_block();
+    fn join_into(
+        &mut self,
+        join: BlockId,
+        outs: Vec<BranchOut>,
+    ) -> (
+        ParamLayout,
+        BTreeMap<SlotId, ValueId>,
+        BTreeMap<RootId, ValueId>,
+    ) {
+        let mut layout = ParamLayout::default();
         let mut params: Vec<ValueId> = Vec::new();
         let mut args: Vec<Vec<ValueId>> = vec![Vec::new(); outs.len()];
         let mut merged_val: BTreeMap<SlotId, ValueId> = BTreeMap::new();
@@ -1720,6 +2082,7 @@ impl Fb<'_> {
                 let t = self.values[first.index()];
                 let p = self.new_value(t);
                 params.push(p);
+                layout.slots.push(s);
                 for (k, v) in vs.iter().enumerate() {
                     args[k].push(v.expect("上面已判过都是 Some"));
                 }
@@ -1753,6 +2116,7 @@ impl Fb<'_> {
                 let t = self.ptr_ty_of(r);
                 let p = self.new_value(t);
                 params.push(p);
+                layout.roots.push(r);
                 for (k, v) in vs.iter().enumerate() {
                     args[k].push(*v);
                 }
@@ -1771,11 +2135,79 @@ impl Fb<'_> {
                 args: std::mem::take(&mut args[k]),
             };
         }
-        self.cur = join;
-        self.terminated = false;
-        self.val = merged_val;
-        self.mem = merged_mem;
-        Some(join)
+        (layout, merged_val, merged_mem)
+    }
+
+    /// 按布局给块建参数，返回「参数 → 状态」的映射。
+    fn layout_params(
+        &mut self,
+        b: BlockId,
+        layout: &ParamLayout,
+    ) -> (BTreeMap<SlotId, ValueId>, BTreeMap<RootId, ValueId>) {
+        let mut params: Vec<ValueId> = Vec::new();
+        let mut val: BTreeMap<SlotId, ValueId> = BTreeMap::new();
+        let mut mem: BTreeMap<RootId, ValueId> = BTreeMap::new();
+        for s in &layout.slots {
+            let t = self.slot_typ(*s);
+            let p = self.new_value(t);
+            params.push(p);
+            val.insert(*s, p);
+        }
+        for r in &layout.roots {
+            let t = self.ptr_ty_of(*r);
+            let p = self.new_value(t);
+            params.push(p);
+            mem.insert(*r, p);
+        }
+        self.blocks[b.index()].params = params;
+        (val, mem)
+    }
+
+    /// 「循环前状态 + 参数覆盖」。
+    ///
+    /// # 为什么不能只用参数当状态
+    ///
+    /// 参数只覆盖**携带项**（槽与 mem 根）；其余值（形参、循环不变量）在
+    /// `header` / `latch` / `exit` 里同样可见，而它们的 `ValueId` 就是循环前那个。
+    /// 初版直接把 `self.val` 赋成「只有参数」，于是体内读一个未被循环修改的形参
+    /// （`*p = i` 里的 `p`）就 panic 了 —— 变异测不出，只有真跑语料才露。
+    fn state_with(base: &BlockState, over: BlockState) -> BlockState {
+        let mut v = base.0.clone();
+        for (k, x) in over.0 {
+            v.insert(k, x);
+        }
+        let mut m = base.1.clone();
+        for (k, x) in over.1 {
+            m.insert(k, x);
+        }
+        (v, m)
+    }
+
+    /// 按布局算一条边的实参。`at` 是**来自哪个块**（缺 mem 时要在那个块里补种子）。
+    fn args_for(
+        &mut self,
+        at: BlockId,
+        layout: &ParamLayout,
+        val: &BTreeMap<SlotId, ValueId>,
+        mem: &BTreeMap<RootId, ValueId>,
+    ) -> Vec<ValueId> {
+        let mut out: Vec<ValueId> = Vec::with_capacity(layout.slots.len() + layout.roots.len());
+        for s in &layout.slots {
+            out.push(
+                *val.get(s)
+                    .unwrap_or_else(|| panic!("槽 s{} 在携带布局里，但当前状态没有它的值", s.0)),
+            );
+        }
+        for r in &layout.roots {
+            match mem.get(r) {
+                Some(v) => out.push(*v),
+                None => {
+                    let v = self.seed_mem_in(at, *r);
+                    out.push(v);
+                }
+            }
+        }
+        out
     }
 
     /// 在**指定块**里插一条 mem 种子（不改 `cur`）。
@@ -1792,9 +2224,15 @@ impl Fb<'_> {
 
     fn stmts(&mut self, v: &[Stmt]) {
         for s in v {
-            if self.terminated {
-                // 目前只有 `return` 会终止；之后的语句是死代码
-                break;
+            // 终止之后的语句是死代码 —— 但「死」只到**下一个标签**为止：
+            // `goto L; x = 1; L: return x` 里 `x = 1` 不可达，而 `L:` 是活的。
+            // 所以这里不能 `break`（那会把标签一起跳掉，标签块永远是空的 —— 实测踩过）。
+            //
+            // 循环 / switch 上的标签在它们自己的 `label` 字段里（由 `lowering` 转交），
+            // 不经过 `Stmt::Labeled`；那种情形下标签块也真的不可达（`goto` 到循环标签
+            // 已被 HIR 拒掉），跳过它是对的。
+            if self.terminated && !matches!(s, Stmt::Labeled { .. }) {
+                continue;
             }
             self.stmt(s);
         }
@@ -1868,7 +2306,7 @@ impl Fb<'_> {
                 self.set_term(Term::Return(vals));
             }
             Stmt::Block(b) => self.stmts(&b.stmts),
-            Stmt::Labeled { stmt, .. } => self.stmt(stmt),
+            Stmt::Labeled { label, stmt } => self.stmt_labeled(label, stmt),
             Stmt::Empty => {}
             Stmt::If {
                 init,
@@ -1881,12 +2319,22 @@ impl Fb<'_> {
                 cond,
                 post,
                 body,
+                label,
                 ..
-            } => self.stmt_for(init.as_deref(), cond.as_ref(), post.as_deref(), body),
+            } => self.stmt_for(
+                init.as_deref(),
+                cond.as_ref(),
+                post.as_deref(),
+                body,
+                label.as_deref(),
+            ),
             Stmt::Switch {
-                init, tag, cases, ..
-            } => self.stmt_switch(init.as_deref(), tag.as_ref(), cases),
-            Stmt::Branch { kind, .. } => match kind {
+                init,
+                tag,
+                cases,
+                label,
+            } => self.stmt_switch(init.as_deref(), tag.as_ref(), cases, label.as_deref()),
+            Stmt::Branch { kind, label } => match kind {
                 BranchKind::Fallthrough => {
                     let Some(t) = self.fallthrough else {
                         todo!("M6/Task 24：`fallthrough` 出现在 case 体之外或最后一个 case")
@@ -1896,15 +2344,11 @@ impl Fb<'_> {
                         args: Vec::new(),
                     });
                 }
-                BranchKind::Break | BranchKind::Continue | BranchKind::Goto => {
-                    todo!(
-                        "M6/Task 25：`{}` 的构建还没实现",
-                        match kind {
-                            BranchKind::Break => "break",
-                            BranchKind::Continue => "continue",
-                            _ => "goto",
-                        }
-                    )
+                BranchKind::Break => self.do_break(label.as_deref()),
+                BranchKind::Continue => self.do_continue(label.as_deref()),
+                BranchKind::Goto => {
+                    let name = label.clone().expect("`goto` 一定有标签（HIR 已校验）");
+                    self.do_goto(&name);
                 }
             },
             other => todo!(

@@ -843,13 +843,26 @@ fn t_ssa_17_循环之后读到的是合流值() {
         other => panic!("出口块不是 return：{other:?}"),
     };
     assert_eq!(ret.len(), 1);
+    // 出口块有自己的参数（`exit` 与 header 共用布局），所以返回值定义在出口块上；
+    // 关键是它**由 header 的参数喂进来** —— 即「出口看到的是合流值」。
     assert_eq!(
         def_block(f, ret[0]),
-        h,
-        "返回值必须定义在循环头（合流点），实际在 b{}\n{}",
+        exit,
+        "返回值必须定义在出口块（它拿的是合流值），实际在 b{}\n{}",
         def_block(f, ret[0]).0,
         rgoc_ssa::dump::dump_func(f, &tt)
     );
+    let c = cfg_of(f);
+    let cargs = c.edge_args(h, exit).to_vec();
+    assert!(!cargs.is_empty(), "header→exit 必须有实参");
+    for a in &cargs {
+        assert_eq!(
+            def_block(f, *a),
+            h,
+            "header→exit 的实参必须来自 header 自己的参数（合流值），实际来自 b{}",
+            def_block(f, *a).0
+        );
+    }
 }
 
 #[test]
@@ -1089,6 +1102,178 @@ fn t_ssa_18_没有_default_时一条都没匹配也算一条路径() {
     assert!(
         zero_seen,
         "「一条都没匹配」的那条路径必须传初值 0\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+// ── Task 25：goto 与 labeled ────────────────────────────────────────
+
+#[test]
+fn t_ssa_19_前向_goto() {
+    let (program, mut tt) = program_of(
+        "goto-forward",
+        "package main\n\nfunc f() int {\n\tx := 0\n\tgoto L\n\tx = 1\nL:\n\treturn x\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 入口 + 标签块；`goto` 之后那句 `x = 1` 是死代码，不建
+    assert_eq!(
+        f.blocks.len(),
+        2,
+        "前向 goto 只该有两个块：{}\n{}",
+        f.blocks.len(),
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert!(
+        matches!(f.blocks[0].term, rgoc_ssa::ir::Term::Goto { .. }),
+        "入口块应以 goto 结束：{:?}",
+        f.blocks[0].term
+    );
+    // 返回的是 `x` 的初值 0（`x = 1` 不可达）
+    let ret = match &f.blocks[1].term {
+        rgoc_ssa::ir::Term::Return(vs) => vs.clone(),
+        other => panic!("标签块不是 return：{other:?}"),
+    };
+    assert_eq!(ret.len(), 1);
+    assert!(
+        f.blocks[1].instrs.iter().any(|i| matches!(
+            i,
+            Instr::Load { dst, .. } if *dst == ret[0]
+        )),
+        "goto 模式不提升 ⇒ 返回的是 Load 出来的值\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_19_反向_goto_构成循环() {
+    let (program, mut tt) = program_of(
+        "goto-backward",
+        "package main\n\nfunc f() int {\n\ti := 0\n\ts := 0\nL:\n\ts = s + i\n\ti = i + 1\n\tif i < 3 {\n\t\tgoto L\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let hs = headers(f);
+    assert_eq!(hs.len(), 1, "标签块该有 2 条前驱（入口 + 回边）：{hs:?}");
+    let c = cfg_of(f);
+    // 两条边都必须送同样的实参个数（都送全部根）
+    let h = hs[0];
+    let n = f.blocks[h.index()].params.len();
+    assert!(
+        n > 0,
+        "标签块该有参数（全部根）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    for p in c.preds(h) {
+        assert_eq!(
+            c.edge_args(*p, h).len(),
+            n,
+            "b{}→b{} 实参个数不符",
+            p.0,
+            h.0
+        );
+    }
+    // goto 模式：不提升 ⇒ 槽都有根、`val` 里没有槽的当前值
+    assert!(
+        !f.slot_root.is_empty(),
+        "goto 模式必须把槽放进内存：{:?}",
+        f.slot_root
+    );
+}
+
+#[test]
+fn t_ssa_19_labeled_break_与_continue() {
+    let (program, mut tt) = program_of(
+        "labeled",
+        "package main\n\nfunc f() int {\n\ts := 0\nOuter:\n\tfor i := 0; i < 3; i++ {\n\t\tfor j := 0; j < 3; j++ {\n\t\t\tif j == 1 {\n\t\t\t\tcontinue Outer\n\t\t\t}\n\t\t\tif i == 2 {\n\t\t\t\tbreak Outer\n\t\t\t}\n\t\t\ts = s + 1\n\t\t}\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // `continue Outer` 必须跳到外层循环的 latch（`i++` 所在块），
+    // `break Outer` 跳到外层循环的 exit。两者都在，所以至少有两个「多前驱」块。
+    let c = cfg_of(f);
+    let multi = (0..f.blocks.len())
+        .map(|i| BlockId(i as u32))
+        .filter(|b| c.preds(*b).len() >= 2)
+        .count();
+    assert!(
+        multi >= 2,
+        "外层 header 与外层 exit 都该有多个前驱：{multi}\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_19_无标签_break_与_continue() {
+    let (program, mut tt) = program_of(
+        "plain-break",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 10; i++ {\n\t\tif i == 5 {\n\t\t\tbreak\n\t\t}\n\t\tif i == 2 {\n\t\t\tcontinue\n\t\t}\n\t\ts = s + 1\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // break 的边与 header 的 else 边都要落到 exit 上 ⇒ exit 有两条前驱
+    let c = cfg_of(f);
+    let exit = (0..f.blocks.len())
+        .map(|i| BlockId(i as u32))
+        .find(|b| matches!(f.blocks[b.index()].term, rgoc_ssa::ir::Term::Return(_)))
+        .expect("没有 return 块");
+    assert!(
+        c.preds(exit).len() >= 2,
+        "exit 该有 header + break 两条前驱：{:?}\n{}",
+        c.preds(exit),
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_19_continue_必须走_post() {
+    // `continue` 在 `for init;cond;post` 里**先执行 post**。若它直接跳 header，
+    // 循环变量不递增 ⇒ 死循环；而且 verifier 全绿（参数个数、类型都对）。
+    let (program, mut tt) = program_of(
+        "continue-post",
+        "package main\n\nfunc f() int {\n\ts := 0\n\tfor i := 0; i < 10; i++ {\n\t\tif i == 2 {\n\t\t\tcontinue\n\t\t}\n\t\ts = s + 1\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let c = cfg_of(f);
+    let h = headers(f)[0];
+    // 判据：**有 post 时，循环头只能有两条前驱** —— preheader 与 latch。
+    // `continue` 若直接跳 header，就会多出第三条（而 verifier 全绿：类型与个数都对）。
+    assert_eq!(
+        c.preds(h).len(),
+        2,
+        "循环头该只有 preheader + latch 两条前驱，实际 {:?} ⇒ 有 `continue` 绕过了 post\n{}",
+        c.preds(h),
         rgoc_ssa::dump::dump_func(f, &tt)
     );
 }
