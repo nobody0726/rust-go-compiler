@@ -1,0 +1,279 @@
+//! 类型判等与归类（`V3` 的原料；`M6-design.md` §3.5 `V3`）。
+//!
+//! # 为什么这里**不重建**「`BinOp` → 允许的操作数类型」那张表
+//!
+//! 计划稿（`M6-plan.md` Task 12）原本要在这里写一张 `allowed_operands` 表，
+//! 但那样会出现**两套类型规则**：检查器一套、verifier 一套。它们迟早会分叉，
+//! 而分叉的方向永远是对 verifier 有利（它自己那套更宽松），于是「verifier 绿」
+//! 就变成一句自我安慰。
+//!
+//! 更关键的是**职责分工**：SSA 的输入是**已通过检查器的 HIR**。
+//! `%` 不能用于浮点、`&` 不能用于字符串 —— 这些合法性**检查器已经判过**，
+//! verifier 再判一次只是重复；而 verifier 真正该抓的是**构建器的错**，
+//! 那是「同一指令内类型不自洽」（`i64 + string`、`dst` 与 `typ` 不符、
+//! 块参数交接类型不匹配），**不需要 op 表就能抓**。
+//!
+//! 所以本模块只提供两类东西：
+//! ① 判等（走 `rgoc_types::identical`，全仓唯一一份类型同一性）；
+//! ② 归类（`bool` / 整数 / 数值 / 字符串），从 `Type::Basic` 读，不发明规则。
+//!
+//! # 与 `rgoc-check` 的关系
+//!
+//! `rgoc-check` 里的二元运算规则是**诊断**（要不要报 `mismatched types`），
+//! 本模块的是**不变式**（IR 是否自洽）。两者判的东西不同，不算重复实现。
+//! 如果哪天发现两边确实在判同一件事，正确做法是把判据下沉到 `rgoc-types`，
+//! **不是**让 `rgoc-ssa` 依赖 `rgoc-check`（那是逆着依赖图的）。
+
+use rgoc_hir::{BinOp, UnOp, types::ConstVal};
+use rgoc_types::{BasicId, TypeId, TypeTable, identical, typ::Type};
+
+use crate::ir::{Instr, SsaFunc};
+
+/// 一个值的静态类型（越界返回 `None` —— `V1` 已保证不越界，这里只为不 panic）。
+#[must_use]
+pub fn type_of(f: &SsaFunc, v: crate::ir::ValueId) -> Option<TypeId> {
+    f.value_types.get(v.index()).copied()
+}
+
+/// 是否 `bool`。
+#[must_use]
+pub fn is_bool(tt: &TypeTable, t: TypeId) -> bool {
+    matches!(basic(tt, t), Some(BasicId::Bool))
+}
+
+/// 是否整数（含 `uintptr`）。
+#[must_use]
+pub fn is_integer(tt: &TypeTable, t: TypeId) -> bool {
+    matches!(
+        basic(tt, t),
+        Some(
+            BasicId::Int
+                | BasicId::Int8
+                | BasicId::Int16
+                | BasicId::Int32
+                | BasicId::Int64
+                | BasicId::Uint
+                | BasicId::Uint8
+                | BasicId::Uint16
+                | BasicId::Uint32
+                | BasicId::Uint64
+                | BasicId::Uintptr
+        )
+    )
+}
+
+/// 是否数值（整数 / 浮点 / 复数）。
+#[must_use]
+pub fn is_numeric(tt: &TypeTable, t: TypeId) -> bool {
+    is_integer(tt, t)
+        || matches!(
+            basic(tt, t),
+            Some(BasicId::Float32 | BasicId::Float64 | BasicId::Complex64 | BasicId::Complex128)
+        )
+}
+
+/// 是否字符串。
+#[must_use]
+pub fn is_string(tt: &TypeTable, t: TypeId) -> bool {
+    matches!(basic(tt, t), Some(BasicId::String))
+}
+
+/// 取基本类型（非基本类型返回 `None`）。
+fn basic(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
+    if t.index() >= tt.len() {
+        return None;
+    }
+    match tt.type_of(t) {
+        Type::Basic(b) => Some(*b),
+        _ => None,
+    }
+}
+
+/// 判等（`identical` 的 `Err` 一律当「不等」，并把原因带上）。
+fn same(tt: &TypeTable, a: TypeId, b: TypeId) -> Result<bool, String> {
+    identical(tt, a, b).map_err(|e| format!("判等失败（{e:?}）：{a:?} vs {b:?}"))
+}
+
+/// 一条指令的类型自洽（`V3`；`Ok(())` 表示没问题，`Err` 是**人读原因**）。
+///
+/// # 检查面
+///
+/// | 指令 | 判据 |
+/// |---|---|
+/// | `Const` | 值类别与静态类型一致（整数/浮点/复数/字符串/布尔） |
+/// | `Copy` | 两侧同型 |
+/// | `Bin` | 两操作数同型；结果 `dst` 与 `typ` 同型；比较得 `bool`；移位计数是整数 |
+/// | `Un` | `-`/`+` 要数值、`!` 要 `bool`、`^` 要整数；结果同型 |
+/// | `Convert` | `dst` 的类型 == `typ`（转换本来就是换类型，只查「记的是不是目标型」） |
+/// | `Composite` / `Make` / `Load` | `dst` 的类型 == `typ` |
+/// | `Field` / `Index` / `Slice` / `AddrOf` / `Store` / `Call` | **不查**（见下） |
+///
+/// # 不查的四类及理由
+///
+/// `Field`/`Index`/`Slice` 要沿类型结构走（结构体字段表、数组元素型、切片元素型），
+/// 那是 `rgoc-types` 的事，`V3` 重复一遍只会制造第二套「字段怎么找」的逻辑；
+/// `AddrOf` 的结果类型由「根的变量类型 → 指针」决定，而根上的变量类型不在
+/// `SsaFunc` 里（在 HIR）；`Call` 的结果数由 `V5` 查，结果类型要签名表 —— 那是
+/// Task 13 与构建器的事。**这四类不是「忘了」**，是判据的原料不在本层。
+pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String> {
+    match i {
+        Instr::Const { dst, c, typ } => {
+            let t = need(f, *dst)?;
+            if t != *typ {
+                return Err(format!("const 的 dst 类型 {t:?} 与 typ {typ:?} 不符"));
+            }
+            let ok = match c {
+                ConstVal::Int(_) => is_integer(tt, t),
+                ConstVal::Float(_) => {
+                    matches!(basic(tt, t), Some(BasicId::Float32 | BasicId::Float64))
+                }
+                ConstVal::Complex(..) => {
+                    matches!(basic(tt, t), Some(BasicId::Complex64 | BasicId::Complex128))
+                }
+                ConstVal::Str(_) => is_string(tt, t),
+                ConstVal::Bool(_) => is_bool(tt, t),
+            };
+            if !ok {
+                return Err(format!(
+                    "常量 {c:?} 不可能有类型 {t:?}（值类别与静态类型不符）"
+                ));
+            }
+            Ok(())
+        }
+        Instr::Copy { dst, src } => {
+            let (a, b) = (need(f, *dst)?, need(f, *src)?);
+            if !same(tt, a, b)? {
+                return Err(format!("copy 两侧类型不同：{a:?} ← {b:?}"));
+            }
+            Ok(())
+        }
+        Instr::Bin {
+            dst,
+            op,
+            lhs,
+            rhs,
+            typ,
+        } => check_bin(f, tt, *dst, *op, *lhs, *rhs, *typ),
+        Instr::Un { dst, op, x, typ } => check_un(f, tt, *dst, *op, *x, *typ),
+        Instr::Convert { dst, typ, .. } => match_type(f, *dst, *typ, "convert"),
+        Instr::Composite { dst, typ, .. } => match_type(f, *dst, *typ, "composite"),
+        Instr::Make { dst, typ, .. } => match_type(f, *dst, *typ, "make"),
+        Instr::Load { dst, typ, .. } => match_type(f, *dst, *typ, "load"),
+        Instr::AddrOf { .. }
+        | Instr::Field { .. }
+        | Instr::Index { .. }
+        | Instr::Slice { .. }
+        | Instr::Store { .. }
+        | Instr::Call { .. } => Ok(()),
+    }
+}
+
+fn need(f: &SsaFunc, v: crate::ir::ValueId) -> Result<TypeId, String> {
+    type_of(f, v).ok_or_else(|| format!("v{} 没有静态类型（value_types 越界）", v.0))
+}
+
+fn match_type(f: &SsaFunc, dst: crate::ir::ValueId, typ: TypeId, what: &str) -> Result<(), String> {
+    let t = need(f, dst)?;
+    if t != typ {
+        return Err(format!("{what} 的 dst 类型 {t:?} 与 typ {typ:?} 不符"));
+    }
+    Ok(())
+}
+
+fn check_bin(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    dst: crate::ir::ValueId,
+    op: BinOp,
+    lhs: crate::ir::ValueId,
+    rhs: crate::ir::ValueId,
+    typ: TypeId,
+) -> Result<(), String> {
+    let (xt, yt, zt) = (need(f, lhs)?, need(f, rhs)?, need(f, dst)?);
+    if zt != typ {
+        return Err(format!("bin 的 dst 类型 {zt:?} 与 typ {typ:?} 不符"));
+    }
+    match op {
+        // 移位：左操作数与结果是同一整数型，**计数只需是整数**
+        // （不要求与左侧同型 —— `int64 << uint` 合法，`T-EX-60` 踩过这条）。
+        // 所以「两侧同型」这条**不能**放在 match 之前当公共前提。
+        BinOp::Shl | BinOp::Shr => {
+            if !is_integer(tt, xt) {
+                return Err(format!("移位 {op:?} 的左操作数必须是整数，实际 {xt:?}"));
+            }
+            if !is_integer(tt, yt) {
+                return Err(format!("移位 {op:?} 的计数必须是整数，实际 {yt:?}"));
+            }
+            if !same(tt, xt, zt)? {
+                return Err(format!(
+                    "移位 {op:?} 的结果类型必须等于左操作数：{xt:?} vs {zt:?}"
+                ));
+            }
+            Ok(())
+        }
+        _ => {
+            // 其余运算都要求两侧同型（Go 的二元运算在检查器里已做完隐式转换）
+            if !same(tt, xt, yt)? {
+                return Err(format!("bin {op:?} 的两个操作数类型不同：{xt:?} vs {yt:?}"));
+            }
+            match op {
+                // 比较：结果必须是 bool
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    if !is_bool(tt, zt) {
+                        return Err(format!("比较表达式的结果必须是 bool，实际 {zt:?}"));
+                    }
+                    Ok(())
+                }
+                // 逻辑：两侧 bool（上面已判同型 ⇒ 查一侧即可），结果 bool
+                BinOp::LAnd | BinOp::LOr => {
+                    if !is_bool(tt, xt) {
+                        return Err(format!("逻辑 {op:?} 的操作数必须是 bool，实际 {xt:?}"));
+                    }
+                    if !is_bool(tt, zt) {
+                        return Err(format!("逻辑 {op:?} 的结果必须是 bool，实际 {zt:?}"));
+                    }
+                    Ok(())
+                }
+                // 其余（含字符串 `+`）：结果同型
+                _ => {
+                    if !same(tt, xt, zt)? {
+                        return Err(format!(
+                            "bin {op:?} 的结果类型必须等于操作数类型：{xt:?} vs {zt:?}"
+                        ));
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+fn check_un(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    dst: crate::ir::ValueId,
+    op: UnOp,
+    x: crate::ir::ValueId,
+    typ: TypeId,
+) -> Result<(), String> {
+    let (xt, zt) = (need(f, x)?, need(f, dst)?);
+    if zt != typ {
+        return Err(format!("un 的 dst 类型 {zt:?} 与 typ {typ:?} 不符"));
+    }
+    if !same(tt, xt, zt)? {
+        return Err(format!(
+            "un {op:?} 的结果类型必须等于操作数类型：{xt:?} vs {zt:?}"
+        ));
+    }
+    let ok = match op {
+        UnOp::Neg | UnOp::Pos => is_numeric(tt, xt),
+        UnOp::Not => is_bool(tt, xt),
+        UnOp::BitNot => is_integer(tt, xt),
+        // `<-ch`：M6 既不建图也不执行（`SSA-UNSUPPORTED-CHAN`），出现即错
+        UnOp::Recv => false,
+    };
+    if !ok {
+        return Err(format!("un {op:?} 不接受类型 {xt:?}"));
+    }
+    Ok(())
+}

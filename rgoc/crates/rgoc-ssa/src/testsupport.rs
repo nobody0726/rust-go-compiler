@@ -16,7 +16,9 @@
 //! `include!`。前者可读性更好，且这份工具本身就需要被测（见 `tests/testsupport.rs`）。
 //! 代价：它进了公开 API —— 文件头的「**只给测试用**」是纪律，不是编译器保证。
 
-use rgoc_types::TypeId;
+use std::collections::BTreeMap;
+
+use rgoc_types::{TypeId, TypeTable};
 
 use crate::ir::{Block, BlockId, Instr, Module, Root, RootId, SsaFunc, Term, ValueId};
 
@@ -27,6 +29,10 @@ pub struct FnBuilder {
     blocks: Vec<Block>,
     roots: Vec<Root>,
     value_types: Vec<TypeId>,
+    /// 类型表（`V3` 要按 `TypeId` 取真实类型；`universe()` 自带 22 个基本类型）。
+    tt: TypeTable,
+    /// 基本类型名的缓存 —— `add_basic` **不去重**，每次调用会新开一个槽。
+    basics: BTreeMap<String, TypeId>,
 }
 
 impl FnBuilder {
@@ -38,6 +44,8 @@ impl FnBuilder {
             blocks: vec![Block::default()],
             roots: Vec::new(),
             value_types: Vec::new(),
+            tt: rgoc_types::universe::universe().2,
+            basics: BTreeMap::new(),
         }
     }
 
@@ -54,9 +62,41 @@ impl FnBuilder {
     }
 
     /// 分配一个值（类型进 `value_types`，编号按调用顺序）。
+    ///
+    /// **只查一件事**：`typ` 必须在本构建器的类型表里（否则 `V3` 会拿到越界 id
+    /// 而不是「类型写错了」）。IR 的合法性仍然一概不查。
     pub fn value(&mut self, typ: TypeId) -> ValueId {
+        assert!(
+            typ.index() < self.tt.len(),
+            "TypeId({}) 不在本构建器的类型表里（表里只有 {} 项）",
+            typ.index(),
+            self.tt.len()
+        );
         self.value_types.push(typ);
         ValueId((self.value_types.len() - 1) as u32)
+    }
+
+    /// 取基本类型（按名字，**同一次构建里复用同一个 `TypeId`**）。
+    ///
+    /// # Panics
+    ///
+    /// 名字不是基本类型名（`int` / `string` / `bool` / …）时 panic —— 拼错类型名
+    /// 的测试应该立刻炸，而不是拿到一个 `None` 再推理。
+    pub fn basic(&mut self, name: &str) -> TypeId {
+        if let Some(&id) = self.basics.get(name) {
+            return id;
+        }
+        let b = rgoc_types::universe::basic_name_to_id(name)
+            .unwrap_or_else(|| panic!("`{name}` 不是基本类型名"));
+        let id = self.tt.add_basic(b);
+        self.basics.insert(name.to_string(), id);
+        id
+    }
+
+    /// 本构建器的类型表（`verify` 的第二个参数）。
+    #[must_use]
+    pub fn tt(&self) -> &TypeTable {
+        &self.tt
     }
 
     /// 登记一个内存根。
@@ -80,10 +120,22 @@ impl FnBuilder {
         self.blocks[b.index()].term = t;
     }
 
-    /// 取出函数。
+    /// 取出函数与其类型表（需要 `verify` 时用这个）。
+    #[must_use]
+    pub fn into_parts(self) -> (SsaFunc, TypeTable) {
+        let (f, tt) = self.finish_inner();
+        (f, tt)
+    }
+
+    /// 取出函数（丢掉类型表 —— 只做结构检查的测试用它）。
     #[must_use]
     pub fn finish(self) -> SsaFunc {
-        SsaFunc {
+        self.finish_inner().0
+    }
+
+    fn finish_inner(self) -> (SsaFunc, TypeTable) {
+        let tt = self.tt;
+        let f = SsaFunc {
             src: rgoc_hir::FuncId(0),
             name: self.name,
             params: Vec::new(),
@@ -92,7 +144,8 @@ impl FnBuilder {
             roots: self.roots,
             slot_root: std::collections::BTreeMap::new(),
             value_types: self.value_types,
-        }
+        };
+        (f, tt)
     }
 }
 
