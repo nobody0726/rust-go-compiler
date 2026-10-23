@@ -851,3 +851,244 @@ fn t_ssa_17_循环之后读到的是合流值() {
         rgoc_ssa::dump::dump_func(f, &tt)
     );
 }
+
+#[test]
+fn t_ssa_07_if_之后_mem_必须合流() {
+    // 只有一条分支写内存时，合流后的 mem 必须是**合的**（块参数），
+    // 而不是「最后建的那条分支的 mem」。
+    //
+    // 后者看起来没事：V2/V6 都绿（旧 mem 同样支配、同块也不乱序），
+    // 但它把「then 里那次 store」从 mem 链上摘掉了 —— 之后的写会被认为
+    // 与它无序。这是**静默**型的错，只有结构断言抓得住。
+    let (program, mut tt) = program_of(
+        "if-mem-merge",
+        "package main\n\nfunc f(c bool, p *int) int {\n\tif c {\n\t\t*p = 1\n\t}\n\treturn *p\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 找那个 if 的汇合块
+    let (then_b, else_b) = match &f.blocks[0].term {
+        rgoc_ssa::ir::Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("入口块不是 if：{other:?}"),
+    };
+    let join = match &f.blocks[then_b.index()].term {
+        rgoc_ssa::ir::Term::Goto { to, .. } => *to,
+        other => panic!("then 支不是 goto：{other:?}"),
+    };
+    assert_eq!(
+        match &f.blocks[else_b.index()].term {
+            rgoc_ssa::ir::Term::Goto { to, .. } => *to,
+            other => panic!("else 支不是 goto：{other:?}"),
+        },
+        join
+    );
+    // 汇合块之后的那条 load 的 mem 必须是汇合块的参数
+    let load_mem = f.blocks[join.index()]
+        .instrs
+        .iter()
+        .find_map(|i| match i {
+            Instr::Load { mem, .. } => Some(*mem),
+            _ => None,
+        })
+        .expect("合流块里没有 load");
+    assert_eq!(
+        def_block(f, load_mem),
+        join,
+        "load 的 mem 定义在 b{}，不是合流块 b{} ⇒ 分支里的 store 被摘出了 mem 链\n{}",
+        def_block(f, load_mem).0,
+        join.0,
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+// ── Task 24：switch ────────────────────────────────────────────────
+
+#[test]
+fn t_ssa_18_switch_有_tag() {
+    let (program, mut tt) = program_of(
+        "switch-tag",
+        "package main\n\nfunc f(x int) int {\n\ts := 0\n\tswitch x {\n\tcase 1, 2:\n\t\ts = 10\n\tcase 3:\n\t\ts = 30\n\tdefault:\n\t\ts = 99\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 入口块是第一个判定（`if`）
+    assert!(
+        matches!(f.blocks[0].term, rgoc_ssa::ir::Term::If { .. }),
+        "入口块应该是判定：{:?}",
+        f.blocks[0].term
+    );
+    // `case 1, 2` 是一个 case ⇒ 一个 `LOr` 合并两个 `Eq`
+    let eqs = instrs(f)
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::Bin {
+                    op: rgoc_hir::BinOp::Eq,
+                    ..
+                }
+            )
+        })
+        .count();
+    let ors = instrs(f)
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::Bin {
+                    op: rgoc_hir::BinOp::LOr,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(eqs, 3, "三个 case 表达式各一次 Eq");
+    assert_eq!(ors, 1, "只有 `case 1, 2` 需要一次 Or");
+}
+
+#[test]
+fn t_ssa_18_switch_无_tag_是_if_链() {
+    let (program, mut tt) = program_of(
+        "switch-notag",
+        "package main\n\nfunc f(x int) int {\n\ts := 0\n\tswitch {\n\tcase x > 10:\n\t\ts = 1\n\tcase x > 0:\n\t\ts = 2\n\tdefault:\n\t\ts = 3\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    // 无 tag ⇒ 没有任何 Eq（条件本身就是表达式）
+    assert_eq!(
+        instrs(f)
+            .iter()
+            .filter(|i| matches!(
+                i,
+                Instr::Bin {
+                    op: rgoc_hir::BinOp::Eq,
+                    ..
+                }
+            ))
+            .count(),
+        0,
+        "无 tag 的 switch 不该产生 Eq：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_18_fallthrough_直接进下一个体() {
+    // `fallthrough` 不重测下一个 case 的条件，所以它的目标必须是
+    // **下一个 case 的体块**，不是下一个测试块。
+    let (program, mut tt) = program_of(
+        "switch-fallthrough",
+        "package main\n\nfunc f(x int) int {\n\ts := 0\n\tswitch x {\n\tcase 1:\n\t\ts = 1\n\t\tfallthrough\n\tcase 2:\n\t\ts = s + 2\n\tdefault:\n\t\ts = 9\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // case1 的体：必须有一条 goto，且目标是某个**含加法的块**（case2 的体）
+    let add_block = f
+        .blocks
+        .iter()
+        .position(|b| {
+            b.instrs.iter().any(|i| {
+                matches!(
+                    i,
+                    Instr::Bin {
+                        op: rgoc_hir::BinOp::Add,
+                        ..
+                    }
+                )
+            })
+        })
+        .map(|i| BlockId(i as u32))
+        .expect("没有加法块");
+    let from = f
+        .blocks
+        .iter()
+        .position(|b| matches!(&b.term, rgoc_ssa::ir::Term::Goto { to, .. } if *to == add_block))
+        .map(|i| BlockId(i as u32));
+    assert!(
+        from.is_some(),
+        "case1 体必须直接 goto 到含加法的块（case2 体）\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // case2 的体块有两条前驱：判定链 + case1 的 fallthrough（这就是「直接进体」的证据）
+    let c = cfg_of(f);
+    assert_eq!(
+        c.preds(add_block).len(),
+        2,
+        "case2 体该有 2 条前驱（判定 + fallthrough）：{:?}\n{}",
+        c.preds(add_block),
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_18_没有_default_时一条都没匹配也算一条路径() {
+    // `y := 0; switch x { case 1: y = 2 }; return y`
+    // 若不合「一条都没匹配」这条路径，`return` 的 y 会变成 2。
+    let (program, mut tt) = program_of(
+        "switch-nomatch",
+        "package main\n\nfunc f(x int) int {\n\ty := 0\n\tswitch x {\n\tcase 1:\n\t\ty = 2\n\t}\n\treturn y\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let join = headers(f);
+    assert_eq!(join.len(), 1, "一个合流块：{join:?}");
+    let j = join[0];
+    assert_eq!(
+        f.blocks[j.index()].params.len(),
+        1,
+        "y 必须是合流参数（三路：case 体 / nomatch / —— ）\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // return 的值必须定义在合流块上
+    let ret = match &f.blocks[j.index()].term {
+        rgoc_ssa::ir::Term::Return(vs) => vs.clone(),
+        other => panic!("合流块不是 return：{other:?}"),
+    };
+    assert_eq!(def_block(f, ret[0]), j, "return 的必须是合流值");
+    // nomatch 路径给的实参必须是 const 0（初值），不能是 2
+    let c = cfg_of(f);
+    let preds = c.preds(j).to_vec();
+    let mut zero_seen = false;
+    for p in preds {
+        let args = c.edge_args(p, j);
+        if args.is_empty() {
+            continue;
+        }
+        let db = def_block(f, args[0]);
+        let is_zero = f.blocks[db.index()].instrs.iter().any(|i| {
+            matches!(i, Instr::Const { dst, c, .. }
+                if *dst == args[0] && *c == rgoc_hir::types::ConstVal::Int(0))
+        });
+        zero_seen |= is_zero;
+    }
+    assert!(
+        zero_seen,
+        "「一条都没匹配」的那条路径必须传初值 0\n{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}

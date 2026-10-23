@@ -118,6 +118,8 @@ fn build_func(
         promoted,
         ptr_ty: BTreeMap::new(),
         terminated: false,
+        bool_ty: None,
+        fallthrough: None,
     };
     fb.entry_params();
 
@@ -137,7 +139,8 @@ fn build_func(
 use std::collections::BTreeSet;
 
 use rgoc_hir::{
-    Block as HirBlock, BranchKind, CompositeItem, Expr, ExprKind, MakeKind, Place, SlotId, Stmt,
+    Block as HirBlock, BranchKind, Case, CompositeItem, Expr, ExprKind, MakeKind, Place, SlotId,
+    Stmt,
 };
 
 use crate::ir::{Root, RootId};
@@ -825,6 +828,14 @@ impl Def<'_> {
 
 // ── 函数体构建器（Task 20 起）────────────────────────────────────────
 
+/// 一条「落到汇合点」的分支的状态快照。
+struct BranchOut {
+    /// 分支的尾块（还没有终止符）。
+    block: BlockId,
+    val: BTreeMap<SlotId, ValueId>,
+    mem: BTreeMap<RootId, ValueId>,
+}
+
 /// 边建块边产指令的单函数构建器。
 ///
 /// # 三个状态
@@ -852,6 +863,10 @@ struct Fb<'a> {
     /// 每个根的地址类型缓存（`*T`；避免同一根建出多个相同的指针类型槽）
     ptr_ty: BTreeMap<RootId, TypeId>,
     terminated: bool,
+    /// `bool` 的 `TypeId` 缓存（`switch` 的比较与 `Or` 合并要用）。
+    bool_ty: Option<TypeId>,
+    /// 当前 `case` 体的 `fallthrough` 目标（`Task 24`）；不在 case 体里时是 `None`。
+    fallthrough: Option<BlockId>,
 }
 
 impl Fb<'_> {
@@ -1016,6 +1031,16 @@ impl Fb<'_> {
             .unwrap_or_else(|| TypeId::from_index(0))
     }
 
+    fn bool_ty(&mut self) -> TypeId {
+        if let Some(t) = self.bool_ty {
+            return t;
+        }
+        let b = rgoc_types::universe::basic_name_to_id("bool").expect("bool 是基本类型名");
+        let t = self.tt.add_basic(b);
+        self.bool_ty = Some(t);
+        t
+    }
+
     fn write_slot(&mut self, s: SlotId, v: ValueId) {
         if s == BLANK_SLOT {
             return;
@@ -1166,6 +1191,24 @@ impl Fb<'_> {
             }
             // `&x`：唯一产生指针的构造。`x` 一定在根表里（`scan_addressed` 保证）
             ExprKind::Addr(p) => self.place_addr(p),
+            // `*p`：读指针指向的存储。目标在**堆根**上 —— 指针可能来自形参、
+            // 别的函数的返回、或本函数取过址的槽；M6 不做别名推理，
+            // 一律记在堆根（`Root::Heap`）上，同根保序。
+            ExprKind::Deref(x) => {
+                let addr = self.expr(x);
+                let root = self.heap_root();
+                let mem = self.mem_of(root);
+                let t = e.typ;
+                let dst = self.new_value(t);
+                self.emit(Instr::Load {
+                    dst,
+                    mem,
+                    root,
+                    addr,
+                    typ: t,
+                });
+                dst
+            }
             // 读字段：底座在内存（部分写/取址）⇒ 先算字段地址再 Load
             ExprKind::Field { base, index } => {
                 if let ExprKind::Slot(s) = &base.kind
@@ -1203,6 +1246,167 @@ impl Fb<'_> {
     fn new_block(&mut self) -> BlockId {
         self.blocks.push(Block::default());
         BlockId((self.blocks.len() - 1) as u32)
+    }
+
+    /// 表达式 `switch`（`Task 24`）。
+    ///
+    /// # 树形，不是链
+    ///
+    /// ```text
+    ///   pre:      ...init... tag = eval(tag)
+    ///             if tag==c0a || tag==c0b -> body0 | if tag==c1 -> body1 | ... | default
+    ///   body_i:   ...   -> join   （或 fallthrough 到 body_{i+1}）
+    ///   nomatch:  -> join          （**只有没有 default 时才存在**）
+    ///   join:     params = [合流值…]
+    /// ```
+    ///
+    /// # 为什么「没有 default」要多一条 `nomatch` 分支
+    ///
+    /// 「一条都没匹配」也是一条真实控制流：它落到 `switch` 之后，且看不到任何
+    /// case 体里的赋值。若不把它当作一条分支参与合流，合流值就会变成
+    /// 「某个 case 体里的值」—— 于是 `switch x { case 1: y = 2 }; print(y)`
+    /// 在 `x != 1` 时会打出 2。这类错**能过 verifier**（类型、支配都对）。
+    ///
+    /// # `fallthrough` 不走判定链
+    ///
+    /// 它的语义是「直接进入下一个 case 的体」（**不**重测下一个 case 的表达式），
+    /// 所以目标是 `bodies[i+1]`，而不是下一个测试块。
+    fn stmt_switch(&mut self, init: Option<&Stmt>, tag: Option<&Expr>, cases: &[Case]) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+        let tagv = tag.map(|t| self.expr(t));
+        let entry = (self.cur, self.val.clone(), self.mem.clone());
+
+        // 预建全部 case 体块：`fallthrough` 要指向「下一个 case 的体」，
+        // 而那时下一个体可能还没建。
+        let bodies: Vec<BlockId> = cases.iter().map(|_| self.new_block()).collect();
+        let default_idx = cases.iter().position(|c| c.is_default);
+        let nomatch = if default_idx.is_none() && !cases.is_empty() {
+            Some(self.new_block())
+        } else {
+            None
+        };
+
+        // ── 各 case 体：**都从入口状态起建**（case 之间没有落空关系）
+        let mut outs: Vec<BranchOut> = Vec::new();
+        for (i, c) in cases.iter().enumerate() {
+            self.cur = bodies[i];
+            self.terminated = false;
+            self.val = entry.1.clone();
+            self.mem = entry.2.clone();
+            self.fallthrough = bodies.get(i + 1).copied();
+            self.stmts(&c.body.stmts);
+            self.fallthrough = None;
+            if !self.terminated {
+                outs.push(BranchOut {
+                    block: self.cur,
+                    val: self.val.clone(),
+                    mem: self.mem.clone(),
+                });
+            }
+        }
+        if let Some(nb) = nomatch {
+            self.cur = nb;
+            self.terminated = false;
+            self.val = entry.1.clone();
+            self.mem = entry.2.clone();
+            outs.push(BranchOut {
+                block: nb,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
+
+        // ── 合流点
+        let join = self.join_branches(outs);
+        let merged = (self.val.clone(), self.mem.clone());
+
+        // ── 判定链：从入口块起，逐 case 生成 `if`
+        self.cur = entry.0;
+        self.terminated = false;
+        self.val = entry.1;
+        self.mem = entry.2;
+        let fallback = default_idx.map(|i| bodies[i]).or(nomatch);
+        let tested: Vec<usize> = (0..cases.len()).filter(|i| !cases[*i].is_default).collect();
+        if tested.is_empty() {
+            // 只有 `default`（或一个 case 都没有）：直接进 default 体
+            if let Some(b) = fallback {
+                self.set_term(Term::Goto {
+                    to: b,
+                    args: Vec::new(),
+                });
+            }
+        } else {
+            let mut chain = entry.0;
+            let n = tested.len();
+            for (k, &i) in tested.iter().enumerate() {
+                let last = k + 1 == n;
+                let no = if last {
+                    fallback.expect("没有 default 时一定有 nomatch")
+                } else {
+                    self.new_block()
+                };
+                self.cur = chain;
+                let bt = self.bool_ty();
+                let mut cond: Option<ValueId> = None;
+                for e in &cases[i].exprs {
+                    let ev = self.expr(e);
+                    let ev = match tagv {
+                        // 有 tag：`tag == e`（两侧类型对齐，`untyped` 常量要物化转换）
+                        Some(t) => {
+                            let tt = self.values[t.index()];
+                            let ev = self.coerce_to(tt, ev);
+                            let dst = self.new_value(bt);
+                            self.emit(Instr::Bin {
+                                dst,
+                                op: rgoc_hir::BinOp::Eq,
+                                lhs: t,
+                                rhs: ev,
+                                typ: bt,
+                            });
+                            dst
+                        }
+                        // 无 tag：表达式本身就是条件（`switch { case x > 0: }`）
+                        None => self.coerce_to(bt, ev),
+                    };
+                    cond = Some(match cond {
+                        None => ev,
+                        Some(p) => {
+                            let dst = self.new_value(bt);
+                            self.emit(Instr::Bin {
+                                dst,
+                                op: rgoc_hir::BinOp::LOr,
+                                lhs: p,
+                                rhs: ev,
+                                typ: bt,
+                            });
+                            dst
+                        }
+                    });
+                }
+                let cond = cond.expect("非 default 的 case 至少有一个表达式");
+                self.set_term(Term::If {
+                    cond,
+                    then_: (bodies[i], Vec::new()),
+                    else_: (no, Vec::new()),
+                });
+                if !last {
+                    chain = no;
+                }
+            }
+        }
+
+        // ── 之后
+        match join {
+            Some(j) => {
+                self.cur = j;
+                self.terminated = false;
+                self.val = merged.0;
+                self.mem = merged.1;
+            }
+            None => self.terminated = true,
+        }
     }
 
     /// 三句式 `for`（`for{}` / `for cond{}` / `for init;cond;post{}`）与回边（`Task 23`）。
@@ -1438,85 +1642,152 @@ impl Fb<'_> {
             else_: (else_b, Vec::new()),
         });
 
-        let base_map = self.val.clone();
+        let base = (self.val.clone(), self.mem.clone());
 
         // ── then 支
         self.cur = then_b;
         self.terminated = false;
-        self.val = base_map.clone();
+        (self.val, self.mem) = base.clone();
         self.stmts(&then.stmts);
-        let then_falls = !self.terminated;
-        let then_tail = self.cur;
-        let then_map = self.val.clone();
+        let mut outs = Vec::new();
+        if !self.terminated {
+            outs.push(BranchOut {
+                block: self.cur,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
 
         // ── else 支
         self.cur = else_b;
         self.terminated = false;
-        self.val = base_map;
+        (self.val, self.mem) = base;
         if let Some(e) = els {
             self.stmt(e);
         }
-        let else_falls = !self.terminated;
-        let else_tail = self.cur;
-        let else_map = self.val.clone();
+        if !self.terminated {
+            outs.push(BranchOut {
+                block: self.cur,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
 
-        match (then_falls, else_falls) {
-            (true, true) => {
-                let join = self.new_block();
-                let mut params: Vec<ValueId> = Vec::new();
-                let (mut ta, mut ea): (Vec<ValueId>, Vec<ValueId>) = (Vec::new(), Vec::new());
-                let mut merged: BTreeMap<SlotId, ValueId> = BTreeMap::new();
-                let slots: BTreeSet<SlotId> =
-                    then_map.keys().chain(else_map.keys()).copied().collect();
-                for s in slots {
-                    match (then_map.get(&s).copied(), else_map.get(&s).copied()) {
-                        (Some(a), Some(b)) if a == b => {
-                            merged.insert(s, a);
-                        }
-                        (Some(a), Some(b)) => {
-                            let t = self.values[a.index()];
-                            let p = self.new_value(t);
-                            params.push(p);
-                            ta.push(a);
-                            ea.push(b);
-                            merged.insert(s, p);
-                        }
-                        // 只在一侧有值：该槽没有提升（`Def` 的交集保证），不该出现
-                        _ => {}
-                    }
+        self.join_branches(outs);
+    }
+
+    /// 把若干条落空的分支合到**新建的汇合块**上（`Task 22` 的两路与 `Task 24` 的 N 路共用）。
+    ///
+    /// `outs` 为空 ⇒ 全部终止 ⇒ 不建块（`V8` 会拒死块）。
+    ///
+    /// # 两块内容都要合：值与 **mem**
+    ///
+    /// 只合值、把 mem 留在「最后建的那条分支」上，是 M6 最隐蔽的一类错：
+    /// `V2`/`V6` 当时都**绿**（旧 mem 同样支配、同块也不乱序），但它把另一条分支里
+    /// 的 `Store` 从 mem 链上摘掉了 —— 之后的写会被当成「与它无序」。
+    /// 实测：`if c { *p = 1 }; return *p` 在只合值时会被 `V6` 抓（合流块里的 `Load`
+    /// 用的 mem 不支配），一旦 mem 也被合上就绿。判据是
+    /// `t_ssa_07_if_之后_mem_必须合流`（断言 load 的 mem 定义在汇合块上）。
+    fn join_branches(&mut self, outs: Vec<BranchOut>) -> Option<BlockId> {
+        if outs.is_empty() {
+            self.terminated = true;
+            return None;
+        }
+        let join = self.new_block();
+        let mut params: Vec<ValueId> = Vec::new();
+        let mut args: Vec<Vec<ValueId>> = vec![Vec::new(); outs.len()];
+        let mut merged_val: BTreeMap<SlotId, ValueId> = BTreeMap::new();
+        let mut merged_mem: BTreeMap<RootId, ValueId> = BTreeMap::new();
+
+        // ── 槽
+        let mut slots: BTreeSet<SlotId> = BTreeSet::new();
+        for o in &outs {
+            slots.extend(o.val.keys().copied());
+        }
+        for s in slots {
+            let vs: Vec<Option<ValueId>> = outs.iter().map(|o| o.val.get(&s).copied()).collect();
+            let Some(first) = vs[0] else {
+                // 第一条分支上就没有 ⇒ 这个槽只在别的分支里活着，不能当汇合值
+                continue;
+            };
+            if vs.iter().any(|v| v.is_none()) {
+                // 有分支缺它 ⇒ 不合并（后续读它必然已被判成「读前未写」⇒ 走内存）
+                continue;
+            }
+            if vs.iter().all(|v| *v == Some(first)) {
+                merged_val.insert(s, first);
+            } else {
+                let t = self.values[first.index()];
+                let p = self.new_value(t);
+                params.push(p);
+                for (k, v) in vs.iter().enumerate() {
+                    args[k].push(v.expect("上面已判过都是 Some"));
                 }
-                self.blocks[join.index()].params = params;
-                self.blocks[then_tail.index()].term = Term::Goto { to: join, args: ta };
-                self.blocks[else_tail.index()].term = Term::Goto { to: join, args: ea };
-                self.cur = join;
-                self.terminated = false;
-                self.val = merged;
-            }
-            (true, false) => {
-                let join = self.new_block();
-                self.blocks[then_tail.index()].term = Term::Goto {
-                    to: join,
-                    args: Vec::new(),
-                };
-                self.cur = join;
-                self.terminated = false;
-                self.val = then_map;
-            }
-            (false, true) => {
-                let join = self.new_block();
-                self.blocks[else_tail.index()].term = Term::Goto {
-                    to: join,
-                    args: Vec::new(),
-                };
-                self.cur = join;
-                self.terminated = false;
-                self.val = else_map;
-            }
-            (false, false) => {
-                // 两侧都终止 ⇒ `if` 之后不可达，不建汇合块（死块会被 V8 拒）
-                self.terminated = true;
+                merged_val.insert(s, p);
             }
         }
+
+        // ── mem
+        let mut roots: BTreeSet<RootId> = BTreeSet::new();
+        for o in &outs {
+            roots.extend(o.mem.keys().copied());
+        }
+        for r in roots {
+            let mut vs: Vec<ValueId> = Vec::new();
+            for o in &outs {
+                match o.mem.get(&r) {
+                    Some(v) => vs.push(*v),
+                    // 这条分支没碰过这个根 ⇒ 在**它自己的块里**补一条种子。
+                    // 语义上等于「本分支对该根没有任何写」—— 与「入口状态」等价，
+                    // 所以这不是编一个值，而是把缺失的初态显式化。
+                    None => {
+                        let v = self.seed_mem_in(o.block, r);
+                        vs.push(v);
+                    }
+                }
+            }
+            let first = vs[0];
+            if vs.iter().all(|v| *v == first) {
+                merged_mem.insert(r, first);
+            } else {
+                let t = self.ptr_ty_of(r);
+                let p = self.new_value(t);
+                params.push(p);
+                for (k, v) in vs.iter().enumerate() {
+                    args[k].push(*v);
+                }
+                merged_mem.insert(r, p);
+            }
+        }
+
+        self.blocks[join.index()].params = params;
+        for (k, o) in outs.iter().enumerate() {
+            debug_assert!(
+                matches!(self.blocks[o.block.index()].term, Term::Unreachable),
+                "落空的分支不该已有终止符（`Unreachable` 是默认值，表示「还没设」）"
+            );
+            self.blocks[o.block.index()].term = Term::Goto {
+                to: join,
+                args: std::mem::take(&mut args[k]),
+            };
+        }
+        self.cur = join;
+        self.terminated = false;
+        self.val = merged_val;
+        self.mem = merged_mem;
+        Some(join)
+    }
+
+    /// 在**指定块**里插一条 mem 种子（不改 `cur`）。
+    fn seed_mem_in(&mut self, b: BlockId, root: RootId) -> ValueId {
+        let t = self.ptr_ty_of(root);
+        let dst = self.new_value(t);
+        self.blocks[b.index()].instrs.push(Instr::Const {
+            dst,
+            c: rgoc_hir::types::ConstVal::Int(0),
+            typ: t,
+        });
+        dst
     }
 
     fn stmts(&mut self, v: &[Stmt]) {
@@ -1612,6 +1883,30 @@ impl Fb<'_> {
                 body,
                 ..
             } => self.stmt_for(init.as_deref(), cond.as_ref(), post.as_deref(), body),
+            Stmt::Switch {
+                init, tag, cases, ..
+            } => self.stmt_switch(init.as_deref(), tag.as_ref(), cases),
+            Stmt::Branch { kind, .. } => match kind {
+                BranchKind::Fallthrough => {
+                    let Some(t) = self.fallthrough else {
+                        todo!("M6/Task 24：`fallthrough` 出现在 case 体之外或最后一个 case")
+                    };
+                    self.set_term(Term::Goto {
+                        to: t,
+                        args: Vec::new(),
+                    });
+                }
+                BranchKind::Break | BranchKind::Continue | BranchKind::Goto => {
+                    todo!(
+                        "M6/Task 25：`{}` 的构建还没实现",
+                        match kind {
+                            BranchKind::Break => "break",
+                            BranchKind::Continue => "continue",
+                            _ => "goto",
+                        }
+                    )
+                }
+            },
             other => todo!(
                 "M6/Task 24–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)
