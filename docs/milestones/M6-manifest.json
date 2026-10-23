@@ -625,7 +625,28 @@
       "戊": 5,
       "己": 5
     },
-    "revisions": []
+    "revisions": [
+      {
+        "id": "R-12-1",
+        "what": "verify 签名加 &TypeTable",
+        "why": "V3 要解析真实类型；类型表是包级的"
+      },
+      {
+        "id": "R-12-2",
+        "what": "V2 不查 mem，归 V6",
+        "why": "否则 V6 的 ① 不可达"
+      },
+      {
+        "id": "R-13-1",
+        "what": "签名存 SsaFunc::call_sigs（ir::Sig）",
+        "why": "SsaFunc 自足"
+      },
+      {
+        "id": "R-16-1",
+        "what": "dump 的 load/store 带 mem 令牌 + 可选写 _ + Effect 不进 dump",
+        "why": "C10 骨架漏了 mem 字段"
+      }
+    ]
   },
   "budget": {
     "effort_calendar": {
@@ -672,5 +693,6 @@
     "workspace_tests": null,
     "gates_pass": 0,
     "gates_total": 9
-  }
+  },
+  "test_ids_total": 64
 }

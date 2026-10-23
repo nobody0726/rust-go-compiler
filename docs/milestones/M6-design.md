@@ -314,12 +314,27 @@ pub struct Effect { pub writes: Vec<RootId>, pub writes_all: bool, pub may_panic
 | `V3` | 类型一致 | `value_types` 与指令语义一致：判等用 `rgoc_types::identical`（已 `pub`）；`Bin` 的操作数规则用**一张表**（`BinOp → 允许的操作数类型`），该表从 `rgoc-check` 提取成 `pub` 或在 `rgoc-types` 重建 —— 两处只能有一份，否则 verifier 会「自己发明一套类型规则」 |
 | `V4` | 前驱后继互逆、entry 无前驱 | 双向对账 |
 | `V5` | 调用结果数 == 签名结果数 | `dsts.len() == sig.results.len()` |
-| `V6` | mem 值被支配 + 同根同块不乱序 | ① 每个 `Load/Store` 的 `mem` 操作数**支配**该指令（`V2` 的推论，但单独查，因为 mem 是隐式链）；② 同块内同根的两个访存，后者的 `mem` 必须等于前者（`Store` 的 `dst`），不得跳过 |
+| `V6` | mem 值被支配 + 同根同块不乱序 | ① 每个 `Load/Store` 的 `mem` 操作数**支配**该指令；② 同块内同根的两个访存，后者的 `mem` 必须等于前者（`Store` 的 `dst`），不得跳过。**`V2` 不查 `mem`**（`R-12-2`：两条不变式查同一件事 ⇒ 后一条永远不可达） |
 | `V7` | 块参数个数 == 每条前驱给参个数 | 边上的 `args.len() == target.params.len()` |
 | `V8` | 可达性 | 非 entry 块**必须至少有一条前驱**；**builder 不产出不可达块**（真死块在构建期丢弃，不靠标记） |
 | `V9` | 取址即建根 | 每个 `AddrOf` 的 `root` 在 `slot_root` 里 |
 
 **反例必须手写 IR**（`D-M6-11`）：每次拒绝要带**不变式名 + 块号 + 指令下标**，这样「拒了但不知道拒了哪条」不会发生。
+
+**入口签名**（`R-12-1` / `R-13-1`，实现期修订）：
+
+```rust
+pub fn verify(f: &SsaFunc, tt: &TypeTable) -> Result<(), VerifyError>;
+```
+
+`&TypeTable` 是 `V3` 的原料（`SsaFunc` 只存 `TypeId`，类型表是**包级**的，不进函数）。
+`V5` 要的签名摘要存在 `SsaFunc::call_sigs: BTreeMap<FuncId, Sig>` 里 —— 让 `SsaFunc`
+**自足**（dump 确定性、单函数测试、后续 passes 都不必拖模块级上下文）。
+
+**九条之外没有查的**：`Call` 与 `mem` 链的关系（`Call` 没有 mem 操作数 ⇒ 「写 `writes`
+里那个根的调用」与前后 load/store 的次序在 IR 里没有结构性位置）。M6 的口径是
+`V6` 只管本函数自己的 load/store 链，跨调用次序由 `effect` 摘要约束、是 **pass 侧**的义务
+（`M6d`）。这条登记为 `G-M6-01`。
 
 ### 3.5 memory 模型（`D-M6-5/6/9`）
 
