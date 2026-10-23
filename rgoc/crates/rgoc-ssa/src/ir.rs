@@ -334,7 +334,7 @@ pub enum Instr {
 }
 
 /// 终止符。**边上的实参挂在终止符上**（`V7` 的比对面）。
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Term {
     /// 无条件跳转。
     Goto {
