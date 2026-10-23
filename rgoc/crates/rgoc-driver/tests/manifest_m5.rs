@@ -159,7 +159,8 @@ fn points_at_something(s: &str) -> bool {
 /// 清单一类的文件：**非空且非 `#` 注释**的行数。
 fn list_lines(rel: &str) -> usize {
     let p = repo_root().join(rel);
-    let text = std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("读不到 {}：{e}", p.display()));
+    let text =
+        std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("读不到 {}：{e}", p.display()));
     text.lines()
         .filter(|l| {
             let t = l.trim();
@@ -169,7 +170,9 @@ fn list_lines(rel: &str) -> usize {
 }
 
 fn gaps_raw(v: &Value) -> &[Value] {
-    v["open_gaps"]["items"].as_array().map_or(&[], Vec::as_slice)
+    v["open_gaps"]["items"]
+        .as_array()
+        .map_or(&[], Vec::as_slice)
 }
 
 /// 所有 `open_gaps.items[].gate`/`.note` 里出现的**完整词**（`EX-2`、`T-EX-40` …）。
@@ -199,8 +202,21 @@ const NOT_DONE_MARKERS: &[&str] = &["未兑现", "未达成", "尚未绿", "仍�
 fn check(v: &Value, tests_md: &str) -> Result<(), String> {
     // ① 顶层结构
     for k in [
-        "stage", "name", "generated_at", "filled_at", "status", "scope", "docs", "crates",
-        "corpus_lists", "gate", "coverage", "test_ids", "unsupported", "budget", "open_gaps",
+        "stage",
+        "name",
+        "generated_at",
+        "filled_at",
+        "status",
+        "scope",
+        "docs",
+        "crates",
+        "corpus_lists",
+        "gate",
+        "coverage",
+        "test_ids",
+        "unsupported",
+        "budget",
+        "open_gaps",
         "phase_summary",
     ] {
         if v.get(k).is_none() {
@@ -273,7 +289,9 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
     for (k, g) in gate {
         let status = g["status"].as_str().unwrap_or_default();
         if !matches!(status, "pass" | "partial" | "fail") {
-            return Err(format!("gate: {k} 的 status `{status}` 不在 pass/partial/fail"));
+            return Err(format!(
+                "gate: {k} 的 status `{status}` 不在 pass/partial/fail"
+            ));
         }
         for f in ["name", "definition", "evidence"] {
             if !nonempty(g, f) {
@@ -327,7 +345,9 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
         let id = t["id"].as_str().unwrap_or_default();
         let verdict = t["verdict"].as_str().unwrap_or_default();
         if !matches!(verdict, "pass" | "partial") {
-            return Err(format!("test_ids: {id} 的 verdict `{verdict}` 不在 pass/partial"));
+            return Err(format!(
+                "test_ids: {id} 的 verdict `{verdict}` 不在 pass/partial"
+            ));
         }
         let g = t["gate"].as_str().unwrap_or_default();
         if !want_gates.contains(g) {
@@ -413,7 +433,9 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
         }
         let pe = u["positive_evidence"].as_str().unwrap_or_default();
         if !points_at_something(pe) {
-            return Err(format!("unsupported: {id} 缺证据指针（T-EX-* 或路径）：{pe:?}"));
+            return Err(format!(
+                "unsupported: {id} 缺证据指针（T-EX-* 或路径）：{pe:?}"
+            ));
         }
     }
 
@@ -498,7 +520,9 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
     //   ① 两处记录必须一致（budget.measured 与 phase_summary.workspace_tests 同源）；
     //   ② 不得小于 M4 收口的基线 1541（缩水 = 有人改小了数字而没重跑）。
     const WORKSPACE_TESTS_AT_M4_BASELINE: u64 = 1541;
-    let measured = b["measured"]["workspace_tests_passed"].as_u64().unwrap_or(0);
+    let measured = b["measured"]["workspace_tests_passed"]
+        .as_u64()
+        .unwrap_or(0);
     let summary = v["phase_summary"]["workspace_tests"]["passed"]
         .as_u64()
         .unwrap_or(0);
@@ -536,7 +560,10 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
     // ⑨ phase_summary：52 任务、四条命令、≥5 条脚本；done 当且仅当九条门禁全 pass
     let ps = &v["phase_summary"];
     if ps["tasks"].as_u64() != Some(52) {
-        return Err(format!("phase_summary: tasks 应为 52，实际 {:?}", ps["tasks"]));
+        return Err(format!(
+            "phase_summary: tasks 应为 52，实际 {:?}",
+            ps["tasks"]
+        ));
     }
     if !nonempty(ps, "status") || !nonempty(ps, "completed_tasks") {
         return Err("phase_summary: status / completed_tasks 空".into());
@@ -578,10 +605,12 @@ fn check(v: &Value, tests_md: &str) -> Result<(), String> {
 fn load() -> (Value, String) {
     let mp = manifest_path();
     let tp = tests_doc_path();
-    let text = std::fs::read_to_string(&mp).unwrap_or_else(|e| panic!("读不到 {}：{e}", mp.display()));
-    let v: Value =
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{} 不是合法 JSON：{e}", mp.display()));
-    let doc = std::fs::read_to_string(&tp).unwrap_or_else(|e| panic!("读不到 {}：{e}", tp.display()));
+    let text =
+        std::fs::read_to_string(&mp).unwrap_or_else(|e| panic!("读不到 {}：{e}", mp.display()));
+    let v: Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("{} 不是合法 JSON：{e}", mp.display()));
+    let doc =
+        std::fs::read_to_string(&tp).unwrap_or_else(|e| panic!("读不到 {}：{e}", tp.display()));
     (v, doc)
 }
 

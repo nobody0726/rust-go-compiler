@@ -90,6 +90,7 @@
 | 4 | **反腿「期望红在」有两处预测未兑现**（`R-3-1`） | 预测错 | ① `T-EX-68` 实测红在 `T-EX-06/24/50`（`T-EX-42` 不比字节）；② `T-EX-70` **首轮没红**，补 `compared == 69` 分母后才红 —— 这是本轮唯一一处**测试改动** | `scripts/mutation-m5-notes.md` |
 | 5 | **`manifest` 的 `measured` 曾比实测少 2 条测试、1 个 suite**（写 1606/149，实测 1608/150） | 记录滞后 | **已对齐**：收口期复跑后把 `budget.measured` 与 `phase_summary.workspace_tests` 两处同时改成 1608 / 150（判据口径不变，只改数字） | `M5-manifest.json` 的 `budget.measured` |
 | 6 | **Task 52 的三项文档回写未做**：`C3` 升正式（仍 7 处「待验证」）、`GAP-01` 的 `PIPE-*`/`RT-*` 落点、`03-roadmap` 状态节 | 未完成 | 已登记为 `G-M5-07..09`（见 §6）；`C3` 的升正式需要先补「四项待验证」的答案，不是改个标题 | `M5-manifest.json` 的 `open_gaps` |
+| 7 | **`cargo fmt --all --check` 在收口时实际是红的**（`manifest_m5.rs` 从未格式化，8 处 diff） | 门禁自报与实际不符 | 收口期跑四条 cargo 时才发现；已 `cargo fmt --all` 修好并复跑（`fmt_check=0`、clippy 无 warning、测试仍 1608 绿）。**这条说明「manifest 里的 exit 0」不能代替自己跑一遍** | 本次提交（`fix(fmt)`） |
 
 ---
 
@@ -128,7 +129,7 @@
 | `EX-5` defer/panic/recover | ✅ `pass` | `T-EX-34..38` 全绿（注册时求值 + LIFO、recover 直接调用限制、命名结果改写、嵌套覆盖、未捕获 `panic:` + 退出码 2） |
 | `EX-6` 顺序语料闭环 | ✅ `pass` | §4 全表；两向断言在 `run_corpus.rs` |
 | `EX-7` 显式帧与资源上限 | ✅ `pass` | `T-EX-52`（三道上限各一条超限 fixture：退出码 2 + 稳定消息 + 宿主不 abort）+ `T-EX-17`（1000 层通过） |
-| `EX-8` 四条 cargo + 既有自检 | ⚠️ `partial` | 四条 cargo 全 exit 0（1608 passed / 0 failed）；五条自检全过（m0 232 断言 / m1 / ast-golden / ast-testdata / ast-stdlib）；`T-EX-62` 只兑现「无回退」⇒ `G-M5-05` |
+| `EX-8` 四条 cargo + 既有自检 | ⚠️ `partial` | 四条 cargo 全 exit 0（1608 passed / 0 failed）—— **`fmt` 在收口时曾红，已修（§5 第 7 条）**；五条自检全过（m0 232 断言 / m1 / ast-golden / ast-testdata / ast-stdlib）；`T-EX-62` 只兑现「无回退」⇒ `G-M5-05` |
 | `EX-9` 反向验证 + 交付 B | ✅ `pass` | `scripts/mutation-m5-notes.md`（8/8 实证变红并复原）+ 本报告 |
 
 **`status` = `partial`，5 pass / 4 partial。** 与 `M5-manifest.json` 的 `phase_summary.gates_pass = 5` 一致。
