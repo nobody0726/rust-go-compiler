@@ -1,0 +1,11 @@
+# M6 的 SSA 拒绝清单（`ssa-rejected.txt`）—— 与 `run-selected.txt`（69 行）互补。
+#
+# 格式：<相对路径>	<码>	<原因>
+# 码：SSA-UNSUPPORTED-{CLOSURE,DEFER,IFACE-DYN,MAP,CHAN,RANGE-FUNC,GENERIC}
+#
+# 纪律（M6-tests.md §4.2 / §5）：
+#  * `能建图 N + 拒绝 M == 69`（两向断言，见 `rgoc-driver/tests/ssa_slice.rs`）
+#  * 每行必须有码；码必须落在 §5 的白名单里
+#  * 由 `tools/run-oracle/ssa-classify.sh` 产出，**Task 39 才冻结**（`R-6-1`）
+#
+# 现在为空：`ssa --verify` 尚未接入 IR（M6/Task 16 起），分类器把 69 行全判为 M。
