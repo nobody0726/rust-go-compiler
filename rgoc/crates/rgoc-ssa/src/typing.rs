@@ -35,10 +35,18 @@ pub fn type_of(f: &SsaFunc, v: crate::ir::ValueId) -> Option<TypeId> {
     f.value_types.get(v.index()).copied()
 }
 
-/// 是否 `bool`。
+/// 是否 `bool`（含未类型化布尔常量）。
+///
+/// # 为什么判据要认「未类型化」
+///
+/// 检查器会把常量表达式**折叠**掉：`1 + 2*3` 到 HIR 时已经是一个 `Const(7)`，
+/// 而它的静态类型是 `untyped int`。所以 SSA 里确实会出现未类型化的基本类型 ——
+/// 它们不是「脏数据」，而是「还没被上下文定型的常量」。判据按**类别**算：
+/// 未类型化整数是整数，未类型化布尔是布尔。真正的定型由 M9 的对象模型负责，
+/// 不是 verifier 的活（它不能替检查器决定 `7` 该是 `int` 还是 `int64`）。
 #[must_use]
 pub fn is_bool(tt: &TypeTable, t: TypeId) -> bool {
-    matches!(basic(tt, t), Some(BasicId::Bool))
+    matches!(basic(tt, t), Some(BasicId::Bool | BasicId::UntypedBool))
 }
 
 /// 是否整数（含 `uintptr`）。
@@ -48,6 +56,8 @@ pub fn is_integer(tt: &TypeTable, t: TypeId) -> bool {
         basic(tt, t),
         Some(
             BasicId::Int
+                | BasicId::UntypedInt
+                | BasicId::UntypedRune
                 | BasicId::Int8
                 | BasicId::Int16
                 | BasicId::Int32
@@ -68,14 +78,21 @@ pub fn is_numeric(tt: &TypeTable, t: TypeId) -> bool {
     is_integer(tt, t)
         || matches!(
             basic(tt, t),
-            Some(BasicId::Float32 | BasicId::Float64 | BasicId::Complex64 | BasicId::Complex128)
+            Some(
+                BasicId::Float32
+                    | BasicId::Float64
+                    | BasicId::Complex64
+                    | BasicId::Complex128
+                    | BasicId::UntypedFloat
+                    | BasicId::UntypedComplex
+            )
         )
 }
 
 /// 是否字符串。
 #[must_use]
 pub fn is_string(tt: &TypeTable, t: TypeId) -> bool {
-    matches!(basic(tt, t), Some(BasicId::String))
+    matches!(basic(tt, t), Some(BasicId::String | BasicId::UntypedString))
 }
 
 /// 取基本类型（非基本类型返回 `None`）。
@@ -123,6 +140,11 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
                 return Err(format!("const 的 dst 类型 {t:?} 与 typ {typ:?} 不符"));
             }
             let ok = match c {
+                // `Int(0)` 在**任意**类型上表示「该类型的零值」（`R-20-1`）：
+                // `nil`（指针/slice/map/func/接口）、结构体的零值、以及 mem 令牌的种子
+                // 都用它。SSA 没有独立的 nil 常量，而 `ConstVal` 属于 M5 的契约，
+                // 不为 SSA 加第 5 个变体 —— 所以「0 = 零值」这条约定必须写在这里。
+                ConstVal::Int(n) if *n == 0 => true,
                 ConstVal::Int(_) => is_integer(tt, t),
                 ConstVal::Float(_) => {
                     matches!(basic(tt, t), Some(BasicId::Float32 | BasicId::Float64))

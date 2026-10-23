@@ -47,8 +47,8 @@ fn program_of(name: &str, src: &str) -> (Program, TypeTable) {
 
 #[test]
 fn t_ssa_15_空函数建一块零指令() {
-    let (program, tt) = program_of("empty-main", "package main\n\nfunc main() {}\n");
-    let out = build(&program, &tt);
+    let (program, mut tt) = program_of("empty-main", "package main\n\nfunc main() {}\n");
+    let out = build(&program, &mut tt);
 
     assert!(out.rejected.is_empty(), "空函数不该被拒");
     assert_eq!(out.module.funcs.len(), 1, "一个函数一个 SsaFunc");
@@ -67,11 +67,11 @@ fn t_ssa_15_空函数建一块零指令() {
 #[test]
 fn t_ssa_15_形参成为入口块参数() {
     // 形参槽 → 入口块块参数（`C10` 规则 2：入口块的 params 就是函数形参）
-    let (program, tt) = program_of(
+    let (program, mut tt) = program_of(
         "params",
         "package main\n\nfunc f(a int, b bool) {}\n\nfunc main() {}\n",
     );
-    let out = build(&program, &tt);
+    let out = build(&program, &mut tt);
     assert!(out.rejected.is_empty());
     let f = out
         .module
@@ -87,8 +87,8 @@ fn t_ssa_15_形参成为入口块参数() {
 
 #[test]
 fn t_ssa_15_模块保留_globals_与_main() {
-    let (program, tt) = program_of("globals", "package main\n\nvar g int\n\nfunc main() {}\n");
-    let out = build(&program, &tt);
+    let (program, mut tt) = program_of("globals", "package main\n\nvar g int\n\nfunc main() {}\n");
+    let out = build(&program, &mut tt);
     assert_eq!(out.module.globals.len(), 1, "包级变量要进 Module::globals");
     assert_eq!(
         out.module.globals[0].0, 0,
@@ -202,4 +202,217 @@ fn t_ssa_27_没有取址就没有根() {
     assert!(scan_addressed(&tt, &func.body).is_empty());
     let (roots, slot_root) = roots_of(&tt, &func.body);
     assert!(roots.is_empty() && slot_root.is_empty());
+}
+
+// ── Task 19–21：提升、直线表达式、赋值 ───────────────────────────────
+
+use rgoc_ssa::ir::{Instr, SsaFunc};
+
+fn func_named<'a>(out: &'a rgoc_ssa::build::BuildOutcome, name: &str) -> &'a SsaFunc {
+    out.module
+        .funcs
+        .iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("没建出 {name}"))
+}
+
+/// 直接看指令（`kind_of_instr` 的白名单之外还有 `Instr` 的字段，所以这里用 enum 匹配）
+fn instrs(f: &SsaFunc) -> Vec<&Instr> {
+    f.blocks.iter().flat_map(|b| b.instrs.iter()).collect()
+}
+
+fn count_kind(f: &SsaFunc, kind: &str) -> usize {
+    instrs(f)
+        .iter()
+        .filter(|i| rgoc_ssa::ir::kind_of_instr(i) == kind)
+        .count()
+}
+
+#[test]
+fn t_ssa_15_直线表达式建出常量与算术() {
+    // 注意：常量表达式会被**检查器**折叠（`1 + 2*3` 到 HIR 只剩一个 `Const(7)`），
+    // 所以要看算术指令必须让操作数来自变量。
+    let (program, mut tt) = program_of(
+        "linear",
+        "package main\n\nfunc f(n int) int {\n\ta := n + 1\n\treturn a * 2\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    assert!(out.rejected.is_empty());
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "直线表达式必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+
+    assert_eq!(count_kind(f, "const"), 2, "两条常量（1 与 2）");
+    // `kind_of_instr` 只到「bin」这一层（加/乘都是 `bin`），所以按 `op` 细分
+    let ops: Vec<rgoc_hir::BinOp> = instrs(f)
+        .into_iter()
+        .filter_map(|i| match i {
+            Instr::Bin { op, .. } => Some(*op),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ops,
+        vec![rgoc_hir::BinOp::Add, rgoc_hir::BinOp::Mul],
+        "先 `n + 1` 再 `a * 2`（求值顺序也要对）"
+    );
+    assert_eq!(
+        count_kind(f, "load") + count_kind(f, "store"),
+        0,
+        "纯表达式不该访存"
+    );
+    assert!(f.roots.is_empty(), "纯表达式不该建根");
+    assert_eq!(count_kind(f, "load"), 0);
+}
+
+#[test]
+fn t_ssa_19_无取址函数里没有访存也没有根() {
+    // `T-SSA-26`：`a` 确定赋值且未取址 ⇒ 全程纯值
+    let (program, mut tt) = program_of(
+        "promote",
+        "package main\n\nfunc f() int {\n\ta := 1\n\ta = a + 1\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "提升后的图必须过 verifier");
+    assert_eq!(count_kind(f, "load"), 0, "不该有 load：{f:#?}");
+    assert_eq!(count_kind(f, "store"), 0, "不该有 store：{f:#?}");
+    assert!(f.roots.is_empty(), "不该建任何根：{:?}", f.roots);
+    assert!(f.slot_root.is_empty(), "slot_root 必须空");
+}
+
+#[test]
+fn t_ssa_26_加一行取址就必须出现根与访存() {
+    // 反向守卫：同一份函数体加 `p := &a; _ = p`，提升必须让位给内存
+    let (program, mut tt) = program_of(
+        "address-taken",
+        "package main\n\nfunc f() int {\n\ta := 1\n\tp := &a\n\t_ = p\n\ta = a + 1\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "取址后的图必须过 verifier");
+    assert_eq!(f.roots.len(), 1, "一个槽根：{:?}", f.roots);
+    assert_eq!(f.slot_root.len(), 1, "slot_root 一条");
+    assert!(count_kind(f, "store") >= 1, "赋值必须走 store：{f:#?}");
+    assert!(count_kind(f, "load") >= 1, "读必须走 load：{f:#?}");
+}
+
+#[test]
+fn t_ssa_15_短声明与赋值更新当前值() {
+    // `a, b := 1, 2; a = b; return a` ⇒ return 的就是 `const 2` 那个值
+    let (program, mut tt) = program_of(
+        "assign",
+        "package main\n\nfunc f() int {\n\ta, b := 1, 2\n\ta = b\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok());
+
+    // 找出 const 2 的值
+    let two = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Const { dst, c, .. } if *c == rgoc_hir::types::ConstVal::Int(2) => Some(*dst),
+        _ => None,
+    });
+    let two = two.expect("没有 const 2");
+    match &f.blocks[0].term {
+        rgoc_ssa::ir::Term::Return(vs) => {
+            assert_eq!(vs, &vec![two], "return 的必须是 `2` 那个值（当前值映射）");
+        }
+        other => panic!("终止符不是 return：{other:?}"),
+    }
+    assert_eq!(count_kind(f, "copy"), 0, "不该靠 copy 搬运：{f:#?}");
+}
+
+#[test]
+fn t_ssa_28_并行赋值a_b_eq_b_a() {
+    // `a, b := 1, 2; a, b = b, a` 之后 `a` 必须是 2、`b` 是 1。
+    // 判据落在**结构**上：`a*10+b` 的两个操作数分别是 const2 与 const1。
+    let (program, mut tt) = program_of(
+        "parallel",
+        "package main\n\nfunc f() int {\n\ta, b := 1, 2\n\ta, b = b, a\n\treturn a*10 + b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok());
+
+    let mut one = None;
+    let mut two = None;
+    for i in instrs(f) {
+        if let Instr::Const { dst, c, .. } = i {
+            match c {
+                rgoc_hir::types::ConstVal::Int(1) => one = Some(*dst),
+                rgoc_hir::types::ConstVal::Int(2) => two = Some(*dst),
+                _ => {}
+            }
+        }
+    }
+    let (one, two) = (one.expect("缺 const 1"), two.expect("缺 const 2"));
+    let mul = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Bin {
+            dst, op, lhs, rhs, ..
+        } if *op == rgoc_hir::BinOp::Mul => Some((*dst, *lhs, *rhs)),
+        _ => None,
+    });
+    let (mul_dst, ml, _) = mul.expect("缺乘法");
+    assert_eq!(ml, two, "`a*10` 的 `a` 必须是 const 2（交换成功）");
+    let add = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Bin { dst, op, rhs, .. } if *op == rgoc_hir::BinOp::Add && *dst != mul_dst => {
+            Some(*rhs)
+        }
+        _ => None,
+    });
+    assert_eq!(
+        add,
+        Some(one),
+        "`+ b` 的 `b` 必须是 const 1（没被先写 a 串掉）"
+    );
+}
+
+#[test]
+fn t_ssa_21_字段赋值让槽进根表() {
+    // `s.f = 1` 不是取址，但也是「部分写」⇒ 整个 s 走内存（SSA 没有改字段的指令）
+    let (program, mut tt) = program_of(
+        "partial-write",
+        "package main\n\ntype S struct{ f int }\n\nfunc g() int {\n\tvar s S\n\ts.f = 1\n\treturn s.f\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let g = func_named(&out, "g");
+    assert!(verify(g, &tt).is_ok(), "部分写的图必须过 verifier：{g:#?}");
+    assert_eq!(g.roots.len(), 1, "s 必须成根：{:?}", g.roots);
+    assert!(count_kind(g, "field") >= 1, "字段地址要出现 field：{g:#?}");
+    assert!(count_kind(g, "store") >= 1, "`s.f = 1` 要写内存");
+}
+
+#[test]
+fn t_ssa_19_未赋值的槽留在内存里() {
+    // `var a int` 从没被写过就返回 ⇒ 读的是**零值**。SSA 没有「零值」指令，
+    // 所以这个槽必须留在内存里，由帧初始化的零值表负责。
+    let (program, mut tt) = program_of(
+        "uninit",
+        "package main\n\nfunc f() int {\n\tvar a int\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    assert_eq!(f.roots.len(), 1, "未赋值的槽必须成根：{:?}", f.roots);
+    assert!(count_kind(f, "load") >= 1, "读它必须走 load：{f:#?}");
+}
+
+#[test]
+fn t_ssa_21_只写不读的字段赋值也要建根() {
+    // `s.f = 1` 之后再也不读 s：这时「读前未赋值」那条**兜不住**它，
+    // 只有「部分写」这条能让 s 进根表 —— 否则写指令无处可写（会 panic）。
+    let (program, mut tt) = program_of(
+        "partial-only-write",
+        "package main\n\ntype S struct{ f int }\n\nfunc g() {\n\tvar s S\n\ts.f = 1\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let g = func_named(&out, "g");
+    assert!(verify(g, &tt).is_ok(), "必须过 verifier：{g:#?}");
+    assert_eq!(g.roots.len(), 1, "s 必须成根：{:?}", g.roots);
+    assert!(count_kind(g, "store") >= 1, "写字段要走 store");
 }
