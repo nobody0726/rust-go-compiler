@@ -6,12 +6,19 @@
 //! 一张同时违反 `V1` 与 `V4` 的图必须**只**报 `V1`，否则同一张图在不同实现下
 //! 报不同码，反例测试就退化成「反正它是红的」。
 //!
-//! # 当前实现范围（Task 12）
+//! # 当前实现范围（Task 13）
 //!
 //! `V1`（每值恰好定义一次）/ `V2`（定义支配使用）/ `V3`（类型自洽）/
-//! `V4`（前驱后继互逆、入口无前驱）/ `V8`（可达性）。`V5/V6/V7/V9` 在 Task 13–14
-//! 落地 —— **这里不写「占位通过」**，未实现的检查直接不跑，且本注释必须随实现
-//! 一起删改（否则注释会变成谎言）。
+//! `V4`（前驱后继互逆、入口无前驱）/ `V5`（调用与签名一致）/ `V6`（mem 链）/
+//! `V7`（块参数计数）/ `V8`（可达性）/ `V9`（取址即建根）。**九条全在**（Task 14）。
+//!
+//! # 九条之外**没有**查的：调用与 mem 链的关系
+//!
+//! `Instr::Call` 没有 mem 操作数、也不产出 mem。所以「一个写 `writes` 里那个根的
+//! 调用，和它前后的 load/store 之间怎么排序」在 IR 里**没有结构性的位置**。
+//! M6 的口径是：`V6` 只管**本函数自己的 load/store 链**；跨调用的顺序由 `effect`
+//! 摘要约束，那是 **pass 侧**的义务（M6d），不是 verifier 能查的不变式。
+//! 这条不自欺 —— 它记在 `G-M6-01`（收口时登记），并有 `T-SSA-36` 的语料做行为侧证据。
 //!
 //! # 为什么要 `&TypeTable`
 //!
@@ -32,11 +39,15 @@
 //! `VerifyError::idx` 是**块内位置序号**：先块参数（`0..params.len()`），
 //! 再指令（`params.len()..`）。没有哨兵值，也不需要知道「这是参数还是指令」。
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::cfg::Cfg;
 use crate::dom::DomTree;
-use crate::ir::{BlockId, CalleeRef, Instr, SsaFunc, Term, ValueId, kind_of_instr, kind_of_term};
+use crate::ir::{
+    BlockId, CalleeRef, Instr, Root, RootId, SsaFunc, Term, ValueId, kind_of_instr, kind_of_root,
+    kind_of_term,
+};
 use rgoc_types::TypeTable;
 
 /// 九条不变式的编号（顺序即执行顺序；进 dump 与断言，不许重排）。
@@ -93,9 +104,11 @@ pub fn verify(f: &SsaFunc, tt: &TypeTable) -> Result<(), VerifyError> {
     check_v2(f, &cfg, &dom, &def)?;
     check_v3(f, &cfg, tt)?;
     check_v4(f, &cfg)?;
-    // V5 / V6 / V7：Task 13 / 14
+    check_v5(f)?;
+    check_v6(f, &dom, &def)?;
+    check_v7(f)?;
     check_v8(f, &cfg)?;
-    // V9：Task 14
+    check_v9(f)?;
     Ok(())
 }
 
@@ -204,10 +217,20 @@ fn define(
     Ok(())
 }
 
-/// 一条指令用到的全部值（**不带通配的 `match`**）。
+/// 一条指令用到的**普通值**（**不带通配的 `match`**）。
 ///
 /// 口径：`Call` 的接收者（`Method.recv` / `Indirect`）**算使用** —— 它们是值；
 /// `Func` / `Builtin` 不是值，不算。
+///
+/// # `mem` 为什么**不**在这里
+///
+/// `mem` 是**线性令牌**，不是普通值：它的正确性判据是「同根串行 + 支配」
+/// （`V6`），不是「被定义支配」这一条。若把它算进 `V2` 的使用集，`V2` 会先报，
+/// 而 `V6` 的 ① 永远不可达 —— 一条**永远不可能失败**的断言等于没有。
+/// （这类「两条不变式覆盖同一件事 ⇒ 一条永远绿」的坑，M4 收口时踩过：
+/// 当时那条断言与另一条逻辑等价，合成反例才抓住。）
+///
+/// 所以分工是硬的：`V2` 判普通值的支配，`V6` 判 mem 的支配与串行。
 fn uses_of(i: &Instr) -> Vec<ValueId> {
     let mut out = Vec::new();
     match i {
@@ -236,12 +259,9 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
             out.extend(len.iter().copied());
             out.extend(cap.iter().copied());
         }
-        Instr::Load { mem, addr, .. } => {
-            out.push(*mem);
-            out.push(*addr);
-        }
-        Instr::Store { mem, addr, val, .. } => {
-            out.push(*mem);
+        // mem 交给 V6（见函数头）
+        Instr::Load { addr, .. } => out.push(*addr),
+        Instr::Store { addr, val, .. } => {
             out.push(*addr);
             out.push(*val);
         }
@@ -321,7 +341,7 @@ fn check_one_use(
     v: ValueId,
     where_: &str,
 ) -> Result<(), VerifyError> {
-    let Some(&(db, didx)) = def.get(v.index()) else {
+    if def.get(v.index()).is_none() {
         // 到不了：`V1` 已要求每个值都有定义点。留着是为了不 panic。
         return Err(err(
             "V2",
@@ -329,33 +349,42 @@ fn check_one_use(
             idx,
             format!("v{} 没有定义点（这条本该由 V1 报）", v.0),
         ));
-    };
+    }
+    match use_violation(dom, def, b, idx, v, where_) {
+        Some(detail) => Err(err("V2", b, idx, detail)),
+        None => Ok(()),
+    }
+}
+
+/// 支配判定的**共用内核**（`V2` 与 `V6` 都用它，只是报不同不变式）。
+///
+/// 只返回 `Option<String>`（人读原因），不造 `VerifyError` —— 否则这里就得知道
+/// 调用方是 `V2` 还是 `V6`，那会让「同一条判据」被写两遍。
+fn use_violation(
+    dom: &DomTree,
+    def: &[(BlockId, usize)],
+    b: BlockId,
+    idx: usize,
+    v: ValueId,
+    where_: &str,
+) -> Option<String> {
+    let &(db, didx) = def.get(v.index())?;
     if db == b {
         if didx >= idx {
-            return Err(err(
-                "V2",
-                b,
-                idx,
-                format!(
-                    "v{} 在 b{}[{didx}] 定义，却在它之前（[{idx}]，{where_}）被使用",
-                    v.0, b.0
-                ),
+            return Some(format!(
+                "v{} 在 b{}[{didx}] 定义，却在它之前（[{idx}]，{where_}）被使用",
+                v.0, b.0
             ));
         }
-        return Ok(());
+        return None;
     }
     if !dom.dominates(db, b) {
-        return Err(err(
-            "V2",
-            b,
-            idx,
-            format!(
-                "v{} 在 b{}[{didx}] 定义，但 b{} 不支配 b{}（{where_}）",
-                v.0, db.0, db.0, b.0
-            ),
+        return Some(format!(
+            "v{} 在 b{}[{didx}] 定义，但 b{} 不支配 b{}（{where_}）",
+            v.0, db.0, db.0, b.0
         ));
     }
-    Ok(())
+    None
 }
 
 /// `V3`：类型自洽（判据全在 [`crate::typing`]，这里只负责定位与打包）。
@@ -500,6 +529,253 @@ fn check_v4(f: &SsaFunc, cfg: &Cfg) -> Result<(), VerifyError> {
                 cfg.preds(entry).len()
             ),
         ));
+    }
+    Ok(())
+}
+
+/// `V5`：调用与签名一致（结果个数、实参个数）。
+///
+/// # 三档口径（都不许「查不了就算过」）
+///
+/// | 被调方 | 判据 |
+/// |---|---|
+/// | `Func` / `Method` | 签名必须在 `call_sigs` 里；个数逐个对；**查不到就报错** |
+/// | `Builtin` | 不判 —— 内建元数是 `rgoc-interp` 的实现细节（`println` 可变长、`len` 不返回值），在 IR 层既查不准也不该查 |
+/// | `Indirect` | 不判 —— 签名运行期才定（M6 允许建图，`effect` 记 `writes_all`） |
+///
+/// 变参函数（`Sig::variadic`）：`args.len()` 允许从 `params - 1` 起（变参那一段
+/// 可以是空）。**这是唯一一处「个数不相等也合法」的地方**，所以它必须由 `Sig`
+/// 显式带出来，不能靠猜。
+fn check_v5(f: &SsaFunc) -> Result<(), VerifyError> {
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let b = BlockId(bi as u32);
+        let base = blk.params.len();
+        for (ii, ins) in blk.instrs.iter().enumerate() {
+            let Instr::Call {
+                dsts, callee, args, ..
+            } = ins
+            else {
+                continue;
+            };
+            let idx = base + ii;
+            let fid = match callee {
+                CalleeRef::Func(x) => Some(*x),
+                CalleeRef::Method { func, .. } => Some(*func),
+                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) => None,
+            };
+            let Some(fid) = fid else { continue };
+            let Some(sig) = f.call_sigs.get(&fid) else {
+                return Err(err(
+                    "V5",
+                    b,
+                    idx,
+                    format!(
+                        "被调方 func#{} 没有签名记录 —— 「查不了」不许当成通过",
+                        fid.0
+                    ),
+                ));
+            };
+            if dsts.len() != sig.results {
+                return Err(err(
+                    "V5",
+                    b,
+                    idx,
+                    format!(
+                        "调用 func#{} 的结果个数不符：接了 {} 个，签名有 {} 个",
+                        fid.0,
+                        dsts.len(),
+                        sig.results
+                    ),
+                ));
+            }
+            let ok = if sig.variadic {
+                args.len() + 1 >= sig.params
+            } else {
+                args.len() == sig.params
+            };
+            if !ok {
+                return Err(err(
+                    "V5",
+                    b,
+                    idx,
+                    format!(
+                        "调用 func#{} 的实参个数不符：给了 {} 个，签名要 {}{}",
+                        fid.0,
+                        args.len(),
+                        sig.params,
+                        if sig.variadic {
+                            "（变参，可少给末尾那段）"
+                        } else {
+                            ""
+                        }
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `V6`：mem 链（`M6-design.md` §3.5）。
+///
+/// ① 每条 `Load`/`Store` 的 `mem` 操作数必须**支配**该指令（同块则须在前）；
+/// ② **同块同根**的连续访存必须逐个接续：后者的 `mem` 必须等于前者留下的 mem
+///    （`Store` 留它自己的 `dst`，`Load` 不改 mem，仍留原来那个）。
+///
+/// # ②为什么只查同块
+///
+/// 跨块的「上一个同根访存在哪」不是一个结构事实（要沿支配树找最近公共前驱），
+/// 它是 **mem 值的支配性**问题 —— 已经由 ① 覆盖。②只需钉住最容易写错的那一处：
+/// 同一个块里 store 之后忘了改用新 mem（这时 ① 是过的，因为旧 mem 同样支配）。
+fn check_v6(f: &SsaFunc, dom: &DomTree, def: &[(BlockId, usize)]) -> Result<(), VerifyError> {
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let b = BlockId(bi as u32);
+        let base = blk.params.len();
+        // 同块「每个根最近一次访存之后该用的 mem」
+        let mut last: BTreeMap<RootId, ValueId> = BTreeMap::new();
+        for (ii, ins) in blk.instrs.iter().enumerate() {
+            let (mem, root, produced) = match ins {
+                Instr::Load { mem, root, .. } => (*mem, *root, None),
+                Instr::Store { dst, mem, root, .. } => (*mem, *root, Some(*dst)),
+                _ => continue,
+            };
+            let idx = base + ii;
+            let what = if produced.is_some() { "store" } else { "load" };
+            if let Some(detail) = use_violation(dom, def, b, idx, mem, "mem 操作数") {
+                return Err(err("V6", b, idx, format!("{what} 的 {detail}")));
+            }
+            if let Some(prev) = last.get(&root)
+                && *prev != mem
+            {
+                return Err(err(
+                    "V6",
+                    b,
+                    idx,
+                    format!(
+                        "{what} 对根 R{} 用的是 v{}，但同块上一次同根访存留下的是 v{} —— 跳过了新 mem",
+                        root.0, mem.0, prev.0
+                    ),
+                ));
+            }
+            last.insert(root, produced.unwrap_or(mem));
+        }
+    }
+    Ok(())
+}
+
+/// `V9`：取址即建根 —— `roots` 里每个 `Slot` 根与 `slot_root` 互为逆，且
+/// 每个 `AddrOf` 指向的根都在范围内。
+///
+/// # 为什么是「互为逆」而不是「两端各查一次」
+///
+/// `slot_root: SlotId → RootId` 与 `roots: RootId → Root` 是同一件事的两种索引。
+/// 只要允许一边有、另一边没有，就会出现「某个槽看起来取过址，但建图时按值处理了」
+/// 这类静默错误 —— 而它的症状是**语义错、测试大部分仍绿**（M5 的 `Rc` 共享同类）。
+/// 所以这条不变式要求两侧严格互逆：多一项、少一项、指错方向都算违反。
+fn check_v9(f: &SsaFunc) -> Result<(), VerifyError> {
+    // ① roots 里的 Slot 根必须在 slot_root 里有回指
+    for (ri, r) in f.roots.iter().enumerate() {
+        let Root::Slot(s) = r else { continue };
+        match f.slot_root.get(s) {
+            Some(back) if back.index() == ri => {}
+            Some(back) => {
+                return Err(err(
+                    "V9",
+                    f.entry,
+                    0,
+                    format!(
+                        "槽 s{} 的根是 R{ri}，但 slot_root 指回 R{}（两边不一致）",
+                        s.0, back.0
+                    ),
+                ));
+            }
+            None => {
+                return Err(err(
+                    "V9",
+                    f.entry,
+                    0,
+                    format!("roots 里有槽 s{} 的根 R{ri}，但 slot_root 里没有它", s.0),
+                ));
+            }
+        }
+    }
+    // ② slot_root 的每一项都必须指向一个 Slot 根
+    for (s, r) in &f.slot_root {
+        match f.roots.get(r.index()) {
+            Some(Root::Slot(s2)) if s2 == s => {}
+            Some(_) => {
+                return Err(err(
+                    "V9",
+                    f.entry,
+                    0,
+                    format!(
+                        "slot_root 把槽 s{} 指到 R{}，但那个根不是 slot 根（是 {}）",
+                        s.0,
+                        r.0,
+                        f.roots.get(r.index()).map_or("?", kind_of_root)
+                    ),
+                ));
+            }
+            None => {
+                return Err(err(
+                    "V9",
+                    f.entry,
+                    0,
+                    format!("slot_root 把槽 s{} 指到越界的 R{}", s.0, r.0),
+                ));
+            }
+        }
+    }
+    // ③ 每个 AddrOf 的根必须在范围内
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let base = blk.params.len();
+        for (ii, ins) in blk.instrs.iter().enumerate() {
+            if let Instr::AddrOf { root, .. } = ins
+                && root.index() >= f.roots.len()
+            {
+                return Err(err(
+                    "V9",
+                    BlockId(bi as u32),
+                    base + ii,
+                    format!(
+                        "addr-of 指向不存在的根 R{}（本函数只有 {} 个根）",
+                        root.0,
+                        f.roots.len()
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `V7`：每条边给的实参个数 == 目标块的参数个数。
+///
+/// 这是块参数方案唯一的**结构性**保证：个数对上，语义才轮得到并行拷贝去管
+/// （`M6-design.md` §3.3.2）。指向不存在块的边归 `V4`（先跑），这里跳过。
+fn check_v7(f: &SsaFunc) -> Result<(), VerifyError> {
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let b = BlockId(bi as u32);
+        let at = blk.params.len() + blk.instrs.len();
+        for (to, args) in term_edges(&blk.term) {
+            let Some(target) = f.blocks.get(to.index()) else {
+                continue; // 越界目标由 V4 报
+            };
+            if args.len() != target.params.len() {
+                return Err(err(
+                    "V7",
+                    b,
+                    at,
+                    format!(
+                        "边 b{}→b{} 给了 {} 个实参，但目标块有 {} 个参数",
+                        b.0,
+                        to.0,
+                        args.len(),
+                        target.params.len()
+                    ),
+                ));
+            }
+        }
     }
     Ok(())
 }

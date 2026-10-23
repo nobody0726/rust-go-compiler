@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 
 use rgoc_types::{TypeId, TypeTable};
 
-use crate::ir::{Block, BlockId, Instr, Module, Root, RootId, SsaFunc, Term, ValueId};
+use crate::ir::{Block, BlockId, Instr, Module, Root, RootId, Sig, SsaFunc, Term, ValueId};
 
 /// 一个最小的 `SsaFunc` 构造器。
 #[derive(Debug)]
@@ -33,6 +33,10 @@ pub struct FnBuilder {
     tt: TypeTable,
     /// 基本类型名的缓存 —— `add_basic` **不去重**，每次调用会新开一个槽。
     basics: BTreeMap<String, TypeId>,
+    /// 被调方签名（`V5` 的比对面）。
+    call_sigs: BTreeMap<rgoc_hir::FuncId, Sig>,
+    /// 取过址的槽 → 根（`V9` 的比对面）。
+    slot_root: BTreeMap<rgoc_hir::SlotId, RootId>,
 }
 
 impl FnBuilder {
@@ -46,6 +50,8 @@ impl FnBuilder {
             value_types: Vec::new(),
             tt: rgoc_types::universe::universe().2,
             basics: BTreeMap::new(),
+            call_sigs: BTreeMap::new(),
+            slot_root: BTreeMap::new(),
         }
     }
 
@@ -91,6 +97,23 @@ impl FnBuilder {
         let id = self.tt.add_basic(b);
         self.basics.insert(name.to_string(), id);
         id
+    }
+
+    /// 登记「这个槽取过址、它的根是 `root`」（`V9` 要查）。
+    pub fn slot_root(&mut self, slot: rgoc_hir::SlotId, root: RootId) {
+        self.slot_root.insert(slot, root);
+    }
+
+    /// 登记一个被调方的签名（`V5` 要查；不登记就等于「查不了」）。
+    pub fn call_sig(&mut self, f: rgoc_hir::FuncId, params: usize, results: usize, variadic: bool) {
+        self.call_sigs.insert(
+            f,
+            Sig {
+                params,
+                results,
+                variadic,
+            },
+        );
     }
 
     /// 本构建器的类型表（`verify` 的第二个参数）。
@@ -142,8 +165,9 @@ impl FnBuilder {
             blocks: self.blocks,
             entry: BlockId(0),
             roots: self.roots,
-            slot_root: std::collections::BTreeMap::new(),
+            slot_root: self.slot_root,
             value_types: self.value_types,
+            call_sigs: self.call_sigs,
         };
         (f, tt)
     }

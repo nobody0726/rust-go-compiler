@@ -70,6 +70,27 @@ pub enum Root {
     Heap,
 }
 
+/// 被调函数的签名摘要（`V5` 的比对面）。
+///
+/// # 为什么记在这个函数里，而不是模块级符号表
+///
+/// `V5` 要判「`Call.dsts.len()` == 被调方的结果数」。`CalleeRef::Func(FuncId)` 只是
+/// 一个 HIR 编号，本 crate 看不到 HIR 的 `Program`。两条路：把模块级符号表传进
+/// `verify`（会污染每个签名），或者让**每个函数记下自己调到的签名**。
+///
+/// 选后者：`SsaFunc` 因此**自足**（dump 确定性、单函数测试、后续 passes 都不必
+/// 拖着模块级上下文）。代价是同被调方在多个调用者里各记一份 —— 一个 `usize`
+/// 三元组的量级，换掉一整个上下文参数。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sig {
+    /// 形参个数（**含**变参那一个）。
+    pub params: usize,
+    /// 结果个数。
+    pub results: usize,
+    /// 是否变参（`args.len()` 允许 ≥ `params - 1`）。
+    pub variadic: bool,
+}
+
 /// 一个模块（单包；`D-M6-2`）。
 #[derive(Clone, Debug, Default)]
 pub struct Module {
@@ -100,6 +121,8 @@ pub struct SsaFunc {
     pub slot_root: BTreeMap<SlotId, RootId>,
     /// `ValueId → TypeId`（长度必须等于值个数；`V3` 查它）。
     pub value_types: Vec<TypeId>,
+    /// 本函数**调用到的**已知函数签名（`V5` 查它；只记直接调用与方法调用）。
+    pub call_sigs: BTreeMap<FuncId, Sig>,
 }
 
 impl SsaFunc {

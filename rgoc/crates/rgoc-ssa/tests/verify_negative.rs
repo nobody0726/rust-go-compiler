@@ -571,3 +571,363 @@ fn 先报_v1_再报_v4_顺序稳定() {
 
     assert_eq!(verify(&f, &tt).expect_err("必须被拒").invariant, "V1");
 }
+
+// ── V5：调用与签名一致 ─────────────────────────────────────────────
+
+#[test]
+fn t_ssa_06_v5_结果个数与签名不符() {
+    let mut fb = FnBuilder::new("arity");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let a = fb.value(ti);
+    let r0 = fb.value(ti);
+    let r1 = fb.value(ti);
+    const_int(&mut fb, b0, a, 1, ti);
+    // 被调方签名只返回 1 个值，却接了两个
+    fb.call_sig(rgoc_hir::FuncId(1), 1, 1, false);
+    fb.instr(
+        b0,
+        Instr::Call {
+            dsts: vec![r0, r1],
+            callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
+            args: vec![a],
+            effect: rgoc_ssa::ir::Effect::default(),
+        },
+    );
+    fb.term(b0, Term::Return(vec![r0, r1]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V5");
+    assert!(
+        msg.contains("结果"),
+        "要说清是结果个数不符（不是实参个数）：{msg}"
+    );
+}
+
+#[test]
+fn t_ssa_06_v5_实参个数与签名不符() {
+    let mut fb = FnBuilder::new("argc");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let a = fb.value(ti);
+    let c = fb.value(ti);
+    let r0 = fb.value(ti);
+    const_int(&mut fb, b0, a, 1, ti);
+    const_int(&mut fb, b0, c, 2, ti);
+    fb.call_sig(rgoc_hir::FuncId(1), 1, 1, false); // 只要 1 个实参
+    fb.instr(
+        b0,
+        Instr::Call {
+            dsts: vec![r0],
+            callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
+            args: vec![a, c], // 给了 2 个
+            effect: rgoc_ssa::ir::Effect::default(),
+        },
+    );
+    fb.term(b0, Term::Return(vec![r0]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V5");
+    assert!(msg.contains("实参"), "要说清是实参个数不符：{msg}");
+}
+
+#[test]
+fn t_ssa_06_v5_被调方没有签名记录() {
+    // 「查不了」不许当「通过」：直接调用一个没登记签名的函数是可验证性缺口。
+    let mut fb = FnBuilder::new("no-sig");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let r0 = fb.value(ti);
+    fb.instr(
+        b0,
+        Instr::Call {
+            dsts: vec![r0],
+            callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(7)),
+            args: vec![],
+            effect: rgoc_ssa::ir::Effect::default(),
+        },
+    );
+    fb.term(b0, Term::Return(vec![r0]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V5");
+    assert!(msg.contains("签名"), "要说明缺的是签名记录：{msg}");
+}
+
+// ── V7：边实参个数 == 目标块参数个数 ───────────────────────────────
+
+#[test]
+fn t_ssa_08_v7_边实参比块参数少() {
+    let mut fb = FnBuilder::new("few-args");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let b1 = fb.block();
+    let v = fb.value(ti);
+    let p1 = fb.value(ti);
+    let p2 = fb.value(ti);
+    const_int(&mut fb, b0, v, 1, ti);
+    fb.set_params(b1, &[p1, p2]); // 两个参数
+    fb.term(
+        b0,
+        Term::Goto {
+            to: b1,
+            args: vec![v],
+        },
+    ); // 只给一个
+    fb.term(b1, Term::Return(vec![p1, p2]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V7");
+    assert!(
+        msg.contains("2") && msg.contains("1"),
+        "要报出两边的个数：{msg}"
+    );
+}
+
+#[test]
+fn t_ssa_08_v7_边实参比块参数多() {
+    let mut fb = FnBuilder::new("many-args");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let b1 = fb.block();
+    let v = fb.value(ti);
+    let p1 = fb.value(ti);
+    const_int(&mut fb, b0, v, 1, ti);
+    fb.set_params(b1, &[p1]); // 一个参数
+    fb.term(
+        b0,
+        Term::Goto {
+            to: b1,
+            args: vec![v, v, v],
+        },
+    ); // 给三个
+    fb.term(b1, Term::Return(vec![p1]));
+    let (f, tt) = fb.into_parts();
+
+    assert_eq!(verify(&f, &tt).expect_err("必须被拒").invariant, "V7");
+}
+
+// ── V6：mem 链 ─────────────────────────────────────────────────────
+
+#[test]
+fn t_ssa_07_v6_mem_操作数不被支配() {
+    // b1 里 store 产出 m1，b2 里直接用它 —— b1 不支配 b2
+    let mut fb = FnBuilder::new("mem-no-dom");
+    let ti = fb.basic("int");
+    let tb = fb.basic("bool");
+    let b0 = fb.entry();
+    let b1 = fb.block();
+    let b2 = fb.block();
+    let r0 = fb.root(rgoc_ssa::ir::Root::Heap);
+    let cond = fb.value(tb);
+    let seed = fb.value(ti);
+    let addr = fb.value(ti);
+    let val = fb.value(ti);
+    let m1 = fb.value(ti);
+    let x = fb.value(ti);
+    const_bool(&mut fb, b0, cond, true, tb);
+    const_int(&mut fb, b0, seed, 0, ti);
+    const_int(&mut fb, b0, addr, 0, ti);
+    const_int(&mut fb, b0, val, 42, ti);
+    fb.term(
+        b0,
+        Term::If {
+            cond,
+            then_: (b1, vec![]),
+            else_: (b2, vec![]),
+        },
+    );
+    fb.instr(
+        b1,
+        Instr::Store {
+            dst: m1,
+            mem: seed,
+            root: r0,
+            addr,
+            val,
+        },
+    );
+    fb.term(
+        b1,
+        Term::Goto {
+            to: b2,
+            args: vec![],
+        },
+    );
+    fb.instr(
+        b2,
+        Instr::Load {
+            dst: x,
+            mem: m1, // ← 来自兄弟分支
+            root: r0,
+            addr,
+            typ: ti,
+        },
+    );
+    fb.term(b2, Term::Return(vec![x]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V6");
+    assert!(msg.contains("mem"), "要点名是 mem 操作数：{msg}");
+}
+
+#[test]
+fn t_ssa_07_v6_同块同根跳过了_store() {
+    // store 产出 m1，同一块里随后的 load 却还用 seed
+    let mut fb = FnBuilder::new("mem-skip");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let r0 = fb.root(rgoc_ssa::ir::Root::Heap);
+    let seed = fb.value(ti);
+    let addr = fb.value(ti);
+    let val = fb.value(ti);
+    let m1 = fb.value(ti);
+    let x = fb.value(ti);
+    const_int(&mut fb, b0, seed, 0, ti);
+    const_int(&mut fb, b0, addr, 0, ti);
+    const_int(&mut fb, b0, val, 42, ti);
+    fb.instr(
+        b0,
+        Instr::Store {
+            dst: m1,
+            mem: seed,
+            root: r0,
+            addr,
+            val,
+        },
+    );
+    fb.instr(
+        b0,
+        Instr::Load {
+            dst: x,
+            mem: seed, // ← 应该用 m1（store 的新 mem）
+            root: r0,
+            addr,
+            typ: ti,
+        },
+    );
+    fb.term(b0, Term::Return(vec![x]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V6");
+    assert!(
+        msg.contains("跳过") || msg.contains("m1") || msg.contains("v3"),
+        "要说清是漏了 store 产出新 mem：{msg}"
+    );
+}
+
+// ── V9：取址即建根 ─────────────────────────────────────────────────
+
+#[test]
+fn t_ssa_10_v9_slot_根没有登记在_slot_root() {
+    let mut fb = FnBuilder::new("no-slot-root");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let v0 = fb.value(ti);
+    // roots[0] = Slot(s0)，但 slot_root 是空的
+    fb.root(rgoc_ssa::ir::Root::Slot(rgoc_hir::SlotId(0)));
+    const_int(&mut fb, b0, v0, 1, ti);
+    fb.term(b0, Term::Return(vec![v0]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V9");
+    assert!(msg.contains("slot_root"), "要点名 slot_root：{msg}");
+}
+
+#[test]
+fn t_ssa_10_v9_slot_root_指向的不是_slot_根() {
+    let mut fb = FnBuilder::new("wrong-root-kind");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let v0 = fb.value(ti);
+    let r0 = fb.root(rgoc_ssa::ir::Root::Heap); // 指向堆根
+    fb.slot_root(rgoc_hir::SlotId(0), r0);
+    const_int(&mut fb, b0, v0, 1, ti);
+    fb.term(b0, Term::Return(vec![v0]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V9");
+    assert!(msg.contains("slot"), "要说明期望的是 slot 根：{msg}");
+}
+
+#[test]
+fn t_ssa_10_v9_取址的根越界() {
+    let mut fb = FnBuilder::new("addr-oob");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let p = fb.value(ti); // 假装是指针
+    // 一个根都没建，却让 AddrOf 指向 RootId(3)
+    fb.instr(
+        b0,
+        Instr::AddrOf {
+            dst: p,
+            root: rgoc_ssa::ir::RootId(3),
+        },
+    );
+    fb.term(b0, Term::Return(vec![p]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V9");
+    assert!(msg.contains('3'), "要报出越界的根编号：{msg}");
+}
+
+#[test]
+fn t_ssa_10_v9_两个_slot_根被交叉登记() {
+    // roots = [Slot(s0), Slot(s1)]，slot_root 却写成 s0→R1 / s1→R0。
+    // 两个方向都错，但 ①（roots→slot_root 回指）先跑 ⇒ 必须报「两边不一致」。
+    // 这条**专门**为 ① 的 `Some(back) if back.index() == ri` 分支存在：
+    // 只写「没登记」那一种，`Some(..)` 分支就永远测不到（变异实测过）。
+    let mut fb = FnBuilder::new("crossed");
+    let ti = fb.basic("int");
+    let b0 = fb.entry();
+    let v0 = fb.value(ti);
+    let r0 = fb.root(rgoc_ssa::ir::Root::Slot(rgoc_hir::SlotId(0)));
+    let r1 = fb.root(rgoc_ssa::ir::Root::Slot(rgoc_hir::SlotId(1)));
+    fb.slot_root(rgoc_hir::SlotId(0), r1);
+    fb.slot_root(rgoc_hir::SlotId(1), r0);
+    const_int(&mut fb, b0, v0, 1, ti);
+    fb.term(b0, Term::Return(vec![v0]));
+    let (f, tt) = fb.into_parts();
+
+    let msg = rejected(&f, &tt, "V9");
+    assert!(msg.contains("不一致"), "要报成两边不一致：{msg}");
+}
+
+#[test]
+fn 位置序号把块参数算在前面() {
+    // b1 有 1 个块参数，它的**第一条指令**在块内位置应为 1（不是 0）。
+    // 这条钉住 `VerifyError::idx` 的口径 —— 若哪天改成「指令下标」，
+    // 报出来的位置会静默偏移一格，而没人会注意到。
+    let mut fb = FnBuilder::new("idx-base");
+    let ti = fb.basic("int");
+    let tf = fb.basic("float64");
+    let b0 = fb.entry();
+    let b1 = fb.block();
+    let p1 = fb.value(ti);
+    let one = fb.value(ti);
+    let bad = fb.value(tf);
+    const_int(&mut fb, b0, one, 1, ti);
+    fb.set_params(b1, &[p1]);
+    fb.term(
+        b0,
+        Term::Goto {
+            to: b1,
+            args: vec![one],
+        },
+    );
+    fb.instr(
+        b1,
+        Instr::Convert {
+            dst: bad,
+            x: p1,
+            typ: ti, // 与 bad 的 float64 不符
+        },
+    );
+    fb.term(b1, Term::Return(vec![bad]));
+    let (f, tt) = fb.into_parts();
+
+    let e = verify(&f, &tt).expect_err("必须被拒");
+    assert_eq!(e.invariant, "V3");
+    assert_eq!(e.block, b1);
+    assert_eq!(e.idx, 1, "块参数占位置 0，第一条指令是位置 1");
+}
