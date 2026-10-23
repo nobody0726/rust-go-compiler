@@ -206,3 +206,80 @@ $ grep -n '变异 #' rgoc/crates/rgoc-interp/src/*.rs \
 
 > **不承诺**：本记录只证明「8 个关键判据各自可被单点破坏」，它**不**证明解释器的
 > 全部语义正确 —— 后者由 `M5-report.md` 的差距清单与语料对撞的实测结论承担。
+
+---
+
+# P0 四族变异（`Task 7`，`T-EX-57..60` 的反向证据）
+
+> **补做于 2026-10-23 收口期**（原执行漏了这一步，登记为 `G-M5-10`）。
+> 这四条**不计入** `EX-9` 的 8 条门禁变异 —— 它们钉的是 Phase 0 的四处规则修复：
+> 没有它们，`T-EX-57..60` 就**只有正向证据**（"修好了"），没有反向证据（"不修就一定红"）。
+>
+> 施加方式：`git checkout -- <file>` 复原（这四处的文件都**已入库**，与上面 8 条不同 ——
+> 那 8 条当时改的是未跟踪文件，`git checkout` 对它们无效）。
+> 每条都走 `cargo clean -p rgoc-check` 再跑（`mutation-m3-notes.md` §0 的产物陈旧陷阱）。
+
+## 汇总
+
+| ID | 变异（改回原状） | 施加点 | 实测（红在哪、报什么） | 复原 |
+|---|---|---|---|---|
+| `T-EX-57` | 调用分派只认 `Mode::Value`（函数值落到 `_` ⇒ invalid） | `rgoc-check/src/expr.rs:436`：`Mode::Value \| Mode::Variable` → `Mode::Value` | **红** `multi_value::t_ex_57_接受面_四形态零诊断`：`left: ["7:10\tassign", "14:10\tassign"]` vs `right: []` | ✅ 2 passed |
+| `T-EX-58` | 表达式语句不再放行「有结果的调用」 | `rgoc-check/src/stmt.rs`：删掉 `is_call_stmt` 的提前 `return` | **红** `expr_stmt::t_ex_58_调用当语句_结果丢弃合法`：`left: ["11:2\tunused", "12:2\tunused", "13:2\tunused", "15:2\tunused", "16:2\tunused"]` | ✅ 2 passed |
+| `T-EX-59` | `&` 不再承认复合字面量这个例外 | `rgoc-check/src/expr.rs:1813`：`addr(x, xpos, is_composite_lit(&e.x))` → `addr(x, xpos, false)` | **红** `addr_composite::t_ex_59_复合字面量取址合法`：9 条 `op-invalid`（`7:25` / `8:37` / `8:44` / `10:12` / `11:16` / `12:26` / `13:17` / `14:25` / `15:13`） | ✅ 2 passed |
+| `T-EX-60` | 移位计数要求「与左操作数同类型」（原 bug 的形态） | `rgoc-check/src/expr.rs:2141`：`all_integer(tt, yt)` → `all_integer(tt, yt) && yt == xt` | **红** `shift_assign::t_ex_60_移位计数只需整数_接受面零诊断`：4 条 `shift`（`11:8` / `13:8` / `15:8` / `16:11`） | ✅ 2 passed |
+
+**4/4 全部实证变红并复原**。
+
+## 逐条现场
+
+### `T-EX-57` 多值调用
+
+```
+---- t_ex_57_接受面_四形态零诊断 stdout ----
+assertion `left == right` failed
+  left: ["7:10\tassign", "14:10\tassign"]
+ right: []
+```
+
+`b, x := f(1000, 99)`（`f` 是**函数类型的变量**）落进 `_ => Operand::invalid()`，
+赋值面于是按「调用只返回 1 个值」报 `assign`。这正是 `method5.go:103` 的原 bug 形态。
+
+### `T-EX-58` 调用当语句
+
+```
+---- t_ex_58_调用当语句_结果丢弃合法 stdout ----
+  left: ["11:2\tunused", "12:2\tunused", "13:2\tunused", "15:2\tunused", "16:2\tunused"]
+ right: []
+```
+
+5 条 `unused` 对应 5 种「有结果的调用当语句」形态。注意反向那条
+（`t_ex_58` 的拒绝面：`x + 1` 当语句仍报）**在变异下也是绿的** —— 它不依赖这个分支，
+说明这条变异只破坏「放行」而不破坏「该报的照报」，判据没有被顺带弄残。
+
+### `T-EX-59` 复合字面量取址
+
+```
+---- t_ex_59_复合字面量取址合法 stdout ----
+  left: ["7:25\top-invalid", "8:37\top-invalid", "8:44\top-invalid", "10:12\top-invalid",
+         "11:16\top-invalid", "12:26\top-invalid", "13:17\top-invalid", "14:25\top-invalid",
+         "15:13\top-invalid"]
+ right: []
+```
+
+9 条覆盖 `&T{...}` 的九种写法（含括号、嵌套字段、slice/map 字面量、`&struct{...}{}`）。
+反向面（`&f()` / `&1` / `&m[k]` 仍拒）同样保持绿。
+
+### `T-EX-60` 移位计数
+
+```
+---- t_ex_60_移位计数只需整数_接受面零诊断 stdout ----
+  left: ["11:8\tshift", "13:8\tshift", "15:8\tshift", "16:11\tshift"]
+ right: []
+```
+
+官方只要求**计数是整数**（`F3-D`），不要求与左操作数同类型。变异把类型相等这条
+加回去，`i <<= c`（`c` 为 `uint`）立刻变红 —— 与 `ken/shift.go:82` 的原 bug 同形。
+
+> **不承诺**：这 4 条只证明「四处修复各自可被单点破坏」。`T-EX-57..60` 的**完整**判据
+> 还包括语料侧（`method5.go` / `divmod.go` / `compos.go` / `ken/shift.go` 转绿），
+> 那半边由 `accept_rate_m5.rs`（79/80）与 `run_corpus.rs`（69/69）承担。
