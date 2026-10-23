@@ -10,6 +10,7 @@
 #   --run         逐文件比对（默认动作）
 #   --list        每个文件打一行 OK/FAIL/DIFF，并汇总
 #   --three-way   额外比对 <文件>.out（存在时）；三方一致才算绿（Task 48）
+#   --ssa         加一列 `run --via=ssa`：hir / ssa / go run 三方（M6 Task 5 骨架，Task 38 接实）
 #   --filter PAT  只跑路径含 PAT 的行（开发期用）
 #   --jobs N      并发数（默认 4）
 #
@@ -28,6 +29,7 @@ LIST=""
 CORPUS="$ROOT"
 MODE_LIST=0
 THREE=0
+SSA=0
 FILTER=""
 JOBS=4
 
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     --run) ;;
     --list) MODE_LIST=1 ;;
     --three-way) THREE=1 ;;
+    --ssa) SSA=1 ;;
     --filter) shift; FILTER="${1:-}" ;;
     --jobs) shift; JOBS="${1:-4}" ;;
     -h|--help) sed -n '2,25p' "${BASH_SOURCE[0]}"; exit 0 ;;
@@ -53,6 +56,17 @@ if [ ! -x "$DRIVER" ]; then
   exit 2
 fi
 mkdir -p "$CACHE"
+
+# `--ssa` 需要 `run --via=ssa`（M6/Task 37）。没有就**明确拒绝**：
+# 静默退回两方比对 = 报了一个没做的检查（M5 的 `T-EX-43/70` 就是这么被骗过两次的）。
+if [ "$SSA" = 1 ]; then
+  probe="$ROOT/go_source_code/test/helloworld.go"
+  msg="$("$DRIVER" run --via=ssa "$probe" 2>&1 >/dev/null || true)"
+  if printf '%s' "$msg" | grep -q '未知选项'; then
+    echo "run-collide.sh: --ssa 需要 \`run --via=ssa\`（M6/Task 37），当前驱动不支持；拒绝静默退回两方比对。" >&2
+    exit 2
+  fi
+fi
 
 # 逐文件跑一遍，结果写到 $CACHE/<slug>.{exp,got,meta}
 one() {
@@ -81,6 +95,16 @@ one() {
   elif [ "$ecode" != "$gcode" ]; then
     verdict="CODE"; why="退出码 go=$ecode rgoc=$gcode"
   fi
+  if [ "$SSA" = 1 ]; then
+    ( cd "$ROOT" && "$DRIVER" run --via=ssa "$src" ) > "$CACHE/$slug.ssa" 2>"$CACHE/$slug.ssaerr"
+    local scode=$?
+    perl -pi -e 's/\r\n/\n/g' "$CACHE/$slug.ssa" 2>/dev/null
+    if [ "$verdict" = "OK" ] && ! cmp -s "$CACHE/$slug.ssa" "$CACHE/$slug.got"; then
+      verdict="DIFF"; why="HIR 与 SSA 合并流不同"
+    elif [ "$verdict" = "OK" ] && [ "$scode" != "$gcode" ]; then
+      verdict="CODE"; why="退出码 hir=$gcode ssa=$scode"
+    fi
+  fi
   if [ "$THREE" = 1 ]; then
     # ⚠️ 命名规则是**把 `.go` 换成 `.out`**，不是「在 `.go` 后面再接 `.out`」。
     # 依据：官方 `testdir_test.go:1176`（`filename[:len-3] + ".out"`）。
@@ -102,7 +126,7 @@ one() {
 }
 
 export -f one
-export ROOT DRIVER CACHE THREE CORPUS
+export ROOT DRIVER CACHE THREE CORPUS SSA
 
 # 串行更稳（go run 会抢 GOCACHE 锁）；候选只有几十个，慢不到哪去。
 n=0; bad=0; three_seen=0
@@ -122,7 +146,8 @@ while IFS= read -r rel; do
   esac
 done < "$LIST"
 
-printf -- '---- %d 个文件：绿 %d / 红 %d（cache=%s）\n' "$n" "$((n-bad))" "$bad" "$CACHE"
+printf -- '---- %d 个文件：绿 %d / 红 %d%s（cache=%s）\n' "$n" "$((n-bad))" "$bad" \
+  "$([ "$SSA" = 1 ] && echo '（hir vs ssa vs go run）' || true)" "$CACHE"
 if [ "$THREE" = 1 ]; then
   # `--three-way` 的分母**不是** $n，而是「真的有 `.out`」的 $three_seen。
   # 一个都没有时报 0，不报「绿」—— 空集合上「全部一致」是恒真句，不是证据。
