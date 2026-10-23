@@ -1,0 +1,12 @@
+[package]
+name = "rgoc-ssa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "SSA 中间表示（M6）：IR / 构建 / CFG / 支配 / verifier / 优化 / dump / 活跃性。"
+
+[lints]
+workspace = true
+
+[dependencies]

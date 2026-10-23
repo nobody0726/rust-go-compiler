@@ -43,6 +43,7 @@ pub mod lex_cmd;
 pub mod report;
 pub mod run_cmd;
 pub mod samples;
+pub mod ssa_cmd;
 pub mod types_cmd;
 
 use std::fmt::Write as _;
@@ -186,6 +187,12 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
         }
         Command::Run(r) => {
             let out = run_cmd::run_run(&r)?;
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            Ok(ExitCode::from(out.exit))
+        }
+        Command::Ssa(c) => {
+            let out = ssa_cmd::run_ssa(&c)?;
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             Ok(ExitCode::from(out.exit))

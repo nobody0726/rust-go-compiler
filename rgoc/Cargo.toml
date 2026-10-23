@@ -37,6 +37,7 @@ members = [
     "crates/rgoc-load",
     "crates/rgoc-parse",
     "crates/rgoc-spikes",
+    "crates/rgoc-ssa",
     "crates/rgoc-types",
     "xtask",
 ]

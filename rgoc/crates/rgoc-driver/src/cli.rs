@@ -36,6 +36,8 @@ pub enum Command {
     Check(CheckCommand),
     /// `run` 子命令（M5/Task 27）
     Run(RunCommand),
+    /// `ssa` 子命令（M6/Task 2 起登记；IR 从 Task 16 起才有内容可 dump）
+    Ssa(SsaCommand),
 }
 
 /// `run` 子命令的参数（M5/Task 27；`M5-design.md` §4.1）。
@@ -62,6 +64,28 @@ pub struct RunCommand {
     pub max_steps: Option<u64>,
     /// `--lang go1.N`：版本门控覆盖（与 `check` 同义）。
     pub lang: Option<String>,
+}
+
+/// `ssa` 子命令的参数（M6/Task 2；`M6-design.md` §3.1 / `C10`）。
+///
+/// # 为什么必须显式给 `--dump` 或 `--verify`
+///
+/// 两个旗标代表**两个不同的比对面**：dump 是给人/对撞看的结构文本，
+/// verify 是给构建器看的自检。默认做哪一个都是猜 —— 猜错的代价是
+/// 「跑通了但什么都没检查」。所以两个都不给就报错（`CliError::SsaNeedsMode`）。
+///
+/// # 通道纪律
+///
+/// dump 只进 stdout，verifier 错误只进 stderr（`T-SSA-38`）。两者同时给时
+/// **先 dump 后 verify**，且两份输出都在（`M6-tests.md` §3.4）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SsaCommand {
+    /// 组成**同一个包**的文件。
+    pub files: Vec<PathBuf>,
+    /// `--dump`：输出 `C10` 中立 dump。
+    pub dump: bool,
+    /// `--verify`：跑 verifier 九条不变式。
+    pub verify: bool,
 }
 
 /// `check` 子命令的参数（M4/Task 2）。
@@ -209,6 +233,10 @@ pub enum CliError {
     CheckNeedsFile,
     /// `run` 一个文件参数都没给（M5/Task 27）
     RunNeedsFile,
+    /// `ssa` 一个文件参数都没给（M6/Task 2）
+    SsaNeedsFile,
+    /// `ssa` 既没给 `--dump` 也没给 `--verify`（M6/Task 2）
+    SsaNeedsMode,
     /// `--max-steps` 的值不是非负整数
     BadSteps(String),
 }
@@ -227,12 +255,13 @@ impl fmt::Display for CliError {
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
-             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...";
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...\n  \
+             rgoc-driver ssa [--dump] [--verify] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness、lex、ast、types、check 与 run 六个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex、ast、types、check、run 与 ssa 七个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -261,6 +290,11 @@ impl fmt::Display for CliError {
             ),
             Self::CheckNeedsFile => write!(f, "check 至少需要一个文件参数。{USAGE}"),
             Self::RunNeedsFile => write!(f, "run 至少需要一个文件参数。{USAGE}"),
+            Self::SsaNeedsFile => write!(f, "ssa 至少需要一个文件参数。{USAGE}"),
+            Self::SsaNeedsMode => write!(
+                f,
+                "ssa 需要 --dump 或 --verify（两个都不给就不知道要比对什么）。{USAGE}"
+            ),
             Self::BadSteps(v) => write!(f, "--max-steps 需要一个非负整数（收到 {v:?}）。{USAGE}"),
         }
     }
@@ -284,6 +318,7 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
         "types" => Ok(Command::Types(parse_types(rest)?)),
         "check" => Ok(Command::Check(parse_check(rest)?)),
         "run" => Ok(Command::Run(parse_run_sub(rest)?)),
+        "ssa" => Ok(Command::Ssa(parse_ssa(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -335,6 +370,41 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
         dump_hir,
         max_steps,
         lang,
+    })
+}
+
+fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut dump = false;
+    let mut verify = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--dump" => {
+                dump = true;
+                i += 1;
+            }
+            "--verify" => {
+                verify = true;
+                i += 1;
+            }
+            a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                files.push(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(CliError::SsaNeedsFile);
+    }
+    if !dump && !verify {
+        return Err(CliError::SsaNeedsMode);
+    }
+    Ok(SsaCommand {
+        files,
+        dump,
+        verify,
     })
 }
 
