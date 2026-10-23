@@ -15,6 +15,7 @@
 //! （见 `ssa_cmd::run_ssa`）。
 #![deny(missing_docs)]
 
+pub mod cfg;
 pub mod dump;
 pub mod ir;
 pub mod testsupport;
