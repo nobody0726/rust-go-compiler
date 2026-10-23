@@ -1,0 +1,47 @@
+# M5 的 ken 专项清单（`run-ken.txt`）—— `T-EX-44` 的输入。
+#
+# `go_source_code/test/ken/` 是 Go 仓库里**最老**的语义测试，覆盖 for/range/
+# 接口/指针/移位/方法值这些「语言核心」形态，且大多没有 `.out`（期望是空输出）。
+# 它们混在入选清单里时，绿/红只汇总成一个数字；单独成组跑才能回答
+# 「解释器在核心语义上到底站不站得住」。
+#
+# 本文件是 `run-selected.txt` 的**子集**（由 `rgoc-driver/tests/run_corpus.rs`
+# 的 `ken_subset_is_complete` 断言）：ken 的候选 32 个**全部**入选，无一进排除。
+# 子集关系断了（例如某人把 ken 文件移进排除却没同步这里）立刻变红。
+#
+# 用法（`M5-tests.md` §9.2）：
+#   scripts/in-container.sh bash tools/run-oracle/run-collide.sh \
+#       --run --list tools/run-oracle/run-ken.txt
+
+go_source_code/test/ken/array.go
+go_source_code/test/ken/complit.go
+go_source_code/test/ken/convert.go
+go_source_code/test/ken/cplx0.go
+go_source_code/test/ken/cplx1.go
+go_source_code/test/ken/cplx2.go
+go_source_code/test/ken/divmod.go
+go_source_code/test/ken/embed.go
+go_source_code/test/ken/for.go
+go_source_code/test/ken/interbasic.go
+go_source_code/test/ken/interfun.go
+go_source_code/test/ken/intervar.go
+go_source_code/test/ken/label.go
+go_source_code/test/ken/litfun.go
+go_source_code/test/ken/mfunc.go
+go_source_code/test/ken/ptrfun.go
+go_source_code/test/ken/ptrvar.go
+go_source_code/test/ken/range.go
+go_source_code/test/ken/rob1.go
+go_source_code/test/ken/robfor.go
+go_source_code/test/ken/robfunc.go
+go_source_code/test/ken/shift.go
+go_source_code/test/ken/simparray.go
+go_source_code/test/ken/simpbool.go
+go_source_code/test/ken/simpconv.go
+go_source_code/test/ken/simpfun.go
+go_source_code/test/ken/simpswitch.go
+go_source_code/test/ken/simpvar.go
+go_source_code/test/ken/slicearray.go
+go_source_code/test/ken/sliceslice.go
+go_source_code/test/ken/string.go
+go_source_code/test/ken/strvar.go

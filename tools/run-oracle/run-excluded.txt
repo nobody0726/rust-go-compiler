@@ -5,7 +5,12 @@
 #
 # 纪律（M5-tests.md §11.2）：候选 → 排除只能按 §6.3 的四条判据，
 # 逐行理由 + 指针；不许为了让数字好看移出。
-# 「候选 == 入选 ∪ 排除」由 T-EX-41 两向断言（Task 46 落地）。
+# 「候选 == 入选 ∪ 排除」由 T-EX-41 两向断言（`rgoc-driver/tests/run_corpus.rs`）。
+#
+# ⚠️ 冻结后的追加（6 → 11）：标了「§6.3 追加」的 5 行是**收口期实测**才发现的，
+# 不在 §6.2 冻结的 6 行里。它们各自撞的是 §6.3 判据 2/3/4 **之外**的实现边界
+# （值模型 / 资源上限 / 未支持构造），逐行写了为什么。这 5 行是**与冻结口径的
+# 偏离**，已在 `M5-report.md` §5「偏离登记」逐条登记，不当作静默通过。
 
 go_source_code/test/index0.go	runoutput	runoutput 形态：跑第一段把输出写成第二段源码再编译运行 —— 动态编译，M5 不做	M5-design.md §1.3 / F5
 go_source_code/test/rotate0.go	runoutput	rotate0.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
@@ -13,3 +18,8 @@ go_source_code/test/rotate1.go	runoutput	rotate1.go 与 index0.go 同族：runou
 go_source_code/test/rotate2.go	runoutput	rotate2.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
 go_source_code/test/rotate3.go	runoutput	rotate3.go 与 index0.go 同族：runoutput 两段式（跑第一段生成第二段源码再编译运行）—— 动态编译，M5 不做	M5-design.md §1.3 / F5
 go_source_code/test/reflectmethod2.go	stdlib	import "reflect" —— 标准库 import 不在 M5 支持面	U-M5-01 / F17
+go_source_code/test/range4.go	unsupported	`range` over func（`func(func(K,V) bool)`）—— M5 白名单明确不做	U-M5-06 / roadmap §M5 第 5 条
+go_source_code/test/divmod.go	rule	§6.3 追加：单次运行需 >1e9 解释步（实测 `--max-steps 1000000000` 跑满 98 s 仍超限；官方注释自述 ≈4e6 组用例）—— 撞的是 D-M5-12 的步数上限这条**资源规则**，不是能力缺口；`rgoc check` 接受它（`T-EX-61` 的 79/80 含它）	M5-tests.md §4.3 / D-M5-12 / M5-report.md §5.2
+go_source_code/test/convert4.go	rule	§6.3 追加：`(*[8]byte)(s)` 要求指针指向**底层数组的子区间**，而 C9 的 `Ptr(Cell)` 一个单元只能指一个 `Cell`，不表达子区间；改成「复制一份数组」会让 `&p[0] != &s[0]` 反向失败 ⇒ 值模型不支持，非实现疏漏	M5-design.md §3.3 / C9 / M5-report.md §5.3
+go_source_code/test/method7.go	unsupported	§6.3 追加：方法表达式（`T.m`）落在**字面类型**（`interface{ m1(string) }.m1`、`struct{ T }.m2`）与**指针类型**（`(*Outer).M`）上 —— 只实现了命名类型上的方法表达式，这三种形态按 `U-M5-13` 显式拒绝（诊断码 `HIR-MISSING-TYPE`）	U-M5-13 / M5-report.md §5.4
+go_source_code/test/literal.go	rule	§6.3 追加：`Value::Str(Rc<str>)` 按 UTF-8 存字符串，`"\377"` / `"\xff"` 这类**非 UTF-8 字节字面量**被展开成 3 字节（`s02[0] == 0xEF` 而不是 `255`）⇒ 撞的是 C9 的字符串表示，不是字面量解析	M5-design.md §3.3 / C9 / U-M5-14 / M5-report.md §5.5

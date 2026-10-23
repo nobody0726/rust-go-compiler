@@ -1,0 +1,80 @@
+# M5 入选清单（`run-selected.txt`）—— 与 `run-candidates.txt` / `run-excluded.txt` 互补。
+#
+# 判据（`M5-tests.md` §6.3 逐条全满足）：在候选内 + `rgoc check` 接受 +
+# 合并流可复现 + 只用 M5 支持面内的构造。
+#
+# 冻结口径：**候选 80 == 入选 69 ∪ 排除 11**（两向断言见
+# `rgoc-driver/tests/run_corpus.rs`；脚本自己不重算，免得口径在两处漂移）。
+#
+# 本清单是 `tools/run-oracle/run-collide.sh` 的输入 —— 它只做「逐文件对撞」，
+# 不做筛选。
+
+go_source_code/test/alias1.go
+go_source_code/test/align.go
+go_source_code/test/bigmap.go
+go_source_code/test/closure1.go
+go_source_code/test/closure2.go
+go_source_code/test/closure4.go
+go_source_code/test/compos.go
+go_source_code/test/const8.go
+go_source_code/test/ddd.go
+go_source_code/test/decl.go
+go_source_code/test/defernil.go
+go_source_code/test/escape3.go
+go_source_code/test/float_lit.go
+go_source_code/test/for.go
+go_source_code/test/func.go
+go_source_code/test/func6.go
+go_source_code/test/func7.go
+go_source_code/test/func8.go
+go_source_code/test/gc1.go
+go_source_code/test/helloworld.go
+go_source_code/test/if.go
+go_source_code/test/indirect.go
+go_source_code/test/initcomma.go
+go_source_code/test/intcvt.go
+go_source_code/test/iota.go
+go_source_code/test/method.go
+go_source_code/test/method3.go
+go_source_code/test/method5.go
+go_source_code/test/newexpr.go
+go_source_code/test/nilptr2.go
+go_source_code/test/print.go
+go_source_code/test/printbig.go
+go_source_code/test/range3.go
+go_source_code/test/simassign.go
+go_source_code/test/turing.go
+go_source_code/test/varinit.go
+go_source_code/test/zerosize.go
+go_source_code/test/ken/array.go
+go_source_code/test/ken/complit.go
+go_source_code/test/ken/convert.go
+go_source_code/test/ken/cplx0.go
+go_source_code/test/ken/cplx1.go
+go_source_code/test/ken/cplx2.go
+go_source_code/test/ken/divmod.go
+go_source_code/test/ken/embed.go
+go_source_code/test/ken/for.go
+go_source_code/test/ken/interbasic.go
+go_source_code/test/ken/interfun.go
+go_source_code/test/ken/intervar.go
+go_source_code/test/ken/label.go
+go_source_code/test/ken/litfun.go
+go_source_code/test/ken/mfunc.go
+go_source_code/test/ken/ptrfun.go
+go_source_code/test/ken/ptrvar.go
+go_source_code/test/ken/range.go
+go_source_code/test/ken/rob1.go
+go_source_code/test/ken/robfor.go
+go_source_code/test/ken/robfunc.go
+go_source_code/test/ken/shift.go
+go_source_code/test/ken/simparray.go
+go_source_code/test/ken/simpbool.go
+go_source_code/test/ken/simpconv.go
+go_source_code/test/ken/simpfun.go
+go_source_code/test/ken/simpswitch.go
+go_source_code/test/ken/simpvar.go
+go_source_code/test/ken/slicearray.go
+go_source_code/test/ken/sliceslice.go
+go_source_code/test/ken/string.go
+go_source_code/test/ken/strvar.go
