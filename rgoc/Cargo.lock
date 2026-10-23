@@ -177,6 +177,10 @@ dependencies = [
 [[package]]
 name = "rgoc-ssa"
 version = "0.0.0"
+dependencies = [
+ "rgoc-hir",
+ "rgoc-types",
+]
 
 [[package]]
 name = "rgoc-types"
