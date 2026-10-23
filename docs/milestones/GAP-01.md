@@ -1,6 +1,6 @@
-# GAP-01：功能 ID → 四维归属（M1/M2/M3/M4 进度）
+# GAP-01：功能 ID → 四维归属（M1/M2/M3/M4/M5 进度）
 
-> **范围**：`docs/01-feature-set.md` 共 210 个功能 ID。M1 只判定 **LEX-01..13**，M2 追加判定 **AST-01..49 + PIPE-03/04/05/25**（53 项），M4 追加判定 **TYP-19..26 / EXP / STM / BIF / PKG / SYS 的静态面**（**范围级**归属 + 例外项，见文末 M4 节），不填满 210 个（`M0-report.md` §7.2 明确警告）。
+> **范围**：`docs/01-feature-set.md` 共 210 个功能 ID。M1 只判定 **LEX-01..13**，M2 追加判定 **AST-01..49 + PIPE-03/04/05/25**（53 项），M4 追加判定 **TYP-19..26 / EXP / STM / BIF / PKG / SYS 的静态面**（**范围级**归属 + 例外项，见文末 M4 节），M5 追加判定 **PIPE-10/14/15/16/16c/24 + `RT-*` 的执行面**（见文末 M5 节），不填满 210 个（`M0-report.md` §7.2 明确警告）。
 > **维度定义**：`docs/03-roadmap.md` §0.3 —— Frontend / Interpreter / Native / Runtime-metadata。
 > **来源**：`docs/milestones/M1-tests.md` §2 与 `M2-tests.md` §2/§4 的逐项覆盖映射。
 
@@ -149,7 +149,45 @@
    （`U-M4-03`、`U-M4-02`），并且**有正向断言**证明它们被显式拒绝/走文档约定路径 —— 白名单项
    **不得**记为 pass（§7 纪律），所以这里也只能是 `○`。
 
+## M5 归属落点（`PIPE-10/14/15/16/16c/24` + `RT-*`，`M5-plan.md` Task 52）
+
+**判定口径**：M5 的产物是**解释器**，所以「降级 / 转换 / 内建」这些在 native 世界里
+属于中端的活，在 M5 一律落 **Interpreter** 维度 —— 它们真的被执行了（不是「有形状没实现」）。
+Frontend 列只在「语义判定发生在前端」时打 ✅；Native / Runtime-metadata 列基本是 `—`，
+因为 M5 不生成机器码、不维护运行时元数据。
+
+| 功能 ID | 描述 | Frontend | Interpreter | Native | Runtime-metadata | 测试 ID |
+|---|---|---|---|---|---|---|
+| PIPE-10 | IR 树构建（AST→IR） | ✅ | ✅ | — | — | `T-EX-01..04`（45 变体穷尽 / dump 确定性 / Place 五形态）；`rgoc-hir/src/lower.rs` |
+| PIPE-14 | 闭包转换（捕获分析 → 按值/按引用） | ◐ | ✅ | — | — | `T-EX-25/26`：捕获的是**变量**（`Closure.captured: Vec<Cell>`），不是 context struct ⇒ Native 的 context struct 仍归 M7 |
+| PIPE-15 | 方法与接口降级 | — | ✅ | — | — | `T-EX-28/29/30/31`：方法值（`recv` 绑定）/ 方法表达式（首参 = 接收者）/ `Callee::Iface` 动态派发 / 断言 / type switch；**itab 未做**（Native `—`） |
+| PIPE-16 | 内建函数降级 | — | ✅ | — | — | `T-EX-23`：`BuiltinKind` 全集在解释器里直接实现（**不**生成 runtime 调用） |
+| PIPE-16c | 循环变量语义（1.22） | — | ✅ | — | — | `T-EX-27`：每轮**新建**变量（新 `Cell`）⇒ `012`；`PIPE-16b`（range over func）**显式拒绝**（`U-M5-06`） |
+| PIPE-24 | 包初始化与启动运行时 | — | ◐ | — | — | `T-EX-39`：单包 `InitOrder` + `init` 序 + `main` ✅；**双包顺序未兑现**（`G-M5-02`）⇒ `◐`；`rt0`/调度器初始化归 M9（`—`） |
+| RT-CMP-01 | Slice 头结构 | — | ✅ | — | — | `C9` 的 `SliceVal { arr, off, len, cap }` + `T-EX-13`（别名 / 增长脱钩 / 三索引 / 重叠 copy） |
+| RT-CMP-02 | String 头结构 | — | ◐ | — | — | `C9` 的 `Value::Str(Rc<str>)` 是**不可变 UTF-8**，不是 `{ptr,len}` 字节串 ⇒ 非 UTF-8 字面量不保真（`U-M5-14`） |
+| RT-CMP-03/04 | Map 桶算法 / 迭代随机化 | — | ◐ | — | — | `T-EX-14`：`MapObj` 是 `Vec` + **插入序**；**刻意不追** RT-CMP-04 的随机化（`U-M5-04`），键相等用 `go_eq` |
+| RT-CMP-07 | 数组/结构体表示（值语义 / 零大小统一 0 地址） | — | ✅ | — | — | `T-EX-11/12`（`deep_copy` 正反）+ `C9` `I6`（零尺寸聚合的指针身份） |
+| RT-MEM-01..08 | 分配器 / GC / 栈管理 | — | — | — | — | **M5 不涉及**：生命周期归宿主 `Rc`，没有 GC、没有栈增长 |
+| RT-SCH-01..05 | `g`/`m`/`p` / 上下文切换 / `go` 语句 | — | — | — | — | **M5 不涉及**：`go` 语句在 lowering 就 `HIR-UNSUPPORTED-GO` 显式拒绝（`U-M5-01`） |
+| RT-POLY-01.. | `_type` 元数据 / itab | — | — | — | — | **M5 不涉及**：动态派发用 `TypeId` + 方法表查表，不需要 `_type` 元数据 |
+| （RT-EXC） | 异常 runtime | — | ✅ | — | — | **`01-feature-set.md` 没有定义 `RT-EXC-*` 编号**（只在第 35 行的命名约定里出现过）。异常语义的 ID 落点是 `STM-20`（defer）+ `BIF-12/13`（panic/recover），执行面在 `interp.rs` 的 `panic_val` + `unwinding` 状态机（`T-EX-34..38`） |
+
+**判定理由**：
+
+1. **为什么 PIPE-14/15/16 全落 Interpreter 而不是 Frontend**：这三项在 native 世界里是
+   「把高层构造翻译成低层构造」；M5 的翻译目标是**值模型 + 显式帧**，翻译结果直接被解释器执行。
+   写成 Frontend 会让人以为「只是 AST 变换」——而它们的语义（捕获按变量、方法值绑定接收者、
+   `append` 扩容阈值）是**运行时行为**，只有执行才能证明。
+2. **为什么 PIPE-24 是 `◐` 而不是 ✅**：单包 init 序已兑现且有 fixture，但
+   `import _ "side"` 不跑 side 的 `init` —— 这是**真缺口**（`G-M5-02`），不能因为「单包绿了」就记 ✅。
+3. **为什么 `RT-*` 大面积 `—`**：M5 的运行时就是宿主（Rust 的 `Rc`/`Vec`）。
+   把 `RT-MEM-*` 记成「解释器已覆盖」是**把宿主的能力算成自己的** —— 那是 M4 报告里
+   「弱绿不算绿」的同一条纪律。
+4. **`RT-EXC` 不存在**：`01-feature-set.md` 第 35 行只是**命名约定**（`RT-{MEM,SCH,CMP,POLY,EXC}-nn`），
+   实际只定义了 MEM/SCH/CMP/POLY 四族。这里如实写「无此 ID」，而不是造一个编号来填表。
+
 ## 未判定部分
 
-其余功能 ID 待后续里程碑按阶段推进，不在本文件填写。**M4 之后的余额**：TYP/EXP/STM/BIF/PKG/SYS 六族的**逐 ID** 展开（`G-M4-37` 收口专项）、`CON-01..08`（M3 常量体系已实现，逐 ID 归属待补）、`SCP-01..10`（M3 作用域/对象，逐 ID 归属待补）。
+其余功能 ID 待后续里程碑按阶段推进，不在本文件填写。**M5 之后的余额**：TYP/EXP/STM/BIF/PKG/SYS 六族的**逐 ID** 展开（`G-M4-37` 收口专项）、`CON-01..08`（M3 常量体系已实现，逐 ID 归属待补）、`SCP-01..10`（M3 作用域/对象，逐 ID 归属待补）、`RT-MEM/SCH/POLY` 三族（M9 的对象模型与运行时，M5 只登记「不涉及」）、`PIPE-16b`（range over func，M5 显式拒绝，`U-M5-06`）。
 

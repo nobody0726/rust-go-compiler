@@ -1,6 +1,6 @@
 # M5 实施计划：HIR 与顺序解释器
 
-> **状态**：**已执行（Task 1–52；44 ✅ / 5 🟡 / 1 ❌）**　|　**测试清单**：[`M5-tests.md`](./M5-tests.md)（判据面已冻结）　|　**机器可读事实**：[`M5-manifest.json`](./M5-manifest.json)（已填实）　|　**交付 B**：[`M5-report.md`](./M5-report.md)（顺序语义基线·候选）
+> **状态**：**已执行（Task 1–52；51 ✅ / 1 🟡 / 0 ❌）**　|　**测试清单**：[`M5-tests.md`](./M5-tests.md)（判据面已冻结）　|　**机器可读事实**：[`M5-manifest.json`](./M5-manifest.json)（已填实）　|　**交付 B**：[`M5-report.md`](./M5-report.md)（顺序语义基线·候选）
 >
 > **任务编号约定**：本计划用 **「Task N」（N=1..52）** 标识任务，**不与测试 ID `T-EX-*` 混用编号空间**。
 > 执行期进度、偏离与 Ruling 记在 `.superpowers/sdd/M5-plan/progress.md`（不入库）。

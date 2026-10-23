@@ -3,7 +3,7 @@
 > **本文件的作用**：任何 agent / 协作者在本工作区开始任务前，读这一份即可掌握 —— 工程是什么、文档在哪、各自什么状态、遵守什么纪律、下一步做什么。
 > **遇到细节一律跳转 `docs/`，本文件不复制细节。**
 >
-> **最后同步**：2026-10-18　|　**同步触发条件**：见 §5
+> **最后同步**：2026-10-23　|　**同步触发条件**：见 §5
 
 ---
 
@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0–M3 四个里程碑全部完成**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-driver`** 七条正式 crate（`rgoc-hir` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1282 条测试全绿**、M0 自检 **232 条断言**全过、M1 自检全过；`M1` / `M2` / `M3` 三份 manifest 均已填实。
+**一句话状态**：**M0–M3 四个里程碑全部完成、M4/M5 已执行（部分兑现）**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`** 十条正式 crate（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1608 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M5` 五份 manifest 均已填实。
 
 **M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
 
@@ -29,6 +29,8 @@
 **M3（符号与类型检查入口）已收尾**（2026-10-17）：三个正式 crate 落地 —— **`rgoc-const`**（任意精度 `BigInt`/`BigRat` + 折叠/转换/可表示性）、**`rgoc-types`**（类型表示 + dump C7 + `identical` + 作用域竞技场 + universe + 按文件版本门控）、**`rgoc-load`**（单包多文件装载 + 声明收集与求值顺序 + 作用域/对象/导出/标签 + 源码 import + `ExportSummary`）；新增 `rgoc-driver types [--dump|--cmp]` 子命令与 `tools/types-oracle`（`go/parser` + `go/types`，两侧读**同一份** fixture）。**验收 = 自有 fixture + oracle 对撞 + 语料精选对撞**：dump 8 / cmp 2 / 语料 31 三条腿逐字节一致，语料候选 57（入选 31 / 排除 26，逐行理由）；**7 条变异探针全红**（`scripts/mutation-m3-notes.md`）；`C7-type-dump.md` 冻结、`M3-manifest.json` 已填实（**TY-1–TY-8** / 68 个测试 ID / `U-M3-01..13` / `open_gaps`）；`M3-tests.md` §3.3 的**修订 R1**（移位只查**计数**非负）与 §4 的**修订 R-36-1** 均已入档。workspace **1282 条测试全绿**。下一阶段 **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）** 待开工 —— 开工前读 `M3-manifest.json` 的 `open_gaps` 与 `unsupported`。
 
 **M4（静态检查闭环）已收口（部分兑现）**（2026-10-22）：新建 **`rgoc-check`** crate（操作数/表达式/语句/内建/`unsafe` 白名单/init 序与环/main 约束/import 三形态/版本门控/C8 渲染）与 **`C8` 契约**（26 类 + 渲染字节格式）；`rgoc-types` 扩判定五件套与泛型三件（**`U-M3-05` 拒面已解除**），`rgoc-driver` 加 `check` 子命令与 `types --cmp` 七 kind；`tools/types-oracle --check` 复刻官方 harness 语义、`run-collide.sh` 增 `--check [--list]` 形态。**验收四腿 + 变异**：`T-CK-*` 63 条中 62 `pass` / 1 `partial`；`B1..B8` 八条变异全部实证变红并复原；workspace **1541 条测试全绿**（136 suite）、四条 cargo 无 warning、五条既有自检不回退。**未兑现**：入选 75 只有 **17 绿（真实内容对齐 9）**、wave A 50 只有 **20 绿（真实对齐 3）** ⇒ `CH-2`/`CH-8` 保持 `fail`、`CH-3` `partial`；缺口成片（赋值/转换矩阵、类型参数核心类型、递归接口同一性、泛型判定面、语法级门控），详见 `M4-report.md` §4 与 `M4-manifest.json` 的 `G-M4-37..41`。
+
+**M5（HIR 与顺序解释器）已执行（部分兑现）**（2026-10-23）：新建 **`rgoc-hir`**（正式：`program/stmt/expr/place/types/lower(2891)/dump(566)/diag`，未支持构造 `HIR-UNSUPPORTED-*` 显式拒绝）与 **`rgoc-interp`**（`value/ops/print/interp(3531)`：显式帧栈 + 显式求值栈，四类赋值语义、内建全集、闭包/接口动态语义、defer/panic/recover），原 spike HIR 整体迁 **`rgoc-hir-spike`**（`D-M5-4`，保 `SM-M0-NATIVE-HELLO`）；`rgoc-driver` 加 `run [--dump-hir] [--max-steps]` 子命令（先 check 后 lower 再执行，诊断非空即拒跑）；**新契约 `C9`**（值表示 / 输出字节 / 退出码）、**`C3` 升正式**、`tools/run-oracle` 复刻官方 testdir run 语义。**验收四腿 + 变异**：入选语料 **69/69** 合并流逐字节一致（`ken/` 32/32）、自有 fixture 40 条全绿、`print` 字节表 10 点冻结；**8 条门禁变异 + 4 条 P0 变异**全部实证变红并复原；workspace **1608 条测试全绿**（150 suite）、四条 cargo 无 warning、五条既有自检不回退。**未兑现**：`EX-1`（常量溢出诊断缺失）、`EX-2`（双包 init）、`EX-4`（泛型只到 `any` + 推断）、`EX-8`（M4 的 `CH-2` 遗留仍红）⇒ `status = partial`，缺口 `G-M5-01..06`，详见 `M5-report.md` §5/§6。
 
 ---
 
@@ -126,7 +128,9 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 │           ├── src/samples.rs       ←       20 样本冻结表（与 M0-tests §4 逐条对账）
 │           ├── src/report.rs        ←       分子/分母/八类分布 + JSON（分母不过滤变小）
 │           └── tests/test_driver.rs ←       23 条（含「子命令必须报错」「分母纪律」「峰值 RSS」）
-│       ├── rgoc-hir/                ←     **SPIKE-ONLY** 最小 HIR（T40，**M5 整体替换**）
+│       ├── rgoc-hir/                ←     正式 HIR（M5；program/stmt/expr/place/types/lower/dump/diag）
+│       ├── rgoc-interp/             ←     顺序解释器（M5；value/ops/print/interp：显式帧栈 + 显式求值栈）
+│       ├── rgoc-hir-spike/          ←     **SPIKE-ONLY** 最小 HIR（原 `rgoc-hir`，`D-M5-4` 整体改名迁入）
 │       │   ├── src/lib.rs           ←       crate 级 `SPIKE-ONLY` 标注（D-M0-11）+ C1 spike 级副本说明
 │       │   ├── src/hir.rs           ←       `Const`（Big/Bool/Str）+ `Stmt::Print{newline,stream,args}` + `Stream`
 │       │   ├── src/value.rs         ←       `BigInt`（base 2^32 任意精度）+ `Val`；**收敛到 i64 溢出即报错**
@@ -154,7 +158,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚不存在**（由 M0 后续阶段创建，结构见 `03` §2）：`rgoc/crates/` 下的编译器正式 crate（lexer / parser / sema / mir / codegen …）—— `rgoc-hir` 虽已存在但**是 SPIKE-ONLY**，M5 会被正式 HIR 整体替换。
+**尚未开始的 crate**：M6 的 SSA / verifier、M7 的 native 代码生成、M9 的 runtime 与对象模型。
+（`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
 
 ---
 
@@ -252,7 +257,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 | 项 | 说明 |
 |---|---|
-| 编译器工程 | `rgoc/` 下已有 **7 条正式 crate**（`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-driver`）+ 2 条工具 crate（`rgoc-harness` / `xtask`）；`rgoc-hir` / `rgoc-spikes` 仍 **SPIKE-ONLY**（M5 整体替换）。M0–M3 四个里程碑的验收全部落在这些 crate 上（**workspace 1282 条测试全绿**）。**尚未开始**：语义检查主体（类型判定 / 可赋值性 / 方法集 / 泛型实例化）、HIR、IR/MIR、native 代码生成 —— 那是 M4 及以后 |
+| 编译器工程 | `rgoc/` 下已有 **10 条正式 crate**（`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`）+ 2 条工具 crate（`rgoc-harness` / `xtask`）；`rgoc-hir-spike` / `rgoc-spikes` 仍 **SPIKE-ONLY**（可整块删）。M0–M5 五个里程碑的验收全部落在这些 crate 上（**workspace 1608 条测试全绿** / 150 suite）。**尚未开始**：M6 的 SSA / verifier、M7 的 native 代码生成、M9 的 runtime 与对象模型 |
 | 开发环境 | **已就绪**：镜像 `rgoc:dev`（`sha256:21f55802…`，2.92GB）、Go oracle `go1.27.1 linux/arm64`、Rust `1.98.1`、clang 14、CodeLLDB 1.12.3（自带 lldb 22.1.8-codelldb）、`.devcontainer/` 与 `scripts/` 全部落地并实测通过 |
 | M0 | **Phase 0 与 Phase 1 均已完成**（T01–T28）。四项门禁 **E1/E2/E10/E5 全部通过**，证据见 `M0-manifest.json` 的 `gate` 与 `M0-benchmarks.md`；E5（实测断点命中）由用户在 VSCode 中按 F5 于 2026-10-02 确认，登记在 `gate.E5`（含 `confirmed_at` / `confirmed_by`）。**Phase 2 已完成（T29–T39，2026-10-05 收口）**：清单已冻结（T29）、期望值已复核（T30）、harness 五件套已落地（T31–T35）、E3 六类自测已过（T36）、driver CLI + xtask 已落地（T37）、**E4 基线 20/20 通过（T38，5.8 s / 峰值 15 MiB）**、T39 复核登记（把登记变成 **19 条可执行断言**，含 7 次反向验证）。**Phase 3 已完成（T40–T47，2026-10-07）**：两个 SPIKE-ONLY crate 落地、三个 spike 跑通、**E6/E7 通过**；**Phase 4 已完成（T48–T55）**：五份契约 + `M0-report.md` + manifest 完整化 + **E9 六条退出检查**。**M0 五个 Phase 全部完成，E1–E10 十条门禁全过。** |
 | **M1（词法与位置）** | **已完成**（T-L01–T-L21，2026-10-12）：`rgoc-lex` crate 已落地（193 条测试）、`rgoc-driver lex` 子命令已产出、**151 条 golden 全绿**、负例双向断言全过、`C1` 由留位升为完整、`GAP-01` 填了 LEX-01..13 四维归属、`U12` 的 lex 半已解除。七条门禁 L1–L7 全部 `pass`。下一阶段 **M2（AST 与 parser）** 待开工 |
@@ -516,7 +521,7 @@ T28 检查表四项逐项通过，登记在 `M0-manifest.json` 的 `gate.E5`。
 | 4 | 契约初稿 + 报告 | E8 / E9 / E10 收口 | ✅ **已完成**（T48–T55；E8 五份契约、E9 六条退出检查，2026-10-07） |
 
 > **M0–M3 四个里程碑全部完成**（T01–T55 / T-L01–T-L21 / T-AP01–T-AP21 / T-TY-01–T-TY-38），
-> **E1–E10 / L1–L7 / A1–A8 / TY-1–TY-8 全部门禁全过**；workspace **1282 条测试全绿**。
+> **E1–E10 / L1–L7 / A1–A8 / TY-1–TY-8 全部门禁全过**；**M4** `CH-1..9` = 6 pass / 1 partial / 2 fail；**M5** `EX-1..9` = 5 pass / 4 partial；workspace **1608 条测试全绿**（150 suite）。
 > **M4（泛型实例化 / 类型集版 interface 同一性 / 可赋值性）三件套与 manifest 骨架已产出**
 > （2026-10-18；builder-check 复审修订已折入）—— **执行未开始** ——
 > 开工前读 [`M4-tests.md`](./docs/milestones/M4-tests.md) §6/R-6-1
