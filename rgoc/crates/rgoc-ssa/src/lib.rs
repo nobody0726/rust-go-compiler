@@ -16,6 +16,7 @@
 #![deny(missing_docs)]
 
 pub mod cfg;
+pub mod dom;
 pub mod dump;
 pub mod ir;
 pub mod testsupport;
