@@ -35,6 +35,7 @@
 | M3 | [`contracts/C7-type-dump.md`](./contracts/C7-type-dump.md) | **中性类型 dump 格式**（七条格式规则 + 15 个标签 + **编号顺序** + 逐标签行语法） | ✅ **已冻结**（M3/Task 1 新建，2026-10-16） |
 | M4 | [`contracts/C8-check-diags.md`](./contracts/C8-check-diags.md) | **检查诊断对撞格式**（渲染字节格式 + **类别枚举 26 类** + 两侧映射纪律 + 过滤规则〔`F2` 摘录〕+ 比较算法 + 最小对撞目标 `check-diags-min`） | ✅ **已冻结**（M4/Task 1 新建，2026-10-18） |
 | M5 | [`contracts/C9-values-and-output.md`](./contracts/C9-values-and-output.md) | **值表示 / 输出字节 / 退出码**（13 个 `Value` 变体 + 7 条不变量 + 四类赋值语义 + `print/println` 字节表 + 合并流 + 退出码表 + 三件不承诺） | ✅ **已冻结（候选）**（M5/Task 9，2026-10-23 收口期补写） |
+| M6 | [`contracts/C10-ssa-dump.md`](./contracts/C10-ssa-dump.md) | **SSA 中立 dump 格式**（头三行字段 / 块段与指令行语法 / 终止符与边实参 / 编号顺序 / 六条禁止项 / 完整示例） | 🟡 **骨架**（M6/Task 1 新建；Task 51 定稿） |
 | M1 | [`milestones/M1-design.md`](./milestones/M1-design.md) | **怎么建 M1** —— 九个决策 D-M1-1~9（五字段）、**20 条实测事实基线**、六切面测试组、诊断代号表、oracle adapter 组成 | **已确认**（2026-10-11） |
 | M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | **已冻结**（T-L21，2026-10-12） |
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |
@@ -130,7 +131,7 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **9 份已产出**（+ **C10 计划中**：M6/Task 1 新建 `C10-ssa-dump.md`）（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **10 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕/ **C10 骨架**〔M6/Task 1〕） |
 | `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial，缺口见 `M5-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>🟡 **M6 三件套 + manifest 骨架已产出**（2026-10-23；执行未开始） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：

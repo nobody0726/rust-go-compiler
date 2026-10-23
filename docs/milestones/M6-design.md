@@ -260,6 +260,7 @@ pub enum Term {
     If { cond: ValueId, then_: (BlockId, Vec<ValueId>), else_: (BlockId, Vec<ValueId>) },
     Return(Vec<ValueId>),
     Panic(ValueId),
+    /// 块**可达**但流到此为止（如 `panic` 之后的块尾）；**无操作数**，也不是「死块」。
     Unreachable,
 }
 ```
@@ -315,7 +316,7 @@ pub struct Effect { pub writes: Vec<RootId>, pub writes_all: bool, pub may_panic
 | `V5` | 调用结果数 == 签名结果数 | `dsts.len() == sig.results.len()` |
 | `V6` | mem 值被支配 + 同根同块不乱序 | ① 每个 `Load/Store` 的 `mem` 操作数**支配**该指令（`V2` 的推论，但单独查，因为 mem 是隐式链）；② 同块内同根的两个访存，后者的 `mem` 必须等于前者（`Store` 的 `dst`），不得跳过 |
 | `V7` | 块参数个数 == 每条前驱给参个数 | 边上的 `args.len() == target.params.len()` |
-| `V8` | 可达性 | 非 entry 块必须有前驱（除非显式标 `dead`） |
+| `V8` | 可达性 | 非 entry 块**必须至少有一条前驱**；**builder 不产出不可达块**（真死块在构建期丢弃，不靠标记） |
 | `V9` | 取址即建根 | 每个 `AddrOf` 的 `root` 在 `slot_root` 里 |
 
 **反例必须手写 IR**（`D-M6-11`）：每次拒绝要带**不变式名 + 块号 + 指令下标**，这样「拒了但不知道拒了哪条」不会发生。
