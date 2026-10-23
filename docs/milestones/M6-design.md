@@ -94,7 +94,7 @@
 | `D-M6-11` | verifier 反例必须是**手写 IR** | 反例若由构建器产出，构建器的 bug 会把非法图挡在门外 |
 | `D-M6-12` | 切片 = **实测分类**（`N` 能建图 + `M` 拒绝 = 69，两向断言） | 不先定支持面再挑文件；数字不预测、只如实报 |
 | `D-M6-13` | 新建 **`C10-ssa-dump.md`**，不复用 `C7` | `C7` 是类型 dump；SSA dump 的排序键与标签都不同 |
-| `D-M6-14` | 用户可见码进 `DiagCode` 五件套，verifier 错误**不进** | verifier 是开发者面，用结构化 `VerifyError`（不变式名 + 位置） |
+| `D-M6-14` | 用户可见码走**crate-local 枚举**（沿 `rgoc-hir::RejectKind` 先例），verifier 错误本地结构化；两者都**不进** `DiagCode` | `C8` 的 26 类是**检查器**词汇且 `other` 的值域被 `T-CK-16` 钉死为 3 个实现限制码，塞进去等于让冻结契约漂 |
 | `D-M6-15` | 不引第三方依赖（支配/图算法手写） | 沿 `AGENTS.md` §4.3；`std` 足够 |
 | `D-M6-16` | 每个 Task 收口即 commit；判据先于实现 | 沿 M4/M5 的教训（M5 曾 46 个任务不提交） |
 
@@ -187,7 +187,7 @@
 | `F11` | M0 的 SSA spike 441 行，**直线程序**：1 块 / 0 succ / 0 param | `rgoc-spikes/src/ssa.rs` |
 | `F12` | dump 契约先例（`C6`/`C7`）：`#` 头行 + 数字编号顺序 + 逐行语法 | `C6-ast-dump.md` / `C7-type-dump.md` |
 | `F13` | 资源上限先例：帧 1000 / 求值栈 10000 / 步数 1e8 | `C9` §6、`M5-manifest.json` |
-| `F14` | 诊断码现 **103** 个，新增码必须同步五件套与三处计数断言 | `rgoc-lex/src/diag.rs`（2026-10-23 计数） |
+| `F14` | 诊断码现 **103** 个；`C8` 的 26 类已冻结，且 `other` 的值域被 `T-CK-16` 钉死为 3 个实现限制码 ⇒ **M6 不往里加码** | `rgoc-lex/src/diag.rs` + `rgoc-check/tests/category.rs`（2026-10-23 核对） |
 
 ---
 
@@ -414,9 +414,17 @@ rgoc run --via=hir  ==  rgoc run --via=ssa  ==  go run（合并流逐字节 + �
 
 | 类 | 出口 | 形态 |
 |---|---|---|
-| 用户面（不支持 / 预算超限） | `stderr` + 退出码 1（静态）或 2（运行） | `DiagCode` 新增 `SSA-UNSUPPORTED-*` 7 个码（`F14` 的 103 → 110；须同步五件套与三处计数断言） |
-| 开发者面（verifier 报错） | `Err(VerifyError)` | **不进** `DiagCode`（`D-M6-14`）：`{ invariant: V1..V9, block: BlockId, idx: usize, detail }` |
+| 用户面（不支持 / 构建预算） | `stderr` + 退出码 1 | `rgoc-ssa/src/diag.rs` 的 `SsaCode`（7 个 `SSA-UNSUPPORTED-*`），**crate-local**，沿 `rgoc-hir::RejectKind` 的先例；`DiagCode` 保持 103 不动（`D-M6-14`） |
+| 开发者面（verifier 报错） | `Err(VerifyError)` | 不进 `DiagCode`：`{ invariant: "V1".."V9", block: BlockId, idx: usize, detail }` |
 | 内部不可达 | `todo!()` + 注释指向门禁 | 不许用 `None` 冒充未实现 |
+
+> **为什么 SSA 的码不进 `DiagCode`**（这条是写计划时核对出来的）：
+> `DiagCode` 的每个码都必须被 `rgoc-check/tests/category.rs` 投影到 **`C8` 冻结的 26 类**之一，
+> 而其中 `other` 的值域被 `T-CK-16` 钉死为「恰好 3 个实现限制码」（`ExceedsFileLimit` /
+> `SynNestingTooDeep` / `TypNestingTooDeep`）。把 7 个 SSA 拒绝码硬塞进去，只有两条路：
+> 让 `other` 的值域漂（破 `T-CK-16` 与 `C8`），或给它们编一个假类别（用类别答错）。
+> **两条都不行。** 所以走 `rgoc-hir::RejectKind` 的同一条路：crate 自己一个 `SsaCode`，
+> 码文本进 `SSA-*` 命名空间，`DiagCode` 保持 103。
 
 ---
 

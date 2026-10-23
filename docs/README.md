@@ -49,6 +49,10 @@
 | M5 | [`milestones/M5-plan.md`](./milestones/M5-plan.md) | **怎么干 M5** —— **Task 1–52**（P0 前置收口 → 契约与 HIR → 求值内核 → 复合值与内建 → 闭包与接口 → 异常 → 集成收口） | ✅ **全部执行**（2026-10-23；收口缺口见 `M5-report.md` §5） |
 | M5 | [`milestones/M5-manifest.json`](./milestones/M5-manifest.json) | **机器可读事实** —— gate EX-1..9（**5 pass / 4 partial**）/ 70 个 `test_ids` / `unsupported` 14 / 三清单 / `budget`（含 `measured`）/ `open_gaps` 6 条；由 `manifest_m5.rs` 对账 | ✅ **已填实**（2026-10-23） |
 | M5 | [`milestones/M5-report.md`](./milestones/M5-report.md) | **交付 B** —— 顺序语义基线（**候选**）：覆盖矩阵（roadmap §M5 五条 × 四腿）/ **三条分别声明**（泛型、loopvar、range-over-func）/ 语料实测 / 偏离登记 / 缺口清单 / 接手指南 | ✅ **已产出**（2026-10-23） |
+| M6 | [`milestones/M6-design.md`](./milestones/M6-design.md) | **怎么建 M6** —— 决策 D-M6-1~16（SSA 输入=HIR / phi=块参数 / 多结果指令 / memory 按根分区 / `rgoc-ssa`+`ssa_exec` / 三 pass+块内 CSE / M6e 只到协议级）、事实基线 F1–F14、门禁 SSA-1..9 | **已确认**（2026-10-23） |
+| M6 | [`milestones/M6-tests.md`](./milestones/M6-tests.md) | **怎么验 M6** —— 64 个 `T-SSA-*`（甲14/乙16/丙7/丁9/反8/戊5/己5）、**九条 verifier 不变式各一反例（手写 IR）**、三方差分（hir/ssa/go run）、`SSA-LIVE v1`、白名单 7 条 | **判据面已冻结**（2026-10-23；切片 N/M 待 Task 39 实测冻结 `R-6-1`） |
+| M6 | [`milestones/M6-plan.md`](./milestones/M6-plan.md) | **怎么干 M6** —— **Task 1–53**（装置 → IR/verifier → 构建 → 求值/差分 → passes → 活跃性 → 收口） | **待执行**（2026-10-23） |
+| M6 | [`milestones/M6-manifest.json`](./milestones/M6-manifest.json) | **机器可读事实（骨架）** —— gate SSA-1..9（全 `pending`）/ 64 个 `test_ids` / `unsupported` 7 / 候选 69（`N`/`M` 待冻）/ `budget`；由 `manifest_m6.rs` 对账 | 🟡 **骨架**（Task 50 填实） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -126,8 +130,8 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **9 份已产出**（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial，缺口见 `M5-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **9 份已产出**（+ **C10 计划中**：M6/Task 1 新建 `C10-ssa-dump.md`）（C1 完整〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕） |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial，缺口见 `M5-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>🟡 **M6 三件套 + manifest 骨架已产出**（2026-10-23；执行未开始） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 
