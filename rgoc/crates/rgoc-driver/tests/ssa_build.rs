@@ -320,7 +320,12 @@ fn t_ssa_15_短声明与赋值更新当前值() {
     let two = two.expect("没有 const 2");
     match &f.blocks[0].term {
         rgoc_ssa::ir::Term::Return(vs) => {
-            assert_eq!(vs, &vec![two], "return 的必须是 `2` 那个值（当前值映射）");
+            assert_eq!(
+                vs,
+                &vec![two],
+                "return 的必须是 `2` 那个值（当前值映射）\n{}",
+                rgoc_ssa::dump::dump_func(f, &tt)
+            );
         }
         other => panic!("终止符不是 return：{other:?}"),
     }
@@ -415,4 +420,176 @@ fn t_ssa_21_只写不读的字段赋值也要建根() {
     assert!(verify(g, &tt).is_ok(), "必须过 verifier：{g:#?}");
     assert_eq!(g.roots.len(), 1, "s 必须成根：{:?}", g.roots);
     assert!(count_kind(g, "store") >= 1, "写字段要走 store");
+}
+
+// ── Task 22：if/else 与块参数 ────────────────────────────────────────
+
+use rgoc_ssa::ir::{BlockId, ValueId};
+
+/// 常量 `n` 在 IR 里的**最终值**：跟随写入点物化的 `Convert` 链。
+///
+/// `a := 1` 的 `1` 在 HIR 里是 `untyped int`，写进 `int` 槽时会插一条 `Convert`
+/// （见 `Fb::coerce_to`）。所以「那个常量的值」不是 Const 的 dst，而是链尾。
+fn const_of(f: &SsaFunc, n: i128) -> ValueId {
+    let all = instrs(f);
+    let mut v = all
+        .iter()
+        .find_map(|i| match i {
+            Instr::Const { dst, c, .. } if *c == rgoc_hir::types::ConstVal::Int(n) => Some(*dst),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("缺 const {n}"));
+    loop {
+        let next = all.iter().find_map(|i| match i {
+            Instr::Convert { dst, x, .. } if *x == v => Some(*dst),
+            _ => None,
+        });
+        match next {
+            Some(nv) => v = nv,
+            None => return v,
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn raw_const_of(f: &SsaFunc, n: i128) -> ValueId {
+    instrs(f)
+        .into_iter()
+        .find_map(|i| match i {
+            Instr::Const { dst, c, .. } if *c == rgoc_hir::types::ConstVal::Int(n) => Some(*dst),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("缺 const {n}"))
+}
+
+fn goto_of(f: &SsaFunc, b: BlockId) -> (BlockId, Vec<ValueId>) {
+    match &f.blocks[b.index()].term {
+        Term::Goto { to, args } => (*to, args.clone()),
+        other => panic!("b{} 的终止符不是 goto：{other:?}", b.0),
+    }
+}
+
+#[test]
+fn t_ssa_16_if_汇合块取两支都改过的值() {
+    let (program, mut tt) = program_of(
+        "if-join",
+        "package main\n\nfunc f(c bool) int {\n\ta := 1\n\tif c {\n\t\ta = 2\n\t}\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 入口块 if → then | else
+    let (then_b, else_b) = match &f.blocks[0].term {
+        Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("入口块不是 if：{other:?}"),
+    };
+    let (join_t, args_t) = goto_of(f, then_b);
+    let (join_e, args_e) = goto_of(f, else_b);
+    assert_eq!(join_t, join_e, "两支必须汇到同一块");
+    assert_eq!(
+        f.blocks[join_t.index()].params.len(),
+        1,
+        "两支的 a 不同 ⇒ 汇合块一个参数"
+    );
+    assert_eq!(args_t.len(), 1, "then 边要给实参");
+    assert_eq!(args_e.len(), 1, "else 边要给实参");
+    assert_ne!(
+        args_t[0], args_e[0],
+        "两侧的 a 值必须不同（否则不该建参数）"
+    );
+    assert_eq!(args_t[0], const_of(f, 2), "then 侧的 a 是 2");
+    assert_eq!(args_e[0], const_of(f, 1), "else 侧的 a 还是 1");
+}
+
+#[test]
+fn t_ssa_16_两侧值相同就不建参数() {
+    let (program, mut tt) = program_of(
+        "if-nochange",
+        "package main\n\nfunc f(c bool) int {\n\ta := 1\n\tif c {\n\t\t_ = a\n\t}\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    let (then_b, _) = match &f.blocks[0].term {
+        Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("入口块不是 if：{other:?}"),
+    };
+    let (join, args) = goto_of(f, then_b);
+    assert!(
+        args.is_empty(),
+        "两侧的 a 是同一个值 ⇒ 不该有参数：{args:?}"
+    );
+    assert!(f.blocks[join.index()].params.is_empty(), "汇合块无参数");
+}
+
+#[test]
+fn t_ssa_16_一支返回时汇合块只有一个前驱() {
+    let (program, mut tt) = program_of(
+        "if-return",
+        "package main\n\nfunc f(c bool) int {\n\tif c {\n\t\treturn 1\n\t}\n\treturn 0\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(verify(f, &tt).is_ok(), "必须过 verifier：{f:#?}");
+    // then 支 return ⇒ 只有 else 支落到汇合块
+    let (then_b, else_b) = match &f.blocks[0].term {
+        Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("入口块不是 if：{other:?}"),
+    };
+    assert!(matches!(f.blocks[then_b.index()].term, Term::Return(_)));
+    let (join, args) = goto_of(f, else_b);
+    assert!(args.is_empty(), "单前驱不需要参数：{args:?}");
+    assert!(f.blocks[join.index()].params.is_empty());
+    assert!(matches!(f.blocks[join.index()].term, Term::Return(_)));
+}
+
+#[test]
+fn t_ssa_16_两支都返回不建死块() {
+    let (program, mut tt) = program_of(
+        "if-both-return",
+        "package main\n\nfunc f(c bool) int {\n\tif c {\n\t\treturn 1\n\t} else {\n\t\treturn 2\n\t}\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    assert!(
+        verify(f, &tt).is_ok(),
+        "必须过 verifier（死块会被 V8 拒）：{f:#?}"
+    );
+    assert_eq!(
+        f.blocks.len(),
+        3,
+        "入口 + then + else，不该有汇合空块：{f:#?}"
+    );
+}
+
+#[test]
+fn t_ssa_28_跨块交换是并行的() {
+    // `if c { a, b = b, a }`：then 边的两个实参必须是 (2, 1) 原值，
+    // 而不是「先写 a 再读 a」得到的 (2, 2)。
+    let (program, mut tt) = program_of(
+        "if-swap",
+        "package main\n\nfunc f(c bool) int {\n\ta, b := 1, 2\n\tif c {\n\t\ta, b = b, a\n\t}\n\treturn a*10 + b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let (one, two) = (const_of(f, 1), const_of(f, 2));
+    let (then_b, else_b) = match &f.blocks[0].term {
+        Term::If { then_, else_, .. } => (then_.0, else_.0),
+        other => panic!("入口块不是 if：{other:?}"),
+    };
+    let (_, args_t) = goto_of(f, then_b);
+    let (_, args_e) = goto_of(f, else_b);
+    assert_eq!(args_t, vec![two, one], "then 边：a←2, b←1（并行交换）");
+    assert_eq!(args_e, vec![one, two], "else 边：a←1, b←2（没交换）");
 }

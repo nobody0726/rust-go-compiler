@@ -973,16 +973,47 @@ impl Fb<'_> {
         self.load_root(root, t)
     }
 
+    /// 把值的静态类型对齐到目标类型（不同就插一条 `Convert`）。
+    ///
+    /// # 为什么必须有这一步
+    ///
+    /// HIR 的表达式带着**未定型**的常量类型（`a := 1` 里 `1` 是 `untyped int`），
+    /// 而槽有明确的静态类型（`int`）。Go 的这条隐式转换在 lowering 里没有落成节点，
+    /// 所以 SSA 必须在**写入点**把它物化 —— 否则同一个槽在不同分支里会带两种类型，
+    /// 汇合块的参数与边实参类型对不上（`V3` 会拒，而且拒得对）。
+    ///
+    /// 这条同时给出一条不变式：**槽的当前值，静态类型恒等于槽的静态类型**。
+    fn coerce_to(&mut self, typ: TypeId, v: ValueId) -> ValueId {
+        // 判等必须走 `identical`：同一个 `int` 在类型表里可以有多个条目
+        if crate::typing::same_type(self.tt, self.values[v.index()], typ) {
+            return v;
+        }
+        let dst = self.new_value(typ);
+        self.emit(Instr::Convert { dst, x: v, typ });
+        dst
+    }
+
+    fn slot_typ(&self, s: SlotId) -> TypeId {
+        self.f
+            .slot_types
+            .get(s.index())
+            .copied()
+            .unwrap_or_else(|| TypeId::from_index(0))
+    }
+
     fn write_slot(&mut self, s: SlotId, v: ValueId) {
         if s == BLANK_SLOT {
             return;
         }
+        let v = self.coerce_to(self.slot_typ(s), v);
         if self.promoted.contains(&s) {
             self.val.insert(s, v);
             return;
         }
         let Some(&root) = self.slot_root.get(&s) else {
-            panic!("槽 s{} 既不提升也没有根", s.0);
+            // **死写**：这个槽既不提升也没有根 ⇒ 全函数没人能观察它
+            // （有读 ⇒ 它在 `definite`（提升）或 `unsafe`（成根）里）。丢掉是安全的。
+            return;
         };
         let addr = self.addr_of(root);
         self.store_root(root, addr, v);
@@ -1154,6 +1185,131 @@ impl Fb<'_> {
         }
     }
 
+    fn new_block(&mut self) -> BlockId {
+        self.blocks.push(Block::default());
+        BlockId((self.blocks.len() - 1) as u32)
+    }
+
+    /// `if` / `else` 与汇合块的块参数（`Task 22`）。
+    ///
+    /// # 并行交接为什么不靠「并行拷贝」
+    ///
+    /// 块参数的**实参是 SSA 值**（`Term::Goto { args }` 里就是 `ValueId`），
+    /// 落地时一次性交给目标块的参数 —— 边上的 `args` 没有先后，所以
+    /// `a, b = b, a` 交换天然正确（两个 arg 分别是交换前的两个值）。
+    /// 真正的「并行赋值」风险在**求值器**（`ssa_exec` 必须一次性写参数）
+    /// 与 **copy 传播 pass**（不许把块的参数替换成实参），不在这里。
+    ///
+    /// # 什么时候不需要块参数
+    ///
+    /// 两侧的当前值**相同**（同一个 `ValueId`）就不建参数 —— 多建一个参数
+    /// 会让 dump 里多出一串无意义的 `v_k = ...`，也白白拉长活跃区间。
+    ///
+    /// # 一条边终止（`return` / `panic`）
+    ///
+    /// 汇合块只剩一条前驱，这时**不需要参数**（没有「两个来源」要合并），
+    /// 直接把落空那一侧的当前值映射接续下去。两侧都终止 ⇒ 汇合块根本不存在
+    /// （`builder` 不产出死块，`V8` 会拒）。
+    fn stmt_if(
+        &mut self,
+        init: Option<&Stmt>,
+        cond: &Expr,
+        then: &rgoc_hir::Block,
+        els: Option<&Stmt>,
+    ) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+        let c = self.expr(cond);
+        let then_b = self.new_block();
+        let else_b = self.new_block();
+        self.set_term(Term::If {
+            cond: c,
+            then_: (then_b, Vec::new()),
+            else_: (else_b, Vec::new()),
+        });
+
+        let base_map = self.val.clone();
+
+        // ── then 支
+        self.cur = then_b;
+        self.terminated = false;
+        self.val = base_map.clone();
+        self.stmts(&then.stmts);
+        let then_falls = !self.terminated;
+        let then_tail = self.cur;
+        let then_map = self.val.clone();
+
+        // ── else 支
+        self.cur = else_b;
+        self.terminated = false;
+        self.val = base_map;
+        if let Some(e) = els {
+            self.stmt(e);
+        }
+        let else_falls = !self.terminated;
+        let else_tail = self.cur;
+        let else_map = self.val.clone();
+
+        match (then_falls, else_falls) {
+            (true, true) => {
+                let join = self.new_block();
+                let mut params: Vec<ValueId> = Vec::new();
+                let (mut ta, mut ea): (Vec<ValueId>, Vec<ValueId>) = (Vec::new(), Vec::new());
+                let mut merged: BTreeMap<SlotId, ValueId> = BTreeMap::new();
+                let slots: BTreeSet<SlotId> =
+                    then_map.keys().chain(else_map.keys()).copied().collect();
+                for s in slots {
+                    match (then_map.get(&s).copied(), else_map.get(&s).copied()) {
+                        (Some(a), Some(b)) if a == b => {
+                            merged.insert(s, a);
+                        }
+                        (Some(a), Some(b)) => {
+                            let t = self.values[a.index()];
+                            let p = self.new_value(t);
+                            params.push(p);
+                            ta.push(a);
+                            ea.push(b);
+                            merged.insert(s, p);
+                        }
+                        // 只在一侧有值：该槽没有提升（`Def` 的交集保证），不该出现
+                        _ => {}
+                    }
+                }
+                self.blocks[join.index()].params = params;
+                self.blocks[then_tail.index()].term = Term::Goto { to: join, args: ta };
+                self.blocks[else_tail.index()].term = Term::Goto { to: join, args: ea };
+                self.cur = join;
+                self.terminated = false;
+                self.val = merged;
+            }
+            (true, false) => {
+                let join = self.new_block();
+                self.blocks[then_tail.index()].term = Term::Goto {
+                    to: join,
+                    args: Vec::new(),
+                };
+                self.cur = join;
+                self.terminated = false;
+                self.val = then_map;
+            }
+            (false, true) => {
+                let join = self.new_block();
+                self.blocks[else_tail.index()].term = Term::Goto {
+                    to: join,
+                    args: Vec::new(),
+                };
+                self.cur = join;
+                self.terminated = false;
+                self.val = else_map;
+            }
+            (false, false) => {
+                // 两侧都终止 ⇒ `if` 之后不可达，不建汇合块（死块会被 V8 拒）
+                self.terminated = true;
+            }
+        }
+    }
+
     fn stmts(&mut self, v: &[Stmt]) {
         for s in v {
             if self.terminated {
@@ -1234,8 +1390,14 @@ impl Fb<'_> {
             Stmt::Block(b) => self.stmts(&b.stmts),
             Stmt::Labeled { stmt, .. } => self.stmt(stmt),
             Stmt::Empty => {}
+            Stmt::If {
+                init,
+                cond,
+                then,
+                els,
+            } => self.stmt_if(init.as_deref(), cond, then, els.as_deref()),
             other => todo!(
-                "M6/Task 22–30：语句 `{}` 的构建还没实现",
+                "M6/Task 23–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)
             ),
         }

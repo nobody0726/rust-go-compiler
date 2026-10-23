@@ -430,7 +430,8 @@ fn check_v3(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Result<(), VerifyError> {
                     (Some(x), Some(y)) => (x, y),
                     _ => continue, // 越界值由 V1 报
                 };
-                if ta != tp {
+                // 类型相同 ≠ `TypeId` 相同：`add_basic` 不去重（同一个 `int` 可有多条）
+                if !crate::typing::same_type(tt, ta, tp) {
                     return Err(err(
                         "V3",
                         b,

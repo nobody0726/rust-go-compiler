@@ -106,6 +106,19 @@ fn basic(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
     }
 }
 
+/// 两个 `TypeId` 是否**同一个类型**（走 `rgoc_types::identical`，不是比下标）。
+///
+/// # 为什么不能比下标
+///
+/// `TypeTable::add_basic` **不去重**：同一个 `int` 在表里可以有多个条目
+/// （检查器与 lowering 各建一个，实测 `1` 和 `2` 就拿到了 `t45` / `t46`，
+/// 两个都打印成 `int`）。比下标会把「同一个类型」判成「不同类型」，
+/// 于是构建器插一堆 `int → int` 的假转换、`V3` 还会拒掉合法的边。
+#[must_use]
+pub fn same_type(tt: &TypeTable, a: TypeId, b: TypeId) -> bool {
+    identical(tt, a, b).unwrap_or(false)
+}
+
 /// 判等（`identical` 的 `Err` 一律当「不等」，并把原因带上）。
 fn same(tt: &TypeTable, a: TypeId, b: TypeId) -> Result<bool, String> {
     identical(tt, a, b).map_err(|e| format!("判等失败（{e:?}）：{a:?} vs {b:?}"))
