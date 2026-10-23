@@ -55,6 +55,25 @@ impl FnBuilder {
         }
     }
 
+    /// 建一个**空类型表**的构建器（`t0` 从 0 开始）。
+    ///
+    /// 只给「要逐字节对 `C10` 示例」的 dump 测试用：`new()` 走 `universe()`，
+    /// 表里已经有 22 个基本类型，`bool` 会是 `t22` 而不是 `t0`。
+    /// 别的测试别用它 —— 类型编号不可读会让人对着 dump 数错。
+    #[must_use]
+    pub fn bare(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            blocks: vec![Block::default()],
+            roots: Vec::new(),
+            value_types: Vec::new(),
+            tt: TypeTable::new(),
+            basics: BTreeMap::new(),
+            call_sigs: BTreeMap::new(),
+            slot_root: BTreeMap::new(),
+        }
+    }
+
     /// 入口块。
     #[must_use]
     pub fn entry(&self) -> BlockId {

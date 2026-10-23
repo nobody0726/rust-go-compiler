@@ -53,6 +53,9 @@
    `<op>` 取 `Instr` 变体名的 **kebab-case**（`const` / `copy` / `bin` / `un` / `convert` /
    `addr-of` / `field` / `index` / `slice` / `composite` / `make` / `load` / `store` / `call`）。
    操作数按 IR 字段顺序用单空格分隔；`dsts` 多于一个时写 `v1,v2 = call ...`。
+   **可选操作数缺省写 `_`**（`slice` 的 `lo/hi/max`、`make` 的 `cap`）——不是省略、不是空串，
+   这样「第几个操作数是什么」只靠位置就能数，不必看上下文。
+   **`load`/`store` 的第一个操作数是 mem 令牌**（`r<k> <mem> <addr> ...`，`R-16-1`）。
 4. **终止符行**：块的最后一行，前缀 `term`：
    ```text
    term goto b<k> (v<i>,...)
@@ -108,14 +111,15 @@ Go 源（等价）：`func g(p *int) int { if p == nil { panic("nil") }; return 
 ```text
 # SSA v1
 # stage: ssa
-# func g blocks=3 values=4
+# func g blocks=3 values=5
 block b0 params=[v0] preds=[] succs=[b1,b2]
   v1 = const nil : t2
   v2 = bin eq v0 v1 : t0
+  v3 = const 0 : t1
   term if v2 -> b2 () | b1 ()
 block b1 params=[] preds=[b0] succs=[]
-  v3 = load r0 v0 : t1
-  term return (v3)
+  v4 = load r0 v3 v0 : t1
+  term return (v4)
 block b2 params=[] preds=[b0] succs=[]
   term panic (v1)
 # root r0 = heap
@@ -125,7 +129,8 @@ block b2 params=[] preds=[b0] succs=[]
 ```
 
 这个例子钉住另外三件事：⑤ `term panic` 是**正常终止符**之一（`recover`/`defer` 才会被拒绝，`panic` 不会）；
-⑥ 访存指令带**根**（`load r0 ...`）—— 根是显式字段，不是从地址反推的；
+⑥ 访存指令带**根**与 **mem 令牌**（`load r0 v3 v0`：根 / mem / 地址）—— 根是显式字段，
+   不是从地址反推的；mem 是 `V6` 的比对面，`v3` 在这里只当「根 R0 的初始 mem」；
 ⑦ `term unreachable` 不带操作数（见下）。
 
 `term unreachable` 的片段（块可达、流到此为止；**不是**死块）：
@@ -160,3 +165,4 @@ block b3 params=[] preds=[b0] succs=[]
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-23 | **骨架创建**（M6/Task 1）：六条规则 + 完整示例 + 三条硬要求 | `M6-design.md` §3.2 / §4.3；`C6`/`C7` 的先例（`#` 头行 + 编号升序 + 禁止不可复现项） |
+| 2026-10-23 | **`R-16-1`**：规则 3 补两处 —— ① `load`/`store` 的第一个操作数是 **mem 令牌**（`V6` 的比对面；不写它 dump 里就看不见 mem 链）；② 可选操作数缺省写 `_`。§3.2 示例随之加一个 mem 种子值（`values` 4→5）。另明确 **`Effect` 不进 dump**（它是 pass 的输入，不是指令操作数） | `M6-plan.md` Task 16 实现期发现骨架漏了 mem 字段；`T-SSA-46` 的 golden 对账 |
