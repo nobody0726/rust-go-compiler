@@ -23,6 +23,8 @@
 //!                                                类型检查入口（M3）
 //! rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...
 //!                                                静态检查面（M4）
+//! rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...
+//!                                                执行面（M5）
 //! ```
 //!
 //! **不预留**未实现的子命令（见 [`cli`] 模块头的说明）。
@@ -39,6 +41,7 @@ pub mod cli;
 pub mod cmp_cmd;
 pub mod lex_cmd;
 pub mod report;
+pub mod run_cmd;
 pub mod samples;
 pub mod types_cmd;
 
@@ -180,6 +183,12 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
             } else {
                 ExitCode::SUCCESS
             })
+        }
+        Command::Run(r) => {
+            let out = run_cmd::run_run(&r)?;
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            Ok(ExitCode::from(out.exit))
         }
     }
 }

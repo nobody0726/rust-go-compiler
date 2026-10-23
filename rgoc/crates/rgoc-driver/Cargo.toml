@@ -13,6 +13,8 @@ rgoc-ast = { path = "../rgoc-ast" }
 rgoc-check = { path = "../rgoc-check" }
 rgoc-const = { path = "../rgoc-const" }
 rgoc-harness = { path = "../rgoc-harness" }
+rgoc-hir = { path = "../rgoc-hir" }
+rgoc-interp = { path = "../rgoc-interp" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
 rgoc-parse = { path = "../rgoc-parse" }

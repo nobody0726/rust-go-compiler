@@ -34,6 +34,34 @@ pub enum Command {
     Types(TypesCommand),
     /// `check` 子命令（M4/Task 2 起登记；真身从 Task 20 起）
     Check(CheckCommand),
+    /// `run` 子命令（M5/Task 27）
+    Run(RunCommand),
+}
+
+/// `run` 子命令的参数（M5/Task 27；`M5-design.md` §4.1）。
+///
+/// # 与 `check` 的分工
+///
+/// `check` 只出诊断；`run` 在诊断为空时**真的执行**，把程序的
+/// `print` / `println` 输出（合并流）打到 stdout。两者共用同一条装载 + 检查
+/// 通路，`run` 多一步 `rgoc_hir::lower` + `rgoc_interp::run`。
+///
+/// # `--dump-hir` 为什么**不跑**
+///
+/// 与 `--diag-dump` 同一条纪律：dump 是给对撞看的中间产物，程序输出是
+/// 给字节比较看的成品。两者写同一个 stdout 会让「哪几个字节是程序的」变得
+/// 不可判 —— 那样 `run-collide` 就只能靠猜。所以给了 `--dump-hir` 就**只**
+/// 出 dump（退出码 0），跑程序请去掉这个旗标。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunCommand {
+    /// 组成**同一个包**的文件。
+    pub files: Vec<PathBuf>,
+    /// `--dump-hir`：只输出 HIR 的确定性 dump（`T-EX-04` 的对撞入口）。
+    pub dump_hir: bool,
+    /// `--max-steps N`：步数预算覆盖（缺省 1e8；`D-M5-12`）。
+    pub max_steps: Option<u64>,
+    /// `--lang go1.N`：版本门控覆盖（与 `check` 同义）。
+    pub lang: Option<String>,
 }
 
 /// `check` 子命令的参数（M4/Task 2）。
@@ -179,6 +207,10 @@ pub enum CliError {
     DumpCmpConflict,
     /// `check` 一个文件参数都没给（M4/Task 2）
     CheckNeedsFile,
+    /// `run` 一个文件参数都没给（M5/Task 27）
+    RunNeedsFile,
+    /// `--max-steps` 的值不是非负整数
+    BadSteps(String),
 }
 
 impl fmt::Display for CliError {
@@ -194,12 +226,13 @@ impl fmt::Display for CliError {
              rgoc-driver lex <file> [--mode comments|directives]\n  \
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
-             rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...";
+             rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness、lex、ast、types 与 check 五个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex、ast、types、check 与 run 六个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -227,6 +260,8 @@ impl fmt::Display for CliError {
                 "--dump 与 --cmp 不能同时给（C7 的 dump 与 `//rgoc:cmp` 的判定行是两个比对面）。{USAGE}"
             ),
             Self::CheckNeedsFile => write!(f, "check 至少需要一个文件参数。{USAGE}"),
+            Self::RunNeedsFile => write!(f, "run 至少需要一个文件参数。{USAGE}"),
+            Self::BadSteps(v) => write!(f, "--max-steps 需要一个非负整数（收到 {v:?}）。{USAGE}"),
         }
     }
 }
@@ -248,8 +283,59 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
         "ast" => Ok(Command::Ast(parse_ast(rest)?)),
         "types" => Ok(Command::Types(parse_types(rest)?)),
         "check" => Ok(Command::Check(parse_check(rest)?)),
+        "run" => Ok(Command::Run(parse_run_sub(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
+}
+
+/// `run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...` —— M5 的执行子命令。
+///
+/// 选项与文件参数的先后无关；未知选项一律报错（T37 纪律，与 `types`/`check` 同）。
+fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut dump_hir = false;
+    let mut max_steps: Option<u64> = None;
+    let mut lang: Option<String> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i] {
+            "--dump-hir" => {
+                dump_hir = true;
+                i += 1;
+            }
+            "--max-steps" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--max-steps"));
+                };
+                let n = v
+                    .parse::<u64>()
+                    .map_err(|_| CliError::BadSteps((*v).to_string()))?;
+                max_steps = Some(n);
+                i += 2;
+            }
+            "--lang" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--lang"));
+                };
+                lang = Some((*v).to_string());
+                i += 2;
+            }
+            a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                files.push(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(CliError::RunNeedsFile);
+    }
+    Ok(RunCommand {
+        files,
+        dump_hir,
+        max_steps,
+        lang,
+    })
 }
 
 /// `types [--dump] [--cmp] [--lang go1.N] [-I <root>]... <file>...` —— 与 `lex`/`ast`
