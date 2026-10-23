@@ -1277,3 +1277,261 @@ fn t_ssa_19_continue_必须走_post() {
         rgoc_ssa::dump::dump_func(f, &tt)
     );
 }
+
+// ── Task 26：多返回值与结果直连 ─────────────────────────────────────
+
+/// 按被调方找 `Call` 指令（返回 (dsts, args)）。
+fn call_to(f: &SsaFunc, fid: rgoc_hir::FuncId) -> Option<(Vec<ValueId>, Vec<ValueId>)> {
+    instrs(f).into_iter().find_map(|i| match i {
+        Instr::Call {
+            dsts,
+            callee: rgoc_ssa::ir::CalleeRef::Func(x),
+            args,
+            ..
+        } if *x == fid => Some((dsts.clone(), args.clone())),
+        _ => None,
+    })
+}
+
+fn func_id(program: &rgoc_hir::Program, name: &str) -> rgoc_hir::FuncId {
+    rgoc_hir::FuncId(
+        program
+            .funcs
+            .iter()
+            .position(|f| f.name == name)
+            .unwrap_or_else(|| panic!("没有 {name}")) as u32,
+    )
+}
+
+#[test]
+fn t_ssa_20_多值接收建出多结果指令() {
+    let (program, mut tt) = program_of(
+        "multi-recv",
+        "package main\n\nfunc two() (int, int) {\n\treturn 1, 2\n}\n\nfunc g() int {\n\ta, b := two()\n\treturn a*10 + b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let g = func_named(&out, "g");
+    if let Err(e) = verify(g, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(g, &tt)
+        );
+    }
+    let two = func_id(&program, "two");
+    let (dsts, args) = call_to(g, two).expect("没有对 two 的调用");
+    assert_eq!(dsts.len(), 2, "两个结果 ⇒ 两个 dst");
+    assert!(args.is_empty(), "two 没有形参");
+    // 两个 dst 都必须被用到（`a*10 + b`）
+    let used = |v: ValueId| {
+        instrs(g).into_iter().any(|i| match i {
+            Instr::Bin { lhs, rhs, .. } => *lhs == v || *rhs == v,
+            _ => false,
+        })
+    };
+    assert!(
+        used(dsts[0]) && used(dsts[1]),
+        "两个结果都要被用上：{dsts:?}"
+    );
+}
+
+#[test]
+fn t_ssa_21_return_直连_无中间值() {
+    // `return two()` 的 `Return` 操作数必须**就是** two 的 dsts。
+    // 若中间插了 copy / 重新落槽，值是一样的，但结构上就不是「直连」了 ——
+    // 这条判据是结构断言，不是看输出。
+    let (program, mut tt) = program_of(
+        "ret-direct",
+        "package main\n\nfunc two() (int, int) {\n\treturn 1, 2\n}\n\nfunc h() (int, int) {\n\treturn two()\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let h = func_named(&out, "h");
+    if let Err(e) = verify(h, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(h, &tt)
+        );
+    }
+    let two = func_id(&program, "two");
+    let (dsts, _) = call_to(h, two).expect("没有对 two 的调用");
+    let ret = match &h.blocks[0].term {
+        rgoc_ssa::ir::Term::Return(vs) => vs.clone(),
+        other => panic!("入口块不是 return：{other:?}"),
+    };
+    assert_eq!(
+        ret,
+        dsts,
+        "Return 的操作数必须是被调方的 dsts（顺序也一致）\n{}",
+        rgoc_ssa::dump::dump_func(h, &tt)
+    );
+    // 且没有额外的 copy / convert 插在中间
+    assert_eq!(
+        count_kind(h, "copy"),
+        0,
+        "直连不该有 copy：{}",
+        rgoc_ssa::dump::dump_func(h, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_22_实参直连_按_spread_展平() {
+    // `sum(two())`：sum 的两个实参必须是 two 的两个 dst（顺序一致）。
+    let (program, mut tt) = program_of(
+        "arg-spread",
+        "package main\n\nfunc two() (int, int) {\n\treturn 1, 2\n}\n\nfunc sum(a, b int) int {\n\treturn a + b\n}\n\nfunc k() int {\n\treturn sum(two())\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let k = func_named(&out, "k");
+    if let Err(e) = verify(k, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(k, &tt)
+        );
+    }
+    let two = func_id(&program, "two");
+    let sum = func_id(&program, "sum");
+    let (two_dsts, _) = call_to(k, two).expect("没有对 two 的调用");
+    let (_, sum_args) = call_to(k, sum).expect("没有对 sum 的调用");
+    assert_eq!(
+        sum_args,
+        two_dsts,
+        "`sum(two())` 的实参必须就是 two 的结果（按 spread 展平，顺序一致）\n{}",
+        rgoc_ssa::dump::dump_func(k, &tt)
+    );
+    assert_eq!(
+        count_kind(k, "copy"),
+        0,
+        "不该靠 copy 搬运：{}",
+        rgoc_ssa::dump::dump_func(k, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_20_单值调用与零结果调用() {
+    // `println` 是 0 结果；`len` 是 1 结果。两者都不能让构建器崩。
+    let (program, mut tt) = program_of(
+        "call-arities",
+        "package main\n\nfunc one(x int) int {\n\treturn x + 1\n}\n\nfunc p(s []int) {\n\tprintln(len(s))\n\tprintln(one(1))\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let p = func_named(&out, "p");
+    if let Err(e) = verify(p, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(p, &tt)
+        );
+    }
+    let zero_dst = instrs(p)
+        .into_iter()
+        .filter(|i| matches!(i, Instr::Call { dsts, .. } if dsts.is_empty()))
+        .count();
+    assert!(zero_dst >= 2, "两次 println 都是 0 结果调用：{zero_dst}");
+}
+
+// ── Task 27：调用摘要（effect）──────────────────────────────────────
+
+/// 找到 f 里对被调方 `fid` 的那次调用，取它的 `effect`。
+fn effect_of_call(f: &SsaFunc, fid: rgoc_hir::FuncId) -> rgoc_ssa::ir::Effect {
+    instrs(f)
+        .into_iter()
+        .find_map(|i| match i {
+            Instr::Call {
+                callee: rgoc_ssa::ir::CalleeRef::Func(x),
+                effect,
+                ..
+            } if *x == fid => Some(effect.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("没找到对 func#{} 的调用", fid.0))
+}
+
+fn global_index(program: &rgoc_hir::Program, name: &str) -> u32 {
+    program
+        .globals
+        .iter()
+        .position(|g| g.name == name)
+        .unwrap_or_else(|| panic!("没有全局 {name}")) as u32
+}
+
+#[test]
+fn t_ssa_23_写全局的函数_摘要里写到了那个全局() {
+    let (program, mut tt) = program_of(
+        "effect-global",
+        "package main\n\nvar g int\n\nfunc setg() {\n\tg = 1\n}\n\nfunc m() {\n\tsetg()\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    assert!(verify(m, &tt).is_ok());
+    let e = effect_of_call(m, func_id(&program, "setg"));
+    let gi = global_index(&program, "g");
+    assert!(
+        e.writes.contains(&rgoc_ssa::ir::RootId(gi)),
+        "摘要必须含全局 g（RootId({gi})）：{:?}",
+        e.writes
+    );
+    assert!(!e.writes_all, "只写一个已知全局，不该是 writes_all：{e:?}");
+}
+
+#[test]
+fn t_ssa_23_只读函数_摘要为空() {
+    let (program, mut tt) = program_of(
+        "effect-readonly",
+        "package main\n\nfunc rd(a int) int {\n\treturn a + 1\n}\n\nfunc m() int {\n\treturn rd(1)\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    let e = effect_of_call(m, func_id(&program, "rd"));
+    assert!(e.writes.is_empty(), "只读函数不该写：{:?}", e.writes);
+    assert!(!e.writes_all, "不该是 writes_all：{e:?}");
+    assert!(!e.may_panic, "不该 panic：{e:?}");
+}
+
+#[test]
+fn t_ssa_23_摘要沿调用链传递() {
+    // `a()` → `b()` → 写 g：a 的摘要也要含 g（并集到不动点）。
+    let (program, mut tt) = program_of(
+        "effect-transitive",
+        "package main\n\nvar g int\n\nfunc b() {\n\tg = 2\n}\n\nfunc a() {\n\tb()\n}\n\nfunc m() {\n\ta()\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    let e = effect_of_call(m, func_id(&program, "a"));
+    let gi = global_index(&program, "g");
+    assert!(
+        e.writes.contains(&rgoc_ssa::ir::RootId(gi)),
+        "经 b 传递的写必须出现在 a 的摘要里：{:?}",
+        e.writes
+    );
+}
+
+#[test]
+fn t_ssa_23_纯递归函数不是_writes_all() {
+    // 环检测 + `writes_all` 的写法会把 fib 误标成「什么都能写」。
+    // 并集到不动点不会：fib 什么都没写，收敛后还是空。
+    let (program, mut tt) = program_of(
+        "effect-recursive",
+        "package main\n\nfunc fib(n int) int {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}\n\nfunc m() int {\n\treturn fib(5)\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    let e = effect_of_call(m, func_id(&program, "fib"));
+    assert!(!e.writes_all, "纯递归函数不该被判成 writes_all：{e:?}");
+    assert!(e.writes.is_empty(), "fib 什么都不写：{:?}", e.writes);
+    assert!(!e.may_panic, "fib 不 panic：{e:?}");
+}
+
+#[test]
+fn t_ssa_23_指针写与_panic_各自被标记() {
+    let (program, mut tt) = program_of(
+        "effect-heap-panic",
+        "package main\n\nfunc st(p *int) {\n\t*p = 1\n}\n\nfunc boom() {\n\tpanic(\"x\")\n}\n\nfunc m(p *int) {\n\tst(p)\n\tboom()\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    let st = effect_of_call(m, func_id(&program, "st"));
+    assert!(
+        st.writes_all,
+        "经指针写 ⇒ writes_all（可能别名任何全局）：{st:?}"
+    );
+    let boom = effect_of_call(m, func_id(&program, "boom"));
+    assert!(boom.may_panic, "`panic(...)` ⇒ may_panic：{boom:?}");
+}

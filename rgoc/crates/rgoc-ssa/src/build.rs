@@ -24,7 +24,7 @@ use rgoc_hir::{Func, FuncId, GlobalId, Program};
 use rgoc_types::{TypeId, TypeTable};
 
 use crate::diag::Reject;
-use crate::ir::{Block, BlockId, Instr, Module, SsaFunc, Term, ValueId};
+use crate::ir::{Block, BlockId, CalleeRef, Effect, Instr, Module, Sig, SsaFunc, Term, ValueId};
 
 /// 空白标识符 `_` 的槽（HIR 约定：`_` 用 `SlotId(u32::MAX)` 占位）。
 ///
@@ -50,11 +50,13 @@ pub struct BuildOutcome {
 /// 一起长大，所以这里要 `&mut`。
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
+    // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
+    let effs = crate::effect::summarize(program);
     let mut funcs = Vec::with_capacity(program.funcs.len());
     let mut rejected = Vec::new();
     for (i, f) in program.funcs.iter().enumerate() {
         let id = FuncId(i as u32);
-        match build_func(f, id, program, tt) {
+        match build_func(f, id, program, &effs, tt) {
             Ok(sf) => funcs.push(sf),
             Err(r) => rejected.push(r),
         }
@@ -79,6 +81,7 @@ fn build_func(
     f: &Func,
     id: FuncId,
     program: &Program,
+    effs: &[crate::effect::Summary],
     tt: &mut TypeTable,
 ) -> Result<SsaFunc, Reject> {
     let unsafe_slots = unsafe_slots_of(f);
@@ -130,7 +133,10 @@ fn build_func(
     let mut fb = Fb {
         tt,
         f,
+        program,
+        effs,
         globals: &program.globals,
+        call_sigs: BTreeMap::new(),
         values: Vec::new(),
         blocks: vec![Block::default()],
         cur: BlockId(0),
@@ -165,8 +171,8 @@ fn build_func(
 use std::collections::BTreeSet;
 
 use rgoc_hir::{
-    Block as HirBlock, BranchKind, Case, CompositeItem, Expr, ExprKind, MakeKind, Place, SlotId,
-    Stmt,
+    Block as HirBlock, BranchKind, BuiltinKind, Callee, Case, CompositeItem, Expr, ExprKind,
+    MakeKind, Place, SlotId, Stmt,
 };
 
 use crate::ir::{Root, RootId};
@@ -949,7 +955,12 @@ struct BranchOut {
 struct Fb<'a> {
     tt: &'a mut TypeTable,
     f: &'a Func,
+    program: &'a Program,
+    /// 全包的调用摘要（`Task 27`；`Instr::Call.effect` 从它来）。
+    effs: &'a [crate::effect::Summary],
     globals: &'a [rgoc_hir::Global],
+    /// 本函数调用到的已知签名（`V5` 的比对面；`Task 26` 起真的填）。
+    call_sigs: BTreeMap<FuncId, Sig>,
     values: Vec<TypeId>,
     blocks: Vec<Block>,
     cur: BlockId,
@@ -1231,6 +1242,151 @@ impl Fb<'_> {
         }
     }
 
+    /// 赋值/短声明的右侧：唯一右值是多值调用时展平，否则逐个求值。
+    fn rhs_values(&mut self, rhs: &[Expr], want: usize) -> Vec<ValueId> {
+        let vs = if rhs.len() == 1 && want > 1 {
+            self.expr_multi(&rhs[0])
+        } else {
+            rhs.iter().map(|e| self.expr(e)).collect()
+        };
+        if vs.len() != want {
+            todo!(
+                "M6/Task 26：右侧产出 {} 个值，左侧有 {want} 个目标（检查器应已拒绝）",
+                vs.len()
+            );
+        }
+        vs
+    }
+
+    /// 一个表达式可能产出**多个**值（只有 `Call` 会）。
+    ///
+    /// 多值出现的位置只有三处（Go 规范）：赋值/短声明的右侧、`return`、
+    /// 以及「唯一实参是多值调用」的调用实参表。这三处都走这个入口。
+    fn expr_multi(&mut self, e: &Expr) -> Vec<ValueId> {
+        match &e.kind {
+            ExprKind::Call {
+                callee,
+                args,
+                spread,
+                ..
+            } => self.call(e, callee, args, *spread),
+            // HIR 把 `len` / `append` / `println` 这类单独放一个变体（不带 `callee`）。
+            // 它与 `Callee::Builtin` 是同一件事的两种写法，所以走同一个 `emit_builtin`。
+            ExprKind::Builtin { kind, args, .. } => self.emit_builtin(e, *kind, args),
+            _ => vec![self.expr(e)],
+        }
+    }
+
+    /// 内建调用的公共出口（`Callee::Builtin` 与 `ExprKind::Builtin` 共用）。
+    fn emit_builtin(&mut self, e: &Expr, kind: BuiltinKind, args: &[Expr]) -> Vec<ValueId> {
+        let avs = self.eval_args(args, 0);
+        let n = builtin_results(kind);
+        let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![e.typ] };
+        let eff = crate::effect::to_effect(&crate::effect::builtin_summary(kind));
+        self.emit_call(CalleeRef::Builtin(kind), avs, &rtypes, eff)
+    }
+
+    /// 实参表：`spread > 0` 时唯一实参是多值调用，按它的结果数展平。
+    fn eval_args(&mut self, args: &[Expr], spread: u8) -> Vec<ValueId> {
+        if spread > 0 && args.len() == 1 {
+            return self.expr_multi(&args[0]);
+        }
+        args.iter().map(|a| self.expr(a)).collect()
+    }
+
+    /// 建一条 `Call`，返回它的结果值（0 个 / 1 个 / n 个）。
+    ///
+    /// # `dst` 的个数与类型从**被调方的签名**来
+    ///
+    /// 这也是 `V5` 能查东西的前提：`Call.dsts.len()` 必须等于签名结果数。
+    /// 如果把「结果个数」当成「调用点自己说几个就是几个」，`V5` 就没有比对面。
+    ///
+    /// # 方法的接收者单独放
+    ///
+    /// HIR 把接收者放在 `Callee::Method.recv`、且 `Func.params[0]` 就是它；
+    /// 而 `CalleeRef::Method { recv, func }` 里 `recv` 是独立字段。
+    /// 所以记进 `call_sigs` 的 `params` 要**减一**（否则 `V5` 会把每次方法调用
+    /// 都判成「实参少一个」）。
+    fn call(&mut self, e: &Expr, callee: &Callee, args: &[Expr], spread: u8) -> Vec<ValueId> {
+        match callee {
+            Callee::Func(fid) => {
+                let (rtypes, sig) = self.sig_of(*fid, false);
+                self.call_sigs.insert(*fid, sig);
+                let avs = self.eval_args(args, spread);
+                let eff = crate::effect::to_effect(&self.effs[fid.index()]);
+                self.emit_call(CalleeRef::Func(*fid), avs, &rtypes, eff)
+            }
+            Callee::Method { recv, func } => {
+                let (rtypes, sig) = self.sig_of(*func, true);
+                self.call_sigs.insert(*func, sig);
+                let rv = self.expr(recv);
+                let avs = self.eval_args(args, spread);
+                let eff = crate::effect::to_effect(&self.effs[func.index()]);
+                self.emit_call(
+                    CalleeRef::Method {
+                        recv: rv,
+                        func: *func,
+                    },
+                    avs,
+                    &rtypes,
+                    eff,
+                )
+            }
+            Callee::Builtin(k) => self.emit_builtin(e, *k, args),
+            Callee::Value(v) => {
+                let fv = self.expr(v);
+                let avs = self.eval_args(args, spread);
+                // 间接调用：签名运行期才定 ⇒ 只当「一个结果」（`V5` 跳过这类）；
+                // 副作用也未知 ⇒ 保守「什么都能写 + 可能回调」
+                let eff = Effect {
+                    writes: Vec::new(),
+                    writes_all: true,
+                    may_panic: true,
+                    may_call_back: true,
+                };
+                self.emit_call(CalleeRef::Indirect(fv), avs, &[e.typ], eff)
+            }
+            Callee::Iface { .. } => {
+                todo!("M6/Task 31：接口动态派发要报 `SSA-UNSUPPORTED-IFACE-DYN`")
+            }
+        }
+    }
+
+    /// 取被调方的「结果类型 + 签名摘要」。`drop_recv` 时 `params` 减一（方法）。
+    fn sig_of(&self, fid: FuncId, drop_recv: bool) -> (Vec<TypeId>, Sig) {
+        let f = &self.program.funcs[fid.index()];
+        (
+            f.result_types.clone(),
+            Sig {
+                params: f.params.len() - usize::from(drop_recv),
+                results: f.result_types.len(),
+                variadic: f.variadic,
+            },
+        )
+    }
+
+    /// 产 `Call` 指令：按结果类型建 `dst`，返回它们。`effect` 由 `Task 27` 的摘要给。
+    fn emit_call(
+        &mut self,
+        callee: CalleeRef,
+        args: Vec<ValueId>,
+        rtypes: &[TypeId],
+        effect: Effect,
+    ) -> Vec<ValueId> {
+        let mut dsts: Vec<ValueId> = Vec::with_capacity(rtypes.len());
+        for t in rtypes {
+            let d = self.new_value(*t);
+            dsts.push(d);
+        }
+        self.emit(Instr::Call {
+            dsts: dsts.clone(),
+            callee,
+            args,
+            effect,
+        });
+        dsts
+    }
+
     fn expr(&mut self, e: &Expr) -> ValueId {
         match &e.kind {
             ExprKind::Const(c) => {
@@ -1340,8 +1496,29 @@ impl Fb<'_> {
                 }
                 todo!("M6/Task 24：读字段（底座不是内存里的槽）的构建")
             }
+            ExprKind::Call {
+                callee,
+                args,
+                spread,
+                ..
+            } => {
+                let vs = self.call(e, callee, args, *spread);
+                match vs.len() {
+                    1 => vs[0],
+                    0 => todo!("0 结果的调用不能当值使用（检查器应已拒绝）"),
+                    n => todo!("{n} 个结果的调用出现在单值位置（检查器应已拒绝）"),
+                }
+            }
+            ExprKind::Builtin { kind, args, .. } => {
+                let vs = self.emit_builtin(e, *kind, args);
+                match vs.len() {
+                    1 => vs[0],
+                    0 => todo!("0 结果的内建（`println` 等）不能当值使用"),
+                    n => todo!("{n} 结果的内建出现在单值位置"),
+                }
+            }
             other => todo!(
-                "M6/Task 23–28：表达式 `{}` 的构建还没实现",
+                "M6/Task 27–29：表达式 `{}` 的构建还没实现",
                 expr_kind_name(other)
             ),
         }
@@ -2241,27 +2418,17 @@ impl Fb<'_> {
     fn stmt(&mut self, s: &Stmt) {
         match s {
             Stmt::ShortDecl { slots, rhs } => {
-                if rhs.len() != slots.len() {
-                    todo!(
-                        "M6/Task 27：多值调用展开（`{} 个槽 ← {} 个右值`）",
-                        slots.len(),
-                        rhs.len()
-                    );
-                }
                 // 右值**全部先求值**（Go 的赋值语义），再逐个写
-                let vs: Vec<ValueId> = rhs.iter().map(|e| self.expr(e)).collect();
+                let vs = self.rhs_values(rhs, slots.len());
                 for (slot, v) in slots.iter().zip(vs) {
                     self.write_slot(*slot, v);
                 }
             }
             Stmt::Assign { lhs, op, rhs } => match op {
                 None => {
-                    if rhs.len() != lhs.len() {
-                        todo!("M6/Task 27：多值调用展开（赋值）");
-                    }
                     // `a, b = b, a` 的正确性来自这里：右值先全部求值成 SSA 值，
                     // 写的时候已经不存在「先写 a 再读 b」的问题
-                    let vs: Vec<ValueId> = rhs.iter().map(|e| self.expr(e)).collect();
+                    let vs = self.rhs_values(rhs, lhs.len());
                     for (p, v) in lhs.iter().zip(vs) {
                         self.write_place(p, v);
                     }
@@ -2289,10 +2456,11 @@ impl Fb<'_> {
                 }
             },
             Stmt::Expr(e) => {
-                self.expr(e);
+                // 表达式语句可以没有值（`println(...)`）⇒ 走多值入口并丢弃
+                let _ = self.expr_multi(e);
             }
             Stmt::Return(es) => {
-                let vals: Vec<ValueId> = if es.is_empty() {
+                let mut vals: Vec<ValueId> = if es.is_empty() {
                     // 裸 return：读命名结果槽（`func f() (r int) { ...; return }`）
                     self.f
                         .results
@@ -2300,9 +2468,19 @@ impl Fb<'_> {
                         .into_iter()
                         .map(|s| self.read_slot(s))
                         .collect()
+                } else if es.len() == 1 && self.f.result_types.len() > 1 {
+                    // `return f()`：**结果直连** —— 不插任何中间值，
+                    // `Return` 的操作数就是被调方的 `dsts`（`T-SSA-21` 判的就是这个）
+                    self.expr_multi(&es[0])
                 } else {
                     es.iter().map(|e| self.expr(e)).collect()
                 };
+                // 返回值也要对齐到签名类型（`return 1` 的 `1` 是 untyped int）
+                if vals.len() == self.f.result_types.len() {
+                    for (v, t) in vals.iter_mut().zip(self.f.result_types.clone()) {
+                        *v = self.coerce_to(t, *v);
+                    }
+                }
                 self.set_term(Term::Return(vals));
             }
             Stmt::Block(b) => self.stmts(&b.stmts),
@@ -2406,7 +2584,7 @@ impl Fb<'_> {
             roots: self.roots,
             slot_root: self.slot_root,
             value_types: self.values,
-            call_sigs: BTreeMap::new(),
+            call_sigs: self.call_sigs,
         }
     }
 }
@@ -2750,5 +2928,37 @@ fn eff_place_inner_exprs(
             eff_expr(tt, sr, index, e);
         }
         Place::Deref(x) => eff_expr(tt, sr, x, e),
+    }
+}
+
+/// 内建返回几个值。
+///
+/// # 为什么是穷尽 `match` 而不是「返回 1 的例外表」
+///
+/// 这张表决定 `Call.dsts` 的个数，也就决定 `V5` 能不能查。写成 `_ => 1`
+/// 会让「以后加了个 0 结果的内建」静默变成「多一个 dst」，而 `V5` 只会说
+/// 「结果个数不符」—— 报错报在构建器上，原因却在表里。穷尽 `match` 让加变体
+/// 时编译就红。
+fn builtin_results(k: BuiltinKind) -> usize {
+    match k {
+        // 没有结果
+        BuiltinKind::Delete
+        | BuiltinKind::Clear
+        | BuiltinKind::Print
+        | BuiltinKind::Println
+        | BuiltinKind::Panic
+        | BuiltinKind::Close => 0,
+        // 一个结果
+        BuiltinKind::Len
+        | BuiltinKind::Cap
+        | BuiltinKind::Append
+        | BuiltinKind::Copy
+        | BuiltinKind::New
+        | BuiltinKind::Min
+        | BuiltinKind::Max
+        | BuiltinKind::Complex
+        | BuiltinKind::Real
+        | BuiltinKind::Imag
+        | BuiltinKind::Recover => 1,
     }
 }

@@ -20,6 +20,7 @@ pub mod cfg;
 pub mod diag;
 pub mod dom;
 pub mod dump;
+pub mod effect;
 pub mod ir;
 pub mod testsupport;
 pub mod typing;
