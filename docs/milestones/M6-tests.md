@@ -274,6 +274,8 @@ M = 拒绝的个数         （每行带 §5 的码）
 | `R-12-1` | 2026-10-23 | `verify` 的签名是 `verify(&SsaFunc, &TypeTable)`，**不是**设计稿的 `verify(&SsaFunc)` | `V3` 要判 `i64 + string`，必须能按 `TypeId` 解析真实类型；类型表是**包级**的，塞进 `SsaFunc` 荒唐（每个函数背一张表）。`M6-design.md` §3.5 同步改 |
 | `R-12-2` | 2026-10-23 | `V2` **不查 `mem` 操作数**，`mem` 的支配性归 `V6` | 实测：`V2` 先跑会把 `V6` 的 ① 挡成不可达（一条永远绿的断言）。分工改为「`V2` 判普通值、`V6` 判 mem 链」 |
 | `R-13-1` | 2026-10-23 | `V5` 的被调方签名存在 `SsaFunc::call_sigs`（新增 `ir::Sig { params, results, variadic }`），不是模块级符号表 | 让 `SsaFunc` 自足（dump 确定性 / 单函数测试 / 后续 passes 都不必拖模块上下文）；代价是被调方签名在多个调用者里各记一份 |
+| `R-17-1` | 2026-10-23 | `Reject` 没有 `pos` 字段，改为 `{ func, code, detail }` | HIR 的 `Expr`/`Stmt` **不带位置**（位置只在 lowering 期的 AST 上有）⇒ `pos` 会永远 `None`；留一个永远空的字段等于骗读的人 |
+| `R-18-1` | 2026-10-23 | `scan_addressed(&TypeTable, &Block)` 比计划多一个类型表参数 | `&arr[i]`（数组）元素在数组槽的存储里 ⇒ 数组槽成根；`&s[i]`（slice）元素在底层数组（堆根）⇒ 不建槽根。两条结论相反，只能按**类型**分叉 |
 | `R-16-1` | 2026-10-23 | `dump` 的 `load`/`store` 行**带 mem 令牌**；可选操作数缺省写 `_`；`Effect` 不进 dump | 骨架期 `C10` 漏了 mem 字段，而 mem 是 `V6` 的比对面（不写它 dump 里看不见 mem 链）。见 `C10` §5 同号行 |
 
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m6.rs` 会对账 `test_ids` 集合。
