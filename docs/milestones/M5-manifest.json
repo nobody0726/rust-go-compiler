@@ -2,14 +2,15 @@
   "stage": "M5",
   "name": "HIR 与顺序解释器（顺序语义基线）",
   "generated_at": "2026-10-22T00:00:00Z",
-  "filled_at": null,
-  "fill_task": "M5-plan.md Task 50（按 M5-tests.md §10 的映射逐字段填实）",
-  "status": "planned",
+  "filled_at": "2026-10-23T00:00:00Z",
+  "fill_task": "M5-plan.md Task 50（按 M5-tests.md §10 的映射逐字段填实；由 rgoc-driver/tests/manifest_m5.rs 对账，三类谎必须被拦）",
+  "status": "partial（EX-3/EX-5/EX-6/EX-7/EX-9 兑现；EX-1/EX-2/EX-4/EX-8 未全绿，缺口见 open_gaps）",
   "scope": "顺序解释闭环：HIR lowering + 显式帧栈 + 显式求值栈 + 四类赋值语义 + 内建 + 闭包/接口动态语义 + defer/panic/recover + 初始化执行；验收 = 自有 fixture（甲 40）+ 官方 test/ 与 test/ken 语料对撞（乙 8）+ 装置与 CLI（丙 8）+ P0 前置（丁 6）+ 变异反向验证（反 8）",
   "docs": {
     "design": "docs/milestones/M5-design.md（D-M5-1..15 / F1–F20 / §12 变更记录）",
-    "tests": "docs/milestones/M5-tests.md（判据面已冻结；R-6-1 入选清单分两次冻结 / R-4-1 浮点补钉）",
+    "tests": "docs/milestones/M5-tests.md（判据面已冻结；R-6-1 入选清单追加冻结 / R-4-1 浮点补钉 / R-6-2 排除 6→11 / R-7-1 白名单追加 U-M5-13/14 / R-3-1 反腿实测 + T-EX-70 分母）",
     "plan": "docs/milestones/M5-plan.md（Task 1–52；进度台账 .superpowers/sdd/M5-plan/progress.md，不入库）",
+    "report": "docs/milestones/M5-report.md（交付 B；§5 偏离登记）",
     "contracts": [
       "docs/contracts/C9-values-and-output.md（Task 9 新建：值表示/输出字节/退出码）",
       "docs/contracts/C3-hir.md（Task 52 升正式：§2 四项待验证全部有答案）"
@@ -17,10 +18,10 @@
   },
   "crates": [
     "rgoc/crates/rgoc-hir（重写：program/stmt/expr/place/lower/dump/diag）",
-    "rgoc/crates/rgoc-hir-spike（新：现 rgoc-hir 的 spike 版迁移，保 SM-M0-NATIVE-HELLO）",
+    "rgoc/crates/rgoc-hir-spike（新：原 rgoc-hir 的 spike 版迁移，保 SM-M0-NATIVE-HELLO）",
     "rgoc/crates/rgoc-interp（新：value/eval/frame/call/ops/print/init/exc/budget/builtin）",
     "rgoc/crates/rgoc-check（Session 7 个入口 pub + P0 四族规则修复）",
-    "rgoc/crates/rgoc-driver（run / hir 子命令 + manifest_m5.rs）",
+    "rgoc/crates/rgoc-driver（run / hir 子命令 + manifest_m5.rs + run_corpus.rs + run_semantics.rs + hir_nodes_m5.rs）",
     "tools/run-oracle（新：官方 testdir run 语义复刻 + run-collide.sh --run）",
     "scripts/mutation-m5-notes.md（新）"
   ],
@@ -33,20 +34,27 @@
     },
     "excluded": {
       "file": "tools/run-oracle/run-excluded.txt",
-      "count": 6,
-      "note": "5 个 runoutput（index0/rotate0..3，动态编译）+ reflectmethod2.go（import reflect，U-M5-01）"
+      "count": 11,
+      "frozen_base": 6,
+      "appended_by": "R-6-2",
+      "note": "冻结 6 = 5 个 runoutput（index0/rotate0..3）+ reflectmethod2.go（import reflect）；R-6-2 追加 5 = range4.go（U-M5-06）/ divmod.go（步数上限）/ convert4.go（Ptr 不表达子区间）/ method7.go（U-M5-13）/ literal.go（非 UTF-8 字符串，U-M5-14）；逐行四栏见文件头与 §6.4"
     },
     "selected": {
       "file": "tools/run-oracle/run-selected.txt",
-      "count": null,
-      "note": "R-6-1：P0 收口后追加冻结；预期 ≈70；入选 < 60 时如实报，不补数"
+      "count": 69,
+      "note": "R-6-1 追加冻结：顶层 37 + ken/ 32；实测 69/69 合并流逐字节相同 + 退出码相同；其中 5 个有 <同名>.out（helloworld/print/printbig/ken-cplx0/ken-string），三方一致"
     },
-    "complement_assert": "候选 80 == 入选 ∪ 排除（两向；T-EX-41）"
+    "ken": {
+      "file": "tools/run-oracle/run-ken.txt",
+      "count": 32,
+      "note": "T-EX-44 的输入；ken 的 32 个候选全部入选，无一进排除（子集关系由 run_corpus.rs 断言）"
+    },
+    "complement_assert": "候选 80 == 入选 69 ∪ 排除 11（两向；T-EX-41，run_corpus.rs 的 lists_are_disjoint_and_complete）"
   },
   "gate": {
     "EX-1": {
       "name": "HIR 与 lowering 闭环",
-      "status": "pending",
+      "status": "partial",
       "definition": "节点穷尽 + 未支持显式拒绝 + 诊断一致性守卫 + dump 确定性",
       "test_ids": [
         "T-EX-01",
@@ -55,11 +63,12 @@
         "T-EX-04",
         "T-EX-05",
         "T-EX-06"
-      ]
+      ],
+      "evidence": "T-EX-01..05 全绿（rgoc/crates/rgoc-driver/tests/hir_nodes_m5.rs 的 45 变体穷尽 + run_semantics 的 dump 确定性/Place 五形态/HIR-UNSUPPORTED-* 五条）；T-EX-06 只兑现「收敛无损」半边，常量溢出诊断未兑现（G-M5-01）"
     },
     "EX-2": {
       "name": "函数、帧与初始化",
-      "status": "pending",
+      "status": "partial",
       "definition": "递归 1000 层/多值/变参/命名返回/单包 init 序/双包 init 序",
       "test_ids": [
         "T-EX-17",
@@ -69,11 +78,12 @@
         "T-EX-21",
         "T-EX-39",
         "T-EX-40"
-      ]
+      ],
+      "evidence": "T-EX-17..21 与 39 全绿（1000 层递归 down(998) 通过，证明语义不压 Rust 栈）；T-EX-40 未兑现：HIR 是单包的，import _ \"side\" 不会跑 side 的 init（G-M5-02）"
     },
     "EX-3": {
       "name": "复合值与内建",
-      "status": "pending",
+      "status": "pass",
       "definition": "值语义 10 组正反 + 内建全集 + print 格式表",
       "test_ids": [
         "T-EX-10",
@@ -85,11 +95,12 @@
         "T-EX-16",
         "T-EX-23",
         "T-EX-24"
-      ]
+      ],
+      "evidence": "T-EX-10..16 / 23 / 24 全绿（数组与结构体拷贝正反、slice 别名与增长、map 引用语义、指针写穿、类型转换矩阵、内建全集、F10 七点格式表）；语料侧 69/69 兜底"
     },
     "EX-4": {
       "name": "闭包与接口",
-      "status": "pending",
+      "status": "partial",
       "definition": "捕获/生命周期/loopvar/方法值/typed nil/断言/type switch/泛型",
       "test_ids": [
         "T-EX-25",
@@ -101,11 +112,12 @@
         "T-EX-31",
         "T-EX-32",
         "T-EX-33"
-      ]
+      ],
+      "evidence": "T-EX-25..31 全绿（含 1.22 loopvar 的 012、typed nil、断言双值、type switch 四支）；T-EX-32 只到 any + 推断（G-M5-03）；T-EX-33 拒绝确定但用通用 CHK 码（G-M5-04）"
     },
     "EX-5": {
       "name": "defer/panic/recover",
-      "status": "pending",
+      "status": "pass",
       "definition": "时机/LIFO/直接调用限制/命名返回值/嵌套/未捕获",
       "test_ids": [
         "T-EX-34",
@@ -113,11 +125,12 @@
         "T-EX-36",
         "T-EX-37",
         "T-EX-38"
-      ]
+      ],
+      "evidence": "T-EX-34..38 全绿：注册时求值 + LIFO、recover 仅直接 defer 有效、命名结果可改写、嵌套 panic 覆盖原值、未捕获 panic 的 panic: 前缀 + 退出码 2"
     },
     "EX-6": {
       "name": "顺序语料闭环",
-      "status": "pending",
+      "status": "pass",
       "definition": "两清单守卫 + 入选全绿 + 三方差分 + ken 专项 + 确定性",
       "test_ids": [
         "T-EX-41",
@@ -128,30 +141,33 @@
         "T-EX-46",
         "T-EX-47",
         "T-EX-48"
-      ]
+      ],
+      "evidence": "T-EX-41..48 全绿：三清单两向相等（80=69+11）、tools/run-oracle/run-collide.sh --run 69/69 绿、--three-way 5 个 .out 三方一致、ken 32/32 绿、地址探针必红、排除清单四栏齐、连跑两次逐字节相同"
     },
     "EX-7": {
       "name": "显式帧与资源上限",
-      "status": "pending",
+      "status": "pass",
       "definition": "三道上限响亮失败 + 1000 层递归通过（语义不依赖 Rust 栈）",
       "test_ids": [
         "T-EX-52",
         "T-EX-17"
-      ]
+      ],
+      "evidence": "T-EX-52 全绿（帧深 1000 / 求值栈 10000 / 步数 1e8 各一条超限 fixture：退出码 2 + 稳定消息 + 宿主不 abort）；T-EX-17 的 down(998) 通过，两者合起来钉住 D-M5-1"
     },
     "EX-8": {
       "name": "四条 cargo + 既有自检",
-      "status": "pending",
+      "status": "partial",
       "definition": "四条 exit 0 + 五条自检 + M4 的 63 条 T-CK 不回退",
       "test_ids": [
         "T-EX-53",
         "T-EX-54",
         "T-EX-62"
-      ]
+      ],
+      "evidence": "T-EX-53 四条 cargo 全 exit 0（fmt 2s / check 2s / clippy 1s / test 76s，1606 passed 0 failed）；T-EX-54 五条自检全过（m0 232 条 / m1 / ast-golden / ast-testdata / ast-stdlib）；T-EX-62 只兑现「无回退」：M4 收口时即红的 CH-2 项仍红（G-M5-05）"
     },
     "EX-9": {
       "name": "反向验证 + 交付 B",
-      "status": "pending",
+      "status": "pass",
       "definition": "8 条变异实证变红并复原 + M5-report.md（措辞为「候选」）",
       "test_ids": [
         "T-EX-63",
@@ -162,574 +178,570 @@
         "T-EX-68",
         "T-EX-69",
         "T-EX-70"
-      ]
-    }
-  },
-  "coverage": {
-    "roadmap_M5_items": {
-      "1": {
-        "sentence": "HIR lowering、环境/调用帧、按值/按引用捕获、可寻址性、多返回值",
-        "ids": [
-          "T-EX-01",
-          "T-EX-02",
-          "T-EX-03",
-          "T-EX-04",
-          "T-EX-05",
-          "T-EX-17",
-          "T-EX-18",
-          "T-EX-19",
-          "T-EX-25"
-        ]
-      },
-      "2": {
-        "sentence": "基础值、数组/struct 拷贝、指针、slice 共享底层、不可变 string、Go map 语义适配",
-        "ids": [
-          "T-EX-07",
-          "T-EX-08",
-          "T-EX-09",
-          "T-EX-10",
-          "T-EX-11",
-          "T-EX-12",
-          "T-EX-13",
-          "T-EX-14",
-          "T-EX-15",
-          "T-EX-16",
-          "T-EX-23"
-        ]
-      },
-      "3": {
-        "sentence": "内建、接口动态值/方法调用/断言/type switch、typed nil、method value 和闭包",
-        "ids": [
-          "T-EX-23",
-          "T-EX-25",
-          "T-EX-26",
-          "T-EX-27",
-          "T-EX-28",
-          "T-EX-29",
-          "T-EX-30",
-          "T-EX-31"
-        ]
-      },
-      "4": {
-        "sentence": "解释执行包变量/init/main；defer/panic/recover：直接调用限制、命名返回值、嵌套 panic",
-        "ids": [
-          "T-EX-34",
-          "T-EX-35",
-          "T-EX-36",
-          "T-EX-37",
-          "T-EX-38",
-          "T-EX-39",
-          "T-EX-40"
-        ]
-      },
-      "5": {
-        "sentence": "泛型解释子集可单态化；loopvar 捕获语义直接测试；range over func 未支持时显式拒绝",
-        "ids": [
-          "T-EX-27",
-          "T-EX-32",
-          "T-EX-33"
-        ]
-      }
-    },
-    "sub_stages": {
-      "M5a": "EX-1",
-      "M5b": "EX-2",
-      "M5c": "EX-3",
-      "M5d": "EX-4",
-      "M5e": "EX-5",
-      "M5f": "EX-6"
+      ],
+      "evidence": "8 条变异全部实证变红并复原（scripts/mutation-m5-notes.md 逐条记施加点/红在哪个测试/复原证据）；M5-report.md 在（含 §5 偏离登记与三条分别声明）"
     }
   },
   "test_ids": [
     {
       "id": "T-EX-01",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/hir_nodes_m5.rs 的 t_ex_01：从 types.rs 现读 45 个变体，fixture 逐 token 点亮",
       "leg": "甲",
-      "name": "HIR 节点覆盖",
-      "source": "S",
-      "status": "pending"
+      "name": "HIR 节点覆盖"
     },
     {
       "id": "T-EX-02",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_02：go/chan/select/rangefunc/close 五条 HIR-UNSUPPORTED-*，退出码 1",
       "leg": "甲",
-      "name": "未支持构造显式拒绝",
-      "source": "S",
-      "status": "pending"
+      "name": "未支持构造显式拒绝"
     },
     {
       "id": "T-EX-03",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/hir_nodes_m5.rs 的 t_ex_03：69 个入选文件 --dump-hir 全绿且 stderr 空",
       "leg": "甲",
-      "name": "lowering 诊断一致性守卫",
-      "source": "H",
-      "status": "pending"
+      "name": "lowering 诊断一致性守卫"
     },
     {
       "id": "T-EX-04",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_04：同一输入两次 dump 逐字节相同",
       "leg": "甲",
-      "name": "hir --dump 确定性",
-      "source": "H",
-      "status": "pending"
+      "name": "hir --dump 确定性"
     },
     {
       "id": "T-EX-05",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_05：slot/global/field/index/deref 五形态取址 + 写穿",
       "leg": "甲",
-      "name": "Place 全形态",
-      "source": "S",
-      "status": "pending"
+      "name": "Place 全形态"
     },
     {
       "id": "T-EX-06",
+      "gate": "EX-1",
+      "verdict": "partial",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_06：i64 极值/1<<62→int64/1<<100→float64 逐位对；溢出诊断缺失（G-M5-01）",
       "leg": "甲",
-      "name": "常量收敛与任意精度",
-      "source": "S",
-      "status": "pending"
+      "name": "常量收敛与任意精度"
     },
     {
       "id": "T-EX-07",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_07：int8(127)+1==-128、有符号右移、除零 panic、% 符号",
       "leg": "甲",
-      "name": "整数算术",
-      "source": "S",
-      "status": "pending"
+      "name": "整数算术"
     },
     {
       "id": "T-EX-08",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_08：float32 每步舍入、%g 格式、complex/real/imag",
       "leg": "甲",
-      "name": "浮点与复数",
-      "source": "S",
-      "status": "pending"
+      "name": "浮点与复数"
     },
     {
       "id": "T-EX-09",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_09：&&/|| 短路副作用计数、无类型常量比较、接口比较",
       "leg": "甲",
-      "name": "比较与短路",
-      "source": "S",
-      "status": "pending"
+      "name": "比较与短路"
     },
     {
       "id": "T-EX-10",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_10：只读索引得 byte、切片、range 得 rune、+ 拼接、len 按字节",
       "leg": "甲",
-      "name": "字符串",
-      "source": "S",
-      "status": "pending"
+      "name": "字符串"
     },
     {
       "id": "T-EX-11",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_11：a:=arr 后改 a[0] 不动 arr；&arr[0] 后拷贝仍不串",
       "leg": "甲",
-      "name": "数组拷贝（正反）",
-      "source": "S",
-      "status": "pending"
+      "name": "数组拷贝（正反）"
     },
     {
       "id": "T-EX-12",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_12：同值语义 + 字段提升选择器 + 匿名嵌入拷贝",
       "leg": "甲",
-      "name": "结构体拷贝与嵌入",
-      "source": "S",
-      "status": "pending"
+      "name": "结构体拷贝与嵌入"
     },
     {
       "id": "T-EX-13",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_13：s2:=s1 共享底层、append 超 cap 不再共享、三索引、copy 重叠",
       "leg": "甲",
-      "name": "slice 别名与增长",
-      "source": "S",
-      "status": "pending"
+      "name": "slice 别名与增长"
     },
     {
       "id": "T-EX-14",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_14：m2:=m1 共享、键相等、delete、双值 v,ok、迭代集合相等",
       "leg": "甲",
-      "name": "map 语义",
-      "source": "S",
-      "status": "pending"
+      "name": "map 语义"
     },
     {
       "id": "T-EX-15",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_15：取址/解引用/指针到字段与元素、*p 写穿、nil 解引用 panic",
       "leg": "甲",
-      "name": "指针",
-      "source": "S",
-      "status": "pending"
+      "name": "指针"
     },
     {
       "id": "T-EX-16",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_16：数值截断与符号扩展、string↔[]byte/[]rune、rune/byte",
       "leg": "甲",
-      "name": "类型转换矩阵",
-      "source": "S",
-      "status": "pending"
+      "name": "类型转换矩阵"
     },
     {
       "id": "T-EX-17",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_17：down(998) 递归通过（不压 Rust 栈）、sum() 与 nums...",
       "leg": "甲",
-      "name": "函数、递归、变参",
-      "source": "S",
-      "status": "pending"
+      "name": "函数、递归、变参"
     },
     {
       "id": "T-EX-18",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_18：a,b:=f()、a,b=f()、g(f()) 嵌套、return f() 直传",
       "leg": "甲",
-      "name": "多返回值",
-      "source": "S",
-      "status": "pending"
+      "name": "多返回值"
     },
     {
       "id": "T-EX-19",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_19：命名结果被 return 前赋值、裸 return 返回当前值",
       "leg": "甲",
-      "name": "命名返回值与裸 return",
-      "source": "S",
-      "status": "pending"
+      "name": "命名返回值与裸 return"
     },
     {
       "id": "T-EX-20",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_20：有返回值的 f() 当语句合法（B 族正向 fixture）",
       "leg": "甲",
-      "name": "调用语句丢弃结果",
-      "source": "S",
-      "status": "pending"
+      "name": "调用语句丢弃结果"
     },
     {
       "id": "T-EX-21",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_21：if/三种 for/switch 有 tag 无 tag fallthrough/goto/labeled break continue",
       "leg": "甲",
-      "name": "控制流",
-      "source": "S",
-      "status": "pending"
+      "name": "控制流"
     },
     {
       "id": "T-EX-22",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_22：array/slice/string/map/int（1.22）与迭代变量个数",
       "leg": "甲",
-      "name": "range 四形态",
-      "source": "S",
-      "status": "pending"
+      "name": "range 四形态"
     },
     {
       "id": "T-EX-23",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_23：len/cap/make/new/append/copy/delete/clear/min/max/complex/real/imag",
       "leg": "甲",
-      "name": "内建全集",
-      "source": "S",
-      "status": "pending"
+      "name": "内建全集"
     },
     {
       "id": "T-EX-24",
+      "gate": "EX-3",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_24：F10 七点 + 多参数分隔 + nil 四种 + rune 十进制",
       "leg": "甲",
-      "name": "print/println 格式表",
-      "source": "O",
-      "status": "pending"
+      "name": "print/println 格式表"
     },
     {
       "id": "T-EX-25",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_25：捕获后外部改动可见、两闭包共享同一变量",
       "leg": "甲",
-      "name": "闭包捕获（按变量）",
-      "source": "S",
-      "status": "pending"
+      "name": "闭包捕获（按变量）"
     },
     {
       "id": "T-EX-26",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_26：返回出去的闭包其捕获变量仍活着",
       "leg": "甲",
-      "name": "闭包生命周期",
-      "source": "S",
-      "status": "pending"
+      "name": "闭包生命周期"
     },
     {
       "id": "T-EX-27",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_27：三个闭包打 012（每轮新 Cell），HIR 的 loopvars 支撑",
       "leg": "甲",
-      "name": "loopvar（1.22）",
-      "source": "S",
-      "status": "pending"
+      "name": "loopvar（1.22）"
     },
     {
       "id": "T-EX-28",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_28：x.M 绑定接收者、T.M 首参是接收者、接口方法值",
       "leg": "甲",
-      "name": "方法值/方法表达式",
-      "source": "S",
-      "status": "pending"
+      "name": "方法值/方法表达式"
     },
     {
       "id": "T-EX-29",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_29：var p *T; var i I = p ⇒ i != nil；var i I ⇒ i == nil",
       "leg": "甲",
-      "name": "接口与 typed nil",
-      "source": "S",
-      "status": "pending"
+      "name": "接口与 typed nil"
     },
     {
       "id": "T-EX-30",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_30：单值失败 panic、双值失败 ok=false、接口到接口",
       "leg": "甲",
-      "name": "类型断言",
-      "source": "S",
-      "status": "pending"
+      "name": "类型断言"
     },
     {
       "id": "T-EX-31",
+      "gate": "EX-4",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_31：各 case 命中、nil case、default、绑定变量类型",
       "leg": "甲",
-      "name": "type switch",
-      "source": "S",
-      "status": "pending"
+      "name": "type switch"
     },
     {
       "id": "T-EX-32",
+      "gate": "EX-4",
+      "verdict": "partial",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_32：只兑现 any 约束 + 推断（Id(1)/Id(\"s\")）；F[int]/Box[T] 未兑现（G-M5-03）",
       "leg": "甲",
-      "name": "泛型单态化",
-      "source": "S",
-      "status": "pending"
+      "name": "泛型单态化"
     },
     {
       "id": "T-EX-33",
+      "gate": "EX-4",
+      "verdict": "partial",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_33：三条超面形态退出码 1、stdout 空；码是通用 CHK-* 非专属（G-M5-04）",
       "leg": "甲",
-      "name": "泛型超出面拒绝",
-      "source": "S",
-      "status": "pending"
+      "name": "泛型超出面拒绝"
     },
     {
       "id": "T-EX-34",
+      "gate": "EX-5",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_34：defer f(x) 后改 x 仍收旧值、三个 defer 逆序",
       "leg": "甲",
-      "name": "defer 时机与 LIFO",
-      "source": "S",
-      "status": "pending"
+      "name": "defer 时机与 LIFO"
     },
     {
       "id": "T-EX-35",
+      "gate": "EX-5",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_35：defer func(){recover()}() 有效；defer recover() 无效",
       "leg": "甲",
-      "name": "recover 直接调用限制",
-      "source": "S",
-      "status": "pending"
+      "name": "recover 直接调用限制"
     },
     {
       "id": "T-EX-36",
+      "gate": "EX-5",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_36：recover 后改写命名结果；未命名结果不可改写",
       "leg": "甲",
-      "name": "命名返回值 + recover",
-      "source": "S",
-      "status": "pending"
+      "name": "命名返回值 + recover"
     },
     {
       "id": "T-EX-37",
+      "gate": "EX-5",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_37：展开中再 panic 覆盖原值继续展开，三层",
       "leg": "甲",
-      "name": "嵌套 panic",
-      "source": "S",
-      "status": "pending"
+      "name": "嵌套 panic"
     },
     {
       "id": "T-EX-38",
+      "gate": "EX-5",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_38：合并流含 panic: 前缀、退出码 2、不比 traceback（U-M5-03）",
       "leg": "甲",
-      "name": "未捕获 panic",
-      "source": "S",
-      "status": "pending"
+      "name": "未捕获 panic"
     },
     {
       "id": "T-EX-39",
+      "gate": "EX-2",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_39：全局按 InitOrder 求值（输出序==InitOrder）、init 按文件序、最后 main",
       "leg": "甲",
-      "name": "单包初始化执行",
-      "source": "S",
-      "status": "pending"
+      "name": "单包初始化执行"
     },
     {
       "id": "T-EX-40",
+      "gate": "EX-2",
+      "verdict": "partial",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 明确登记未兑现：HIR 单包，import _ \"side\" 不跑 side 的 init（G-M5-02）",
       "leg": "甲",
-      "name": "双包初始化顺序",
-      "source": "S",
-      "status": "pending"
+      "name": "双包初始化顺序"
     },
     {
       "id": "T-EX-41",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 lists_are_disjoint_and_complete：80=69+11 三向断言 + 无重复无死行",
       "leg": "乙",
-      "name": "候选清单守卫",
-      "source": "H",
-      "status": "pending"
+      "name": "候选清单守卫"
     },
     {
       "id": "T-EX-42",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "tools/run-oracle/run-collide.sh --run 69/69 绿 + rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 selected_files_are_self_sufficient（rgoc 侧自足）",
       "leg": "乙",
-      "name": "入选清单逐文件对撞",
-      "source": "O",
-      "status": "pending"
+      "name": "入选清单逐文件对撞"
     },
     {
       "id": "T-EX-43",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 three_way_agreement_against_dot_out（rgoc==.out，无 .out 期望为空）+ --three-way 5 个 .out 与 go run 一致",
       "leg": "乙",
-      "name": "go run 三方差分",
-      "source": "O",
-      "status": "pending"
+      "name": "go run 三方差分"
     },
     {
       "id": "T-EX-44",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 ken_subset_is_complete + run-ken.txt 32/32 绿",
       "leg": "乙",
-      "name": "ken 子集专项",
-      "source": "O",
-      "status": "pending"
+      "name": "ken 子集专项"
     },
     {
       "id": "T-EX-45",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 runoutput_family_is_excluded：5 个文件类别 runoutput 且理由含动态编译/M5 不做",
       "leg": "乙",
-      "name": "runoutput 排除理由",
-      "source": "H",
-      "status": "pending"
+      "name": "runoutput 排除理由"
     },
     {
       "id": "T-EX-46",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 address_output_would_turn_the_list_red：地址探针非空 ⇒ 混进入选集必红",
       "leg": "乙",
-      "name": "不确定性守卫",
-      "source": "H",
-      "status": "pending"
+      "name": "不确定性守卫"
     },
     {
       "id": "T-EX-47",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 excluded_lines_carry_reason_and_pointer：11 行四栏齐、类别合法、无 TODO、指针可复核",
       "leg": "乙",
-      "name": "排除清单逐行理由",
-      "source": "H",
-      "status": "pending"
+      "name": "排除清单逐行理由"
     },
     {
       "id": "T-EX-48",
+      "gate": "EX-6",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 repeated_runs_are_byte_identical：69 个文件各跑两次逐字节相同",
       "leg": "乙",
-      "name": "重复运行确定性",
-      "source": "H",
-      "status": "pending"
+      "name": "重复运行确定性"
     },
     {
       "id": "T-EX-49",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_49：0/1/2 六形态各一条",
       "leg": "丙",
-      "name": "run 退出码表",
-      "source": "H",
-      "status": "pending"
+      "name": "run 退出码表"
     },
     {
       "id": "T-EX-50",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_50：print/println 交错顺序 a1\\nb 不可丢，同 buffer",
       "leg": "丙",
-      "name": "合并流保真",
-      "source": "H",
-      "status": "pending"
+      "name": "合并流保真"
     },
     {
       "id": "T-EX-51",
+      "gate": "EX-1",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_51：dump 只进 stdout、诊断只进 stderr",
       "leg": "丙",
-      "name": "--dump-hir 通道分离",
-      "source": "H",
-      "status": "pending"
+      "name": "--dump-hir 通道分离"
     },
     {
       "id": "T-EX-52",
+      "gate": "EX-7",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_52：帧深/求值栈/步数三条超限 fixture，退出码 2 + 稳定消息，宿主不 abort",
       "leg": "丙",
-      "name": "三道上限各自响亮失败",
-      "source": "H",
-      "status": "pending"
+      "name": "三道上限各自响亮失败"
     },
     {
       "id": "T-EX-53",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "fmt 2s / check 2s / clippy 1s / test 76s 全部 exit 0（2026-10-23 实测）",
       "leg": "丙",
-      "name": "四条 cargo",
-      "source": "H",
-      "status": "pending"
+      "name": "四条 cargo"
     },
     {
       "id": "T-EX-54",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "check-m0-consistency.py（232 条）/ check-m1 / check-ast-golden / check-ast-testdata / check-ast-stdlib 全过",
       "leg": "丙",
-      "name": "五条既有自检不回退",
-      "source": "H",
-      "status": "pending"
+      "name": "五条既有自检不回退"
     },
     {
       "id": "T-EX-55",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/manifest_m5.rs：gate/test_ids/unsupported/open_gaps 对账 + 合成反例逐条报错",
       "leg": "丙",
-      "name": "manifest 对账",
-      "source": "H",
-      "status": "pending"
+      "name": "manifest 对账"
     },
     {
       "id": "T-EX-56",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_corpus.rs 的 corpus_files_are_untouched：80 个候选及其 .out 的 sha256 与 corpus-manifest.sha256 一致",
       "leg": "丙",
-      "name": "语料只读",
-      "source": "H",
-      "status": "pending"
+      "name": "语料只读"
     },
     {
       "id": "T-EX-57",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_57：b,x:=f() / a,b=swap(1,2) / swap(swap(a,b)) / g(f()) 全接受",
       "leg": "丁",
-      "name": "A 族：多值调用",
-      "source": "S",
-      "status": "pending"
+      "name": "A 族：多值调用"
     },
     {
       "id": "T-EX-58",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_58：f() 当语句不再报 UNUSED-EXPR；反向 x+1 当语句仍报",
       "leg": "丁",
-      "name": "B 族：调用语句结果丢弃",
-      "source": "S",
-      "status": "pending"
+      "name": "B 族：调用语句结果丢弃"
     },
     {
       "id": "T-EX-59",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_59：复合字面量取址合法；反向 &f() 仍拒",
       "leg": "丁",
-      "name": "C 族：&T{...}",
-      "source": "S",
-      "status": "pending"
+      "name": "C 族：&T{...}"
     },
     {
       "id": "T-EX-60",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_60：i<<=c(c 为 uint)、(*Int4)(slice)、make(map[T]V) 底层同一",
       "leg": "丁",
-      "name": "D 族：移位/转换/make",
-      "source": "S",
-      "status": "pending"
+      "name": "D 族：移位/转换/make"
     },
     {
       "id": "T-EX-61",
+      "gate": "EX-8",
+      "verdict": "pass",
+      "evidence": "rgoc/crates/rgoc-driver/tests/accept_rate_m5.rs：80 个候选恰 79 个被 rgoc check 接受，唯一例外 reflectmethod2.go（U-M5-01）",
       "leg": "丁",
-      "name": "接受率 79/80",
-      "source": "O",
-      "status": "pending"
+      "name": "接受率 79/80"
     },
     {
       "id": "T-EX-62",
+      "gate": "EX-8",
+      "verdict": "partial",
+      "evidence": "workspace 1606 passed / 0 failed（含全部 M4 测试）；但 M4 收口时 CH-2 即未兑现，故「T-CK 全绿」不成立（G-M5-05）",
       "leg": "丁",
-      "name": "M4 判据不回退",
-      "source": "H",
-      "status": "pending"
+      "name": "M4 判据不回退"
     },
     {
       "id": "T-EX-63",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #1：改 deep_copy 让 Array 只 clone Rc ⇒ t_ex_11/12 红，复原后绿",
       "leg": "反",
-      "name": "数组赋值改成共享 Rc",
-      "source": "H",
-      "status": "pending"
+      "name": "数组赋值改成共享 Rc"
     },
     {
       "id": "T-EX-64",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #2：改 deep_copy 让 Slice 深拷 ⇒ t_ex_13 红，复原后绿",
       "leg": "反",
-      "name": "slice 赋值改成深拷贝",
-      "source": "H",
-      "status": "pending"
+      "name": "slice 赋值改成深拷贝"
     },
     {
       "id": "T-EX-65",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #3：defer 改存表达式 ⇒ t_ex_34 红，复原后绿",
       "leg": "反",
-      "name": "defer 参数改成执行时求值",
-      "source": "H",
-      "status": "pending"
+      "name": "defer 参数改成执行时求值"
     },
     {
       "id": "T-EX-66",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #4：去掉「直接 defer」判定 ⇒ t_ex_35 红，复原后绿",
       "leg": "反",
-      "name": "recover 放宽为任意 defer",
-      "source": "H",
-      "status": "pending"
+      "name": "recover 放宽为任意 defer"
     },
     {
       "id": "T-EX-67",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #5：drive 改嵌套递归 ⇒ t_ex_17 红（栈溢出），复原后绿",
       "leg": "反",
-      "name": "帧栈改成 Rust 递归",
-      "source": "H",
-      "status": "pending"
+      "name": "帧栈改成 Rust 递归"
     },
     {
       "id": "T-EX-68",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #6：run_collide 只比 stdout ⇒ t_ex_42 侧红，复原后绿",
       "leg": "反",
-      "name": "合并流改成只比 stdout",
-      "source": "H",
-      "status": "pending"
+      "name": "合并流改成只比 stdout"
     },
     {
       "id": "T-EX-69",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #7：lower 对 go/chan 不再报拒 ⇒ t_ex_02 红，复原后绿",
       "leg": "反",
-      "name": "未支持构造改成静默跳过",
-      "source": "H",
-      "status": "pending"
+      "name": "未支持构造改成静默跳过"
     },
     {
       "id": "T-EX-70",
+      "gate": "EX-9",
+      "verdict": "pass",
+      "evidence": "scripts/mutation-m5-notes.md #8：run_collide 无 .out 即判 OK ⇒ T-EX-70 探针红，复原后绿",
       "leg": "反",
-      "name": "无 .out 当成不比",
-      "source": "H",
-      "status": "pending"
+      "name": "无 .out 当成不比"
     }
   ],
   "unsupported": [
@@ -743,9 +755,9 @@
     {
       "id": "U-M5-02",
       "item": "地址数值（&x 的十六进制）",
-      "why": "不可复现（F10 实测）",
+      "why": "不可复现（F10 实测；官方每次跑都不同）",
       "planned_phase": "不承诺",
-      "positive_evidence": "T-EX-46：含地址输出的文件被显式排除并留理由"
+      "positive_evidence": "T-EX-46：含地址输出的探针混进入选集必红"
     },
     {
       "id": "U-M5-03",
@@ -766,21 +778,21 @@
       "item": "goroutine / channel / select / go 语句",
       "why": "roadmap §M5「不做」",
       "planned_phase": "M8a–M8c",
-      "positive_evidence": "T-EX-02：显式拒绝（HIR-UNSUPPORTED-*）"
+      "positive_evidence": "T-EX-02：显式拒绝（HIR-UNSUPPORTED-GO/CHAN/SELECT）"
     },
     {
       "id": "U-M5-06",
       "item": "range over func（PIPE-16b）",
       "why": "roadmap §M5 第 5 条",
       "planned_phase": "M8d",
-      "positive_evidence": "T-EX-02：显式拒绝"
+      "positive_evidence": "T-EX-02：显式拒绝 HIR-UNSUPPORTED-RANGE-FUNC；range4.go 在排除清单"
     },
     {
       "id": "U-M5-07",
       "item": "unsafe 的执行面",
       "why": "M4 白名单只到静态求值",
       "planned_phase": "M6+",
-      "positive_evidence": "M4 的 U-M4-06 承接；M5 执行面无触发者"
+      "positive_evidence": "M4 的 U-M4-06 承接；M5 执行面无触发者（T-EX-02 无 unsafe 项）"
     },
     {
       "id": "U-M5-08",
@@ -794,35 +806,107 @@
       "item": "求值顺序（EXP-27）的 codegen 面",
       "why": "roadmap §5 归属 M6",
       "planned_phase": "M6",
-      "positive_evidence": "解释器顺序由 T-EX-09/T-EX-18 覆盖"
+      "positive_evidence": "解释器顺序由 T-EX-09 / T-EX-18 覆盖"
     },
     {
       "id": "U-M5-10",
       "item": "泛型字典/shape 共享（RT-POLY-05）",
       "why": "只做单态化",
       "planned_phase": "M12",
-      "positive_evidence": "T-EX-32/T-EX-33"
+      "positive_evidence": "T-EX-32 / T-EX-33；HIR 的 HIR-UNSUPPORTED-GENERIC 码已就位"
     },
     {
       "id": "U-M5-11",
       "item": "print/println 的非法操作数拒绝（M4 缺口，F11）",
       "why": "拒绝面缺口，不阻塞执行",
       "planned_phase": "M4 收口",
-      "positive_evidence": "F11 实测（println(S{1}) 两侧判定不一致）；登记为 M4 backlog"
+      "positive_evidence": "F11 实测（println(S{1}) 两侧判定不一致）；登记为 M4 backlog，见 docs/milestones/M5-report.md 与 G-M5-05"
     },
     {
       "id": "U-M5-12",
       "item": "close（chan 内建）",
       "why": "依赖 U-M5-05",
       "planned_phase": "M8b",
-      "positive_evidence": "T-EX-02：显式拒绝"
+      "positive_evidence": "T-EX-02：显式拒绝 HIR-UNSUPPORTED-CLOSE"
+    },
+    {
+      "id": "U-M5-13",
+      "item": "方法表达式（T.m）在字面类型与指针类型上的形态",
+      "why": "只实现命名类型上的方法表达式；字面类型要造方法表，属 M6 类型表示",
+      "planned_phase": "M6",
+      "positive_evidence": "T-EX-28 的命名类型三条；method7.go 在排除清单（R-6-2），拒绝码 HIR-MISSING-TYPE"
+    },
+    {
+      "id": "U-M5-14",
+      "item": "含非 UTF-8 字节的字符串字面量",
+      "why": "C9 的 Value::Str 是 Rc<str>（必须合法 UTF-8）；换字节串要动 29 处调用点",
+      "planned_phase": "M6（随 C9 修订）",
+      "positive_evidence": "T-EX-10 的字节索引/切片/range 全绿；literal.go 在排除清单（R-6-2）"
     }
   ],
+  "coverage": {
+    "note": "roadmap §M5 五条逐项映射见 M5-tests.md §2.1；六个子阶段见 §2.2；manifest_m5.rs 对账「无孤儿 ID」与「无野 ID」",
+    "matrix_rows": 5,
+    "test_ids_total": 70,
+    "unsupported_total": 14,
+    "legs": {
+      "甲": 40,
+      "乙": 8,
+      "丙": 8,
+      "丁": 6,
+      "反": 8
+    },
+    "derived_gates": {
+      "note": "gate.EX-*.test_ids 严格照 §8 冻结表（57 项，含 T-EX-17 被 EX-2/EX-7 共用）；下面 14 条不在 §8 的显式列表里，按 §2.2 的语义派生到主门禁 —— 不许借派生名目塞野 ID",
+      "items": [
+        "T-EX-07",
+        "T-EX-08",
+        "T-EX-09",
+        "T-EX-22",
+        "T-EX-49",
+        "T-EX-50",
+        "T-EX-51",
+        "T-EX-55",
+        "T-EX-56",
+        "T-EX-57",
+        "T-EX-58",
+        "T-EX-59",
+        "T-EX-60",
+        "T-EX-61"
+      ]
+    },
+    "revisions": [
+      {
+        "id": "R-6-1",
+        "date": "2026-10-22",
+        "content": "§6 语料清单分两次冻结；入选清单在 P0 收口后追加冻结",
+        "trigger": "设计 D-M5-3"
+      },
+      {
+        "id": "R-4-1",
+        "date": "2026-10-22",
+        "content": "§4.2 浮点：F10 的 7 点冻结，其余边界在 RED 期对撞后补钉",
+        "trigger": "F10 只覆盖常见形态"
+      },
+      {
+        "id": "R-6-2",
+        "date": "2026-10-23",
+        "content": "§6.2 的 6 行不动；§6.4 追加 5 行排除（divmod/convert4/method7/literal/range4），排除 6→11、入选 69",
+        "trigger": "收口期实测的实现边界（值模型/资源上限/未支持构造）"
+      },
+      {
+        "id": "R-7-1",
+        "date": "2026-10-23",
+        "content": "§7 的 12 行不动；§7.1 追加 U-M5-13（方法表达式只支持命名类型）与 U-M5-14（非 UTF-8 字符串）",
+        "trigger": "method7.go / literal.go 的排除需要正向证据落点"
+      }
+    ]
+  },
   "budget": {
     "effort_calendar": {
       "start": "2026-10-22",
       "max_calendar_weeks": 12,
-      "note": "roadmap §6.1：M5 全部子阶段合计 6–12 人周；本仓按任务数折算，不换算人周"
+      "note": "roadmap §6.1：M5 全部子阶段合计 6–12 人周；本仓按任务数折算（Task 1–52），不换算人周"
     },
     "resource_limits": {
       "frame_depth": 1000,
@@ -834,32 +918,99 @@
       "smoke": "<=5min",
       "milestone": "<=30min",
       "full": "<=2h"
+    },
+    "measured": {
+      "wall_s": {
+        "fmt": 2,
+        "check": 2,
+        "clippy": 1,
+        "test": 76,
+        "selfcheck_m0": 1,
+        "selfcheck_m1": 0,
+        "selfcheck_ast_golden": 2,
+        "selfcheck_ast_testdata": 2,
+        "selfcheck_ast_stdlib": 11,
+        "collide_selected": 210,
+        "collide_ken": 100,
+        "collide_three_way": 210
+      },
+      "workspace_tests_passed": 1606,
+      "workspace_tests_failed": 0,
+      "workspace_tests_ignored": 1,
+      "workspace_suites": 149,
+      "note": "2026-10-23 实测（容器内，R-9-1 生效形态）：四条 cargo 全 exit 0；1606 passed / 0 failed / 1 ignored（ignored 的那条是 t_ex_06 的溢出缺口，故意 ignore）；对撞三条形态均 69/69 与 32/32 全绿。M4 基线 1541 ⇒ 本阶段 +65"
     }
   },
-  "open_gaps": [
-    {
-      "id": "G-M5-01",
-      "item": "入选清单未冻结（R-6-1）",
-      "blocking": "EX-6",
-      "plan": "Task 46（P0 收口后）"
-    },
-    {
-      "id": "G-M5-02",
-      "item": "print/println 浮点边界未补钉（NaN/Inf/-0/float32 舍入）",
-      "blocking": "EX-3",
-      "plan": "Task 25 RED 期用 go run 对撞补钉（R-4-1）"
-    },
-    {
-      "id": "G-M5-03",
-      "item": "D 族修复可能牵出类型参数核心类型（G-M4-37）",
-      "blocking": "EX-6",
-      "plan": "Task 5 失效条件：成片则相关文件进排除"
-    }
-  ],
+  "open_gaps": {
+    "note": "收口时逐项核对：每条要么在本阶段关闭，要么带去向与卡住谁。非 pass 的门禁与测试项**必须**在这里被点名（manifest_m5.rs 会拦「显式降级不留痕」）",
+    "items": [
+      {
+        "id": "G-M5-01",
+        "item": "常量溢出诊断缺失（T-EX-06 的「静态 overflow」半边）",
+        "note": "实测：var y int8 = 200 被接受并打印 200；var x int = 1 << 100 被接受并打印全精度值。go run 两侧都报 overflows。这是 M4 的面（M5-tests.md T-EX-06 原文就写「M4 面」），本仓 M4 的 CH-2 已登记未兑现，故此处只登记不修",
+        "gate": "EX-1 / T-EX-06"
+      },
+      {
+        "id": "G-M5-02",
+        "item": "双包初始化顺序未兑现（T-EX-40）",
+        "note": "HIR 是单包的：Program 里只有一组 funcs/globals/init_order，import _ \"side\" 既不装载 side 也不跑它的 init。要做需要 HIR 的多包表示 + 初始化图，属 M6 的链接面。run_semantics.rs 里以显式注释登记为未兑现，不伪装成绿",
+        "gate": "EX-2 / T-EX-40"
+      },
+      {
+        "id": "G-M5-03",
+        "item": "泛型只到「any 约束 + 类型推断」（T-EX-32）",
+        "note": "实测：Id(1)/Id(\"s\") 正确；F[int](1) 报 CHK-INVALID-INDEX、Box[int]{v:7} 报 CHK-INVALID-SELECTOR、Sum([]int{...}) 报 CHK-INVALID-ASSIGN。单态化的执行面在 interp 里已就位（HIR-UNSUPPORTED-GENERIC 码在），缺的是检查器对实例化表达式的识别 —— 与 G-M5-04 同根",
+        "gate": "EX-4 / T-EX-32"
+      },
+      {
+        "id": "G-M5-04",
+        "item": "泛型超面用通用 CHK-* 码拒绝，而非专属 HIR-UNSUPPORTED-GENERIC（T-EX-33）",
+        "note": "拒绝本身确定、响亮、不静默算错（三条 fixture 退出码 1 + stdout 空），判据想防的事都防住了；但码不是专属的。要走到专属码，得先让 check 过了再说 —— 见 G-M5-03",
+        "gate": "EX-4 / T-EX-33"
+      },
+      {
+        "id": "G-M5-05",
+        "item": "M4 的 CH-2（检查器接受/拒绝闭环）收口时即未兑现，M5 未回退也未修（T-EX-62）",
+        "note": "M4-manifest.json 记录 CH-2 = fail（入选 75 实测 17 绿）。M5 的判据是「不回退」：workspace 1606 passed / 0 failed 证明 M4 的测试一条没坏，但那批红仍在。本阶段不动 M4 判据（M5-tests.md §11.6：P0 修接受面，M4 判拒绝面，互不修改）",
+        "gate": "EX-8 / T-EX-62"
+      },
+      {
+        "id": "G-M5-06",
+        "item": "R-6-2 的 5 行追加排除：与冻结口径（排除 6）的偏离",
+        "note": "divmod（步数上限）/ convert4（Ptr 不表达子区间）/ method7（U-M5-13）/ literal（U-M5-14）/ range4（U-M5-06）。逐行理由 + 指针在 run-excluded.txt，判断依据在 M5-tests.md §6.4，展开在 M5-report.md §5。登记在此是因为「排除数从 6 变 11」必须有人认账，不能只体现在文件行数上",
+        "gate": "EX-6 / T-EX-47"
+      }
+    ]
+  },
   "phase_summary": {
-    "status": "planned",
-    "gates_pass": 0,
-    "gates_total": 9,
-    "note": "未执行。状态字段由 manifest_m5.rs 对账，禁止在门禁未全绿时写 done。"
+    "tasks": 52,
+    "status": "partial（EX-3/EX-5/EX-6/EX-7/EX-9 全绿；EX-1/EX-2/EX-4/EX-8 未全绿；Task 1–52 均已执行）",
+    "plan": "docs/milestones/M5-plan.md（Task 1–52；Phase 0 装置 → 1 契约/HIR → 2 求值内核 → 3 复合值 → 4 闭包接口 → 5 异常 → 6 集成收口）",
+    "progress_ledger": ".superpowers/sdd/M5-plan/progress.md（不入库）",
+    "gate_commands": [
+      "scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo fmt --all --check'",
+      "scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo check --workspace --all-targets'",
+      "scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo clippy --workspace --all-targets -- -D warnings'",
+      "scripts/in-container.sh bash -lc 'cd /work/rgoc && cargo test --workspace --no-fail-fast'"
+    ],
+    "gate_scripts": [
+      "python3 scripts/check-m0-consistency.py（232 条断言）",
+      "python3 scripts/check-m1-consistency.py",
+      "bash scripts/check-ast-golden.sh",
+      "bash scripts/check-ast-testdata.sh",
+      "bash scripts/check-ast-stdlib.sh",
+      "bash tools/run-oracle/run-collide.sh --run --list tools/run-oracle/run-selected.txt",
+      "bash tools/run-oracle/run-collide.sh --run --list tools/run-oracle/run-ken.txt",
+      "bash tools/run-oracle/run-collide.sh --run --three-way tools/run-oracle/run-selected.txt"
+    ],
+    "completed_tasks": "Task 1–52 全部执行；Task 46（入选 69 / 排除 11 追加冻结）、Task 47/48（对撞与三方差分）、Task 49（8 条变异实证）、Task 50（manifest + manifest_m5.rs）、Task 51（M5-report.md）、Task 52（全量回归 + 文档收口）均在本日完成",
+    "workspace_tests": {
+      "passed": 1606,
+      "failed": 0,
+      "ignored": 1,
+      "suites": 149
+    },
+    "gates_pass": 5,
+    "gates_total": 9
   }
 }
