@@ -1,9 +1,12 @@
 # M5 实施计划：HIR 与顺序解释器
 
-> **状态**：**待执行**（Task 1–52 待办；产出 2026-10-22）　|　**测试清单**：[`M5-tests.md`](./M5-tests.md)（判据面已冻结）　|　**机器可读事实**：[`M5-manifest.json`](./M5-manifest.json)（Task 50 填实）
+> **状态**：**已执行（Task 1–52；44 ✅ / 5 🟡 / 1 ❌）**　|　**测试清单**：[`M5-tests.md`](./M5-tests.md)（判据面已冻结）　|　**机器可读事实**：[`M5-manifest.json`](./M5-manifest.json)（已填实）　|　**交付 B**：[`M5-report.md`](./M5-report.md)（顺序语义基线·候选）
 >
 > **任务编号约定**：本计划用 **「Task N」（N=1..52）** 标识任务，**不与测试 ID `T-EX-*` 混用编号空间**。
 > 执行期进度、偏离与 Ruling 记在 `.superpowers/sdd/M5-plan/progress.md`（不入库）。
+>
+> ⚠️ **本文件的 `- [ ]` 勾选框没有被维护过**（执行期 46 个任务直接写代码、没有逐条勾选）。
+> 真实状态以 `progress.md` 的逐任务表与 `M5-report.md` §5/§6 为准 —— **不要**把这里的空框读成「没做」。
 >
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

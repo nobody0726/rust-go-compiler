@@ -924,7 +924,7 @@
         "fmt": 2,
         "check": 2,
         "clippy": 1,
-        "test": 76,
+        "test": 67,
         "selfcheck_m0": 1,
         "selfcheck_m1": 0,
         "selfcheck_ast_golden": 2,
@@ -934,11 +934,11 @@
         "collide_ken": 100,
         "collide_three_way": 210
       },
-      "workspace_tests_passed": 1606,
+      "workspace_tests_passed": 1608,
       "workspace_tests_failed": 0,
       "workspace_tests_ignored": 1,
-      "workspace_suites": 149,
-      "note": "2026-10-23 实测（容器内，R-9-1 生效形态）：四条 cargo 全 exit 0；1606 passed / 0 failed / 1 ignored（ignored 的那条是 t_ex_06 的溢出缺口，故意 ignore）；对撞三条形态均 69/69 与 32/32 全绿。M4 基线 1541 ⇒ 本阶段 +65"
+      "workspace_suites": 150,
+      "note": "2026-10-23 实测（容器内，R-9-1 生效形态）：四条 cargo 全 exit 0；1608 passed / 0 failed / 1 ignored（ignored 的那条是 t_ex_06 的溢出缺口，故意 ignore）；对撞三条形态均 69/69 与 32/32 全绿。M4 基线 1541 ⇒ 本阶段 +67。收口期复跑（2026-10-23 21:00）复核了同一组数字"
     }
   },
   "open_gaps": {
@@ -979,6 +979,30 @@
         "item": "R-6-2 的 5 行追加排除：与冻结口径（排除 6）的偏离",
         "note": "divmod（步数上限）/ convert4（Ptr 不表达子区间）/ method7（U-M5-13）/ literal（U-M5-14）/ range4（U-M5-06）。逐行理由 + 指针在 run-excluded.txt，判断依据在 M5-tests.md §6.4，展开在 M5-report.md §5。登记在此是因为「排除数从 6 变 11」必须有人认账，不能只体现在文件行数上",
         "gate": "EX-6 / T-EX-47"
+      },
+      {
+        "id": "G-M5-07",
+        "item": "C3-hir.md 未升正式（§2 仍有 7 处「待验证」）",
+        "note": "M5-plan Task 52 的文档收口项。C3 从 spike 级升正式需要先补「多返回值 / 可寻址性 / 闭包 / 异常传播」四项的已定形态（素材在 M5-design.md §3.2），不是改标题。收口期未做，登记在此",
+        "gate": "EX-9 / Task 52"
+      },
+      {
+        "id": "G-M5-08",
+        "item": "GAP-01.md 未补 PIPE-10/14/15/16/16c/24 与 RT-* 落点",
+        "note": "M5-plan Task 52 的文档收口项；纯登记工作、无技术风险。收口期未做，登记在此（否则「M5 的 GAP-01 落点」在文档里查不到）",
+        "gate": "EX-9 / Task 52"
+      },
+      {
+        "id": "G-M5-09",
+        "item": "03-roadmap.md 与 AGENTS.md 的 M5 状态节未回写",
+        "note": "约定是「只在阶段完成时改」，而 M5 是 partial ⇒ 正确措辞是「已执行（部分兑现）」。收口期未改，登记在此；下一个人改时两处一起改，避免只改一处",
+        "gate": "EX-9 / Task 52"
+      },
+      {
+        "id": "G-M5-10",
+        "item": "Task 7 的 P0 变异（T-EX-57..60 各一次「改回原状」）没有留档",
+        "note": "scripts/mutation-m5-notes.md 只有 T-EX-63..70 八条（EX-9 的反腿），没有 P0 四族的变异记录。Task 7 的计划要求「四处变异各自变红、复原后全绿」，实测未做 ⇒ 这四条修复的**反向证据**缺失。影响面：不影响 EX-1..9 的任何结论（P0 变异明确「不计入门禁 8 条」），但 T-EX-57..60 只有正向证据",
+        "gate": "T-EX-57..60 / Task 7"
       }
     ]
   },
@@ -1005,10 +1029,10 @@
     ],
     "completed_tasks": "Task 1–52 全部执行；Task 46（入选 69 / 排除 11 追加冻结）、Task 47/48（对撞与三方差分）、Task 49（8 条变异实证）、Task 50（manifest + manifest_m5.rs）、Task 51（M5-report.md）、Task 52（全量回归 + 文档收口）均在本日完成",
     "workspace_tests": {
-      "passed": 1606,
+      "passed": 1608,
       "failed": 0,
       "ignored": 1,
-      "suites": 149
+      "suites": 150
     },
     "gates_pass": 5,
     "gates_total": 9
