@@ -1,6 +1,6 @@
-# GAP-01：功能 ID → 四维归属（M1/M2/M3/M4/M5 进度）
+# GAP-01：功能 ID → 四维归属（M1/M2/M3/M4/M5/M6 进度）
 
-> **范围**：`docs/01-feature-set.md` 共 210 个功能 ID。M1 只判定 **LEX-01..13**，M2 追加判定 **AST-01..49 + PIPE-03/04/05/25**（53 项），M4 追加判定 **TYP-19..26 / EXP / STM / BIF / PKG / SYS 的静态面**（**范围级**归属 + 例外项，见文末 M4 节），M5 追加判定 **PIPE-10/14/15/16/16c/24 + `RT-*` 的执行面**（见文末 M5 节），不填满 210 个（`M0-report.md` §7.2 明确警告）。
+> **范围**：`docs/01-feature-set.md` 共 210 个功能 ID。M1 只判定 **LEX-01..13**，M2 追加判定 **AST-01..49 + PIPE-03/04/05/25**（53 项），M4 追加判定 **TYP-19..26 / EXP / STM / BIF / PKG / SYS 的静态面**（**范围级**归属 + 例外项，见文末 M4 节），M5 追加判定 **PIPE-10/14/15/16/16c/24 + `RT-*` 的执行面**（见文末 M5 节），M6 追加判定 **PIPE-17/18/21/26 + GC 元数据协议**（见文末 M6 节），不填满 210 个（`M0-report.md` §7.2 明确警告）。
 > **维度定义**：`docs/03-roadmap.md` §0.3 —— Frontend / Interpreter / Native / Runtime-metadata。
 > **来源**：`docs/milestones/M1-tests.md` §2 与 `M2-tests.md` §2/§4 的逐项覆盖映射。
 
@@ -187,7 +187,34 @@ Frontend 列只在「语义判定发生在前端」时打 ✅；Native / Runtime
 4. **`RT-EXC` 不存在**：`01-feature-set.md` 第 35 行只是**命名约定**（`RT-{MEM,SCH,CMP,POLY,EXC}-nn`），
    实际只定义了 MEM/SCH/CMP/POLY 四族。这里如实写「无此 ID」，而不是造一个编号来填表。
 
+## M6 归属落点（`PIPE-17/18/21/26` + GC 元数据协议，`M6-plan.md` Task 52）
+
+**判定口径**：M6 的产物是**第二条执行通路**（HIR → SSA → 求值）与它的可验证性。
+`PIPE-17/18` 落 **Frontend**（图在编译期建、在编译期优化），`PIPE-21` 只落
+**Runtime-metadata 的协议面**（值级活跃性 + safepoint live set，**不是**栈帧布局），
+`PIPE-26` 落 **Frontend**（dump 是开发期设施，不产生运行期语义）。
+
+| 功能 ID | 描述 | Frontend | Interpreter | Native | Runtime-metadata | 测试 ID |
+|---|---|---|---|---|---|---|
+| PIPE-17 | SSA 构建（块/值/Phi） | ✅ | ◐ | — | — | `T-SSA-15..30`（`ssa_build.rs` **76** 条）；phi = **块参数**（`D-M6-3`）；**Interpreter ◐** 是因为 SSA 能被求值（`ssa_exec`），但那是诊断设施不是交付路径 |
+| PIPE-18 | SSA 优化 passes（折叠/DCE/复制传播/CSE） | ✅ | — | — | — | `T-SSA-60..64`（`opt_*` **32** 条 + `opt_equiv` 46 个 `all==none`）；**窥孔（peephole）未做** ⇒ 与 M7 的指令选择一起（`G-M6-04` 同源） |
+| PIPE-21 | 栈帧布局与活跃性 | ◐ | — | — | ◐ | **只做活跃性，不做帧布局**：`T-SSA-55..59`（`live.rs` 6 条 + `live_consumer` 46 文件/140 函数/678 safepoint）；`SSA-LIVE v1` 是**协议**，栈图/变量偏移/逃逸位图归 M7（`PIPE-21` 的 Native 列仍 `—`） |
+| PIPE-26 | 阶段调试 dump | ✅ | — | — | — | `T-SSA-13/14/46`（`C10` 定稿 + 文档驱动 golden）；`rgoc ssa --dump` |
+| （GC 元数据） | GC roots / live set / stack map / safe point | — | — | — | ◐ | `01-feature-set.md` 没有给这一族独立编号（只在 `RT-MEM-06` 的描述里提到「GC 栈扫描联动」）。**M6 只交协议**：safepoint 定义（`Call` + `Make`）、根闭包保守策略、`ptrs` 只含 `*T`（`G-M6-02/03`）；真正的栈图归 M7 `PIPE-21`，扫描器归 M10 |
+
+**判定理由**：
+
+1. **为什么 `PIPE-17` 的 Interpreter 是 `◐` 而不是 ✅**：SSA 求值器是**诊断设施**
+   （roadmap 原文：「共用定义好的值与 runtime 操作，不发展第三套完整 runtime」）。
+   把「能被求值」记成「解释器已覆盖 SSA」会让人以为 M7 可以走解释器 —— 而 M7 必须生成机器码。
+2. **为什么 `PIPE-21` 两列都是 `◐`**：活跃性真的算了（值级、含回边、有 678 个 safepoint 的实测），
+   但**帧布局没做**（没有帧大小、没有变量偏移、没有逃逸位图）。半件事记 `◐`，不记 ✅。
+3. **为什么 `PIPE-18` 不记窥孔**：`peephole` 是**机器相关**的（要在指令选择之后才有意义），
+   M6 的 IR 还是中立的 —— 现在写等于给一个不存在的后端做优化。
+4. **为什么 GC 元数据不给编号**：`01-feature-set.md` 没有这一族的 ID。**如实写「无此编号」**，
+   而不是造一个来填表（沿 M5 节对 `RT-EXC` 的同一处理）。
+
 ## 未判定部分
 
-其余功能 ID 待后续里程碑按阶段推进，不在本文件填写。**M5 之后的余额**：TYP/EXP/STM/BIF/PKG/SYS 六族的**逐 ID** 展开（`G-M4-37` 收口专项）、`CON-01..08`（M3 常量体系已实现，逐 ID 归属待补）、`SCP-01..10`（M3 作用域/对象，逐 ID 归属待补）、`RT-MEM/SCH/POLY` 三族（M9 的对象模型与运行时，M5 只登记「不涉及」）、`PIPE-16b`（range over func，M5 显式拒绝，`U-M5-06`）。
+其余功能 ID 待后续里程碑按阶段推进，不在本文件填写。**M6 之后的余额**：`PIPE-19/20/22/23`（机器相关 lowering / 指令选择与寄存器分配 / 对象文件与元数据 / 链接器，归 M7）、`PIPE-21` 的**帧布局与栈图**部分（M7）、GC 元数据的**扫描器**（M10）、`PIPE-16b`（range over func）与 M6 的 9 条白名单（闭包/defer/接口动态/map/chan/泛型/函数值/range-str，M7–M9）。**M5 遗留的余额**：TYP/EXP/STM/BIF/PKG/SYS 六族的**逐 ID** 展开（`G-M4-37` 收口专项）、`CON-01..08`（M3 常量体系已实现，逐 ID 归属待补）、`SCP-01..10`（M3 作用域/对象，逐 ID 归属待补）、`RT-MEM/SCH/POLY` 三族（M9 的对象模型与运行时，M5 只登记「不涉及」）、`PIPE-16b`（range over func，M5 显式拒绝，`U-M5-06`）。
 

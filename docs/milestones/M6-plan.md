@@ -941,9 +941,9 @@
 - Create: `docs/milestones/M6-report.md`
 - Modify: `docs/milestones/GAP-01.md`、`docs/03-roadmap.md`、`AGENTS.md`
 
-- [ ] 报告：覆盖矩阵（roadmap 十句 × 四腿）、三条分别声明（SSA 支持面 / 优化边界 / live set 协议）、偏离登记、缺口、接手指南
-- [ ] `GAP-01` 补 `PIPE-17/18/21/26`；`03-roadmap` 与 `AGENTS.md` 的 M6 状态节（**只在 M6 收口时**改）
-- [ ] Commit：`docs(m6): 报告与状态回写（Task 52）`
+- [x] 报告：覆盖矩阵（roadmap 十句 × 四腿）、三条分别声明（SSA 支持面 / 优化边界 / live set 协议）、偏离登记、缺口、接手指南、复现命令
+- [x] `GAP-01` 补 `PIPE-17/18/21/26` + GC 元数据协议（无独立编号，如实写）；`03-roadmap` 与 `AGENTS.md` 的 M6 状态节回写
+- [x] Commit：`docs(m6): 报告与状态回写（Task 52）`
 
 **Verify:** 报告里每个数字都能由 §Verify 的命令复现
 

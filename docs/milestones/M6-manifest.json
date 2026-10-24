@@ -23,7 +23,7 @@
     "rgoc/crates/rgoc-driver（ssa 子命令 + run --via={hir,ssa} + --opt）",
     "tools/run-oracle（ssa-classify.sh / ssa-rejected.txt 23 行 / run-collide.sh --ssa）",
     "rgoc/crates/rgoc-ssa/src/diag.rs（SsaCode 9 码，crate-local；DiagCode 保持 103）",
-    "scripts/mutation-m6-notes.md（新；M1–M67 累计 67 条探针）"
+    "scripts/mutation-m6-notes.md（新；累计 66 条探针，M1–M65 + M67）"
   ],
   "corpus_lists": {
     "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
@@ -766,7 +766,7 @@
     "three_way_red": 0,
     "live_safepoints": 678,
     "live_functions": 140,
-    "mutations_red": 67,
+    "mutations_red": 66,
     "diag_codes": 103,
     "corpus_sha_ok": "15618/15618"
   }

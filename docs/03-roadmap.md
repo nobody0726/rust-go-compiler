@@ -346,6 +346,13 @@ UTF-8/Unicode、注释、token 最长匹配、分号、数字/rune/string、错�
 
 ### M6：SSA、verifier 与精简优化（PIPE-17/18/21/26）
 
+> **状态：✅ 已收口（2026-10-24）** —— 九条门禁 `SSA-1..9` 全 `pass`；语料 **N=46 / M=23**
+> （46 个 SSA 输出与官方 `.out` 逐字节一致，且 `--via=hir` == `--via=ssa`）；
+> 四个 pass 的 `all == none` 在 46 个上逐字节一致；`SSA-LIVE v1` 协议可被只读文本的桩消费；
+> 66 条变异全红。交付见 [`M6-report.md`](./milestones/M6-report.md)，机器可读事实见
+> [`M6-manifest.json`](./milestones/M6-manifest.json)。**未兑现的 6 条**都是 M7–M9 的已知边界
+> （`open_gaps`），其中唯一「该做没做」的是构建预算（`G-M6-01`）。
+
 HIR→SSA 的 Block/Value/Phi、多返回值 tuple、memory/effect、调用和异常传播表示；支配分析先于依赖它的变换。先常量折叠/死代码/复制传播，再证明必要的 CSE；LICM 和复杂优化延期。
 
 SSA 求值器是诊断设施，共用定义好的值与 runtime 操作，不发展第三套完整 runtime。定义 safepoint live set、指针/派生指针处理和 lowering→frame map 协议。
