@@ -1,3 +1,8 @@
+#![allow(dead_code)]
+//! 注：`mod support;` 被多个测试二进制各自编译一份，不是每个都用得到全部辅助函数。
+//! 对共享装置开 `dead_code` 是**刻意**的 —— 否则每加一个辅助函数，用不到它的
+//! 测试二进制就会因为 `-D warnings` 编译失败。
+
 //! native 装置的公共部分：**Go 源 → 产物 → 三通道**（`M7-plan.md` Task 4）。
 //!
 //! # 三条纪律
@@ -92,4 +97,34 @@ pub fn build_and_run(name: &str, src: &str) -> Result<Outcome, String> {
         exit: run.status.code().unwrap_or(-1),
         asm,
     })
+}
+
+/// 用**解释器**跑同一段源码，返回 stdout（`--via=hir` 的等价物）。
+///
+/// # 为什么走 `run_cmd` 而不是再实现一遍
+///
+/// 解释器就是「另一条通路」的基准。自己拼装载/检查/求值等于再造一个基准 ——
+/// 那样两边一起错时，对撞仍然绿。
+///
+/// # Errors
+///
+/// 写文件失败，或解释器返回 `Err` / 非零退出码。
+pub fn hir_output(name: &str, src: &str) -> Result<String, String> {
+    let dir = fixture_root().join(format!("{name}-hir"));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("建 {} 失败：{e}", dir.display()))?;
+    let go = dir.join("main.go");
+    std::fs::write(&go, src).map_err(|e| format!("写 {} 失败：{e}", go.display()))?;
+    let cmd = rgoc_driver::cli::RunCommand {
+        files: vec![go],
+        dump_hir: false,
+        max_steps: None,
+        lang: None,
+        via: rgoc_driver::cli::Via::Hir,
+        opt: rgoc_ssa::opt::Config::all(),
+    };
+    let out = rgoc_driver::run_cmd::run_run(&cmd)?;
+    if out.exit != 0 {
+        return Err(format!("解释器退出码 {}：{}", out.exit, out.stderr));
+    }
+    Ok(out.stdout)
 }

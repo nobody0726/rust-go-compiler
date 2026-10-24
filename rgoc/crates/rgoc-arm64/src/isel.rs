@@ -422,6 +422,27 @@ fn bin(
     let d = cx.slot(dst);
     let (l, r) = (cx.slot(lhs), cx.slot(rhs));
     match cx.class(dst) {
+        SlotClass::Float if cx.is_f32(typ) => {
+            // `float32`：`s` 寄存器 + 每次运算后按 `f32` 舍入（`ops::normalize` 同口径）。
+            ld_s(asm, "s10", l.off);
+            ld_s(asm, "s11", r.off);
+            let ins = match op {
+                BinOp::Add => "fadd",
+                BinOp::Sub => "fsub",
+                BinOp::Mul => "fmul",
+                BinOp::Div => "fdiv",
+                BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                    asm.ins("fcmp s10, s11");
+                    let cond = fcmp_cond(op);
+                    asm.ins(&format!("cset x12, {cond}"));
+                    st_x(asm, "x12", d.off);
+                    return;
+                }
+                _ => return,
+            };
+            asm.ins(&format!("{ins} s12, s10, s11"));
+            st_s(asm, "s12", d.off);
+        }
         SlotClass::Float => {
             ld_d(asm, "d10", l.off);
             ld_d(asm, "d11", r.off);

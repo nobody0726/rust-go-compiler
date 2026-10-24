@@ -68,7 +68,13 @@ fn 无类型常量按默认类型取布局() {
         (BasicId::UntypedString, 16, 8),
     ] {
         let t = basic(b);
-        assert_layout(&t, rgoc_types::TypeId::from_index(0), size, align, &format!("{b:?}"));
+        assert_layout(
+            &t,
+            rgoc_types::TypeId::from_index(0),
+            size,
+            align,
+            &format!("{b:?}"),
+        );
     }
 }
 
