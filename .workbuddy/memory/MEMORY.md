@@ -10,7 +10,7 @@
 
 ## 当前状态（2026-10-24）
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
-- **M6 执行中：Task 1–31 完成（Phase 1–2 收口）**，下一 Task = 32b（包初始化）→ 32（`ssa_exec` 骨架）
+- **M6 执行中：Task 1–34 完成（Phase 1–2 收口 + 求值器骨架/纯值/控制流）**，下一 Task = 35（访存与调用）
   - 语料**首次真实读数 N=46 / M=23**（未冻结，`R-6-1` 仍是 Task 39 的活）；M 侧全带白名单码
   - 白名单 **9 条**（`R-31-1` 补 FUNC-VALUE / RANGE-STR；`U-M6-05/06/07` 够不着 ⇒ 守卫测试 `R-31-2`）
   - `ssa` 子命令已接真管线（dump→stdout / 拒绝与 verify→stderr / 退出码 0·1·2）
@@ -23,6 +23,11 @@
   `build()` 不读它 ⇒ SSA 里全局是零值。Task 32b 修（`R-32-1`）；三方差分前必须补
 - ⚠️ **指针根归属是构造性记录**（`Fb::ptr_root`，只认 `AddrOf`/`Field`/`Index`/指针转换）：
   合并/形参/调用结果一律「根未知」⇒ 写操作**扇出到所有根**（`store_to_unknown`），不猜堆根
+- ⚠️ **`&&`/`||` 是控制流不是 `Bin`**（`Task 33b`）：`join_into` 的 `lead` 参数承载「表达式值」参数；
+  `const_bool` 的类型必须由调用者给（`&&` 的结果可能是 `untyped bool`，`x<3 && y`）
+- ⚠️ **`ssa_exec` 的运行期内存模型**：按**真实地址**访存（`Value::Ptr` 里的 `Cell`），
+  `root` 只用于静态定序；`RootId` 是函数内下标，跨帧指针靠真实 `Cell`。
+  块参数交接必须「先全算边实参、再全写」（`a,b = b,a`）
 
 ## 结构与改动前必读
 - **crate 顺序**：`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY，可整块删）
