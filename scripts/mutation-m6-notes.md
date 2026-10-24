@@ -187,3 +187,24 @@ Go 规范说比较产生 untyped boolean）。短路支的常量若用缓存的 
 （`main` 调自己会一直压帧，预算 1e8 步也拦不住 1e8 个帧）。一条会 OOM 的变异
 没法当判据，所以帧深守卫用**直接测试**钉（`t_ssa_40_无限递归按帧深上限停下`：
 退出码 2 + 诊断里有 1000）。这条偏差记在这里，不假装有变异覆盖。
+
+## Task 38/39：三方差分与切片冻结（2 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut38_39.py`。这两条是**数据变异**（改
+`tools/run-oracle/ssa-rejected.txt` 一行），不重编译 —— 打的就是「清单与实测脱节」。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M47` 删掉一行拒绝记录 | 清单少 `closure4.go` | `ssa_slice::t_ssa_31_切片冻结值两向自洽` + `…清单与实测一致` | ✅ 红 |
+| `M48` 把码改错 | `closure4.go` 的 `-DEFER` 改成 `-MAP` | 同上（码不一致） | ✅ 红 |
+
+### 三方差分的实测（脚本腿）
+
+```
+bash tools/run-oracle/run-collide.sh --run --list --ssa --three-way tools/run-oracle/run-selected.txt
+---- 69 个文件：绿 46 / 跳过 23 / 红 0（hir vs ssa vs go run）
+---- 三方比对：5 个文件有 .out（其余 64 个按「期望为空」只做两方）
+```
+
+`SKIP` 的判据是「stderr 里有 `SSA-UNSUPPORTED-*`」**而不是**「退出码 1」：
+后者会把任何静态错都说成「它被拒了」，装置等于没有。

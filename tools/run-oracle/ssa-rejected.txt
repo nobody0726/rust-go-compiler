@@ -1,11 +1,35 @@
 # M6 的 SSA 拒绝清单（`ssa-rejected.txt`）—— 与 `run-selected.txt`（69 行）互补。
 #
 # 格式：<相对路径>	<码>	<原因>
-# 码：SSA-UNSUPPORTED-{CLOSURE,DEFER,IFACE-DYN,MAP,CHAN,RANGE-FUNC,GENERIC}
+# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,IFACE-DYN,MAP,RANGE-FUNC,RANGE-STR}
 #
 # 纪律（M6-tests.md §4.2 / §5）：
 #  * `能建图 N + 拒绝 M == 69`（两向断言，见 `rgoc-driver/tests/ssa_slice.rs`）
 #  * 每行必须有码；码必须落在 §5 的白名单里
-#  * 由 `tools/run-oracle/ssa-classify.sh` 产出，**Task 39 才冻结**（`R-6-1`）
+#  * 由 `tools/run-oracle/ssa-classify.sh` 产出，**Task 39 冻结**（`R-6-1`）
 #
-# 现在为空：`ssa --verify` 尚未接入 IR（M6/Task 16 起），分类器把 69 行全判为 M。
+# 冻结值：N=46 / M=23（2026-10-24，go1.27.1 语料 + 本仓 main 的构建器）。
+# 分布：IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2。
+go_source_code/test/alias1.go	SSA-UNSUPPORTED-IFACE-DYN	func#0 — type switch（按运行期动态类型分支）
+go_source_code/test/bigmap.go	SSA-UNSUPPORTED-MAP	func#2 — map 类型出现在表达式里（键相等 / 并发语义属宿主面）
+go_source_code/test/closure1.go	SSA-UNSUPPORTED-FUNC-VALUE	func#0 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/closure2.go	SSA-UNSUPPORTED-FUNC-VALUE	func#0 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/closure4.go	SSA-UNSUPPORTED-DEFER	func#0 — defer（延迟调用链是运行期结构，不是 SSA 值）
+go_source_code/test/ddd.go	SSA-UNSUPPORTED-FUNC-VALUE	func#1 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/defernil.go	SSA-UNSUPPORTED-DEFER	func#0 — defer（延迟调用链是运行期结构，不是 SSA 值）
+go_source_code/test/func6.go	SSA-UNSUPPORTED-FUNC-VALUE	func#0 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/indirect.go	SSA-UNSUPPORTED-MAP	func#1 — map 类型出现在表达式里（键相等 / 并发语义属宿主面）
+go_source_code/test/method.go	SSA-UNSUPPORTED-IFACE-DYN	func#6 — 接口方法调用（目标函数运行期才定）
+go_source_code/test/method3.go	SSA-UNSUPPORTED-IFACE-DYN	func#1 — 接口方法调用（目标函数运行期才定）
+go_source_code/test/method5.go	SSA-UNSUPPORTED-IFACE-DYN	func#13 — 接口方法调用（目标函数运行期才定）
+go_source_code/test/nilptr2.go	SSA-UNSUPPORTED-FUNC-VALUE	func#0 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/print.go	SSA-UNSUPPORTED-MAP	func#0 — map 类型出现在表达式里（键相等 / 并发语义属宿主面）
+go_source_code/test/ken/complit.go	SSA-UNSUPPORTED-MAP	func#0 — map 类型出现在表达式里（键相等 / 并发语义属宿主面）
+go_source_code/test/ken/embed.go	SSA-UNSUPPORTED-IFACE-DYN	func#9 — 类型断言（运行期类型判定）
+go_source_code/test/ken/interbasic.go	SSA-UNSUPPORTED-IFACE-DYN	func#1 — 类型断言（运行期类型判定）
+go_source_code/test/ken/interfun.go	SSA-UNSUPPORTED-IFACE-DYN	func#2 — 类型断言（运行期类型判定）
+go_source_code/test/ken/intervar.go	SSA-UNSUPPORTED-IFACE-DYN	func#0 — 接口方法调用（目标函数运行期才定）
+go_source_code/test/ken/litfun.go	SSA-UNSUPPORTED-FUNC-VALUE	func#0 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/ken/ptrfun.go	SSA-UNSUPPORTED-FUNC-VALUE	func#1 — 函数字面量 / 函数名当值用（IR 里没有函数引用值）
+go_source_code/test/ken/range.go	SSA-UNSUPPORTED-MAP	func#1 — map 类型出现在表达式里（键相等 / 并发语义属宿主面）
+go_source_code/test/ken/rob1.go	SSA-UNSUPPORTED-IFACE-DYN	func#2 — 接口方法调用（目标函数运行期才定）

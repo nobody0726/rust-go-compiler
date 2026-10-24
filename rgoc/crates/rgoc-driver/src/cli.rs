@@ -379,6 +379,16 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     let mut via = Via::Hir;
     let mut i = 0;
     while i < rest.len() {
+        // `--via=ssa` 与 `--via ssa` 两种写法都收（`run-collide.sh` 用前者，
+        // 人敲命令习惯后者；只收一种就等于让另一个入口静默失灵）。
+        if let Some(v) = rest[i].strip_prefix("--via=") {
+            let Some(v2) = Via::parse(v) else {
+                return Err(CliError::BadVia(v.to_string()));
+            };
+            via = v2;
+            i += 1;
+            continue;
+        }
         match rest[i] {
             "--dump-hir" => {
                 dump_hir = true;

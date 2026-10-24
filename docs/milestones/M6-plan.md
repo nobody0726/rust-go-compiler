@@ -726,9 +726,10 @@
 - Modify: `tools/run-oracle/run-collide.sh`（Task 5 的骨架填实）
 - Test: `rgoc/crates/rgoc-driver/tests/ssa_diff.rs`
 
-- [ ] `--ssa` 形态跑通：hir / ssa / go run 三列
-- [ ] `T-SSA-32` / `T-SSA-34` / `T-SSA-35` / `T-SSA-36` / `T-SSA-37`：在 `N`（Task 39 之前用「当前能建图的集合」）上全绿
-- [ ] Commit：`feat(ssa): 三方差分（Task 38）`
+- [x] `--ssa` 形态跑通：hir / ssa / go run 三列（`M` 侧判 SKIP，判据是**白名单码**而不是退出码 1）
+- [x] `T-SSA-32` / `T-SSA-34` / `T-SSA-35` / `T-SSA-36` / `T-SSA-37`：在 `N` 上全绿
+      （`ssa_diff.rs` 驱动侧 + `ssa_corpus_run.rs` 库侧；脚本实测 69 = 绿 46 / 跳过 23 / 红 0）
+- [x] Commit：`feat(ssa): 三方差分（Task 38）`
 
 **Verify:** `… bash tools/run-oracle/run-collide.sh --run --ssa --list tools/run-oracle/run-selected.txt` ⇒ 绿；`grep -c 'DIFF'` 无输出
 
@@ -741,10 +742,11 @@
 - Modify: `docs/milestones/M6-tests.md`（§6 填 `N`/`M` 实测值 + 修订行 `R-6-1`）
 - Test: `rgoc/crates/rgoc-driver/tests/ssa_slice.rs`
 
-- [ ] 跑分类器，得到 `N`/`M`；`M` 每行落三栏
-- [ ] 两向断言：`N+M==69`、`M` 的码 ⊆ 白名单
-- [ ] 反向守卫：把 `M` 一行挪进 `N` 清单 ⇒ 测试必红（写死在测试里）
-- [ ] Commit：`test(ssa): 切片实测冻结 N/M（Task 39）`
+- [x] 跑分类器，得到 `N`/`M`；`M` 每行落三栏（23 行：IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）
+- [x] 两向断言：`N+M==69`、`M` 的码 ⊆ 白名单（`SsaCode::ALL` 是唯一来源）
+- [x] 反向守卫：**实测集合 == 清单集合**（逐文件重跑构建器，路径与码都比）——
+      删一行、改一个码、或某个 `N` 文件被改坏，都会红
+- [x] Commit：`test(ssa): 切片实测冻结 N/M（Task 39）`
 
 **Verify:** `… cargo test -p rgoc-driver --test ssa_slice`；`awk -F'\t' 'NF!=3' tools/run-oracle/ssa-rejected.txt` 无输出
 

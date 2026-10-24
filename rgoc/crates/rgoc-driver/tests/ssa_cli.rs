@@ -148,9 +148,22 @@ fn t_ssa_39_解析_run_的_via() {
         }),
         "--via ssa 选中 SSA 通路"
     );
+    // `--via=X` 的等号写法也必须认（`run-collide.sh --ssa` 用的就是它）
+    assert_eq!(
+        parse_args(&["run", "--via=ssa", "a.go"]).unwrap(),
+        Command::Run(RunCommand {
+            via: Via::Ssa,
+            ..base.clone()
+        }),
+        "--via=ssa 与 --via ssa 等价"
+    );
     // 非法值必须报错，不猜（猜错的代价是「跑了另一条通路还以为是这条」）
     assert_eq!(
         parse_args(&["run", "--via", "hir2", "a.go"]).unwrap_err(),
+        CliError::BadVia("hir2".to_string())
+    );
+    assert_eq!(
+        parse_args(&["run", "--via=hir2", "a.go"]).unwrap_err(),
         CliError::BadVia("hir2".to_string())
     );
     assert_eq!(

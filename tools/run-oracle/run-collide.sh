@@ -99,7 +99,16 @@ one() {
     ( cd "$ROOT" && "$DRIVER" run --via=ssa "$src" ) > "$CACHE/$slug.ssa" 2>"$CACHE/$slug.ssaerr"
     local scode=$?
     perl -pi -e 's/\r\n/\n/g' "$CACHE/$slug.ssa" 2>/dev/null
-    if [ "$verdict" = "OK" ] && ! cmp -s "$CACHE/$slug.ssa" "$CACHE/$slug.got"; then
+    # M 侧（构建期拒绝）：**白名单码 + 退出码 1** ⇒ SKIP，不算红。
+    #
+    # 判据必须是「stderr 里有 `SSA-UNSUPPORTED-*`」，不能只看退出码 1 ——
+    # 退出码 1 也可能是别的静态错（那必须照红）。否则「拒绝」就成了万能挡箭牌：
+    # 任何 SSA 侧的红都能被一句话解释掉，装置等于没有。
+    if [ "$scode" = 1 ] && grep -q 'SSA-UNSUPPORTED-' "$CACHE/$slug.ssaerr" 2>/dev/null; then
+      local code
+      code="$(grep -o 'SSA-UNSUPPORTED-[A-Z-]*' "$CACHE/$slug.ssaerr" | head -1)"
+      verdict="SKIP"; why="$code"
+    elif [ "$verdict" = "OK" ] && ! cmp -s "$CACHE/$slug.ssa" "$CACHE/$slug.got"; then
       verdict="DIFF"; why="HIR 与 SSA 合并流不同"
     elif [ "$verdict" = "OK" ] && [ "$scode" != "$gcode" ]; then
       verdict="CODE"; why="退出码 hir=$gcode ssa=$scode"
@@ -129,7 +138,7 @@ export -f one
 export ROOT DRIVER CACHE THREE CORPUS SSA
 
 # 串行更稳（go run 会抢 GOCACHE 锁）；候选只有几十个，慢不到哪去。
-n=0; bad=0; three_seen=0
+n=0; bad=0; skip=0; three_seen=0
 while IFS= read -r rel; do
   case "$rel" in ''|'#'*) continue ;; esac
   rel="${rel%%[[:space:]]*}"
@@ -142,11 +151,13 @@ while IFS= read -r rel; do
   n=$((n+1))
   case "$verdict" in
     OK) [ "$MODE_LIST" = 1 ] && printf 'OK   %s\n' "$rel" ;;
+    SKIP) skip=$((skip+1)); printf 'SKIP %s   %s\n' "$rel" "$why" ;;
     *)  bad=$((bad+1)); printf '%-5s %s   %s\n' "$verdict" "$rel" "$why" ;;
   esac
 done < "$LIST"
 
-printf -- '---- %d 个文件：绿 %d / 红 %d%s（cache=%s）\n' "$n" "$((n-bad))" "$bad" \
+printf -- '---- %d 个文件：绿 %d / 跳过 %d / 红 %d%s（cache=%s）\n' \
+  "$n" "$((n-bad-skip))" "$skip" "$bad" \
   "$([ "$SSA" = 1 ] && echo '（hir vs ssa vs go run）' || true)" "$CACHE"
 if [ "$THREE" = 1 ]; then
   # `--three-way` 的分母**不是** $n，而是「真的有 `.out`」的 $three_seen。

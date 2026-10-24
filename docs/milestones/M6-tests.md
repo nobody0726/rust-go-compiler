@@ -242,10 +242,26 @@ M = 拒绝的个数         （每行带 §5 的码）
 | 清单 | 内容 |
 |---|---|
 | 候选 | M5 的 `run-selected.txt`（**69** 行，已冻结） |
-| 能建图 `N` | **待 Task 3 实测后冻结**（`R-6-1` 同款：先做分类器，拿到真实数字再冻） |
-| 拒绝 `M` | 同上；每行带 §5 的码，落 `tools/run-oracle/ssa-rejected.txt`（三栏：文件/码/原因） |
+| 能建图 `N` | **46**（冻结，`R-6-1`） |
+| 拒绝 `M` | **23**（冻结）；每行三栏落 `tools/run-oracle/ssa-rejected.txt` |
 
-> **纪律**：`N` 低于 30 时如实报，不复制用例凑数（沿 `M5-tests.md` §6.3）。
+**`M` 侧的码分布**（23 行，全部落在 §5 白名单里）：
+
+| 码 | 行数 | 典型形态 |
+|---|---|---|
+| `SSA-UNSUPPORTED-IFACE-DYN` | 9 | 接口方法调用 / type switch / 类型断言（`method*.go` / `ken/inter*.go` / `alias1.go`） |
+| `SSA-UNSUPPORTED-FUNC-VALUE` | 7 | 函数字面量当值、具名函数当值（`closure1/2.go` / `ken/litfun.go` / `ddd.go`） |
+| `SSA-UNSUPPORTED-MAP` | 5 | `map` 类型出现在表达式里（`bigmap.go` / `print.go` / `ken/complit.go`） |
+| `SSA-UNSUPPORTED-DEFER` | 2 | `defer`（`closure4.go` / `defernil.go`） |
+
+**两向自洽**（`rgoc/crates/rgoc-driver/tests/ssa_slice.rs`）：
+
+1. `N + M == 69`（两个数都写死，任一侧漂了都红）；
+2. 拒绝清单的**实测集合 == 清单集合**（逐文件重跑构建器，路径与码都比）——
+   清单一旦与代码脱节，「46/23」就只是历史陈述；
+3. 每行三栏、原因非空、码 ∈ `SsaCode::ALL`。
+
+> **纪律**：`N` 低于 30 时如实报，不复制用例凑数（沿 `M5-tests.md` §6.3）。本次 `N=46`。
 
 ---
 
@@ -311,5 +327,7 @@ M = 拒绝的个数         （每行带 §5 的码）
 
 | `R-36-1` | 2026-10-24 | `T-SSA-40` 的「墙钟 < 10 s」用**显式预算 1e7** 判；默认 1e8 只用常量断言钉住 | 实测 debug 构建吞吐约 **9.5M 步/秒**（1e7 步 ≈ 1.05 s）⇒ 默认 1e8 要 **10.4 s**，拿它断言等于把机器速度写进测试（release 下又必然过）。判据仍是「死循环必须停下且给出原因」，只是分母换成一条不会随机器翻车的值 |
 | `R-37-1` | 2026-10-24 | `run --via=ssa` 在 `build` 与 `run_ssa` 之间**强制**跑 verifier；并修 `struct_field_ty`/`elem_ty_of` 不认指针底座 | ① 求值器假定 `V1..V9` 成立，图不合法时行为未定义（可能碰巧对）⇒ 「要么合法、要么响亮报错」必须是硬边界；② `via` 的第一条端到端用例（`p.x += d`，`p *P`）当场抓到 `V3` 失败：`struct_field_ty(*P, 0)` 返回 `None` ⇒ 字段地址类型退化成 `TypeId(0)`（`bool`），Load 的 `typ` 跟着错。加 `pointee_of` 并让两个推导函数穿透指针 |
+
+| `R-6-1` | 2026-10-24 | §6 的 `N`/`M` 冻结为 **46 / 23**；`M` 侧落 `tools/run-oracle/ssa-rejected.txt`（23 行三栏） | Task 39 实测（分类器 + `ssa_slice.rs` 两向断言）。此前 §6 只是「待 Task 3 实测后冻结」的占位；冻结值 = 2026-10-24 的语料（go1.27.1）+ 本仓构建器 |
 
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m6.rs` 会对账 `test_ids` 集合。
