@@ -25,6 +25,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/rgoc-arm64",
     "crates/rgoc-ast",
     "crates/rgoc-check",
     "crates/rgoc-const",

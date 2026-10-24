@@ -92,14 +92,21 @@
 - Produces: `rgoc_arm64::diag::CgCode`（`ALL` + `as_str`，沿 `SsaCode` 形状）；CLI `rgoc-driver build [-o PATH] [--emit=asm|elf] [--keep-asm] <file>...`
 - Consumes: 无（骨架）
 
-- [ ] 建 crate，`lib.rs` 声明 `pub mod abi; pub mod frame; pub mod isel; pub mod emit; pub mod diag;`（模块内容后续任务填）
-- [ ] `CgCode` 四个变体：`Slice` / `IndirectCall` / `MethodValue` / `OutOfArena`（后两个是运行期，码仍登记在此）
-- [ ] 写 `CgCode::ALL` 与计数测试（新增变体不更新 `ALL` ⇒ 红）
-- [ ] driver 加 `Command::Build(BuildCommand)`，`build_cmd::run_build` 先返回 `Err("未实现")`（退出码 2）
-- [ ] 测试 `T-NAT-47` 的骨架版：`build` 缺文件参数 ⇒ 退出码 2 + 稳定消息
-- [ ] Commit：`feat(arm64): crate 骨架与 build 子命令（Task 2）`
+- [x] 建 crate；`lib.rs` **只声明 `pub mod diag;`** —— 其余模块由各自 Task 建立
+      （**不留空占位文件**：一个只有 `//!` 的模块看起来像「已实现」，实际什么都没有）
+- [x] `CgCode` **三个**变体：`Slice` / `IndirectCall` / `MethodValue`
+      （**偏离计划**：原写四个，`OutOfArena` 是**运行期**事件 —— 出口是 `panic: out of arena`
+      + 退出码 2，不是生成期诊断。把运行期事件编进 `CgCode::ALL` 会让码表里混进一个
+      编译期永不出现的成员，正好违反「拒绝必须有码」的反面）
+- [x] 写 `CgCode::ALL` 与计数测试（`tests/diag.rs` 4 条：条数/字典序/前缀唯一/不撞 TYP- 与 SSA-）
+- [x] driver 加 `Command::Build(BuildCommand)` + `Emit` + `-o` / `--emit` / `--keep-asm` / `--opt`；
+      `build_cmd::run_build` 返回 `Err("尚未实现")`（→ 退出码 2）
+- [x] 测试 `T-NAT-47` 的骨架版：`tests/native_cli.rs` 7 条（含「`--emit=llvm` 不许静默回落」）
+- [x] **连带修**：`tests/test_driver.rs::未实现的子命令必须报错` 把 `build` 从「将来会有」清单
+      移出（T37 的清单随实现推进而收缩，否则它自己变成谎话）
+- [x] Commit：`feat(arm64): crate 骨架与 build 子命令（Task 2）`
 
-**Verify:** `… cargo test -p rgoc-arm64 --lib`（`CgCode` 计数 ≥1）；`… cargo check --workspace`
+**Verify:** `… cargo test -p rgoc-arm64 --test diag`（4 条）；`… cargo test -p rgoc-driver --test native_cli`（7 条）；`… cargo clippy -p rgoc-arm64 -p rgoc-driver --all-targets -- -D warnings`（0）
 
 ---
 

@@ -66,9 +66,14 @@ fn 解析_harness_三个子命令() {
 
 #[test]
 fn 未实现的子命令必须报错() {
-    // ★ T37 的纪律：**不预留**未实现的子命令。这三个都是「将来会有」的，
+    // ★ T37 的纪律：**不预留**未实现的子命令。这些都是「将来会有」的，
     // 现在接受它们等于让 CLI 承诺一个不存在的能力。
-    for bad in ["spike", "hir", "compile", "build", "test", "s1", "s2", "s3"] {
+    //
+    // `build` 于 M7/Task 2 从这份清单**移出**：它已经不是「将来会有」——
+    // 子命令本身已登记（参数面可解析，产物要到 Task 50）。它进「已实现」清单，
+    // 由 `tests/native_cli.rs` 的 `t_nat_47_骨架期_build_必须响亮地说未实现` 钉住
+    // 「有命令但没产物时必须报错」这另一半纪律。
+    for bad in ["spike", "hir", "compile", "test", "s1", "s2", "s3"] {
         let e = parse_args(&[bad]).unwrap_err();
         assert!(
             matches!(e, CliError::UnknownCommand(_)),

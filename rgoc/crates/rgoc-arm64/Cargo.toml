@@ -1,0 +1,15 @@
+[package]
+name = "rgoc-arm64"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "arm64 代码生成（M7）：ABI / 帧布局 / 指令选择 / 文本汇编 / 拒绝码。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-hir = { path = "../rgoc-hir" }
+rgoc-ssa = { path = "../rgoc-ssa" }
+rgoc-types = { path = "../rgoc-types" }

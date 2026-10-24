@@ -38,6 +38,8 @@ pub enum Command {
     Run(RunCommand),
     /// `ssa` 子命令（M6/Task 2 起登记；IR 从 Task 16 起才有内容可 dump）
     Ssa(SsaCommand),
+    /// `build` 子命令（M7/Task 2 起登记；真身从 Task 50 起）
+    Build(BuildCommand),
 }
 
 /// `run` 子命令的参数（M5/Task 27；`M5-design.md` §4.1）。
@@ -131,6 +133,55 @@ pub struct SsaCommand {
     /// `--verify`：跑 verifier 九条不变式。
     pub verify: bool,
     /// `--opt all|none|fold,dce,…`：跑哪些 pass（默认全开）。
+    pub opt: rgoc_ssa::opt::Config,
+}
+
+/// `build` 子命令的产物形态（M7/Task 2）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Emit {
+    /// 只到 ELF（默认）：`.s` 是中间件，除非 `--keep-asm` 否则删掉。
+    #[default]
+    Elf,
+    /// 只到 `.s`：不出 ELF（用来做 `T-NAT-48` 的逐字节可复现判据）。
+    Asm,
+}
+
+impl Emit {
+    /// 解析 `--emit` 的值（只接受 `elf` / `asm`）。
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "elf" => Some(Self::Elf),
+            "asm" => Some(Self::Asm),
+            _ => None,
+        }
+    }
+}
+
+/// `build` 子命令的参数（M7/Task 2 登记；真身从 Task 50 起）。
+///
+/// # 与 `run` / `ssa` 的分工
+///
+/// `run` 在 Rust 进程里解释执行，`ssa` 只出结构文本；`build` 是**唯一产出可执行文件**的入口。
+/// 三者的前半段（装载 → 检查 → HIR → SSA）完全共用，差别只在最后一步。
+///
+/// # 为什么默认输出路径要**确定**
+///
+/// `--emit=asm` 的判据是「同一输入两次逐字节相同」（`T-NAT-48`）。如果输出名里掺了
+/// 进程号或时间，那条判据就只能靠 `cmp` 两份不同名的文件 —— 判据本身没变，但
+/// 装置会开始「先找文件」而不再是「比内容」。所以默认名固定为 `<stem>`（无扩展名），
+/// 与源文件同目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuildCommand {
+    /// 组成**同一个包**的文件。
+    pub files: Vec<PathBuf>,
+    /// `-o PATH`：产物路径（缺省 `<stem>`，与源文件同目录）。
+    pub output: Option<PathBuf>,
+    /// `--emit elf|asm`：产物形态（默认 `elf`）。
+    pub emit: Emit,
+    /// `--keep-asm`：保留中间的 `.s`（`T-NAT-47`）。
+    pub keep_asm: bool,
+    /// `--opt all|none|fold,dce,…`：SSA passes 的开关（默认全开）。
     pub opt: rgoc_ssa::opt::Config,
 }
 
@@ -289,6 +340,10 @@ pub enum CliError {
     BadVia(String),
     /// `--opt` 的值不认识（只接受 `all` / `none` / `fold,dce,copy,cse`）
     BadOpt(String),
+    /// `build` 一个文件参数都没给（M7/Task 2）
+    BuildNeedsFile,
+    /// `--emit` 的值不认识（只接受 `elf` / `asm`）
+    BadEmit(String),
 }
 
 impl fmt::Display for CliError {
@@ -306,12 +361,13 @@ impl fmt::Display for CliError {
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
              rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] <file>...\n  \
-             rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...";
+             rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...\n  \
+             rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
                 f,
-                "未知命令 {c:?}：只实现了 harness、lex、ast、types、check、run 与 ssa 七个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
+                "未知命令 {c:?}：只实现了 harness、lex、ast、types、check、run、ssa 与 build 八个子命令（spike 属 Phase 3，尚未开工）。{USAGE}"
             ),
             Self::MissingSubcommand => write!(f, "harness 需要一个子命令。{USAGE}"),
             Self::UnknownSubcommand(c) => write!(f, "harness 下没有 {c:?} 这个子命令。{USAGE}"),
@@ -351,6 +407,8 @@ impl fmt::Display for CliError {
                 f,
                 "--opt 只接受 all / none / fold,dce,copy,cse（收到 {v:?}）。{USAGE}"
             ),
+            Self::BuildNeedsFile => write!(f, "build 至少需要一个文件参数。{USAGE}"),
+            Self::BadEmit(v) => write!(f, "--emit 只接受 elf / asm（收到 {v:?}）。{USAGE}"),
         }
     }
 }
@@ -374,6 +432,7 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
         "check" => Ok(Command::Check(parse_check(rest)?)),
         "run" => Ok(Command::Run(parse_run_sub(rest)?)),
         "ssa" => Ok(Command::Ssa(parse_ssa(rest)?)),
+        "build" => Ok(Command::Build(parse_build(rest)?)),
         other => Err(CliError::UnknownCommand(other.to_string())),
     }
 }
@@ -521,6 +580,86 @@ fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
         files,
         dump,
         verify,
+        opt,
+    })
+}
+
+/// `build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] <file>...` —— M7 的产物入口。
+///
+/// 选项与文件参数的先后无关；未知选项一律报错（T37 纪律，与 `ssa` 同）。
+/// `--emit=asm` 与 `--emit asm` 两种写法都收（与 `--via`/`--opt` 同一条理由：
+/// 只收一种就等于让另一个入口静默失灵）。
+fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut output: Option<PathBuf> = None;
+    let mut emit = Emit::Elf;
+    let mut keep_asm = false;
+    let mut opt = rgoc_ssa::opt::Config::all();
+    let mut i = 0;
+    while i < rest.len() {
+        if let Some(v) = rest[i].strip_prefix("--emit=") {
+            let Some(e) = Emit::parse(v) else {
+                return Err(CliError::BadEmit(v.to_string()));
+            };
+            emit = e;
+            i += 1;
+            continue;
+        }
+        if let Some(v) = rest[i].strip_prefix("--opt=") {
+            let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                return Err(CliError::BadOpt(v.to_string()));
+            };
+            opt = c;
+            i += 1;
+            continue;
+        }
+        match rest[i] {
+            "--emit" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--emit"));
+                };
+                let Some(e) = Emit::parse(v) else {
+                    return Err(CliError::BadEmit((*v).to_string()));
+                };
+                emit = e;
+                i += 2;
+            }
+            "--opt" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--opt"));
+                };
+                let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                    return Err(CliError::BadOpt((*v).to_string()));
+                };
+                opt = c;
+                i += 2;
+            }
+            "-o" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("-o"));
+                };
+                output = Some(PathBuf::from(*v));
+                i += 2;
+            }
+            "--keep-asm" => {
+                keep_asm = true;
+                i += 1;
+            }
+            a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
+            a => {
+                files.push(PathBuf::from(a));
+                i += 1;
+            }
+        }
+    }
+    if files.is_empty() {
+        return Err(CliError::BuildNeedsFile);
+    }
+    Ok(BuildCommand {
+        files,
+        output,
+        emit,
+        keep_asm,
         opt,
     })
 }

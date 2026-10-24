@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+rgoc-arm64 = { path = "../rgoc-arm64" }
 rgoc-ast = { path = "../rgoc-ast" }
 rgoc-check = { path = "../rgoc-check" }
 rgoc-const = { path = "../rgoc-const" }

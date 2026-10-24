@@ -36,6 +36,7 @@
 //! 把「检查通过没有」混进 dump 会让两侧的 diff 变得没法判。
 
 pub mod ast_cmd;
+pub mod build_cmd;
 pub mod check_cmd;
 pub mod cli;
 pub mod cmp_cmd;
@@ -193,6 +194,12 @@ fn run(cmd: Command) -> Result<ExitCode, String> {
         }
         Command::Ssa(c) => {
             let out = ssa_cmd::run_ssa(&c)?;
+            print!("{}", out.stdout);
+            eprint!("{}", out.stderr);
+            Ok(ExitCode::from(out.exit))
+        }
+        Command::Build(b) => {
+            let out = build_cmd::run_build(&b)?;
             print!("{}", out.stdout);
             eprint!("{}", out.stderr);
             Ok(ExitCode::from(out.exit))
