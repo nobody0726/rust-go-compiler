@@ -158,7 +158,7 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚未开始的 crate**：M6 的 SSA / verifier、M7 的 native 代码生成、M9 的 runtime 与对象模型。
+**尚未开始的 crate**：M7 的 native 代码生成（`rgoc-arm64` 待建）、M9 的 runtime 与对象模型。
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
 
 ---
