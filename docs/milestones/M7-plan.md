@@ -138,19 +138,26 @@
 ### Task 4: fixture 装置（Go 源 → 产物 → 比对）
 
 **Files:**
-- Create: `rgoc/crates/rgoc-driver/tests/support/native_harness.rs`（`#[path]` 引入）
-- Create: `rgoc/crates/rgoc-driver/fixtures/native/*.go`（首批 3 个：`hello.go` / `ret42.go` / `empty.go`）
+- Create: `rgoc/crates/rgoc-driver/tests/support/mod.rs`、`tests/support/native_harness.rs`
+- Create: `rgoc/crates/rgoc-driver/fixtures/native/{hello,ret42,empty}.go`
+- Create: `rgoc/crates/rgoc-driver/tests/native_smoke.rs`
 
 **Interfaces:**
-- Produces: `build_and_run(src: &str) -> Outcome { stdout, stderr, exit, asm: Option<String> }`（内部走 `build_cmd::run_build` + `std::process::Command`）
-- Consumes: Task 2 的 `build`
+- Produces: `native_harness::{build_and_run(name, src) -> Result<Outcome, String>, fixture_root()}`；
+  `Outcome { stdout, stderr, exit, asm }`（内部走 `build_cmd::run_build`，**不重实现流水线**）
+- Consumes: Task 2 的 `build`；`build_cmd::BuildOutcome` 新增 `artifact: Option<PathBuf>`
 
-- [ ] 装置把 fixture 写到 `target/native-fixtures/<name>/`（**不写 `go_source_code/`**），编译、运行、收集三通道
-- [ ] `Outcome` 带 `asm`（`--keep-asm` 时读回 `.s`），供后续任务做结构断言
-- [ ] 三个 fixture 先写「期望红」：`build` 未实现 ⇒ 全部失败（证明装置不是恒绿）
-- [ ] Commit：`test(arm64): native fixture 装置（Task 4）`
+- [x] 装置把 fixture 写到 `target/native-fixtures/<name>/`（**不写 `go_source_code/`**），编译、运行、收集三通道
+- [x] `Outcome` 带 `asm`（`--keep-asm` 时读回 `<output>.s`），供后续任务做结构断言
+- [x] **偏离计划**：三条 fixture 测试用 `#[ignore = "build 无产物（Task 50 接线后去掉）"]`，
+      而不是「先全红」。理由：全红的测试留在树里 40 多个 Task，等于让 `cargo test` 长期是红的
+      —— 那时没人分得清「本来红」和「刚坏」。另留一条**绿**的 `骨架期_build_未实现时装置必须报错`
+      钉住当前诚实行为（装置不许把「没产物」当成「跑出空输出」）
+- [x] 三个 fixture：`hello`（13 字节字节面）/ `ret42`（乘法，故意不用常量 —— 常量会被 `fold` 折掉）/ `empty`（空输出 + 退出码 0）
+- [x] Commit：`test(arm64): native fixture 装置（Task 4）`
 
-**Verify:** `… cargo test -p rgoc-driver --test native_smoke`（3 条，此时**全红**是预期）
+**Verify:** `… cargo test -p rgoc-driver --test native_smoke` ⇒ **1 passed / 3 ignored**；
+Task 50 接线后去掉 ignore，三条必须真绿。
 
 ---
 

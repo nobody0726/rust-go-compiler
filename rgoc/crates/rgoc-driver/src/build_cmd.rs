@@ -10,6 +10,8 @@
 //! 会让 `T-NAT-47` 与 `run-collide.sh --native` 都变成**恒绿的空话**
 //! —— 这是本仓 T37 起就有的纪律（`cli.rs` 模块文档：「宁可直接报错也不假装支持」）。
 
+use std::path::PathBuf;
+
 use crate::cli::BuildCommand;
 
 /// `build` 的三通道结果（与 `ssa_cmd::SsaOutcome` 同构）。
@@ -21,6 +23,12 @@ pub struct BuildOutcome {
     pub stderr: String,
     /// 退出码：`0` 成功 / `1` 静态拒绝（不支持面、检查诊断）/ `2` 内部或工具链失败。
     pub exit: u8,
+    /// 产物路径（成功时才有）。
+    ///
+    /// **为什么要返回它**：`--emit=asm` 的判据是「两次逐字节相同」，而比对两份文件
+    /// 之前得先知道比哪两份。让测试自己按「`<stem>`」的规则去猜，等于把**命名规则**
+    /// 复制到每个测试里 —— 规则一改，测试就会去比一对不存在的文件（然后「通过」）。
+    pub artifact: Option<PathBuf>,
 }
 
 /// 跑一次 `build`。

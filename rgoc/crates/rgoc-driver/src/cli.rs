@@ -180,6 +180,9 @@ pub struct BuildCommand {
     /// `--emit elf|asm`：产物形态（默认 `elf`）。
     pub emit: Emit,
     /// `--keep-asm`：保留中间的 `.s`（`T-NAT-47`）。
+    ///
+    /// 保留路径固定为 `<output>.s`（`output` 见上一条）—— 不另开一个「asm 输出路径」旗标：
+    /// 多一个旗标就多一种组合，而 `T-NAT-48` 只需要「能拿回那份 `.s`」这一件事。
     pub keep_asm: bool,
     /// `--opt all|none|fold,dce,…`：SSA passes 的开关（默认全开）。
     pub opt: rgoc_ssa::opt::Config,
