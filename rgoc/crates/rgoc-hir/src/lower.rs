@@ -2104,9 +2104,23 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         // 展开时不能按位置收敛：`arg_types[0]` 是**第一个**形参，而这个实参
         // 对应的是整串形参，逐位 `coerce` 会把它整体转成第一个形参的类型。
         if !c.has_dots && spread == 0 {
+            // 变参被调方：末尾那一段实参要收敛到**元素**类型，不是整个 slice 类型。
+            //
+            // 踩过：`sum(1, 2, 3)` 里 `arg_types[0]` 是 `[]int`，逐位收敛会把 `1`
+            // 标成 `[]int` —— 解释器不看静态类型所以一直没露；SSA 的 `V3` 会当场拒
+            // （`常量 Int(1) 不可能有类型 []int`）。这是 M5 留在 HIR 里的一个真错。
+            let var_elem = if !c.has_dots && self.callee_is_variadic(&callee) {
+                arg_types.last().copied().and_then(|t| self.slice_elem(t))
+            } else {
+                None
+            };
             let mut targets: Vec<TypeId> = Vec::new();
+            let fixed = arg_types.len().saturating_sub(1);
             for (i, a) in args.iter().enumerate() {
-                let t = arg_types.get(i).copied().unwrap_or(a.typ);
+                let t = match var_elem {
+                    Some(elem) if i >= fixed => elem,
+                    _ => arg_types.get(i).copied().unwrap_or(a.typ),
+                };
                 targets.push(t);
             }
             self.coerce_list(&mut args, &targets);
@@ -2314,6 +2328,27 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
         let _ = fop;
         Callee::Value(Box::new(self.lower_expr(&c.fun)))
+    }
+
+    /// 被调方是不是变参函数（`...T`）。
+    fn callee_is_variadic(&self, callee: &Callee) -> bool {
+        let fid = match callee {
+            Callee::Func(f) => *f,
+            Callee::Method { func, .. } => *func,
+            _ => return false,
+        };
+        self.prog.funcs.get(fid.index()).is_some_and(|f| f.variadic)
+    }
+
+    /// `[]T` 的元素类型（不是 slice ⇒ `None`）。
+    fn slice_elem(&self, t: TypeId) -> Option<TypeId> {
+        if t.index() >= self.s.tt.len() {
+            return None;
+        }
+        match self.s.tt.type_of(rgoc_types::underlying(self.s.tt, t)) {
+            rgoc_types::typ::Type::Slice(e) => Some(*e),
+            _ => None,
+        }
     }
 
     fn callee_param_types(&self, callee: &Callee) -> Vec<TypeId> {

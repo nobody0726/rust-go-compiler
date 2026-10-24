@@ -1303,6 +1303,20 @@ fn func_id(program: &rgoc_hir::Program, name: &str) -> rgoc_hir::FuncId {
     )
 }
 
+/// 按**名字后缀**找函数（方法名形如 `T.M`，但前缀可能是包名，别硬编码）。
+fn func_id_suffix(program: &rgoc_hir::Program, suffix: &str) -> rgoc_hir::FuncId {
+    rgoc_hir::FuncId(
+        program
+            .funcs
+            .iter()
+            .position(|f| f.name.ends_with(suffix) || f.name == suffix)
+            .unwrap_or_else(|| {
+                let all: Vec<&str> = program.funcs.iter().map(|f| f.name.as_str()).collect();
+                panic!("没有以 {suffix} 结尾的函数；现有：{all:?}")
+            }) as u32,
+    )
+}
+
 #[test]
 fn t_ssa_20_多值接收建出多结果指令() {
     let (program, mut tt) = program_of(
@@ -1534,4 +1548,234 @@ fn t_ssa_23_指针写与_panic_各自被标记() {
     );
     let boom = effect_of_call(m, func_id(&program, "boom"));
     assert!(boom.may_panic, "`panic(...)` ⇒ may_panic：{boom:?}");
+}
+
+// ── Task 28：变参与方法调用 ─────────────────────────────────────────
+
+#[test]
+fn t_ssa_29_变参在调用点打包成切片() {
+    let (program, mut tt) = program_of(
+        "variadic",
+        "package main\n\nfunc sum(xs ...int) int {\n\ts := 0\n\tfor _, x := range xs {\n\t\ts = s + x\n\t}\n\treturn s\n}\n\nfunc m() int {\n\treturn sum(1, 2, 3)\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    if let Err(e) = verify(m, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(m, &tt)
+        );
+    }
+    let fid = func_id(&program, "sum");
+    let (_, args) = call_to(m, fid).expect("没有对 sum 的调用");
+    assert_eq!(
+        args.len(),
+        1,
+        "变参打包后只应剩一个 slice 实参：{args:?}\n{}",
+        rgoc_ssa::dump::dump_func(m, &tt)
+    );
+    // 那个实参必须是 Composite（三个元素）
+    let items = instrs(m).into_iter().find_map(|i| match i {
+        Instr::Composite { dst, items, .. } if *dst == args[0] => Some(items.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        items.map(|v| v.len()),
+        Some(3),
+        "三个实参要装进一个 Composite：{}",
+        rgoc_ssa::dump::dump_func(m, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_29_变参用_dots_时不打包() {
+    let (program, mut tt) = program_of(
+        "variadic-dots",
+        "package main\n\nfunc sum(xs ...int) int {\n\ts := 0\n\tfor _, x := range xs {\n\t\ts = s + x\n\t}\n\treturn s\n}\n\nfunc m() int {\n\tys := []int{1, 2}\n\treturn sum(ys...)\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    // `ys...` 已经把 slice 给出去了，不能再包一层
+    let fid = func_id(&program, "sum");
+    let (_, args) = call_to(m, fid).expect("没有对 sum 的调用");
+    assert_eq!(args.len(), 1, "dots 形态只送一个实参：{args:?}");
+    // 关键：`ys...` 已经把 slice 给出去了，**不许**再包一层 Composite。
+    // （只数 `args.len()` 抓不到这个错：把 1 个 slice 打包成 1 个 slice 还是 1 个实参。）
+    // 这个 fixture 里本来就有 1 个 Composite（`[]int{1,2}` 字面量）⇒ 只许有 1 个。
+    assert_eq!(
+        count_kind(m, "composite"),
+        1,
+        "dots 形态不该再包一层 Composite（只该有字面量那一个）：{}",
+        rgoc_ssa::dump::dump_func(m, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_30_方法调用带接收者() {
+    let (program, mut tt) = program_of(
+        "method",
+        "package main\n\ntype T struct{ n int }\n\nfunc (t T) Get() int {\n\treturn t.n\n}\n\nfunc (t *T) Set(v int) {\n\tt.n = v\n}\n\nfunc m() int {\n\tvar t T\n\tt.Set(3)\n\treturn t.Get()\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let m = func_named(&out, "m");
+    if let Err(e) = verify(m, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(m, &tt)
+        );
+    }
+    let get = func_id_suffix(&program, "Get");
+    let set = func_id_suffix(&program, "Set");
+    let gets = instrs(m)
+        .into_iter()
+        .filter(|i| matches!(i, Instr::Call { callee: rgoc_ssa::ir::CalleeRef::Method { func, .. }, .. } if *func == get))
+        .count();
+    let sets = instrs(m)
+        .into_iter()
+        .filter(|i| matches!(i, Instr::Call { callee: rgoc_ssa::ir::CalleeRef::Method { func, .. }, .. } if *func == set))
+        .count();
+    assert_eq!(gets, 1, "一次 `t.Get()`");
+    assert_eq!(sets, 1, "一次 `t.Set(3)`");
+    // 指针接收者的 `Set` 必须有接收者操作数
+    let set_args = instrs(m).into_iter().find_map(|i| match i {
+        Instr::Call {
+            callee: rgoc_ssa::ir::CalleeRef::Method { func, recv },
+            args,
+            ..
+        } if *func == set => Some((*recv, args.clone())),
+        _ => None,
+    });
+    let (recv, sargs) = set_args.expect("没有 Set 调用");
+    assert_eq!(sargs.len(), 1, "`Set(3)` 一个实参");
+    // 接收者是指针：`AddrOf` 或 `Copy` 出来的值（不能是 `Invalid`）
+    assert!(recv.0 < u32::MAX, "接收者必须是个真值");
+}
+
+// ── Task 28–29：range 与复合字面量 ──────────────────────────────────
+
+#[test]
+fn t_ssa_17_range_遍历切片() {
+    let (program, mut tt) = program_of(
+        "range-slice",
+        "package main\n\nfunc f(xs []int) int {\n\ts := 0\n\tfor i, v := range xs {\n\t\ts = s + i + v\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 循环头：preheader + 回边
+    assert_eq!(
+        headers(f).len(),
+        1,
+        "一个循环头：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // `len(xs)` 用内建调用表达
+    let lens = instrs(f)
+        .into_iter()
+        .filter(|i| {
+            matches!(
+                i,
+                Instr::Call {
+                    callee: rgoc_ssa::ir::CalleeRef::Builtin(rgoc_hir::BuiltinKind::Len),
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(lens, 1, "一条 len 调用：{lens}");
+    // `xs[i]` 要出现 Index + Load
+    assert!(
+        count_kind(f, "index") >= 1,
+        "取元素要 Index：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_17_range_没有_key_时用私有槽() {
+    // `for range xs`：HIR 没有 key 位，但下标必须跨块携带 ⇒ 构建器私有槽。
+    let (program, mut tt) = program_of(
+        "range-nokey",
+        "package main\n\nfunc f(xs []int) {\n\tfor range xs {\n\t\tprintln(1)\n\t}\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let h = headers(f)[0];
+    assert!(
+        !f.blocks[h.index()].params.is_empty(),
+        "循环头必须携带下标：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_24_结构体字面量按声明序() {
+    let (program, mut tt) = program_of(
+        "composite-struct",
+        "package main\n\ntype S struct{\n\ta int\n\tb int\n}\n\nfunc f() int {\n\ts := S{a: 1, b: 2}\n\treturn s.a + s.b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let comp = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Composite { items, .. } => Some(items.len()),
+        _ => None,
+    });
+    assert_eq!(
+        comp,
+        Some(2),
+        "两个字段 ⇒ 两个 item：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_24_keyed_数组字面量补零值() {
+    // `[4]int{2: 7}`：4 个元素，只有下标 2 是 7，其余是零值。
+    let (program, mut tt) = program_of(
+        "composite-keyed",
+        "package main\n\nfunc f() int {\n\ta := [4]int{2: 7}\n\treturn a[2]\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let items = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Composite { items, .. } => Some(items.clone()),
+        _ => None,
+    });
+    let items = items.expect("没有 Composite");
+    assert_eq!(items.len(), 4, "keyed 也要补齐到 4 个元素");
+    // 第 2 个是 7，其余是 0
+    let consts: Vec<rgoc_hir::types::ConstVal> = instrs(f)
+        .into_iter()
+        .filter_map(|i| match i {
+            Instr::Const { dst, c, .. } if items.contains(dst) => Some(c.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        consts.contains(&rgoc_hir::types::ConstVal::Int(7)),
+        "下标 2 的 7 要在里面：{consts:?}"
+    );
 }

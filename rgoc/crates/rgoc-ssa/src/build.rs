@@ -108,6 +108,15 @@ fn build_func(
             rooted.insert(SlotId(i as u32));
         }
     }
+    // 聚合类型（结构体 / 数组）的槽**不提升**：`Instr::Field` 只在**地址**上取字段，
+    // SSA 没有「从一个结构体值里取出第 k 个字段」的指令。留在内存里之后
+    // `s.f` 就是 `Load(Field(AddrOf(root_s), k))`，不需要新指令（`R-28-1`）。
+    // 代价：结构体/数组局部变量全走内存（M6 不追这个优化）。
+    for i in 0..f.slot_types.len() {
+        if is_aggregate(tt, f.slot_types[i]) {
+            rooted.insert(SlotId(i as u32));
+        }
+    }
 
     let ng = program.globals.len();
     // 根表顺序固定：先全局（按 GlobalId），再槽（按 SlotId 升序）—— dump 的 r<k> 靠它稳定
@@ -148,6 +157,9 @@ fn build_func(
         ptr_ty: BTreeMap::new(),
         terminated: false,
         bool_ty: None,
+        int_ty: None,
+        extra_slots: BTreeMap::new(),
+        next_tmp: u32::MAX - 1,
         fallthrough: None,
         labels: BTreeMap::new(),
         regions: Vec::new(),
@@ -172,7 +184,7 @@ use std::collections::BTreeSet;
 
 use rgoc_hir::{
     Block as HirBlock, BranchKind, BuiltinKind, Callee, Case, CompositeItem, Expr, ExprKind,
-    MakeKind, Place, SlotId, Stmt,
+    MakeKind, Place, RangeKind, SlotId, Stmt,
 };
 
 use crate::ir::{Root, RootId};
@@ -499,6 +511,17 @@ fn scan_value_root(tt: &TypeTable, e: &Expr, sc: &mut Scanned, addressed: bool) 
         // 其余形态：存储不在本函数的槽里，但仍要扫它们内部有没有 `&x`
         _ => scan_expr(tt, e, sc),
     }
+}
+
+/// 是否是**聚合类型**（结构体 / 数组，含具名与别名）。
+fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, t)),
+        rgoc_types::typ::Type::Struct(_) | rgoc_types::typ::Type::Array { .. }
+    )
 }
 
 /// 是否是**数组**（含具名数组、别名；`[]T` 不算）。
@@ -974,6 +997,12 @@ struct Fb<'a> {
     terminated: bool,
     /// `bool` 的 `TypeId` 缓存（`switch` 的比较与 `Or` 合并要用）。
     bool_ty: Option<TypeId>,
+    /// `int` 的 `TypeId` 缓存（`range` 的下标与 `len` 用）。
+    int_ty: Option<TypeId>,
+    /// 构建器私有的槽类型（`range` 下标），见 `fresh_slot`。
+    extra_slots: BTreeMap<SlotId, TypeId>,
+    /// 下一个私有槽号（从 `u32::MAX-1` 往下）。
+    next_tmp: u32,
     /// 当前 `case` 体的 `fallthrough` 目标（`Task 24`）；不在 case 体里时是 `None`。
     fallthrough: Option<BlockId>,
     /// `goto` 的标签位置（`Task 25`）。
@@ -1139,11 +1168,38 @@ impl Fb<'_> {
     }
 
     fn slot_typ(&self, s: SlotId) -> TypeId {
+        if let Some(t) = self.extra_slots.get(&s) {
+            return *t;
+        }
         self.f
             .slot_types
             .get(s.index())
             .copied()
             .unwrap_or_else(|| TypeId::from_index(0))
+    }
+
+    fn int_ty(&mut self) -> TypeId {
+        if let Some(t) = self.int_ty {
+            return t;
+        }
+        let b = rgoc_types::universe::basic_name_to_id("int").expect("int 是基本类型名");
+        let t = self.tt.add_basic(b);
+        self.int_ty = Some(t);
+        t
+    }
+
+    /// 造一个**构建器私有**的槽（`range` 的下标用；`R-28-2`）。
+    ///
+    /// HIR 不保证 `range` 有关键字位（`for range xs` 就没有），而循环下标必须
+    /// 跨块携带 —— 它得有个槽当载体。这类槽从 `u32::MAX-1` 往下发，不进
+    /// `slot_types`，只在 `extra_slots` 里登记类型，并且**直接进 `promoted`**
+    /// （它们只活在本函数内，永远不是根）。
+    fn fresh_slot(&mut self, t: TypeId) -> SlotId {
+        let s = SlotId(self.next_tmp);
+        self.next_tmp -= 1;
+        self.extra_slots.insert(s, t);
+        self.promoted.insert(s);
+        s
     }
 
     fn bool_ty(&mut self) -> TypeId {
@@ -1242,6 +1298,122 @@ impl Fb<'_> {
         }
     }
 
+    /// 复合字面量（`Task 29`）：数组 / 结构体 / slice ⇒ 一条 `Composite`。
+    ///
+    /// # 顺序 == 源码顺序，但 keyed 形态要按**下标落位**
+    ///
+    /// `[5]int{2: 7}` 的 `items` 只有一项，而结果必须有 5 个元素（其余是零值）。
+    /// 所以 keyed 形态先按 `Field(k)` / `Index(k)` 落到位，再用零值补空位 ——
+    /// 不能让 `Composite` 的语义依赖「第几个 item 就是第几个元素」，否则
+    /// 求值器还得知道哪些位置被跳过。
+    ///
+    /// # 空位的零值用 `Const Int(0)`
+    ///
+    /// 与 `R-20-1` 一致：`Int(0)` 在任意类型上表示「该类型的零值」。
+    fn composite(&mut self, c: &rgoc_hir::Composite) -> ValueId {
+        let arity = self.arity_of(c.typ);
+        let positional = c
+            .items
+            .iter()
+            .all(|it| matches!(it, CompositeItem::Value(_)));
+        let mut items: Vec<ValueId> = Vec::new();
+        if positional && arity.is_none() {
+            // slice / map 字面量：元素个数就是字面量里写出来的个数
+            for it in &c.items {
+                if let CompositeItem::Value(x) = it {
+                    items.push(self.expr(x));
+                }
+            }
+        } else {
+            let n = arity.unwrap_or(c.items.len());
+            let elem_ty = self.elem_ty_of(c.typ);
+            let mut slots: Vec<Option<ValueId>> = vec![None; n];
+            let mut next = 0usize;
+            for it in &c.items {
+                let (idx, x) = match it {
+                    CompositeItem::Value(x) => {
+                        let i = next;
+                        next += 1;
+                        (i, x)
+                    }
+                    CompositeItem::Field(k, x) | CompositeItem::Index(k, x) => {
+                        next = k + 1;
+                        (*k, x)
+                    }
+                    // map 字面量不在 M6 面（`SSA-UNSUPPORTED-MAP`）
+                    CompositeItem::Key(..) => {
+                        todo!("M6/Task 31：map 字面量要报 `SSA-UNSUPPORTED-MAP`")
+                    }
+                };
+                let v = self.expr(x);
+                if idx < slots.len() {
+                    slots[idx] = Some(v);
+                }
+            }
+            for s in slots {
+                items.push(match s {
+                    Some(v) => v,
+                    None => {
+                        let t = elem_ty.unwrap_or(c.typ);
+                        self.const_int(0, t)
+                    }
+                });
+            }
+        }
+        let dst = self.new_value(c.typ);
+        self.emit(Instr::Composite {
+            dst,
+            typ: c.typ,
+            items,
+        });
+        dst
+    }
+
+    /// 聚合类型的「位置个数」：数组是长度，结构体是字段数；其余 `None`。
+    fn arity_of(&self, t: TypeId) -> Option<usize> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        match self.tt.type_of(rgoc_types::underlying(self.tt, t)) {
+            rgoc_types::typ::Type::Array { len, .. } => len
+                .and_then(|cid| self.const_len(cid))
+                .and_then(|n| usize::try_from(n).ok()),
+            rgoc_types::typ::Type::Struct(sid) => self.struct_field_count(*sid),
+            _ => None,
+        }
+    }
+
+    /// 常量表里那个数组长度（`[N]T` 的 `N`）。
+    ///
+    /// `BigInt` 的取值交给 `rgoc_const`（它本来就是这个表的拥有者）——
+    /// 这里只关心「装不装得进 `usize`」。
+    fn const_len(&self, cid: rgoc_types::ConstId) -> Option<i64> {
+        match self.tt.consts().get(cid) {
+            rgoc_const::Const::Int(n) => n.to_i64(),
+            _ => None,
+        }
+    }
+
+    fn struct_field_count(&self, sid: rgoc_types::StructId) -> Option<usize> {
+        Some(self.tt.struct_def(sid).fields.len())
+    }
+
+    /// 聚合类型的「元素类型」：数组/slice 取元素，结构体取第 0 个字段（只用于补零值）。
+    fn elem_ty_of(&self, t: TypeId) -> Option<TypeId> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        match self.tt.type_of(rgoc_types::underlying(self.tt, t)) {
+            rgoc_types::typ::Type::Array { elem, .. } | rgoc_types::typ::Type::Slice(elem) => {
+                Some(*elem)
+            }
+            rgoc_types::typ::Type::Struct(sid) => {
+                self.tt.struct_def(*sid).fields.first().map(|x| x.typ)
+            }
+            _ => None,
+        }
+    }
+
     /// 赋值/短声明的右侧：唯一右值是多值调用时展平，否则逐个求值。
     fn rhs_values(&mut self, rhs: &[Expr], want: usize) -> Vec<ValueId> {
         let vs = if rhs.len() == 1 && want > 1 {
@@ -1268,8 +1440,9 @@ impl Fb<'_> {
                 callee,
                 args,
                 spread,
+                variadic,
                 ..
-            } => self.call(e, callee, args, *spread),
+            } => self.call(e, callee, args, *spread, *variadic),
             // HIR 把 `len` / `append` / `println` 这类单独放一个变体（不带 `callee`）。
             // 它与 `Callee::Builtin` 是同一件事的两种写法，所以走同一个 `emit_builtin`。
             ExprKind::Builtin { kind, args, .. } => self.emit_builtin(e, *kind, args),
@@ -1307,20 +1480,29 @@ impl Fb<'_> {
     /// 而 `CalleeRef::Method { recv, func }` 里 `recv` 是独立字段。
     /// 所以记进 `call_sigs` 的 `params` 要**减一**（否则 `V5` 会把每次方法调用
     /// 都判成「实参少一个」）。
-    fn call(&mut self, e: &Expr, callee: &Callee, args: &[Expr], spread: u8) -> Vec<ValueId> {
+    fn call(
+        &mut self,
+        e: &Expr,
+        callee: &Callee,
+        args: &[Expr],
+        spread: u8,
+        dots: bool,
+    ) -> Vec<ValueId> {
         match callee {
             Callee::Func(fid) => {
-                let (rtypes, sig) = self.sig_of(*fid, false);
+                let (rtypes, sig, vty) = self.sig_of(*fid, false);
                 self.call_sigs.insert(*fid, sig);
                 let avs = self.eval_args(args, spread);
+                let avs = self.pack_variadic(avs, &sig, vty, dots);
                 let eff = crate::effect::to_effect(&self.effs[fid.index()]);
                 self.emit_call(CalleeRef::Func(*fid), avs, &rtypes, eff)
             }
             Callee::Method { recv, func } => {
-                let (rtypes, sig) = self.sig_of(*func, true);
+                let (rtypes, sig, vty) = self.sig_of(*func, true);
                 self.call_sigs.insert(*func, sig);
                 let rv = self.expr(recv);
                 let avs = self.eval_args(args, spread);
+                let avs = self.pack_variadic(avs, &sig, vty, dots);
                 let eff = crate::effect::to_effect(&self.effs[func.index()]);
                 self.emit_call(
                     CalleeRef::Method {
@@ -1352,8 +1534,11 @@ impl Fb<'_> {
         }
     }
 
-    /// 取被调方的「结果类型 + 签名摘要」。`drop_recv` 时 `params` 减一（方法）。
-    fn sig_of(&self, fid: FuncId, drop_recv: bool) -> (Vec<TypeId>, Sig) {
+    /// 取被调方的「结果类型 + 签名摘要 + 变参那一位的 slice 类型」。
+    ///
+    /// `drop_recv` 时 `params` 减一（方法：`Func.params[0]` 是接收者，
+    /// 而 `CalleeRef::Method.recv` 是独立字段）。
+    fn sig_of(&self, fid: FuncId, drop_recv: bool) -> (Vec<TypeId>, Sig, Option<TypeId>) {
         let f = &self.program.funcs[fid.index()];
         (
             f.result_types.clone(),
@@ -1362,7 +1547,49 @@ impl Fb<'_> {
                 results: f.result_types.len(),
                 variadic: f.variadic,
             },
+            if f.variadic {
+                f.param_types.last().copied()
+            } else {
+                None
+            },
         )
+    }
+
+    /// 变参打包（`Task 28`）：调用点没有 `...` 时，把多出来的实参装成一个 slice。
+    ///
+    /// # 为什么在**调用点**打包，而不是让被调方自己收
+    ///
+    /// 被调方的最后一个槽是 `[]T`（`Func.param_types` 的最后一项就是 slice 类型），
+    /// 它的帧里只认一个值。所以「变参」在调用边界上必须变成一个 slice 实参 ——
+    /// 这与 `rgoc-interp` 的做法一致（`T-EX-28` 的语义基准）。
+    ///
+    /// 打包用 `Composite { typ: 切片类型, items }`：它正是「用这些元素造一个复合值」，
+    /// 与 `[]T{a, b, c}` 字面量同形，求值器不必为变参再造一条指令。
+    fn pack_variadic(
+        &mut self,
+        mut avs: Vec<ValueId>,
+        sig: &Sig,
+        vty: Option<TypeId>,
+        dots: bool,
+    ) -> Vec<ValueId> {
+        if !sig.variadic || dots {
+            return avs;
+        }
+        let Some(slice_ty) = vty else { return avs };
+        let fixed = sig.params.saturating_sub(1);
+        let rest: Vec<ValueId> = if avs.len() > fixed {
+            avs.split_off(fixed)
+        } else {
+            Vec::new()
+        };
+        let dst = self.new_value(slice_ty);
+        self.emit(Instr::Composite {
+            dst,
+            typ: slice_ty,
+            items: rest,
+        });
+        avs.push(dst);
+        avs
     }
 
     /// 产 `Call` 指令：按结果类型建 `dst`，返回它们。`effect` 由 `Task 27` 的摘要给。
@@ -1500,14 +1727,49 @@ impl Fb<'_> {
                 callee,
                 args,
                 spread,
+                variadic,
                 ..
             } => {
-                let vs = self.call(e, callee, args, *spread);
+                let vs = self.call(e, callee, args, *spread, *variadic);
                 match vs.len() {
                     1 => vs[0],
                     0 => todo!("0 结果的调用不能当值使用（检查器应已拒绝）"),
                     n => todo!("{n} 个结果的调用出现在单值位置（检查器应已拒绝）"),
                 }
+            }
+            ExprKind::Composite(c) => self.composite(c),
+            // `a[i]`：数组元素在槽的存储里（走那个根），slice 元素在堆根上。
+            // 与 `range` 取元素走同一条路（`Index` 出地址 + `Load` 取值）。
+            ExprKind::Index { base, index, .. } => {
+                let base_v = self.expr(base);
+                let idx = self.expr(index);
+                let (base_ptr, root) = match &base.kind {
+                    ExprKind::Slot(s)
+                        if is_array(self.tt, base.typ) && self.slot_root.contains_key(s) =>
+                    {
+                        let r = self.slot_root[s];
+                        (self.addr_of(r), r)
+                    }
+                    _ => (base_v, self.heap_root()),
+                };
+                let pt = self.ptr_ty_of(root);
+                let addr = self.new_value(pt);
+                self.emit(Instr::Index {
+                    dst: addr,
+                    base: base_ptr,
+                    i: idx,
+                });
+                let mem = self.mem_of(root);
+                let t = e.typ;
+                let dst = self.new_value(t);
+                self.emit(Instr::Load {
+                    dst,
+                    mem,
+                    root,
+                    addr,
+                    typ: t,
+                });
+                dst
             }
             ExprKind::Builtin { kind, args, .. } => {
                 let vs = self.emit_builtin(e, *kind, args);
@@ -1990,6 +2252,296 @@ impl Fb<'_> {
             }
             None => self.terminated = true,
         }
+    }
+
+    /// `range` 循环（`Task 28` 并入；计划里原先没有这一项）。
+    ///
+    /// # 为什么它必须并入 Task 28
+    ///
+    /// `func sum(xs ...int)` 的语义基准就是「用 `range` 把变参走一遍」——
+    /// 没有 `range` 连变参打包都验不了。计划把它漏了（`R-28-3`）。
+    ///
+    /// # 去糖成「下标循环」
+    ///
+    /// ```text
+    ///   idx = 0
+    ///   header: if idx < len(xs) -> body | exit
+    ///   body:   value = xs[idx]; ...body...
+    ///           idx = idx + 1; goto header
+    /// ```
+    ///
+    /// 下标放在**槽**里（HIR 的 key 位，或构建器私有槽 `fresh_slot`），
+    /// 于是它天然成为循环携带值，复用 `stmt_for` 那一套布局与回边。
+    ///
+    /// # `len` 用 `Call Builtin(Len)` 表达
+    ///
+    /// `Instr` 里没有 `Len` 指令。用内建调用表达它有两个好处：求值器只认
+    /// 一种「取长度」的形态，且 `effect` 天然是「纯读」。
+    ///
+    /// # 支持面
+    ///
+    /// `Array` / `Slice` / `Int`（`for i := range 10`）。
+    /// **`Str` 与 `Map` 不在 M6 面**：字符串要按 rune 解码（当前指令集里没有
+    /// 能表达「按 rune 取第 i 个」的操作），map 的键相等是宿主语义
+    /// （`SSA-UNSUPPORTED-MAP`）。两者都**显式拒绝**，不静默降级。
+    fn stmt_range(
+        &mut self,
+        key: Option<&Place>,
+        value: Option<&Place>,
+        x: &Expr,
+        body: &HirBlock,
+        kind: RangeKind,
+        label: Option<&str>,
+    ) {
+        match kind {
+            RangeKind::Array | RangeKind::Slice | RangeKind::Int => {}
+            RangeKind::Str => todo!("M6/Task 31：`range` over string 要报显式拒绝码"),
+            RangeKind::Map => todo!("M6/Task 31：`range` over map 要报 `SSA-UNSUPPORTED-MAP`"),
+        }
+        let xs = self.expr(x);
+        let int_ty = self.int_ty();
+
+        // 下标槽：优先用 HIR 的 key；`_` 或没有 key 时用私有槽。
+        let key_slot = match key {
+            Some(Place::Slot(s)) if *s != BLANK_SLOT => *s,
+            _ => self.fresh_slot(int_ty),
+        };
+
+        // ── 初始化 idx = 0（在 preheader 里）
+        let zero = self.const_int(0, int_ty);
+        self.write_slot(key_slot, zero);
+
+        let base = (self.val.clone(), self.mem.clone());
+
+        // 循环体的副作用 + 下标 + value 槽
+        let mut eff = scan_loop_effects(self.tt, &self.slot_root, body, None);
+        eff.slots.insert(key_slot);
+        let val_slot: Option<SlotId> = match value {
+            Some(Place::Slot(s)) if *s != BLANK_SLOT => Some(*s),
+            _ => None,
+        };
+        if let Some(s) = val_slot {
+            eff.slots.insert(s);
+        }
+        let carried: Vec<SlotId> = eff
+            .slots
+            .iter()
+            .copied()
+            .filter(|s| self.val.contains_key(s))
+            .collect();
+        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
+        if eff.calls {
+            for i in 0..self.globals.len() {
+                wroots.insert(RootId(i as u32));
+            }
+        }
+        if eff.heap || eff.calls {
+            let h = self.heap_root();
+            wroots.insert(h);
+        }
+        let layout = ParamLayout {
+            slots: carried,
+            roots: wroots.into_iter().collect(),
+        };
+
+        // ── header
+        let header = self.new_block();
+        let hstate = self.layout_params(header, &layout);
+        let pre_args = self.args_for(self.cur, &layout, &base.0, &base.1);
+        self.set_term(Term::Goto {
+            to: header,
+            args: pre_args,
+        });
+        self.cur = header;
+        self.terminated = false;
+        let hs = Self::state_with(&base, (hstate.0.clone(), hstate.1.clone()));
+        self.val = hs.0.clone();
+        self.mem = hs.1.clone();
+
+        // cond: idx < len(xs)（`range n` 时上界直接是 n）
+        let up = if matches!(kind, RangeKind::Int) {
+            xs
+        } else {
+            self.emit_len(xs)
+        };
+        let idx_v = self.read_slot(key_slot);
+        let bt = self.bool_ty();
+        let cond = self.new_value(bt);
+        self.emit(Instr::Bin {
+            dst: cond,
+            op: rgoc_hir::BinOp::Lt,
+            lhs: idx_v,
+            rhs: up,
+            typ: bt,
+        });
+
+        let body_b = self.new_block();
+        let exit_b = self.new_block();
+        let exit_state = self.layout_params(exit_b, &layout);
+        let pass = layout
+            .slots
+            .iter()
+            .map(|s| hstate.0[s])
+            .chain(layout.roots.iter().map(|r| hstate.1[r]))
+            .collect();
+        self.set_term(Term::If {
+            cond,
+            then_: (body_b, Vec::new()),
+            else_: (exit_b, pass),
+        });
+
+        // ── body
+        let idx = self.regions.len();
+        self.regions.push(Region::Loop(LoopCtx {
+            label: label.map(ToString::to_string),
+            layout: layout.clone(),
+            break_target: Some(exit_b),
+            break_pending: Vec::new(),
+            continues: Vec::new(),
+        }));
+        let bstate = (self.val.clone(), self.mem.clone());
+        self.cur = body_b;
+        self.terminated = false;
+        self.val = bstate.0;
+        self.mem = bstate.1;
+        // value = xs[idx]
+        if let (Some(p), false) = (value, matches!(kind, RangeKind::Int)) {
+            let cur_idx = self.read_slot(key_slot);
+            let vt = match val_slot {
+                Some(s) => self.slot_typ(s),
+                None => TypeId::from_index(0),
+            };
+            let elem = self.range_elem(xs, x, cur_idx, vt, kind);
+            self.write_place(p, elem);
+        }
+        self.stmts(&body.stmts);
+        let body_falls = !self.terminated;
+        let Region::Loop(ctx) = self.regions.remove(idx) else {
+            unreachable!("刚压进去的是 Loop")
+        };
+
+        // ── latch：idx = idx + 1
+        let need_latch = body_falls || !ctx.continues.is_empty();
+        let mut latch: Option<BlockId> = None;
+        let cont_target = if need_latch {
+            let l = self.new_block();
+            latch = Some(l);
+            l
+        } else {
+            header
+        };
+        for c in &ctx.continues {
+            let args = self.args_for(c.block, &layout, &c.val, &c.mem);
+            self.blocks[c.block.index()].term = Term::Goto {
+                to: cont_target,
+                args,
+            };
+        }
+        if body_falls {
+            let tail = self.cur;
+            let args_state = (self.val.clone(), self.mem.clone());
+            if let Some(l) = latch {
+                self.blocks[tail.index()].term = Term::Goto {
+                    to: l,
+                    args: Vec::new(),
+                };
+                // latch 的入口状态 = 体落空处的状态（值都支配 latch）
+                self.cur = l;
+                self.terminated = false;
+                self.val = args_state.0;
+                self.mem = args_state.1;
+                let cur_idx = self.read_slot(key_slot);
+                let one = self.const_int(1, int_ty);
+                let inc = self.new_value(int_ty);
+                self.emit(Instr::Bin {
+                    dst: inc,
+                    op: rgoc_hir::BinOp::Add,
+                    lhs: cur_idx,
+                    rhs: one,
+                    typ: int_ty,
+                });
+                self.write_slot(key_slot, inc);
+                let args = self.args_for(l, &layout, &self.val.clone(), &self.mem.clone());
+                self.set_term(Term::Goto { to: header, args });
+            } else {
+                let args = self.args_for(tail, &layout, &args_state.0, &args_state.1);
+                self.set_term(Term::Goto {
+                    to: cont_target,
+                    args,
+                });
+            }
+        }
+
+        // ── 出口
+        self.cur = exit_b;
+        self.terminated = false;
+        let es = Self::state_with(&base, exit_state);
+        self.val = es.0;
+        self.mem = es.1;
+    }
+
+    /// `range` 里取第 `i` 个元素的值。
+    ///
+    /// 数组：元素在槽的存储里 ⇒ 从 `AddrOf(root)` 起算地址；
+    /// slice：元素在底层数组（堆根）⇒ 直接以 slice 值为 base。
+    /// 两者都靠 `Index` 出地址、`Load` 取值 —— 与 `a[i]` 的读法完全一致，
+    /// 求值器不必为 `range` 单独写一条路径。
+    fn range_elem(
+        &mut self,
+        xs: ValueId,
+        x: &Expr,
+        i: ValueId,
+        vt: TypeId,
+        kind: RangeKind,
+    ) -> ValueId {
+        // 数组：元素在槽的存储里 ⇒ 从 `AddrOf(root)` 起算；slice：在堆根上。
+        // 注意 `x` 只用来**判断**底座形态，不再求值 —— 求值会重复执行副作用
+        // （`range f()` 只该调一次）。
+        let (base, root) = match (kind, &x.kind) {
+            (RangeKind::Array, ExprKind::Slot(s)) if self.slot_root.contains_key(s) => {
+                let r = self.slot_root[s];
+                (self.addr_of(r), r)
+            }
+            _ => (xs, self.heap_root()),
+        };
+        let pt = self.ptr_ty_of(root);
+        let addr = self.new_value(pt);
+        self.emit(Instr::Index { dst: addr, base, i });
+        let mem = self.mem_of(root);
+        let dst = self.new_value(vt);
+        self.emit(Instr::Load {
+            dst,
+            mem,
+            root,
+            addr,
+            typ: vt,
+        });
+        dst
+    }
+
+    /// 建一条 `len(x)`（用内建调用表达，见 `stmt_range` 的说明）。
+    fn emit_len(&mut self, xs: ValueId) -> ValueId {
+        let t = self.int_ty();
+        let dst = self.new_value(t);
+        let eff = crate::effect::to_effect(&crate::effect::builtin_summary(BuiltinKind::Len));
+        self.emit(Instr::Call {
+            dsts: vec![dst],
+            callee: CalleeRef::Builtin(BuiltinKind::Len),
+            args: vec![xs],
+            effect: eff,
+        });
+        dst
+    }
+
+    /// 一个小整数常量（类型给定）。
+    fn const_int(&mut self, n: i128, t: TypeId) -> ValueId {
+        let dst = self.new_value(t);
+        self.emit(Instr::Const {
+            dst,
+            c: rgoc_hir::types::ConstVal::Int(n),
+            typ: t,
+        });
+        dst
     }
 
     /// 带标签的普通语句（`L: x = 1`）—— `goto` 的唯一合法目标（`Task 25`）。
@@ -2512,6 +3064,22 @@ impl Fb<'_> {
                 cases,
                 label,
             } => self.stmt_switch(init.as_deref(), tag.as_ref(), cases, label.as_deref()),
+            Stmt::Range {
+                key,
+                value,
+                x,
+                body,
+                kind,
+                label,
+                ..
+            } => self.stmt_range(
+                key.as_ref(),
+                value.as_ref(),
+                x,
+                body,
+                *kind,
+                label.as_deref(),
+            ),
             Stmt::Branch { kind, label } => match kind {
                 BranchKind::Fallthrough => {
                     let Some(t) = self.fallthrough else {
