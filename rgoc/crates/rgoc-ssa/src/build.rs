@@ -155,6 +155,7 @@ fn build_func(
         slot_root,
         promoted,
         ptr_ty: BTreeMap::new(),
+        ptr_root: BTreeMap::new(),
         terminated: false,
         bool_ty: None,
         int_ty: None,
@@ -994,6 +995,14 @@ struct Fb<'a> {
     promoted: BTreeSet<SlotId>,
     /// 每个根的地址类型缓存（`*T`；避免同一根建出多个相同的指针类型槽）
     ptr_ty: BTreeMap<RootId, TypeId>,
+    /// 指针值 → 它指向的根（`Task 30`）。
+    ///
+    /// # 这不是别名分析，是**构造性**事实
+    ///
+    /// 只有 `AddrOf` 产出的值才有条目：它指向哪个根，是**造这条指令时就知道的**。
+    /// 一旦值被合并（块参数）、被转换、来自形参或调用结果，就没有条目 ——
+    /// 那时按「可能指向任何根」处理（见 `store_to_unknown`），**不是**猜一个根。
+    ptr_root: BTreeMap<ValueId, RootId>,
     terminated: bool,
     /// `bool` 的 `TypeId` 缓存（`switch` 的比较与 `Or` 合并要用）。
     bool_ty: Option<TypeId>,
@@ -1081,7 +1090,26 @@ impl Fb<'_> {
         let t = self.ptr_ty_of(root);
         let dst = self.new_value(t);
         self.emit(Instr::AddrOf { dst, root });
+        // 这条指针值指向哪个根，是**造它的时候就知道的** —— 记下来，
+        // 之后 `*p` 才能落在同一个根上（`T-SSA-25`）。
+        self.ptr_root.insert(dst, root);
         dst
+    }
+
+    /// 一个指针值「构造性地」指向哪个根（没有记录 ⇒ `None`）。
+    fn ptr_hint(&self, v: ValueId) -> Option<RootId> {
+        self.ptr_root.get(&v).copied()
+    }
+
+    /// 记下「这个指针值指向哪个根」（根未知就不记）。
+    ///
+    /// 地址类指令（`AddrOf` / `Field` / `Index`）的**结果仍是地址**，
+    /// 根与底座相同 —— 不记的话 `&s.n` 一旦离开 `place_addr_root` 的返回值
+    /// 就「失忆」了，写穿会退化成扇出。
+    fn note_root(&mut self, v: ValueId, root: Option<RootId>) {
+        if let Some(r) = root {
+            self.ptr_root.insert(v, r);
+        }
     }
 
     /// 根的当前 mem 令牌（懒建；类型只是占位，`C9` 的 mem 是抽象令牌）。
@@ -1128,6 +1156,27 @@ impl Fb<'_> {
         self.mem.insert(root, dst);
     }
 
+    /// 通过一个**根未知**的指针写（`*p = v`，`p` 是形参 / 调用结果 / 合并后的值）。
+    ///
+    /// # 为什么不「随便挑一个根」
+    ///
+    /// 挑堆根是最省事的写法，也是**静默错**：调用方的槽根没有前进，
+    /// 之后的 `a` 读到的是旧 mem（静态上「写后读」不成立），优化器一旦拿它做
+    /// load 消除就会读到旧值。M6 不做别名推理，那就**别假装知道**。
+    ///
+    /// # 扇出为什么是对的
+    ///
+    /// 对**每个根**各发一条 `Store`（同一个地址、同一个值）。运行期写的是真实地址，
+    /// 重复写同值幂等；静态上每个根的 mem 都前进了 ⇒ 「写后读」对任何根都成立。
+    /// 代价是指令数 × 根数 —— 而根数只有「取过址的槽 + 全局 + 堆」那么多。
+    fn store_to_unknown(&mut self, addr: ValueId, v: ValueId) {
+        self.heap_root(); // 堆根总在里面（未知指针完全可能指向堆）
+        let n = self.roots.len();
+        for i in 0..n {
+            self.store_root(RootId(i as u32), addr, v);
+        }
+    }
+
     fn read_slot(&mut self, s: SlotId) -> ValueId {
         if let Some(&v) = self.val.get(&s) {
             return v;
@@ -1164,6 +1213,12 @@ impl Fb<'_> {
         }
         let dst = self.new_value(typ);
         self.emit(Instr::Convert { dst, x: v, typ });
+        // 指针之间的转换**不动地址**（只改「指向什么类型」的看法）⇒ 根跟着走。
+        // 不传的话 `&s.n`（`*named`）收敛到 `*int` 之后就「根未知」了，
+        // 写穿会退化成扇出（实测：`p := &s.n; *p = 5` 出了两条 Store）。
+        if let Some(root) = self.ptr_hint(v) {
+            self.ptr_root.insert(dst, root);
+        }
         dst
     }
 
@@ -1238,41 +1293,40 @@ impl Fb<'_> {
         RootId((self.roots.len() - 1) as u32)
     }
 
-    /// 一个 place 的「底座根」（`s.f` / `arr[i]` 落到 s 的根；`*p` 落到堆根）。
-    fn root_of_place(&mut self, p: &Place) -> RootId {
-        match p {
-            Place::Slot(s) => *self
-                .slot_root
-                .get(s)
-                .unwrap_or_else(|| panic!("槽 s{} 没有根（不该有 place 指向它）", s.0)),
-            Place::Global(g) => RootId(g.0),
-            Place::Field { base, .. } => self.root_of_place(base),
-            Place::Index { base, .. } => {
-                if is_array(self.tt, base.typ)
-                    && let ExprKind::Slot(s) = &base.kind
-                    && let Some(&r) = self.slot_root.get(s)
-                {
-                    return r;
-                }
-                self.heap_root()
-            }
-            Place::Deref(_) => self.heap_root(),
-        }
-    }
-
     /// 一个 place 的地址值。
     fn place_addr(&mut self, p: &Place) -> ValueId {
+        self.place_addr_root(p).0
+    }
+
+    /// 一个 place 的「地址 + 根」，**一次求值**。
+    ///
+    /// # 为什么必须是同一个函数
+    ///
+    /// 初版是 `place_addr(p)` 与 `root_of_place(p)` 两个独立函数，读写处**各调一次**。
+    /// 对 `Place::Deref(f())` 来说那就是把 `f()` 求值两遍 —— 副作用做两次，
+    /// 而且两次拿到的是**两个不同的值**（地址与根来自不同的求值）。
+    /// 合成一个返回值就结构性地消灭了这类错。
+    ///
+    /// # `None` 是什么意思
+    ///
+    /// **「根未知」**，不是「没有根」：`*p` 里 `p` 是形参、是调用结果、或经过块参数
+    /// 合并时，M6 不做别名推理，就说不出它指向哪个根。读这种地址落堆根（保守），
+    /// 写则**扇出到所有根**（见 `store_to_unknown`）—— 见返回类型是 `Option` 的理由。
+    fn place_addr_root(&mut self, p: &Place) -> (ValueId, Option<RootId>) {
         match p {
             Place::Slot(s) => {
                 let root = *self
                     .slot_root
                     .get(s)
                     .unwrap_or_else(|| panic!("槽 s{} 没有根", s.0));
-                self.addr_of(root)
+                (self.addr_of(root), Some(root))
             }
-            Place::Global(g) => self.addr_of(RootId(g.0)),
+            Place::Global(g) => {
+                let root = RootId(g.0);
+                (self.addr_of(root), Some(root))
+            }
             Place::Field { base, index } => {
-                let base_v = self.place_addr(base);
+                let (base_v, root) = self.place_addr_root(base);
                 let t = self.values[base_v.index()];
                 let dst = self.new_value(t);
                 self.emit(Instr::Field {
@@ -1280,10 +1334,11 @@ impl Fb<'_> {
                     base: base_v,
                     index: *index,
                 });
-                dst
+                self.note_root(dst, root);
+                (dst, root)
             }
             Place::Index { base, index } => {
-                let base_v = self.expr(base);
+                let (base_v, root) = self.index_base(base);
                 let idx = self.expr(index);
                 let t = self.values[base_v.index()];
                 let dst = self.new_value(t);
@@ -1292,9 +1347,119 @@ impl Fb<'_> {
                     base: base_v,
                     i: idx,
                 });
-                dst
+                self.note_root(dst, root);
+                (dst, root)
             }
-            Place::Deref(e) => self.expr(e),
+            Place::Deref(e) => {
+                let addr = self.expr(e);
+                let root = self.ptr_hint(addr);
+                (addr, root)
+            }
+        }
+    }
+
+    /// 下标底座的「指针值 + 根」。
+    ///
+    /// 三种形态各有各的底座：
+    /// * **数组槽**（`[N]T` 局部变量）：元素住在槽的存储里 ⇒ 底座是 `AddrOf(槽根)`；
+    /// * **指向数组的指针**（`p[i]`，`p *[N]T`）：底座**就是** `p` 的值；
+    /// * **slice**：元素在底层数组（堆根）⇒ 底座是 slice 值本身。
+    ///
+    /// 只按**类型**分叉，不按语法猜 —— `a[i]` 里 `a` 是数组还是 slice 决定根，
+    /// 而写 `a[i] = v` 与读 `a[i]` 必须走同一条路，否则读写落在不同根上（静默丢写）。
+    fn index_base(&mut self, base: &Expr) -> (ValueId, Option<RootId>) {
+        if !self.is_pointer(base.typ) {
+            match &base.kind {
+                ExprKind::Slot(s)
+                    if is_array(self.tt, base.typ) && self.slot_root.contains_key(s) =>
+                {
+                    let r = self.slot_root[s];
+                    return (self.addr_of(r), Some(r));
+                }
+                ExprKind::Global(g) if is_array(self.tt, base.typ) => {
+                    let r = RootId(g.0);
+                    return (self.addr_of(r), Some(r));
+                }
+                _ => {}
+            }
+        }
+        let v = self.expr(base);
+        // 指针底座：`p` 指向哪就写哪（有记录才知道）；slice 底座：底层数组在堆根。
+        let root = if self.is_pointer(base.typ) {
+            self.ptr_hint(v)
+        } else {
+            Some(self.heap_root())
+        };
+        (v, root)
+    }
+
+    fn is_pointer(&self, t: TypeId) -> bool {
+        if t.index() >= self.tt.len() {
+            return false;
+        }
+        matches!(
+            self.tt.type_of(rgoc_types::underlying(self.tt, t)),
+            rgoc_types::typ::Type::Pointer(_)
+        )
+    }
+
+    /// 一个**表达式**作为「存储位置」时的地址 + 根（`s.f` / `s.a.b` / `p.f` / `g.f`）。
+    ///
+    /// # 为什么 `Place` 之外还要有这一份
+    ///
+    /// HIR 的字段访问是 `ExprKind::Field { base: Expr }`，底座是**表达式**而不是
+    /// `Place`（`p.f` 的底座是 `p` 这个指针**值**）。两者形状重叠但不互为子类型，
+    /// 于是各自一个函数；判据（哪种底座落在哪个根）两边必须一致。
+    ///
+    /// 返回 `None` 表示**不可取址**：调用结果、常量、字面量 —— 它们没有存储。
+    fn expr_addr_root(&mut self, e: &Expr) -> Option<(ValueId, Option<RootId>)> {
+        match &e.kind {
+            ExprKind::Slot(s) => {
+                if let Some(&root) = self.slot_root.get(s) {
+                    return Some((self.addr_of(root), Some(root)));
+                }
+                // 提升过的指针槽：值本身就是地址
+                if self.is_pointer(e.typ) {
+                    let v = self.expr(e);
+                    return Some((v, self.ptr_hint(v)));
+                }
+                None
+            }
+            ExprKind::Global(g) => {
+                let root = RootId(g.0);
+                Some((self.addr_of(root), Some(root)))
+            }
+            ExprKind::Field { base, index } => {
+                let (bv, hint) = self.expr_addr_root(base)?;
+                let t = self.values[bv.index()];
+                let dst = self.new_value(t);
+                self.emit(Instr::Field {
+                    dst,
+                    base: bv,
+                    index: *index,
+                });
+                self.note_root(dst, hint);
+                Some((dst, hint))
+            }
+            ExprKind::Index { base, index, .. } => {
+                let (bv, hint) = self.index_base(base);
+                let i = self.expr(index);
+                let t = self.values[bv.index()];
+                let dst = self.new_value(t);
+                self.emit(Instr::Index { dst, base: bv, i });
+                self.note_root(dst, hint);
+                Some((dst, hint))
+            }
+            ExprKind::Deref(x) => {
+                let addr = self.expr(x);
+                Some((addr, self.ptr_hint(addr)))
+            }
+            // 指针底座（`f().x` 之类）：值本身就是地址
+            _ if self.is_pointer(e.typ) => {
+                let v = self.expr(e);
+                Some((v, self.ptr_hint(v)))
+            }
+            _ => None,
         }
     }
 
@@ -1678,12 +1843,12 @@ impl Fb<'_> {
             }
             // `&x`：唯一产生指针的构造。`x` 一定在根表里（`scan_addressed` 保证）
             ExprKind::Addr(p) => self.place_addr(p),
-            // `*p`：读指针指向的存储。目标在**堆根**上 —— 指针可能来自形参、
-            // 别的函数的返回、或本函数取过址的槽；M6 不做别名推理，
-            // 一律记在堆根（`Root::Heap`）上，同根保序。
+            // `*p`：读指针指向的存储。`p` 是本函数 `&x` 造出来的 ⇒ 读**那个根**
+            // （`T-SSA-25` 要的就是这条：写穿之后读 `x` 与 `*p` 走同一条 mem 链）。
+            // 其余来源（形参 / 调用结果 / 合并值）根未知 ⇒ 堆根，M6 不做别名推理。
             ExprKind::Deref(x) => {
                 let addr = self.expr(x);
-                let root = self.heap_root();
+                let root = self.ptr_hint(addr).unwrap_or_else(|| self.heap_root());
                 let mem = self.mem_of(root);
                 let t = e.typ;
                 let dst = self.new_value(t);
@@ -1696,32 +1861,38 @@ impl Fb<'_> {
                 });
                 dst
             }
-            // 读字段：底座在内存（部分写/取址）⇒ 先算字段地址再 Load
+            // 读字段：先算字段地址，再 `Load`。底座有四种（槽 / 全局 / 指针 / 聚合值链）。
             ExprKind::Field { base, index } => {
-                if let ExprKind::Slot(s) = &base.kind
-                    && let Some(&root) = self.slot_root.get(s)
-                {
-                    let a = self.addr_of(root);
-                    let at = self.values[a.index()];
-                    let fa = self.new_value(at);
-                    self.emit(Instr::Field {
-                        dst: fa,
-                        base: a,
-                        index: *index,
-                    });
-                    let mem = self.mem_of(root);
-                    let ty = e.typ;
-                    let dst = self.new_value(ty);
-                    self.emit(Instr::Load {
-                        dst,
-                        mem,
-                        root,
-                        addr: fa,
-                        typ: ty,
-                    });
-                    return dst;
-                }
-                todo!("M6/Task 24：读字段（底座不是内存里的槽）的构建")
+                let Some((addr, hint)) = self.expr_addr_root(base) else {
+                    todo!(
+                        "M6/Task 30：字段底座不可取址（`{}` 不是地址形态）",
+                        expr_kind_name(&base.kind)
+                    );
+                };
+                let (root, mem) = match hint {
+                    Some(r) => (r, self.mem_of(r)),
+                    None => {
+                        let r = self.heap_root();
+                        (r, self.mem_of(r))
+                    }
+                };
+                let at = self.values[addr.index()];
+                let fa = self.new_value(at);
+                self.emit(Instr::Field {
+                    dst: fa,
+                    base: addr,
+                    index: *index,
+                });
+                let ty = e.typ;
+                let dst = self.new_value(ty);
+                self.emit(Instr::Load {
+                    dst,
+                    mem,
+                    root,
+                    addr: fa,
+                    typ: ty,
+                });
+                dst
             }
             ExprKind::Call {
                 callee,
@@ -1738,20 +1909,13 @@ impl Fb<'_> {
                 }
             }
             ExprKind::Composite(c) => self.composite(c),
-            // `a[i]`：数组元素在槽的存储里（走那个根），slice 元素在堆根上。
-            // 与 `range` 取元素走同一条路（`Index` 出地址 + `Load` 取值）。
+            // `a[i]`：数组元素在槽的存储里（走那个根），slice 元素在堆根上，
+            // `p[i]`（`p *[N]T`）在指针背后。三种底座都由 `index_base` 归一，
+            // 与 `a[i] = v` 的写路径**同一套**判据。
             ExprKind::Index { base, index, .. } => {
-                let base_v = self.expr(base);
+                let (base_ptr, hint) = self.index_base(base);
                 let idx = self.expr(index);
-                let (base_ptr, root) = match &base.kind {
-                    ExprKind::Slot(s)
-                        if is_array(self.tt, base.typ) && self.slot_root.contains_key(s) =>
-                    {
-                        let r = self.slot_root[s];
-                        (self.addr_of(r), r)
-                    }
-                    _ => (base_v, self.heap_root()),
-                };
+                let root = hint.unwrap_or_else(|| self.heap_root());
                 let pt = self.ptr_ty_of(root);
                 let addr = self.new_value(pt);
                 self.emit(Instr::Index {
@@ -3109,8 +3273,9 @@ impl Fb<'_> {
             Place::Slot(s) => self.read_slot(*s),
             Place::Global(g) => self.load_root(RootId(g.0), self.elem_type(RootId(g.0))),
             other => {
-                let addr = self.place_addr(other);
-                let root = self.root_of_place(other);
+                // 地址与根**一次**求出来（`Deref(f())` 不能求两遍）
+                let (addr, hint) = self.place_addr_root(other);
+                let root = hint.unwrap_or_else(|| self.heap_root());
                 let mem = self.mem_of(root);
                 let t = self.values[addr.index()];
                 let dst = self.new_value(t);
@@ -3135,9 +3300,12 @@ impl Fb<'_> {
                 self.store_root(root, addr, v);
             }
             other => {
-                let addr = self.place_addr(other);
-                let root = self.root_of_place(other);
-                self.store_root(root, addr, v);
+                let (addr, hint) = self.place_addr_root(other);
+                match hint {
+                    Some(root) => self.store_root(root, addr, v),
+                    // 根未知 ⇒ 扇出到所有根，而不是猜一个（见 `store_to_unknown`）
+                    None => self.store_to_unknown(addr, v),
+                }
             }
         }
     }

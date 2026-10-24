@@ -1779,3 +1779,284 @@ fn t_ssa_24_keyed_数组字面量补零值() {
         "下标 2 的 7 要在里面：{consts:?}"
     );
 }
+
+// ── Task 30：指针、取址与写穿（`T-SSA-25`）──────────────────────────
+
+use rgoc_ssa::ir::RootId;
+
+/// 返回块里的 `Return` 操作数（直线 fixture 只有一个）。
+fn ret_vals(f: &SsaFunc) -> Vec<ValueId> {
+    f.blocks
+        .iter()
+        .find_map(|b| match &b.term {
+            Term::Return(v) => Some(v.clone()),
+            _ => None,
+        })
+        .expect("fixture 里没有 return")
+}
+
+/// 全部 `Store` 的 `(根, 用的 mem, 产出的 mem)`。
+fn stores(f: &SsaFunc) -> Vec<(RootId, ValueId, ValueId)> {
+    instrs(f)
+        .into_iter()
+        .filter_map(|i| match i {
+            Instr::Store { dst, mem, root, .. } => Some((*root, *mem, *dst)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 某个值的定义指令（`None` = 块参数 / 越界）。
+fn def_instr(f: &SsaFunc, v: ValueId) -> Option<&Instr> {
+    instrs(f).into_iter().find(|i| match i {
+        Instr::Load { dst, .. }
+        | Instr::Const { dst, .. }
+        | Instr::Copy { dst, .. }
+        | Instr::Bin { dst, .. }
+        | Instr::Un { dst, .. }
+        | Instr::Convert { dst, .. }
+        | Instr::AddrOf { dst, .. }
+        | Instr::Field { dst, .. }
+        | Instr::Index { dst, .. }
+        | Instr::Slice { dst, .. }
+        | Instr::Composite { dst, .. }
+        | Instr::Make { dst, .. }
+        | Instr::Store { dst, .. } => *dst == v,
+        Instr::Call { dsts, .. } => dsts.contains(&v),
+    })
+}
+
+#[test]
+fn t_ssa_25_写穿之后读同一个槽走同一条_mem_链() {
+    // `p := &a; *p = 2; return a` —— 关键不是「有个 Store」，而是
+    // **读 `a` 的那条 Load 用的是那个 Store 产出的 mem**（否则静态上「写后读」不成立）。
+    let (program, mut tt) = program_of(
+        "ptr-write",
+        "package main\n\nfunc f() int {\n\ta := 1\n\tp := &a\n\t*p = 2\n\treturn a\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // `a` 取过址 ⇒ 它必须有一个槽根
+    let slot_root = f
+        .roots
+        .iter()
+        .position(|r| matches!(r, Root::Slot(_)))
+        .map(|i| RootId(i as u32))
+        .unwrap_or_else(|| {
+            panic!(
+                "`&a` 必须建槽根：{:?}\n{}",
+                f.roots,
+                rgoc_ssa::dump::dump_func(f, &tt)
+            )
+        });
+    let ss = stores(f);
+    // 槽的初始化也有一条 Store（`a := 1` 落进根），所以这里数不出「1 条」——
+    // 判据是「**只有**这个根被写」（没有扇出到堆根）且读用的是最后一条的 mem。
+    assert!(
+        ss.iter().all(|s| s.0 == slot_root),
+        "`*p = 2` 只该写在 `a` 的根上（扇出说明根丢了）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    let w = *ss.last().expect("至少一条 Store");
+    assert_eq!(
+        w.0,
+        slot_root,
+        "最后一条 Store 必须是写穿：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // return 的那个值必须是 Load，且 mem 就是 Store 产出的 mem
+    let ret = ret_vals(f);
+    assert_eq!(ret.len(), 1, "一个返回值");
+    let Some(Instr::Load { mem, root, .. }) = def_instr(f, ret[0]) else {
+        panic!(
+            "`return a` 必须是 Load（`a` 在内存里）：{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    };
+    assert_eq!(*root, slot_root, "读 `a` 与写 `*p` 必须是同一个根");
+    assert_eq!(
+        *mem,
+        w.2,
+        "读 `a` 必须用写穿产出的新 mem（`T-SSA-25` 的核心判据）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_25_写穿结构体字段() {
+    // `&s.n` 走 `Field(AddrOf(槽根))`：地址是「根 + 字段偏移」，
+    // 写穿与读回必须落同一个根、同一条 mem 链。
+    let (program, mut tt) = program_of(
+        "ptr-field",
+        "package main\n\ntype S struct{ n int }\n\nfunc f() int {\n\tvar s S\n\tp := &s.n\n\t*p = 5\n\treturn s.n\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let slot_root = f
+        .roots
+        .iter()
+        .position(|r| matches!(r, Root::Slot(_)))
+        .map(|i| RootId(i as u32))
+        .expect("`&s.n` 必须建 `s` 的槽根");
+    let ss = stores(f);
+    assert!(
+        ss.iter().all(|s| s.0 == slot_root),
+        "`&s.n` 的写穿只该落在 `s` 的根上（扇出说明 `Field` 丢了根）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    let w = *ss.last().expect("至少一条 Store");
+    assert!(
+        count_kind(f, "field") >= 2,
+        "取址与读回各要一条 Field：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    let ret = ret_vals(f);
+    let Some(Instr::Load { mem, root, .. }) = def_instr(f, ret[0]) else {
+        panic!("`return s.n` 必须是 Load");
+    };
+    assert_eq!(*root, slot_root);
+    assert_eq!(*mem, w.2, "读回必须用写穿的新 mem");
+}
+
+#[test]
+fn t_ssa_25_数组元素写落在数组槽根上() {
+    // `a[1] = 7` 与 `a[1]` 读必须**同根同链**。这里最容易出的错是
+    // 写路径把 `a` 当值求（`Load` 出一个数组值）再去 `Index` —— 那样写进了堆根，
+    // 读却在槽根上，静默丢写。
+    let (program, mut tt) = program_of(
+        "array-write",
+        "package main\n\nfunc f() int {\n\ta := [3]int{}\n\ta[1] = 7\n\treturn a[1]\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let slot_root = f
+        .roots
+        .iter()
+        .position(|r| matches!(r, Root::Slot(_)))
+        .map(|i| RootId(i as u32))
+        .expect("数组局部变量必须是根");
+    let ss = stores(f);
+    assert!(
+        ss.iter().all(|s| s.0 == slot_root),
+        "元素写必须落在数组槽的根上（扇出说明底座求成了值）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    let w = *ss.last().expect("至少一条 Store");
+    let ret = ret_vals(f);
+    let Some(Instr::Load { mem, root, .. }) = def_instr(f, ret[0]) else {
+        panic!("`return a[1]` 必须是 Load");
+    };
+    assert_eq!(*root, slot_root, "读元素与写元素必须同根");
+    assert_eq!(*mem, w.2, "读元素必须用写元素的新 mem");
+}
+
+#[test]
+fn t_ssa_25_取址全局变量写穿落在全局根上() {
+    let (program, mut tt) = program_of(
+        "ptr-global",
+        "package main\n\nvar g int\n\nfunc f() {\n\tp := &g\n\t*p = 3\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let ss = stores(f);
+    assert_eq!(
+        ss.len(),
+        1,
+        "一条写穿：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert!(
+        matches!(f.roots.get(ss[0].0.index()), Some(Root::Global(_))),
+        "`&g` 的写必须落在全局根上，实际是 {:?}",
+        f.roots.get(ss[0].0.index())
+    );
+}
+
+#[test]
+fn t_ssa_25_根未知的指针写扇出到所有根() {
+    // 形参指针的根在 M6 是**未知**的（不做别名推理）。这时不能猜一个根：
+    // 猜堆根会让调用方的槽根不前进（静默丢写）。判据 = 每个根各一条 Store。
+    let (program, mut tt) = program_of(
+        "ptr-unknown",
+        "package main\n\nvar g0 int\n\nfunc g(p *int) {\n\t*p = 1\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let g = func_named(&out, "g");
+    if let Err(e) = verify(g, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(g, &tt)
+        );
+    }
+    let ss = stores(g);
+    assert!(
+        g.roots.len() >= 2,
+        "fixture 该有「全局 + 堆」两个根：{:?}",
+        g.roots
+    );
+    assert_eq!(
+        ss.len(),
+        g.roots.len(),
+        "根未知的写必须对每个根各发一条（扇出），实际 {} 条 / {} 个根：{}",
+        ss.len(),
+        g.roots.len(),
+        rgoc_ssa::dump::dump_func(g, &tt)
+    );
+    let mut covered: Vec<RootId> = ss.iter().map(|s| s.0).collect();
+    covered.sort();
+    covered.dedup();
+    assert_eq!(covered.len(), g.roots.len(), "每个根都要被写到一次");
+}
+
+#[test]
+fn t_ssa_25_指针底座的字段读() {
+    // `p.n`（`p *S`）：底座是**指针值**，不是槽 —— 初版这里直接 `todo!()`。
+    let (program, mut tt) = program_of(
+        "ptr-deref-field",
+        "package main\n\ntype S struct{ n int }\n\nfunc f(p *S) int {\n\treturn p.n\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    assert_eq!(
+        count_kind(f, "field"),
+        1,
+        "`p.n` 要一条 Field：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert_eq!(
+        count_kind(f, "load"),
+        1,
+        "取字段值要一条 Load：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
