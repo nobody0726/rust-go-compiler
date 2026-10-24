@@ -2081,6 +2081,8 @@ impl Fb<'_> {
             rgoc_types::typ::Type::Struct(sid) => {
                 self.tt.struct_def(*sid).fields.first().map(|x| x.typ)
             }
+            // 指向数组的指针（`p[i]`，`p *[N]T`）：元素在指针背后
+            rgoc_types::typ::Type::Pointer(_) => self.elem_ty_of(self.pointee_of(t)?),
             _ => None,
         }
     }
@@ -4091,6 +4093,17 @@ impl Fb<'_> {
     }
 
     /// 结构体第 `index` 个字段的类型（含具名/别名，走 underlying）。
+    /// `*T` → `T`（非指针 ⇒ `None`）。
+    fn pointee_of(&self, t: TypeId) -> Option<TypeId> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        match self.tt.type_of(rgoc_types::underlying(self.tt, t)) {
+            rgoc_types::typ::Type::Pointer(p) => Some(*p),
+            _ => None,
+        }
+    }
+
     fn struct_field_ty(&self, t: TypeId, index: usize) -> Option<TypeId> {
         if t.index() >= self.tt.len() {
             return None;
@@ -4099,6 +4112,8 @@ impl Fb<'_> {
             rgoc_types::typ::Type::Struct(sid) => {
                 self.tt.struct_def(*sid).fields.get(index).map(|f| f.typ)
             }
+            // 指针底座（`p.x`，`p *S`）：字段在**指针指向**的结构体上
+            rgoc_types::typ::Type::Pointer(_) => self.struct_field_ty(self.pointee_of(t)?, index),
             _ => None,
         }
     }

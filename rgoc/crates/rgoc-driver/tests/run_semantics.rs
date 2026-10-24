@@ -40,6 +40,7 @@ fn run_src(name: &str, src: &str) -> RunOutcome {
         dump_hir: false,
         max_steps: None,
         lang: None,
+        via: rgoc_driver::cli::Via::Hir,
     })
     .expect("内部错（`run_run` 返回 Err ⇒ 退出码 2 的那一类）")
 }
@@ -149,6 +150,7 @@ fn t_ex_04_dump_is_deterministic() {
             dump_hir: true,
             max_steps: None,
             lang: None,
+            via: rgoc_driver::cli::Via::Hir,
         })
         .unwrap_or_else(|e| panic!("{name}: {e}"))
     };
@@ -1242,6 +1244,7 @@ fn t_ex_49_exit_code_table() {
         dump_hir: false,
         max_steps: None,
         lang: None,
+        via: rgoc_driver::cli::Via::Hir,
     });
     assert!(err.is_err(), "读不到文件应当返回 Err（CLI 侧退出码 2）");
 }
@@ -1268,6 +1271,7 @@ fn t_ex_51_dump_channel_separation() {
         dump_hir: true,
         max_steps: None,
         lang: None,
+        via: rgoc_driver::cli::Via::Hir,
     })
     .expect("内部错");
     assert_eq!(o.exit, 0);
@@ -1294,6 +1298,7 @@ fn t_ex_51_dump_channel_separation() {
         dump_hir: true,
         max_steps: None,
         lang: None,
+        via: rgoc_driver::cli::Via::Hir,
     })
     .expect("内部错");
     assert_eq!(o2.exit, 1);
@@ -1332,6 +1337,7 @@ fn t_ex_52_budget_limits_fail_loudly() {
         dump_hir: false,
         max_steps: Some(10_000),
         lang: None,
+        via: rgoc_driver::cli::Via::Hir,
     })
     .expect("内部错");
     assert_eq!(o2.exit, 2, "步数超限应当退出 2");

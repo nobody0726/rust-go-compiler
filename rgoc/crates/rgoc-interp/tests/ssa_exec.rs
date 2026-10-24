@@ -8,8 +8,9 @@
 //! 工具用 `rgoc_ssa::testsupport`（`D-M6-11` 的地基）。
 
 use rgoc_interp::{Options, run_ssa};
-use rgoc_ssa::ir::{Module, Term};
+use rgoc_ssa::ir::{CalleeRef, Effect, Instr, Module, Term};
 use rgoc_ssa::testsupport::{FnBuilder, module_of};
+use rgoc_types::TypeTable;
 
 /// 空 `main`：入口块直接 `Return`。
 #[test]
@@ -66,4 +67,112 @@ fn t_ssa_32_步数上限要能停住() {
     );
     assert_eq!(out.exit, 2, "预算 0 ⇒ 超限：{out:?}");
     assert!(out.diag.is_some(), "要给原因");
+}
+
+// ── Task 36：预算与退出码（`T-SSA-40`）────────────────────────────
+
+/// 一个自环的 `main`：`b0: goto b0`。
+fn spin() -> (Module, TypeTable) {
+    let mut b = FnBuilder::new("main");
+    let e = b.entry();
+    b.term(
+        e,
+        Term::Goto {
+            to: e,
+            args: Vec::new(),
+        },
+    );
+    let (f, tt) = b.into_parts();
+    (
+        Module {
+            main: Some(rgoc_hir::FuncId(0)),
+            ..module_of(vec![f])
+        },
+        tt,
+    )
+}
+
+#[test]
+fn t_ssa_40_死循环按预算停下并给出原因() {
+    let (m, tt) = spin();
+    let out = run_ssa(
+        &m,
+        &tt,
+        Options {
+            max_steps: 10_000,
+            ..Options::default()
+        },
+    );
+    assert_eq!(out.exit, 2, "超预算 ⇒ 退出码 2：{out:?}");
+    let diag = out.diag.unwrap_or_default();
+    assert!(
+        diag.contains("步数超限") && diag.contains("10000"),
+        "诊断要说明原因与预算，实际：{diag:?}"
+    );
+    assert_eq!(out.steps, 10_000, "步数正好用满预算（不是提前也不是超出）");
+    assert_eq!(out.output, "", "没有输出");
+}
+
+#[test]
+fn t_ssa_40_预算耗尽是十秒内可控的() {
+    // 「宿主不挂死」是这条的全部意义：预算必须真的能兜住死循环。
+    //
+    // 用**显式**预算 1e7 钉墙钟（实测约 1 s；见台账里的吞吐测量），而不是拿
+    // 默认值 1e8 来断言 —— debug 构建的吞吐约 10M 步/秒，1e8 要 10.4 s，
+    // 那条断言等于把「机器速度」写进测试（release 下又必然过）。
+    // 默认值本身用一条常量断言钉住（它是与 M5 共享的口径，不许悄悄改小）。
+    assert_eq!(
+        Options::default().max_steps,
+        100_000_000,
+        "默认预算与 M5 同口径（1e8）"
+    );
+    let (m, tt) = spin();
+    let t0 = std::time::Instant::now();
+    let out = run_ssa(
+        &m,
+        &tt,
+        Options {
+            max_steps: 10_000_000,
+            ..Options::default()
+        },
+    );
+    let dt = t0.elapsed();
+    assert_eq!(out.exit, 2);
+    assert_eq!(out.steps, 10_000_000, "用满给定预算");
+    assert!(
+        dt < std::time::Duration::from_secs(10),
+        "1e7 步的死循环必须 10 s 内停下（实测约 1 s），实际 {dt:?}"
+    );
+}
+
+#[test]
+fn t_ssa_40_无限递归按帧深上限停下() {
+    // `main` 调自己：压帧不设限就是宿主栈溢出（段错误），所以 `max_frames`
+    // 必须真的拦住。判据是「退出码 2 + 诊断里有帧深上限」，而不是「没崩」——
+    // 「没崩」在宿主栈够大时也可能成立（然后 OOM）。
+    let mut b = FnBuilder::new("main");
+    let e = b.entry();
+    b.instr(
+        e,
+        Instr::Call {
+            dsts: Vec::new(),
+            callee: CalleeRef::Func(rgoc_hir::FuncId(0)),
+            args: Vec::new(),
+            dots: false,
+            effect: Effect::default(),
+        },
+    );
+    b.term(e, Term::Return(Vec::new()));
+    let (f, tt) = b.into_parts();
+    let m = Module {
+        main: Some(rgoc_hir::FuncId(0)),
+        ..module_of(vec![f])
+    };
+    let out = run_ssa(&m, &tt, Options::default());
+    assert_eq!(out.exit, 2, "栈溢出 ⇒ 退出码 2：{out:?}");
+    let diag = out.diag.unwrap_or_default();
+    assert!(
+        diag.contains("栈溢出") && diag.contains("1000"),
+        "诊断要说明帧深上限，实际：{diag:?}"
+    );
 }

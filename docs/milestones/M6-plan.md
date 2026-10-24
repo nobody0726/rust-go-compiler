@@ -693,9 +693,10 @@
 **Files:**
 - Modify: `ssa_exec.rs`
 
-- [ ] 步数计数（1e8）+ 超限 ⇒ `Outcome.exit = 2` + stderr 原因
-- [ ] `T-SSA-40`：死循环 fixture 触发上限，墙钟 < 10 s
-- [ ] Commit：`feat(interp): 预算（Task 36）`
+- [x] 步数计数（默认 1e8，与 M5 同口径）+ 超限 ⇒ `Outcome.exit = 2` + stderr 原因
+- [x] 帧深上限（默认 1000）：无限递归 ⇒ 退出码 2 + 原因（不靠宿主栈溢出兜）
+- [x] `T-SSA-40`：死循环 fixture 触发上限；**显式预算 1e7** 钉墙钟 < 10 s（`R-36-1`）
+- [x] Commit：`feat(interp): 预算与退出码（Task 36）`
 
 **Verify:** `… cargo test -p rgoc-interp --test ssa_exec budget`
 
@@ -709,10 +710,11 @@
 **Interfaces:**
 - Produces: `RunCommand { via: Via }`（默认 `Hir`）；`Via::Ssa` 时走 `build` → `verify` → `opt` → `run_ssa`
 
-- [ ] 加 `--via`；默认 `hir`（M5 行为不变）
-- [ ] 非法值 ⇒ 退出码 2 + 稳定消息
-- [ ] `T-SSA-39`：不给 `--via` 时 69/69 仍绿；非法值报错
-- [ ] Commit：`feat(driver): run --via（Task 37）`
+- [x] 加 `--via`；默认 `hir`（M5 行为不变）
+- [x] 非法值 ⇒ `CliError::BadVia`（退出码 2）+ 稳定消息
+- [x] `Via::Ssa` 时 `build` → **`verify`** → `run_ssa`（verifier 不是可选开关，`R-37-1`）
+- [x] `T-SSA-39`：默认通路不变；两条通路输出逐字节一致；拒绝 ⇒ 1、panic ⇒ 2
+- [x] Commit：`feat(driver): run --via（Task 37）`
 
 **Verify:** `… cargo test -p rgoc-driver --test ssa_cli via_`
 

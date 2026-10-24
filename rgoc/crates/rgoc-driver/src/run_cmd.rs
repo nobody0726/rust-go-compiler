@@ -39,7 +39,7 @@ use rgoc_check::CheckOptions;
 use rgoc_load::load_with_imports;
 use rgoc_types::TypeTable;
 
-use crate::cli::RunCommand;
+use crate::cli::{RunCommand, Via};
 
 /// `run` 的运行结果（三条通道不合并）。
 #[derive(Debug)]
@@ -168,6 +168,9 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
             .unwrap_or(rgoc_interp::Options::default().max_steps),
         ..rgoc_interp::Options::default()
     };
+    if cmd.via == Via::Ssa {
+        return Ok(run_via_ssa(&program, &mut tt, interp_opts, stderr));
+    }
     let out = rgoc_interp::run(&program, &tt, interp_opts);
     if let Some(d) = out.diag {
         let _ = writeln!(stderr, "{d}");
@@ -177,4 +180,55 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
         stderr,
         exit: u8::try_from(out.exit).unwrap_or(2),
     })
+}
+
+/// `--via ssa`：建图 → verifier → 求值（`M6-plan.md` Task 37）。
+///
+/// # 为什么中间要跑 verifier
+///
+/// 求值器假定 IR 满足 `V1..V9`（值必有定义、块参数与边实参等长、同根保序…）。
+/// 图不合法时求值器的行为是「未定义」——它可能算错、可能读到 `None` 报内部错，
+/// 也可能碰巧对。**跑一遍 verifier 只要几毫秒**，换来的是「要么图合法、要么
+/// 响亮报错」这条硬边界。所以这里不是可选的调试开关。
+///
+/// # 退出码与 `hir` 同口径
+///
+/// 拒绝（`SSA-UNSUPPORTED-*`）= 1（静态面），verifier 失败 = 2（内部错），
+/// 程序自己的 panic / 预算耗尽 = 2（`run_ssa` 给）。
+fn run_via_ssa(
+    program: &rgoc_hir::Program,
+    tt: &mut TypeTable,
+    opts: rgoc_interp::Options,
+    mut stderr: String,
+) -> RunOutcome {
+    let built = rgoc_ssa::build::build(program, tt);
+    if !built.rejected.is_empty() {
+        for r in &built.rejected {
+            let _ = writeln!(stderr, "{}", r.render());
+        }
+        return RunOutcome {
+            stdout: String::new(),
+            stderr,
+            exit: 1,
+        };
+    }
+    for f in &built.module.funcs {
+        if let Err(e) = rgoc_ssa::verify::verify(f, tt) {
+            let _ = writeln!(stderr, "SSA 内部错误（verifier）：{e}");
+            return RunOutcome {
+                stdout: String::new(),
+                stderr,
+                exit: 2,
+            };
+        }
+    }
+    let out = rgoc_interp::run_ssa(&built.module, tt, opts);
+    if let Some(d) = out.diag {
+        let _ = writeln!(stderr, "{d}");
+    }
+    RunOutcome {
+        stdout: out.output,
+        stderr,
+        exit: u8::try_from(out.exit).unwrap_or(2),
+    }
 }

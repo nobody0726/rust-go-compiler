@@ -54,6 +54,46 @@ pub enum Command {
 /// 给字节比较看的成品。两者写同一个 stdout 会让「哪几个字节是程序的」变得
 /// 不可判 —— 那样 `run-collide` 就只能靠猜。所以给了 `--dump-hir` 就**只**
 /// 出 dump（退出码 0），跑程序请去掉这个旗标。
+/// 执行通路（`run --via`，M6/Task 37）。
+///
+/// # 为什么要有这个开关
+///
+/// M6 之后同一个程序有**两条**执行通路：M5 的 HIR 解释器（`hir`，默认）与
+/// M6 的 SSA 求值器（`ssa`）。默认必须是 `hir` —— 语料 69/69 的官方对撞是
+/// 在它上面冻结的，换默认等于悄悄换判据。
+///
+/// `ssa` 存在的意义是**三方差分**（`T-SSA-32`）：同一个程序两条通路输出必须
+/// 逐字节一致，不一致就说明 SSA 侧错了。所以它必须能单独选，而不是「都跑一遍」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Via {
+    /// M5 的 HIR 解释器（默认）。
+    #[default]
+    Hir,
+    /// M6 的 SSA 求值器（`rgoc_ssa::build` → `verify` → `run_ssa`）。
+    Ssa,
+}
+
+impl Via {
+    /// 解析 `--via` 的值（只接受这两个词；别的一律报错，不猜）。
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "hir" => Some(Via::Hir),
+            "ssa" => Some(Via::Ssa),
+            _ => None,
+        }
+    }
+
+    /// 稳定文本（进诊断与测试断言）。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Via::Hir => "hir",
+            Via::Ssa => "ssa",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunCommand {
     /// 组成**同一个包**的文件。
@@ -64,6 +104,8 @@ pub struct RunCommand {
     pub max_steps: Option<u64>,
     /// `--lang go1.N`：版本门控覆盖（与 `check` 同义）。
     pub lang: Option<String>,
+    /// `--via hir|ssa`：走哪条执行通路（默认 `hir`）。
+    pub via: Via,
 }
 
 /// `ssa` 子命令的参数（M6/Task 2；`M6-design.md` §3.1 / `C10`）。
@@ -239,6 +281,8 @@ pub enum CliError {
     SsaNeedsMode,
     /// `--max-steps` 的值不是非负整数
     BadSteps(String),
+    /// `--via` 的值不认识（只接受 `hir` / `ssa`）
+    BadVia(String),
 }
 
 impl fmt::Display for CliError {
@@ -255,7 +299,7 @@ impl fmt::Display for CliError {
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
-             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] <file>...\n  \
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] <file>...\n  \
              rgoc-driver ssa [--dump] [--verify] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
@@ -296,6 +340,7 @@ impl fmt::Display for CliError {
                 "ssa 需要 --dump 或 --verify（两个都不给就不知道要比对什么）。{USAGE}"
             ),
             Self::BadSteps(v) => write!(f, "--max-steps 需要一个非负整数（收到 {v:?}）。{USAGE}"),
+            Self::BadVia(v) => write!(f, "--via 只接受 hir / ssa（收到 {v:?}）。{USAGE}"),
         }
     }
 }
@@ -331,6 +376,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     let mut dump_hir = false;
     let mut max_steps: Option<u64> = None;
     let mut lang: Option<String> = None;
+    let mut via = Via::Hir;
     let mut i = 0;
     while i < rest.len() {
         match rest[i] {
@@ -355,6 +401,16 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 lang = Some((*v).to_string());
                 i += 2;
             }
+            "--via" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--via"));
+                };
+                let Some(v2) = Via::parse(v) else {
+                    return Err(CliError::BadVia((*v).to_string()));
+                };
+                via = v2;
+                i += 2;
+            }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
                 files.push(PathBuf::from(a));
@@ -370,6 +426,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
         dump_hir,
         max_steps,
         lang,
+        via,
     })
 }
 

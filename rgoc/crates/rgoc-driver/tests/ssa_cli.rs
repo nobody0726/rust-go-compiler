@@ -99,3 +99,102 @@ fn t_ssa_31_接上管线之后_dump_有内容且通道分开() {
         out.stderr
     );
 }
+
+// ── Task 37：`run --via={hir,ssa}`（`T-SSA-39`）─────────────────────
+
+use rgoc_driver::cli::{RunCommand, Via};
+use rgoc_driver::run_cmd::{RunOutcome, run_run};
+
+/// 跑一段源码的 `run`（`via` 由调用者定）。
+fn run_via(name: &str, src: &str, via: Via) -> RunOutcome {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/tmp/ssa-via");
+    std::fs::create_dir_all(&dir).expect("建不了 target/tmp/ssa-via");
+    let path = dir.join(format!("{name}.go"));
+    std::fs::write(&path, src).expect("写不了 fixture");
+    run_run(&RunCommand {
+        files: vec![path],
+        dump_hir: false,
+        max_steps: None,
+        lang: None,
+        via,
+    })
+    .expect("内部错（不该发生）")
+}
+
+#[test]
+fn t_ssa_39_解析_run_的_via() {
+    let base = RunCommand {
+        files: vec![PathBuf::from("a.go")],
+        dump_hir: false,
+        max_steps: None,
+        lang: None,
+        via: Via::Hir,
+    };
+    assert_eq!(
+        parse_args(&["run", "a.go"]).unwrap(),
+        Command::Run(base.clone()),
+        "不给 --via ⇒ 默认 hir（语料 69/69 是在它上面冻结的）"
+    );
+    assert_eq!(
+        parse_args(&["run", "--via", "hir", "a.go"]).unwrap(),
+        Command::Run(base.clone()),
+        "--via hir 显式给也一样"
+    );
+    assert_eq!(
+        parse_args(&["run", "--via", "ssa", "a.go"]).unwrap(),
+        Command::Run(RunCommand {
+            via: Via::Ssa,
+            ..base.clone()
+        }),
+        "--via ssa 选中 SSA 通路"
+    );
+    // 非法值必须报错，不猜（猜错的代价是「跑了另一条通路还以为是这条」）
+    assert_eq!(
+        parse_args(&["run", "--via", "hir2", "a.go"]).unwrap_err(),
+        CliError::BadVia("hir2".to_string())
+    );
+    assert_eq!(
+        parse_args(&["run", "--via"]).unwrap_err(),
+        CliError::MissingValue("--via")
+    );
+}
+
+#[test]
+fn t_ssa_39_两条通路在正常程序上输出一致() {
+    let src = "package main\n\ntype P struct{ x int }\n\nfunc (p *P) add(d int) {\n\tp.x += d\n}\n\nfunc fib(n int) int {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}\n\nfunc main() {\n\tp := P{1}\n\tp.add(4)\n\ts := []int{1, 2}\n\ts = append(s, 3)\n\tprintln(p.x, fib(7), len(s), s[2])\n}\n";
+    let hir = run_via("via-eq", src, Via::Hir);
+    let ssa = run_via("via-eq", src, Via::Ssa);
+    assert_eq!(hir.exit, 0, "hir 通路该成功：{}", hir.stderr);
+    assert_eq!(ssa.exit, 0, "ssa 通路该成功：{}", ssa.stderr);
+    assert_eq!(ssa.stdout, hir.stdout, "两条通路必须逐字节一致");
+    assert_eq!(hir.stdout, "5 13 3 3\n");
+}
+
+#[test]
+fn t_ssa_39_via_ssa_的拒绝面退出码是_1() {
+    // 拒绝是**静态面**的结论（`SSA-UNSUPPORTED-*`），所以退出码 1，不是 2
+    let o = run_via(
+        "via-reject",
+        "package main\n\nfunc main() {\n\tm := map[int]int{}\n\t_ = m\n}\n",
+        Via::Ssa,
+    );
+    assert_eq!(o.exit, 1, "拒绝 ⇒ 退出码 1：{:?}", o.stderr);
+    assert!(
+        o.stderr.contains("SSA-UNSUPPORTED-MAP"),
+        "stderr 要带稳定码：{:?}",
+        o.stderr
+    );
+    assert!(o.stdout.is_empty(), "拒绝时 stdout 必须为空");
+}
+
+#[test]
+fn t_ssa_39_via_ssa_的_panic_退出码是_2() {
+    let o = run_via(
+        "via-panic",
+        "package main\n\nfunc main() {\n\tprintln(\"before\")\n\tpanic(\"boom\")\n}\n",
+        Via::Ssa,
+    );
+    assert_eq!(o.exit, 2, "未捕获 panic ⇒ 退出码 2");
+    assert_eq!(o.stdout, "before\npanic: boom\n");
+    assert!(o.stderr.is_empty(), "panic 不是诊断（与 hir 同口径）");
+}
