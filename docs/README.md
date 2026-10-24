@@ -57,6 +57,7 @@
 | M6 | [`milestones/M6-report.md`](./milestones/M6-report.md) | **交付 B** —— SSA 契约（正式）：覆盖矩阵 / 三方差分实测 / passes 与 `SSA-LIVE v1` / 偏离登记 / 缺口清单 / 接手指南 | ✅ **已产出**（2026-10-24） |
 | M7 | [`milestones/M7-design.md`](./milestones/M7-design.md) | **怎么建 M7** —— 决策 D-M7-1~16（值全落栈槽 / runtime 用 freestanding C / 自定 rgoc-AAPCS64 / 并行拷贝 / arena / 实测切片 / 完整 `%g`）、事实基线 F1–F18、门禁 NAT-1..9 | ✅ **已确认**（2026-10-24；`Q1..Q3` 已签字） |
 | M7 | [`milestones/M7-tests.md`](./milestones/M7-tests.md) | **怎么验 M7** —— 64 个 `T-NAT-*`（甲11/乙19/丙9/丁7/戊10/反8）、**有输出/空输出分两栏**（42/46 语料是空输出）、`C9` §4.4 六点、白名单 4 条 | **判据面已冻结**（2026-10-24；`N'`/`M'` 待实测冻结） |
+| M7 | [`milestones/M7-plan.md`](./milestones/M7-plan.md) | **怎么干 M7** —— **Task 1–65**（装置 → 帧与 ABI → 指令选择 → runtime → startup 与链接 → 集成切片 → 收口） | **待执行**（2026-10-24） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -135,7 +136,7 @@
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
 | `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **10 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕/ **C10 已冻结**〔M6/Task 51〕）<br>🟡 **M7 待新建 `C11-native-abi.md`**（见 `M7-design.md` §10） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>🟡 **M7 已有 `design` + `tests`**（2026-10-24，判据面冻结）；`plan`/`manifest` 待产出 |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>🟡 **M7 三件套已就位**（2026-10-24：`design` 已确认 / `tests` 判据面冻结 / `plan` Task 1–65）；`manifest` 待 Task 59 填实 |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 
