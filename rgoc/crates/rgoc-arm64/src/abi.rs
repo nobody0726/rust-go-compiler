@@ -120,14 +120,15 @@ fn class_of(tt: &TypeTable, t: TypeId) -> Option<SlotClass> {
             | BasicId::Uintptr
             | BasicId::String
             | BasicId::UnsafePointer => Some(SlotClass::Int),
-            // 无类型常量没有运行期形状。
-            BasicId::UntypedBool
-            | BasicId::UntypedInt
-            | BasicId::UntypedRune
-            | BasicId::UntypedFloat
-            | BasicId::UntypedComplex
-            | BasicId::UntypedString
-            | BasicId::UntypedNil => None,
+            // 无类型常量按**默认类型**分类（`R-13-1`，与 `rgoc_types::layout` 同口径）。
+            BasicId::UntypedBool => Some(SlotClass::Int),
+            BasicId::UntypedInt => Some(SlotClass::Int),
+            BasicId::UntypedRune => Some(SlotClass::Int),
+            BasicId::UntypedFloat => Some(SlotClass::Float),
+            BasicId::UntypedComplex => Some(SlotClass::Complex128),
+            BasicId::UntypedString => Some(SlotClass::Int),
+            // `nil` 必须由上下文给类型。
+            BasicId::UntypedNil => None,
         },
         // 指针 / map / chan / func / slice / 接口 在 M7 的**值槽**里都是标量（≤24 字节）。
         // 其中只有 slice/接口会跨多个字，但 M7 不支持 slice、接口被 M6 拒 —— 见下。

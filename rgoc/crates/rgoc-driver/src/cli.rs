@@ -186,6 +186,8 @@ pub struct BuildCommand {
     pub keep_asm: bool,
     /// `--opt all|none|fold,dce,…`：SSA passes 的开关（默认全开）。
     pub opt: rgoc_ssa::opt::Config,
+    /// `--lang go1.N`：版本门控覆盖（与 `check`/`run` 同义）。
+    pub lang: Option<String>,
 }
 
 /// `check` 子命令的参数（M4/Task 2）。
@@ -365,7 +367,7 @@ impl fmt::Display for CliError {
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
              rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] <file>...\n  \
              rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...\n  \
-             rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] <file>...";
+             rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] [--lang go1.N] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
@@ -597,6 +599,7 @@ fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
     let mut output: Option<PathBuf> = None;
     let mut emit = Emit::Elf;
     let mut keep_asm = false;
+    let mut lang: Option<String> = None;
     let mut opt = rgoc_ssa::opt::Config::all();
     let mut i = 0;
     while i < rest.len() {
@@ -648,6 +651,13 @@ fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
                 keep_asm = true;
                 i += 1;
             }
+            "--lang" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--lang"));
+                };
+                lang = Some((*v).to_string());
+                i += 2;
+            }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
                 files.push(PathBuf::from(a));
@@ -664,6 +674,7 @@ fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
         emit,
         keep_asm,
         opt,
+        lang,
     })
 }
 

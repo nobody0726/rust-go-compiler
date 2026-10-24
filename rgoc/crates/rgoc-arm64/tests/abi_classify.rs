@@ -163,6 +163,13 @@ fn 不可分类的类型返回_none() {
     assert_eq!(slot_of(&t, inv), None);
     assert_eq!(reg_count(&t, inv), None);
 
-    let untyped = t.add_basic(BasicId::UntypedInt);
-    assert_eq!(slot_of(&t, untyped), None, "无类型常量必须先收敛");
+    // 无类型常量按**默认类型**分类（`R-13-1`）：`print("hi")` 的实参就是
+    // `untyped string`，后端不认它，整类程序都编不出来。
+    let untyped_int = t.add_basic(BasicId::UntypedInt);
+    assert_eq!(slot(&t, untyped_int), (SlotClass::Int, 8), "untyped int ⇒ int");
+    let untyped_str = t.add_basic(BasicId::UntypedString);
+    assert_eq!(slot(&t, untyped_str), (SlotClass::Int, 16), "untyped string ⇒ string");
+    // 只有 `nil` 没有默认类型。
+    let untyped_nil = t.add_basic(BasicId::UntypedNil);
+    assert_eq!(slot_of(&t, untyped_nil), None, "nil 必须由上下文给类型");
 }

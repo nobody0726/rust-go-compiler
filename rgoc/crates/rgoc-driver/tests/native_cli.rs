@@ -12,7 +12,7 @@
 //! 3. **不假装支持**：Task 2 时 `build` 还没有产物 ⇒ `run_build` 必须返回 `Err`。
 //!    这条断言在 Task 50 会被换成「产物真的存在」，**在此之前**它是防「假绿」的唯一闸。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rgoc_driver::build_cmd;
 use rgoc_driver::cli::{BuildCommand, CliError, Command, Emit, parse_args};
@@ -24,6 +24,7 @@ fn build(files: &[&str]) -> BuildCommand {
         emit: Emit::Elf,
         keep_asm: false,
         opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
     }
 }
 
@@ -56,6 +57,7 @@ fn 解析_全部旗标() {
         emit: Emit::Asm,
         keep_asm: true,
         opt: rgoc_ssa::opt::Config::none(),
+        lang: None,
     };
     assert_eq!(got, Command::Build(want));
 }
@@ -97,13 +99,72 @@ fn 未知选项报错() {
     );
 }
 
+/// 把一段 Go 源写到 `target/native-cli/<name>.go`。
+fn write_src(name: &str, src: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli");
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join(format!("{name}.go"));
+    std::fs::write(&p, src).unwrap();
+    p
+}
+
 #[test]
-fn t_nat_47_骨架期_build_必须响亮地说未实现() {
-    // Task 2 的判据：**命令存在但没有产物** 时，必须 Err（→ 退出码 2），
-    // 不许返回 `Ok(exit: 0)` 让 `run-collide --native` 变成恒绿的空话。
-    let err = build_cmd::run_build(&build(&["a.go"])).unwrap_err();
-    assert!(
-        err.contains("尚未实现"),
-        "错误信息要说清是「还没接」，实际：{err}"
-    );
+fn t_nat_47_emit_asm_只出汇编() {
+    let go = write_src("asm_only", "package main\nfunc main() { println(1) }\n");
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/asm_only.s");
+    let cmd = BuildCommand {
+        files: vec![go],
+        output: Some(out.clone()),
+        emit: Emit::Asm,
+        keep_asm: false,
+        opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
+    };
+    let r = build_cmd::run_build(&cmd).unwrap();
+    assert_eq!(r.exit, 0, "stderr={}", r.stderr);
+    assert_eq!(r.artifact.as_deref(), Some(out.as_path()));
+    let text = std::fs::read_to_string(&out).unwrap();
+    assert!(text.contains(".text"), "应是汇编文本");
+    assert!(text.contains("bl rt_print_i64"), "println(1) 应调 runtime");
+    assert!(!out.with_extension("").exists(), "--emit=asm 不该出 ELF");
+}
+
+#[test]
+fn t_nat_47_默认出_elf_且不保留汇编() {
+    let go = write_src("elf_default", "package main\nfunc main() { println(7) }\n");
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/elf_default");
+    let cmd = BuildCommand {
+        files: vec![go],
+        output: Some(out.clone()),
+        emit: Emit::Elf,
+        keep_asm: false,
+        opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
+    };
+    let r = build_cmd::run_build(&cmd).unwrap();
+    assert_eq!(r.exit, 0, "stderr={}", r.stderr);
+    assert!(out.exists(), "应出 ELF");
+    assert!(!out.with_extension("s").exists(), "默认不保留 .s");
+
+    // 真跑一次：`println(7)` ⇒ `7\n`
+    let run = std::process::Command::new(&out).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "7\n");
+    assert_eq!(run.status.code(), Some(0));
+}
+
+#[test]
+fn t_nat_47_keep_asm_保留中间件() {
+    let go = write_src("keep_asm", "package main\nfunc main() {}\n");
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/keep_asm");
+    let cmd = BuildCommand {
+        files: vec![go],
+        output: Some(out.clone()),
+        emit: Emit::Elf,
+        keep_asm: true,
+        opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
+    };
+    let r = build_cmd::run_build(&cmd).unwrap();
+    assert_eq!(r.exit, 0, "stderr={}", r.stderr);
+    assert!(out.with_extension("s").exists(), "--keep-asm 应留下 .s");
 }

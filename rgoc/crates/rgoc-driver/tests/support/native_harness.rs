@@ -61,6 +61,7 @@ pub fn build_and_run(name: &str, src: &str) -> Result<Outcome, String> {
         emit: Emit::Elf,
         keep_asm: true,
         opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
     };
     let out = build_cmd::run_build(&cmd)?;
     if out.exit != 0 {

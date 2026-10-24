@@ -129,14 +129,20 @@ fn basic_layout(b: BasicId) -> Option<Layout> {
             let s = Sizes::HOST_ARM64.width_of(b)? / 8;
             one(s)
         }
-        // 无类型常量没有运行期布局 —— 它们必须先被收敛到一个具体类型。
-        B::UntypedBool
-        | B::UntypedInt
-        | B::UntypedRune
-        | B::UntypedFloat
-        | B::UntypedComplex
-        | B::UntypedString
-        | B::UntypedNil => None,
+        // 无类型常量按 Go 的**默认类型**取布局（`R-13-1`）。
+        //
+        // 它们本该在 lowering 的写入点被收敛（`R-22-2`），但**直接当内建实参**时
+        // 没有写入点：`print("hi")` 的 SSA 里那个常量就带着 `untyped string`。
+        // 后端要么按默认类型处理，要么整类程序编不出来 —— 而默认类型是规范
+        // 明确规定的（`untyped int` ⇒ `int`、`untyped rune` ⇒ `int32`…），不是猜。
+        B::UntypedBool => basic_layout(B::Bool),
+        B::UntypedInt => basic_layout(B::Int),
+        B::UntypedRune => basic_layout(B::Int32),
+        B::UntypedFloat => basic_layout(B::Float64),
+        B::UntypedComplex => basic_layout(B::Complex128),
+        B::UntypedString => basic_layout(B::String),
+        // `untyped nil` 没有默认类型（`nil` 必须由上下文给类型）。
+        B::UntypedNil => None,
     }
 }
 

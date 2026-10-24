@@ -57,23 +57,26 @@ fn 标量尺寸与对齐() {
 }
 
 #[test]
-fn 无类型常量没有布局() {
-    for b in [
-        BasicId::UntypedBool,
-        BasicId::UntypedInt,
-        BasicId::UntypedRune,
-        BasicId::UntypedFloat,
-        BasicId::UntypedComplex,
-        BasicId::UntypedString,
-        BasicId::UntypedNil,
+fn 无类型常量按默认类型取布局() {
+    // `R-13-1`：`untyped X` 的默认类型是 `X`（`untyped rune` ⇒ `int32`）。
+    for (b, size, align) in [
+        (BasicId::UntypedBool, 1, 1),
+        (BasicId::UntypedInt, 8, 8),
+        (BasicId::UntypedRune, 4, 4),
+        (BasicId::UntypedFloat, 8, 8),
+        (BasicId::UntypedComplex, 16, 8),
+        (BasicId::UntypedString, 16, 8),
     ] {
         let t = basic(b);
-        assert_eq!(
-            layout(&t, rgoc_types::TypeId::from_index(0)),
-            None,
-            "{b:?} 没有运行期布局"
-        );
+        assert_layout(&t, rgoc_types::TypeId::from_index(0), size, align, &format!("{b:?}"));
     }
+}
+
+#[test]
+fn untyped_nil_没有布局() {
+    // `nil` 没有默认类型 —— 必须由上下文给。
+    let t = basic(BasicId::UntypedNil);
+    assert_eq!(layout(&t, rgoc_types::TypeId::from_index(0)), None);
 }
 
 #[test]

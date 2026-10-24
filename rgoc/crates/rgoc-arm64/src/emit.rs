@@ -143,6 +143,20 @@ impl Asm {
         label
     }
 
+    /// 把一段字节放进 `.data` 并**用给定的名字**当标签（包级全局用）。
+    ///
+    /// 与 [`Asm::data_bytes`] 的区别只有标签来源：全局的符号名必须是稳定的
+    /// `g<id>`（`adrp g3` 要能指到它），不能是 `.Ldata<N>` 这种按调用顺序的编号 ——
+    /// 否则「同一个全局在两个函数里」会拿到两个名字。
+    pub fn data_named(&mut self, label: &str, bytes: &[u8]) {
+        let _ = writeln!(self.data, ".p2align 3");
+        let _ = writeln!(self.data, "{label}:");
+        for chunk in bytes.chunks(16) {
+            let list: Vec<String> = chunk.iter().map(u8::to_string).collect();
+            let _ = writeln!(self.data, "  .byte {}", list.join(","));
+        }
+    }
+
     /// 拼成最终文本。**固定顺序**：`.text` → `.rodata` → `.data`。
     #[must_use]
     pub fn render(&self) -> String {
