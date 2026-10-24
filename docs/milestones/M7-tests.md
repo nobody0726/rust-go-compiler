@@ -137,7 +137,7 @@
 | `T-NAT-48` | `.s` 逐字节可复现 | 同一份 SSA 生成两次逐字节相同；**反向守卫**：把生成器改成 `HashMap` 迭代序 ⇒ 必红 |
 | `T-NAT-49` | ELF 逐字节可复现 | 同一份 `.s` 链接两次逐字节相同（靠 `-Wl,-s`，`F2`）；去掉 `-Wl,-s` ⇒ 必红（证明这个旗标真的是必需的） |
 | `T-NAT-50` | `file` 双条件 | `ELF 64-bit LSB` **且** `ARM aarch64`（沿 `T-S3-02`：只判其一会被 x86-64 的 ELF 骗过） |
-| `T-NAT-51` | `FRAME-MAP v1` | 格式符合 `C11`；每个 `slot` 的 `off`/`size` 与 `objdump` 里实际访存的偏移一致；`safepoint` 的 `offs` 覆盖该位点所有活值；同一函数两次输出逐字节相同 |
+| `T-NAT-51` | `FRAME-MAP v1` | 格式符合 `C5`；每个 `slot` 的 `off`/`size` 与 `objdump` 里实际访存的偏移一致；`safepoint` 的 `offs` 覆盖该位点所有活值；同一函数两次输出逐字节相同 |
 | `T-NAT-52` | 不支持面 | 每条 `CG-UNSUPPORTED-*` 一个 fixture：退出码 **1** + 稳定码 + **不 abort**（`SIGABRT` 即红） |
 | `T-NAT-53` | 工具链失败不吞 | 人为给一个非法 `.s`：`clang` 的 stderr **原样**带出，退出码 2；不许改写成「内部错误」 |
 | `T-NAT-54` | 四条 cargo + 五条自检 | `fmt --check` / `check` / `clippy -D warnings` / `test` 全 exit 0；m0（232）/ m1 / lex-golden / ast-golden / ast-testdata 全过 |
@@ -153,7 +153,7 @@
 | `T-NAT-59` | `sp` 不再对齐到 16（`sub sp, sp, #frame` 原样） | `T-NAT-05` |
 | `T-NAT-60` | `ftoa` 改成「固定 17 位有效数字再裁尾零」 | `T-NAT-34` |
 | `T-NAT-61` | 删掉除零检查（直接 `sdiv`） | `T-NAT-17` / `T-NAT-37` |
-| `T-NAT-62` | 聚合实参改成**按值**传（与 `C11` 冲突） | `T-NAT-09` |
+| `T-NAT-62` | 聚合实参改成**按值**传（与 `C5` 冲突） | `T-NAT-09` |
 | `T-NAT-63` | 分类器把拒绝的文件算进 `N'` | `T-NAT-40` |
 | `T-NAT-64` | 字符串常量标签用 `HashMap` 序 | `T-NAT-48` |
 
@@ -213,7 +213,7 @@ M' = 显式拒绝的个数        （每行带 §5 的码）
 
 ### 4.5 `FRAME-MAP v1`（`T-NAT-51`）
 
-三条硬要求：① 格式符合 `C11`（`#` 头行 + 逐行语法 + 确定性排序）；② `frame=` 等于序言的
+三条硬要求：① 格式符合 `C5`（`#` 头行 + 逐行语法 + 确定性排序）；② `frame=` 等于序言的
 `sub sp` 立即数（`T-NAT-04` 与它同源）；③ `safepoint` 的 `offs` 覆盖 `SSA-LIVE v1` 在该位点的
 **全部**活值 —— 少一个就是栈图漏根（M10 会拿它扫栈）。
 
@@ -308,6 +308,6 @@ M' = 显式拒绝的个数        （每行带 §5 的码）
 
 | 修订 | 日期 | 内容 | 触发 |
 |---|---|---|---|
-| — | — | （开工后按 `R-x-y` 追加） | — |
+| `R-1-1` | 2026-10-24 | ABI 契约**不是新建 `C11`，而是把 `C5-abi.md` 升正式**；`T-NAT-51/62` 与 §4.5 的引用随之改指 `C5` | 开工 Task 1 时发现 `docs/contracts/C5-abi.md` 已存在，标题就是「ABI / frame layout / 对象布局 / runtime symbol bridge」，文件头写明「归属：**M7** 做 MVP、M9 完整化」。新建 C11 会把同一件事写两遍，且让 C5 永远停在 spike 级 |
 
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m7.rs` 会对账 `test_ids` 集合。

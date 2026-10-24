@@ -30,7 +30,7 @@
 | M0 | [`milestones/M0-benchmarks.md`](./milestones/M0-benchmarks.md) | **实测依据** —— 镜像时间/体积、冷启动、编译、`target/` 挂载布局对比、可复现性结论、环境陷阱清单、调试环境四则案例（CodeLLDB 平台包 / DWARF 变量条目 / VS Code Server / cargo 启动配置） | **已产出**（E10 证据） |
 | M0 | [`milestones/M0-manifest.json`](./milestones/M0-manifest.json) | **机器可读事实** —— `environment`（E2）+ `gate`（**E1–E10 十条**）+ `test_ids`（37 条）+ `unsupported`（U1–U14）+ `budget` + `test_contract` + `phase_plan` + `benchmarks` | ✅ **已填实**（十条门禁全部 `pass`） |
 | M0 | [`milestones/M0-report.md`](./milestones/M0-report.md) | **交接文档** —— 三个命题各由哪个测试 ID 证明、门禁证据出处、spike 留下的差距、未验证范围（U1–U14）、**接手指南** | ✅ **已产出**（T53） |
-| M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 完整 / **C2 完整初稿** / C3–C5 spike 级 | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整） |
+| M0 | [`contracts/C1`–`C5`](./contracts/) | **五份契约** —— C1 完整 / **C2 完整初稿** / C3 spike 级 / **C4 正式**（M6）/ **C5 正式**（M7） | ✅ **已产出**（T48–T52 / E8；C1 于 T-L20 升完整；C4 于 M6/Task 51 升正式；**C5 于 M7/Task 1 升正式**） |
 | M2 | [`contracts/C6-ast-dump.md`](./contracts/C6-ast-dump.md) | **AST 中立 dump 格式**（五条格式规则 + 三条规范化 + 转义语义） | ✅ **已冻结**（T-AP21，2026-10-15） |
 | M3 | [`contracts/C7-type-dump.md`](./contracts/C7-type-dump.md) | **中性类型 dump 格式**（七条格式规则 + 15 个标签 + **编号顺序** + 逐标签行语法） | ✅ **已冻结**（M3/Task 1 新建，2026-10-16） |
 | M4 | [`contracts/C8-check-diags.md`](./contracts/C8-check-diags.md) | **检查诊断对撞格式**（渲染字节格式 + **类别枚举 26 类** + 两侧映射纪律 + 过滤规则〔`F2` 摘录〕+ 比较算法 + 最小对撞目标 `check-diags-min`） | ✅ **已冻结**（M4/Task 1 新建，2026-10-18） |
@@ -135,7 +135,7 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **10 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3–C5 spike 级 / **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕/ **C10 已冻结**〔M6/Task 51〕）<br>🟡 **M7 待新建 `C11-native-abi.md`**（见 `M7-design.md` §10） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **10 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3 spike 级 / **C4 正式**〔M6/Task 51〕/ **C5 正式**〔M7/Task 1〕/ **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕/ **C10 已冻结**〔M6/Task 51〕） |
 | `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>🟡 **M7 三件套已就位**（2026-10-24：`design` 已确认 / `tests` 判据面冻结 / `plan` Task 1–65）；`manifest` 待 Task 59 填实 |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：

@@ -44,7 +44,7 @@
 
 | Phase | Task | 内容 |
 |---|---|---|
-| 0 | 1–7 | 装置与契约：`C11` 骨架、crate 骨架、emitter、`--native` 装置、分类器、错误码 |
+| 0 | 1–7 | 装置与契约：`C5` 升正式、crate 骨架、emitter、`--native` 装置、分类器、错误码 |
 | 1 | 8–17 | 帧与 ABI：槽分类 → 布局 → 零值 → `FRAME-MAP` → 并行拷贝 → 序言/调用点 |
 | 2 | 18–39 | 指令选择：14 个 `Instr` + 5 个 `Term` 逐个「先写会红的 fixture 再实现」 |
 | 3 | 40–48 | runtime：`rt.c`（write/exit/itoa/ftoa/complex/panic/arena/memcpy） |
@@ -56,23 +56,29 @@
 
 ## Phase 0：装置与契约（Task 1–7）
 
-### Task 1: `C11` 契约骨架（ABI + 帧 + `FRAME-MAP v1`）
+### Task 1: `C5` 升正式（调用约定 + 帧布局 + `FRAME-MAP v1`）
+
+> **开工前修正（`R-1-1`）**：设计稿原写「新建 `C11-native-abi.md`」，但 `docs/contracts/C5-abi.md`
+> **已经存在**且标题就是「ABI / frame layout / 对象布局 / runtime symbol bridge」，文件头写明
+> 「归属：**M7** 做 MVP、M9 完整化」。新建 C11 等于把同一件事写两遍，还会让 C5 永远停在 spike 级。
+> 正确动作是**升正式**。
 
 **Files:**
-- Create: `docs/contracts/C11-native-abi.md`
-- Modify: `docs/README.md`（契约清单登记 C11）
+- Modify: `docs/contracts/C5-abi.md`（升正式；原文六项记录与可复现证据**保留**）
+- Modify: `docs/README.md`（契约清单把 C5 从「spike 级」改成「已升正式」）
 
 **Interfaces:**
-- Produces: `C11` 的四张表（寄存器分类 / 聚合按指针 / 帧布局 / `FRAME-MAP v1` 行语法），供 Task 8–11 逐条对齐
+- Produces: `C5` 的四张表（寄存器分类 / 聚合按指针 / 帧布局 / `FRAME-MAP v1` 行语法），供 Task 8–11 逐条对齐
 
-- [ ] 写 §1 寄存器约定：`x0..x7` 整数/指针、`v0..v7` 浮点（独立计数）、`complex` 占 2 个 `v`、聚合**按指针**、多返回值按结果顺序依次占两个序列、聚合返回值走 `x8`
-- [ ] 写 §2 帧布局：`saved fp` +0 / `saved lr` +8 / 值槽区 / 取址槽区 / 并行拷贝临时区 / outgoing 区；`sp` 恒 16 对齐
-- [ ] 写 §3 `FRAME-MAP v1`：`# FRAME-MAP v1` / `# func <name> frame=<n> slots=<n>` / `# slot <v> off=<n> size=<n> type=<t>` / `# safepoint b<k>:<idx> offs=[..] ptrs=[..]`
-- [ ] 写 §4 三条禁止项：不含地址 / 不含哈希序 / 不含时间；聚合只报起始偏移与大小
-- [ ] 反向自洽：§3 的每个字段名都在 §4 的示例里出现（文档自洽测试）
-- [ ] Commit：`docs(m7): C11 native ABI 契约骨架（Task 1）`
+- [ ] 改头部：`契约级别：spike 级` → **正式（MVP 级）**；写明「M0 的六项记录保留为历史证据，M7 的 §2.1'–§4 是新增正文」
+- [ ] 写 §2.1′ 寄存器约定：`x0..x7` 整数/指针、`v0..v7` 浮点（**独立计数**）、`complex` 占 2 个 `v`、聚合**按指针**、多返回值按结果顺序依次占两个序列、聚合返回值走 `x8`、`x19..x29`/`v8..v15` 生成代码**一律不用**
+- [ ] 写 §3 帧布局：`saved fp` +0 / `saved lr` +8 / 值槽区 / 取址槽区 / 并行拷贝临时区 / outgoing 区；`sp` 恒 16 对齐；槽宽与对齐规则
+- [ ] 写 §4 `FRAME-MAP v1`：`# FRAME-MAP v1` / `# func <name> frame=<n> slots=<n>` / `# slot <v> off=<n> size=<n> type=<t>` / `# safepoint b<k>:<idx> offs=[..] ptrs=[..]`
+- [ ] 写 §5 三条禁止项：不含地址 / 不含哈希序 / 不含时间；聚合只报起始偏移与大小
+- [ ] 反向自洽：§4 的每个字段名都在 §4 的示例里出现（文档自洽测试）
+- [ ] Commit：`docs(m7): C5 ABI 契约升正式（Task 1，R-1-1）`
 
-**Verify:** `grep -c '^| ' docs/contracts/C11-native-abi.md` ⇒ ≥ 12；`grep -n 'C11' docs/README.md` 有命中
+**Verify:** `grep -c '^| ' docs/contracts/C5-abi.md` ⇒ ≥ 20；`grep -n 'C5' docs/README.md` 有命中且不再写「spike 级」
 
 ---
 
@@ -260,7 +266,7 @@
 - Produces: `render_frame_map(f: &SsaFunc, fr: &Frame, live: &Liveness, tt: &TypeTable) -> String`
 - Consumes: Task 9 的 `Frame`；`rgoc_ssa::live::{Liveness, analyze}`
 
-- [ ] 先写会红的测试：格式符合 `C11` §3（头两行 + `slot` 行按 `ValueId` 升序 + `safepoint` 行按块号/下标升序）
+- [ ] 先写会红的测试：格式符合 `C5` §4（头两行 + `slot` 行按 `ValueId` 升序 + `safepoint` 行按块号/下标升序）
 - [ ] `frame=` 等于 `frame_size`；`slot` 行的 `off`/`size` 来自 `Frame`
 - [ ] `safepoint` 的 `offs` 覆盖 `SSA-LIVE v1` 在该位点的**全部**活值（少一个即红）
 - [ ] 两次渲染逐字节相同
@@ -943,7 +949,7 @@
 
 ### Task 64: 文档回写
 
-- [ ] `C11` 升正式；`C9` 补 native 消费者一节；`C4`/`C10` 不改（写明理由）
+- [ ] `C5` 校订（把执行期 `R-*` 修订折回正文）；`C9` 补 native 消费者一节；`C4`/`C10` 不改（写明理由）
 - [ ] `GAP-01.md` 补 `PIPE-19/20/21/22/24` 的 M7 落点
 - [ ] `03-roadmap.md` §M7 状态块；`AGENTS.md` §0 一句话状态；`docs/README.md` 四行
 - [ ] Commit：`docs(m7): 契约升正式与文档回写（Task 64）`

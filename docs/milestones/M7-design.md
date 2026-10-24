@@ -36,7 +36,7 @@
 | **输出 ⑥** | 新 crate **`rgoc-arm64`**：SSA → **文本 arm64 汇编**（纯函数，不碰磁盘、不碰 `clang`） |
 | **输出 ⑦** | `runtime/native/aarch64-unknown-linux-gnu/rt.c`（freestanding C）+ 编译驱动（`clang -c`） |
 | **输出 ⑧** | `rgoc-driver build` 子命令：装载 → 检查 → HIR → SSA → opt → 汇编 → `clang` → ELF |
-| **输出 ⑨** | 新契约 **`C11-native-abi.md`**：rgoc-AAPCS64 子集 + 帧布局 + `FRAME-MAP v1` |
+| **输出 ⑨** | **`C5-abi.md` 升正式**（原文是 spike 级，明确「M7 做 MVP」）：rgoc-AAPCS64 子集 + 帧布局 + `FRAME-MAP v1` |
 | **输出 ⑩** | 装置：`run-collide.sh --native`（第四列）、`scripts/mutation-m7-notes.md`、native 语料分类器 |
 
 ### 1.2 范围（`03-roadmap.md` §M7 逐句展开）
@@ -81,7 +81,7 @@
 | `NAT-6` | 基础对象 | 数组/struct 的**值语义**（拷贝后互不影响）、指针写回、全局读写、`new` 的 arena 分配与清零 |
 | `NAT-7` | 帧布局与 stack map | `FRAME-MAP v1` 的每个偏移与 `objdump` 反汇编里实际用的偏移一致；safepoint 活值全在表内 |
 | `NAT-8` | 不支持面 | 每条 `CG-UNSUPPORTED-*` 一个 fixture（退出码 1 + 稳定码 + 不 abort） |
-| `NAT-9` | 回归与收口 | 四条 cargo + 五条自检 + M6 的 46/23 零回归 + `C11` 冻结 + `GAP-01` 补 + 报告/manifest |
+| `NAT-9` | 回归与收口 | 四条 cargo + 五条自检 + M6 的 46/23 零回归 + `C5` 冻结 + `GAP-01` 补 + 报告/manifest |
 
 ---
 
@@ -95,7 +95,7 @@
 | `D-M7-2` | 产物 = **文本 `.s` → `clang`** | 不自研 assembler/linker/ELF writer |
 | `D-M7-3` | **每个值一个栈槽**，不做寄存器分配 | 正确性优先；帧布局可从 `value_types` 直接算 |
 | `D-M7-4` | runtime 用 **freestanding C** | 不用 Rust（unwind 跨 frame）、不用纯汇编（`ftoa` 写不出来） |
-| `D-M7-5` | 自定 **rgoc-AAPCS64 子集**，写成 `C11` | 内部调用与 runtime 调用**同一套**，少一条路径 |
+| `D-M7-5` | 自定 **rgoc-AAPCS64 子集**，写成 `C5` | 内部调用与 runtime 调用**同一套**，少一条路径 |
 | `D-M7-6` | 块参数交接 = **并行拷贝**（带环检测） | 与 `D-M6-3` 同源；顺序搬会让 `a,b=b,a` 静默错 |
 | `D-M7-7` | 分配 = **静态 arena + bump**，不 free | 「无 GC」的最小可运行形态；`new`/复合字面量都走它 |
 | `D-M7-8` | native 支持面 = **实测再切**（沿 `R-6-1`） | 不先定支持面再挑文件；预估 40 进 / 6 拒，**实测替换** |
@@ -138,7 +138,7 @@
 | **选项** | ① 复刻 Go internal ABI；② 复刻 C 的 AAPCS64 全量（含 HFA 规则）；③ 自定子集，与 AAPCS64 兼容 |
 | **决定** | ③ |
 | **理由** | ① roadmap 明确「不用 Go internal ABI 作门槛」，且它没有稳定文档；② HFA/小聚合的规则我们**不需要**（`print` 的实参面不含复合值，`C9` §4.3），照抄只会引入没测过的分支；③ 子集 = 整数/指针走 `x0..x7`、浮点/复数走 `v0..v7`、**聚合一律按指针传**（调用方在自己的帧里放副本）、多返回值按同一顺序回填、`x8` 留给「调用方提供返回缓冲」。这样 runtime 的 C 函数可以直接被调（C 侧看到的正是 AAPCS64 的标量部分） |
-| **失效条件** | 若 M9 的 iface 需要「按值传 16 字节聚合」，会与「聚合按指针」冲突 —— 那时**改 `C11` 并升版本**，不许在代码里悄悄特例 |
+| **失效条件** | 若 M9 的 iface 需要「按值传 16 字节聚合」，会与「聚合按指针」冲突 —— 那时**改 `C5` 并升版本**，不许在代码里悄悄特例 |
 
 #### `D-M7-6` 块参数并行拷贝
 
@@ -158,7 +158,7 @@
 | **选项** | ① 不做分配 ⇒ 这些全拒；② 静态 arena + bump（不 free）；③ 调宿主 `malloc` |
 | **决定** | ② |
 | **理由** | ① 会把 `new` 的 8 个文件全砍掉，其中包含 `newexpr.go`/`gc1.go` 这类基础样例；③ 引入 libc 依赖，与 M0 spike 的「零 libc」结论（`F1`）冲突，也让「我们到底依赖了什么」变模糊；② 一个 `.bss` 块 + 一个指针 + 清零，**十行**，且正好是 roadmap「固定栈、无 GC」的字面形态 |
-| **失效条件** | arena 耗尽必须**显式 panic**（`out of arena`），不许静默返回未初始化内存；`M9a` 会用 typed allocation 替换它，替换时 `C11` 的分配入口签名不变 |
+| **失效条件** | arena 耗尽必须**显式 panic**（`out of arena`），不许静默返回未初始化内存；`M9a` 会用 typed allocation 替换它，替换时 `C5` 的分配入口签名不变 |
 
 #### `D-M7-8` 支持面实测切片
 
@@ -188,7 +188,7 @@
 | **选项** | ① 只出帧布局，不出 stack map；② 出 `FRAME-MAP v1`（帧布局 + safepoint 活值偏移）；③ 连 GC 根位图一起出 |
 | **决定** | ② |
 | **理由** | ① 等于没交 roadmap 要的「扩展接口」；③ 需要对象边界与派生指针策略，属 M9c2；② 能把 `SSA-LIVE v1` 的**值**翻译成**偏移**，并让 `NAT-7` 用 `objdump` 核对 —— 这是「协议真的能落地」的唯一证据 |
-| **失效条件** | 若某个 safepoint 的活值包含聚合（数组/struct），M7 只报它的**起始偏移与大小**，不承诺内部指针 —— 明确写进 `C11` |
+| **失效条件** | 若某个 safepoint 的活值包含聚合（数组/struct），M7 只报它的**起始偏移与大小**，不承诺内部指针 —— 明确写进 `C5` |
 
 ### 2.3 事实基线（`F1..F18`，均为源码指认或实测）
 
@@ -242,7 +242,7 @@ AST ─► HIR ─► SSA ─► opt ─┬─► ssa_exec（M6 诊断求值）
 
 | crate / 目录 | 变化 |
 |---|---|
-| `rgoc-arm64`（**新建**） | `abi`（`C11` 的寄存器与分类规则）/ `frame`（帧布局 + `FRAME-MAP v1`）/ `isel`（指令选择）/ `emit`（文本汇编）/ `diag`（`CgCode`） |
+| `rgoc-arm64`（**新建**） | `abi`（`C5` 的寄存器与分类规则）/ `frame`（帧布局 + `FRAME-MAP v1`）/ `isel`（指令选择）/ `emit`（文本汇编）/ `diag`（`CgCode`） |
 | `rgoc-driver` | 新增 `build` 子命令；`run` 加 `--via=native`（可选，调 `build` 再执行） |
 | `runtime/native/aarch64-unknown-linux-gnu/` | `rt.c`（freestanding）+ `rt.h`；`README.md` 记六项桥接事实 |
 | `rgoc-ssa` / `rgoc-interp` / `rgoc-hir` | **不改**（若发现 IR 缺信息，先补 SSA 并登记，`D-M7-1` 的失效条件） |
@@ -250,7 +250,7 @@ AST ─► HIR ─► SSA ─► opt ─┬─► ssa_exec（M6 诊断求值）
 > **为什么 `rgoc-arm64` 不并进 `rgoc-ssa`**：SSA 的 verifier 与 passes 是**平台无关**的，一旦
 > 把 `arm64` 塞进去，`C4`/`C10` 的契约就被一个具体 ISA 绑住。M9 若上第二平台，加 crate 即可。
 
-### 3.2 调用约定（rgoc-AAPCS64 子集，`C11` 的正文）
+### 3.2 调用约定（rgoc-AAPCS64 子集，`C5` 的正文）
 
 | 项 | 约定 |
 |---|---|
@@ -515,7 +515,7 @@ rgoc build <file> -o prog  &&  ./prog        ==  rgoc run --via=hir  ==  go run�
 
 | Phase | 内容 | 估 |
 |---|---|---|
-| 0 | 装置与契约：`C11` 骨架、`run-collide --native` 空壳、语料分类器（46 → N'/M'） | 6–7 |
+| 0 | 装置与契约：`C5` 骨架、`run-collide --native` 空壳、语料分类器（46 → N'/M'） | 6–7 |
 | 1 | 帧与 ABI：`frame` 模块（槽分配、零值、`FRAME-MAP v1`）、并行拷贝 | 8–10 |
 | 2 | 指令选择：14 个 `Instr` 逐个「先写会红的 fixture 再实现」 | 14–16 |
 | 3 | runtime：`rt.c`（write/exit/itoa/ftoa/complex/panic/arena/memcpy） | 8–10 |
@@ -532,7 +532,7 @@ rgoc build <file> -o prog  &&  ./prog        ==  rgoc run --via=hir  ==  go run�
 
 | 产物 | 动作 |
 |---|---|
-| `docs/contracts/C11-native-abi.md` | **新建**：rgoc-AAPCS64 子集 + 帧布局 + `FRAME-MAP v1` |
+| `docs/contracts/C5-abi.md` | **升正式**（spike 级 → MVP 级）：补调用约定（寄存器分类 / 聚合按指针 / 多返回值）、帧布局、`FRAME-MAP v1`；原文六项记录与可复现性证据保留 |
 | `docs/contracts/C9-values-and-output.md` | 补一节：native 的 print/panic 与解释器**同一口径**（本文件 §3.9 的证据） |
 | `docs/contracts/C4-ssa.md` / `C10` | **不改**（native 只消费，不改 IR 形状） |
 | `docs/milestones/GAP-01.md` | 补 `PIPE-19/20/21/22/24` 的 M7 落点 |
@@ -547,3 +547,4 @@ rgoc build <file> -o prog  &&  ./prog        ==  rgoc run --via=hir  ==  go run�
 |---|---|---|
 | 2026-10-24 | **初稿**：`D-M7-1..16`、`F1..F18`、`NAT-1..9`、白名单 5 条、风险 5 条；`Q1..Q3` 待签字 | 容器内实测（`F1`/`F3`/`F5`–`F10`）+ `M0-report.md` §P3 + `C9` §4/§5 + `M6-design.md` §3 |
 | 2026-10-24 | **确认**：`Q1..Q3` 全部按建议签字（runtime = freestanding C / 支持面只拒 `[]T` / 浮点做完整最短往返）；白名单 5 → 4 条（删掉「不存在的 `%v`」占位项） | 用户签字；占位项与「拒绝必须有码」的纪律冲突（§5 纪律） |
+| 2026-10-24 | `R-1-1`：ABI 契约改为**把 `C5-abi.md` 升正式**，不新建 `C11`（§1.1 输出⑨ / §3.2 / §10 同步改） | 开工 Task 1 时发现 C5 已存在且文件头写明「归属：M7 做 MVP」；新建等于同一件事写两遍，并让 C5 永远停在 spike 级 |
