@@ -48,6 +48,7 @@ fn run_via(src: &Path, via: Via) -> (String, u8, String) {
         max_steps: None,
         lang: None,
         via,
+        opt: rgoc_ssa::opt::Config::all(),
     })
     .unwrap_or_else(|e| panic!("{} 跑 {} 失败（内部错）：{e}", src.display(), via.as_str()));
     (o.stdout.replace("\r\n", "\n"), o.exit, o.stderr)

@@ -169,7 +169,7 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
         ..rgoc_interp::Options::default()
     };
     if cmd.via == Via::Ssa {
-        return Ok(run_via_ssa(&program, &mut tt, interp_opts, stderr));
+        return Ok(run_via_ssa(&program, &mut tt, cmd.opt, interp_opts, stderr));
     }
     let out = rgoc_interp::run(&program, &tt, interp_opts);
     if let Some(d) = out.diag {
@@ -198,10 +198,11 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
 fn run_via_ssa(
     program: &rgoc_hir::Program,
     tt: &mut TypeTable,
+    opt: rgoc_ssa::opt::Config,
     opts: rgoc_interp::Options,
     mut stderr: String,
 ) -> RunOutcome {
-    let built = rgoc_ssa::build::build(program, tt);
+    let mut built = rgoc_ssa::build::build(program, tt);
     if !built.rejected.is_empty() {
         for r in &built.rejected {
             let _ = writeln!(stderr, "{}", r.render());
@@ -210,6 +211,27 @@ fn run_via_ssa(
             stdout: String::new(),
             stderr,
             exit: 1,
+        };
+    }
+    // 先验后优化：pass 假定 `V1..V9` 成立，坏图上做变换只会把错报错地方。
+    for f in &built.module.funcs {
+        if let Err(e) = rgoc_ssa::verify::verify(f, tt) {
+            let _ = writeln!(stderr, "SSA 内部错误（构建出的图不合法）：{e}");
+            return RunOutcome {
+                stdout: String::new(),
+                stderr,
+                exit: 2,
+            };
+        }
+    }
+    // passes：每个 pass 之后 `opt::run` 自己 verify（`SSA-5`）；这里只负责
+    // 把「pass 破坏了图」翻译成内部错（退出码 2），不报成用户程序的错。
+    if let Err(e) = rgoc_ssa::opt::run(&mut built.module, tt, opt) {
+        let _ = writeln!(stderr, "SSA 内部错误（pass 之后 verifier 不过）：{e}");
+        return RunOutcome {
+            stdout: String::new(),
+            stderr,
+            exit: 2,
         };
     }
     for f in &built.module.funcs {

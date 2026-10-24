@@ -38,6 +38,7 @@ fn run(path: &Path) -> ssa_cmd::SsaOutcome {
         files: vec![path.to_path_buf()],
         dump: false,
         verify: true,
+        opt: rgoc_ssa::opt::Config::all(),
     })
     .expect("run_ssa 不该返回 Err（Err 只代表参数/io 内部错）")
 }

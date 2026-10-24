@@ -763,9 +763,11 @@
 **Interfaces:**
 - Produces: `opt::Config { fold: bool, dce: bool, copy: bool, cse: bool }`；`opt::run(&mut Module, &TypeTable, Config)`；`Config::parse("all|none|fold,dce")`
 
-- [ ] 框架：每个 pass 一个 `fn(&mut SsaFunc, &TypeTable)`，跑完**立刻 verify**（`SSA-5` 的「每 pass 后 verifier 绿」）
-- [ ] `--opt=` 解析 + 默认 `all`
-- [ ] `T-SSA-64` 骨架：`all` / `none` 两路输出一致
+- [x] 框架：每个 pass 一个 `fn(&mut SsaFunc, …)`，跑完**立刻 verify**（`SSA-5`）
+- [x] `--opt=` 解析（`all|none|fold,dce,copy,cse`）+ 默认 `all`；`ssa` 与 `run` 两个子命令都有
+- [x] **先验后优化**：`opt.any()` 时先 verify，坏图不进 pass（`R-40-1`）
+- [x] 删指令后**值压实** `compact_values`（`V1` 要求每个值有定义点；还要同步 `f.params`，`R-40-2`）
+- [x] `T-SSA-64`：`all` / `none` 两路输出一致（单测 + 语料 46 条）
 - [ ] Commit：`feat(ssa): pass 框架与开关（Task 40）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test opt_config`
@@ -777,8 +779,9 @@
 **Files:**
 - Create: `src/opt/fold.rs`
 
-- [ ] 常量折叠（`Bin/Un/Convert`）+ `If` 常量条件简化边；溢出走 `rgoc-const` 的可表示性（不静默截断）
-- [ ] `T-SSA-60`
+- [x] 常量折叠（`Bin/Un/Convert`）+ `If` 常量条件简化边（连带清死块 + 压实）
+- [x] 溢出按**宽度回绕**（Go 语义，一处 `wrap()`）；除零 / 负移位 / 浮点→整数**不折**（`R-41-1`）
+- [x] `T-SSA-60`（11 条：折对 + 不折错各半）
 - [ ] Commit：`feat(ssa): fold（Task 41）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test opt_fold`
@@ -790,8 +793,10 @@
 **Files:**
 - Create: `src/opt/dce.rs`
 
-- [ ] 删无使用且无副作用的值；`Store`/有 effect 的 `Call` 不删
-- [ ] `T-SSA-61`（含「删了会错」反例：effect 非空的调用必须留下）
+- [x] 删无使用且无副作用的值；`Store`/有 effect 的 `Call`/间接调用不删
+- [x] `Effect` 补 `prints` 维度（`print` 在内存效果上是纯的，但删了少输出，`R-42-1`）
+- [x] 摘要的存储归属认**引用型**槽（指针/切片/map，`R-42-2`）
+- [x] `T-SSA-61`（8 条：删得掉 + 删不掉各半）
 - [ ] Commit：`feat(ssa): dce（Task 42）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test opt_dce`
@@ -803,8 +808,9 @@
 **Files:**
 - Create: `src/opt/copy.rs`
 
-- [ ] `Copy` 链合并；块参数实参里的 `Copy` 消解（**不得**破坏并行语义）
-- [ ] `T-SSA-62`
+- [x] `Copy` 链合并（解析到终点）+ 块参数实参里的 `Copy` 消解（**不得**破坏并行语义）
+- [x] `CalleeRef::Method { recv }` 也是使用点（`R-43-1`：漏了它 dce 会删掉接收者的地址值）
+- [x] `T-SSA-62`（4 条：链 / 交换 / 空操作 / 自拷贝）
 - [ ] Commit：`feat(ssa): copy（Task 43）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test opt_copy`
@@ -816,8 +822,8 @@
 **Files:**
 - Create: `src/opt/cse.rs`
 
-- [ ] 单块内相同 `(op, operands, typ)` 的纯指令合一；**跨块不合**
-- [ ] `T-SSA-63`（正例 + 跨块反例）
+- [x] 单块内相同 `(op, operands, typ)` 的纯指令合一；**跨块不合**
+- [x] `T-SSA-63`（4 条：合一 / 跨块不合 / 操作数不同 / 目标类型不同）
 - [ ] Commit：`feat(ssa): 块内 CSE（Task 44）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test opt_cse`

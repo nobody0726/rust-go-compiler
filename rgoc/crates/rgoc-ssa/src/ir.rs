@@ -205,6 +205,16 @@ pub struct Effect {
     pub may_panic: bool,
     /// 可能回调（间接调用 / 接口派发 —— M6 虽不做，但字段留着给 M7）。
     pub may_call_back: bool,
+    /// 有**输出**副作用（`print` / `println`，含经被调方传递）。
+    ///
+    /// # 为什么内存效果描述不了它
+    ///
+    /// `print` 不写任何根、不 panic、不回调 —— 在 `writes/may_panic` 三个维度上
+    /// 它都是「纯」的。可它**会往 stdout 写字节**，而那正是 `C9` 契约里
+    /// 「合并流」的全部内容。少了这一位，`dce` 会把没人用的 `println` 删掉：
+    /// 图仍然合法、verifier 全绿、程序**少一行输出**（实测：`via=ssa` 的输出
+    /// 直接变成空串）。
+    pub prints: bool,
 }
 
 /// 被调方。

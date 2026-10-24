@@ -31,6 +31,7 @@ fn ssa(files: &[&str], dump: bool, verify: bool) -> SsaCommand {
         files: files.iter().map(PathBuf::from).collect(),
         dump,
         verify,
+        opt: rgoc_ssa::opt::Config::all(),
     }
 }
 
@@ -117,6 +118,7 @@ fn run_via(name: &str, src: &str, via: Via) -> RunOutcome {
         max_steps: None,
         lang: None,
         via,
+        opt: rgoc_ssa::opt::Config::all(),
     })
     .expect("内部错（不该发生）")
 }
@@ -129,6 +131,7 @@ fn t_ssa_39_解析_run_的_via() {
         max_steps: None,
         lang: None,
         via: Via::Hir,
+        opt: rgoc_ssa::opt::Config::all(),
     };
     assert_eq!(
         parse_args(&["run", "a.go"]).unwrap(),

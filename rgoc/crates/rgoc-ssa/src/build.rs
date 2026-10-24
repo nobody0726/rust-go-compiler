@@ -53,7 +53,7 @@ pub struct BuildOutcome {
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
-    let effs = crate::effect::summarize(program);
+    let effs = crate::effect::summarize(program, tt);
     let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
     let mut rejected = Vec::new();
     for (i, f) in program.funcs.iter().enumerate() {
@@ -2213,6 +2213,8 @@ impl Fb<'_> {
                     writes_all: true,
                     may_panic: true,
                     may_call_back: true,
+                    // 被调方可能是任何函数（包括会 print 的）
+                    prints: true,
                 };
                 self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, false, eff)
             }

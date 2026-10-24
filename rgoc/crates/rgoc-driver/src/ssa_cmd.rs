@@ -138,6 +138,39 @@ pub fn run_ssa(cmd: &SsaCommand) -> Result<SsaOutcome, String> {
         });
     }
 
+    // ⑥.5 passes（`--opt=all` 是默认）：**先优化再 dump/verify**，
+    // 这样 `--dump` 看到的就是「要拿去执行的那份图」。
+    // pass 之后 verifier 不过 ⇒ 那是 pass 的 bug（内部错，退出码 2），
+    // 不能报成「你的程序有问题」（1）。
+    let mut out = out;
+    if cmd.opt.any() {
+        // **先验后优化**：pass 假定 `V1..V9` 成立。在坏图上做变换，出来的错会
+        // 被报成「pass 的 bug」—— 而真正的错在构建器（`T-SSA-33` 的泛型守卫
+        // 就是这么暴露的：图本来就 `V3` 不合法）。
+        let mut bad = false;
+        for f in &out.module.funcs {
+            if let Err(e) = rgoc_ssa::verify::verify(f, &tt) {
+                let _ = writeln!(stderr, "{}: {e}", f.name);
+                bad = true;
+            }
+        }
+        if bad {
+            return Ok(SsaOutcome {
+                stdout: String::new(),
+                stderr,
+                exit: 1,
+            });
+        }
+        if let Err(e) = rgoc_ssa::opt::run(&mut out.module, &tt, cmd.opt) {
+            let _ = writeln!(stderr, "SSA 内部错误（pass 之后 verifier 不过）：{e}");
+            return Ok(SsaOutcome {
+                stdout: String::new(),
+                stderr,
+                exit: 2,
+            });
+        }
+    }
+
     // ⑦ dump（stdout，先于 verify）
     let mut stdout = String::new();
     if cmd.dump {

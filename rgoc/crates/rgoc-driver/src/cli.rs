@@ -106,6 +106,8 @@ pub struct RunCommand {
     pub lang: Option<String>,
     /// `--via hir|ssa`：走哪条执行通路（默认 `hir`）。
     pub via: Via,
+    /// `--opt all|none|fold,dce,…`：SSA passes 的开关（只在 `via=ssa` 时有意义）。
+    pub opt: rgoc_ssa::opt::Config,
 }
 
 /// `ssa` 子命令的参数（M6/Task 2；`M6-design.md` §3.1 / `C10`）。
@@ -128,6 +130,8 @@ pub struct SsaCommand {
     pub dump: bool,
     /// `--verify`：跑 verifier 九条不变式。
     pub verify: bool,
+    /// `--opt all|none|fold,dce,…`：跑哪些 pass（默认全开）。
+    pub opt: rgoc_ssa::opt::Config,
 }
 
 /// `check` 子命令的参数（M4/Task 2）。
@@ -283,6 +287,8 @@ pub enum CliError {
     BadSteps(String),
     /// `--via` 的值不认识（只接受 `hir` / `ssa`）
     BadVia(String),
+    /// `--opt` 的值不认识（只接受 `all` / `none` / `fold,dce,copy,cse`）
+    BadOpt(String),
 }
 
 impl fmt::Display for CliError {
@@ -299,8 +305,8 @@ impl fmt::Display for CliError {
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
-             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] <file>...\n  \
-             rgoc-driver ssa [--dump] [--verify] <file>...";
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] <file>...\n  \
+             rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
@@ -341,6 +347,10 @@ impl fmt::Display for CliError {
             ),
             Self::BadSteps(v) => write!(f, "--max-steps 需要一个非负整数（收到 {v:?}）。{USAGE}"),
             Self::BadVia(v) => write!(f, "--via 只接受 hir / ssa（收到 {v:?}）。{USAGE}"),
+            Self::BadOpt(v) => write!(
+                f,
+                "--opt 只接受 all / none / fold,dce,copy,cse（收到 {v:?}）。{USAGE}"
+            ),
         }
     }
 }
@@ -377,6 +387,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     let mut max_steps: Option<u64> = None;
     let mut lang: Option<String> = None;
     let mut via = Via::Hir;
+    let mut opt = rgoc_ssa::opt::Config::all();
     let mut i = 0;
     while i < rest.len() {
         // `--via=ssa` 与 `--via ssa` 两种写法都收（`run-collide.sh` 用前者，
@@ -386,6 +397,14 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 return Err(CliError::BadVia(v.to_string()));
             };
             via = v2;
+            i += 1;
+            continue;
+        }
+        if let Some(v) = rest[i].strip_prefix("--opt=") {
+            let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                return Err(CliError::BadOpt(v.to_string()));
+            };
+            opt = c;
             i += 1;
             continue;
         }
@@ -421,6 +440,16 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 via = v2;
                 i += 2;
             }
+            "--opt" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--opt"));
+                };
+                let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                    return Err(CliError::BadOpt((*v).to_string()));
+                };
+                opt = c;
+                i += 2;
+            }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
                 files.push(PathBuf::from(a));
@@ -437,6 +466,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
         max_steps,
         lang,
         via,
+        opt,
     })
 }
 
@@ -444,8 +474,17 @@ fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
     let mut dump = false;
     let mut verify = false;
+    let mut opt = rgoc_ssa::opt::Config::all();
     let mut i = 0;
     while i < rest.len() {
+        if let Some(v) = rest[i].strip_prefix("--opt=") {
+            let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                return Err(CliError::BadOpt(v.to_string()));
+            };
+            opt = c;
+            i += 1;
+            continue;
+        }
         match rest[i] {
             "--dump" => {
                 dump = true;
@@ -454,6 +493,16 @@ fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
             "--verify" => {
                 verify = true;
                 i += 1;
+            }
+            "--opt" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--opt"));
+                };
+                let Some(c) = rgoc_ssa::opt::Config::parse(v) else {
+                    return Err(CliError::BadOpt((*v).to_string()));
+                };
+                opt = c;
+                i += 2;
             }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
@@ -472,6 +521,7 @@ fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
         files,
         dump,
         verify,
+        opt,
     })
 }
 

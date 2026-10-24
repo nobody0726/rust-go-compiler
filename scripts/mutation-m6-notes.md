@@ -208,3 +208,26 @@ bash tools/run-oracle/run-collide.sh --run --list --ssa --three-way tools/run-or
 
 `SKIP` 的判据是「stderr 里有 `SSA-UNSUPPORTED-*`」**而不是**「退出码 1」：
 后者会把任何静态错都说成「它被拒了」，装置等于没有。
+
+## Task 40–44：四个 pass 与它们依赖的两条不变量（7 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut40_44.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M49` `copy` 不解析链 | 去掉 `while map.get` 的链式解析 | `opt_copy::62_链式_copy_一路消到终点` | ✅ 红 |
+| `M50` `dce` 删 `Store` | `Store` 的 `keep` 返回 `false` | `opt_dce::61_没用的_store_必须留着` | ✅ 红 |
+| `M51` `fold` 除零也折 | `Div` 的 `b == 0` 返回 `Some(0)` | `opt_fold::60_除零不折` | ✅ 红 |
+| `M52` 压实不同步 `params` | 删掉 `f.params = …` 那一行 | `ssa_cli::39_两条通路在正常程序上输出一致` | ✅ 红 |
+| `M53` `dce` 把 `prints` 当纯 | `pure_effect` 不看 `prints` | `opt_equiv::64_全开与全关在入选集上输出一致` | ✅ 红 |
+| `M54` 摘要不认引用型槽 | `owner_of_expr` 的 `Slot` 分支恒 `Local` | 同上（`ken/array.go`） | ✅ 红 |
+| `M55` `cse` 跨块也合 | `seen` 提到块循环外 | `opt_cse::63_跨块不合` | ✅ 红 |
+
+### `M54` 第一次打偏了
+
+初版把锚点放在 `owner_of_place` 的 `Place::Slot` 分支 —— 变异**全绿**。原因：
+`s[i] = v` 的归属走的是 `owner_of_place(Index)` → `owner_of_expr(base)`，真正
+要看类型的那个函数是 `owner_of_expr`。改成打后者才红。
+
+这条偏差说明一件事：**「我改了某个判断」不等于「变异打到了那个判断」**。
+变异全绿时先怀疑锚点，再怀疑用例。

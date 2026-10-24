@@ -167,6 +167,7 @@ fn selected_files_are_self_sufficient() {
             max_steps: None,
             lang: None,
             via: rgoc_driver::cli::Via::Hir,
+            opt: rgoc_ssa::opt::Config::all(),
         };
         match run_run(&cmd) {
             Ok(o) => {
@@ -330,6 +331,7 @@ fn run_file(path: &Path) -> (String, u8) {
         max_steps: None,
         lang: None,
         via: rgoc_driver::cli::Via::Hir,
+        opt: rgoc_ssa::opt::Config::all(),
     })
     .unwrap_or_else(|e| panic!("跑 {} 失败（内部错）：{e}", path.display()));
     (o.stdout.replace("\r\n", "\n"), o.exit)

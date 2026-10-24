@@ -29,8 +29,9 @@ use std::collections::BTreeSet;
 
 use rgoc_hir::{
     Block as HirBlock, BuiltinKind, Callee, CompositeItem, Expr, ExprKind, FuncId, GlobalId,
-    MakeKind, Place, Program, Stmt,
+    MakeKind, Place, Program, SlotId, Stmt,
 };
+use rgoc_types::{TypeId, TypeTable};
 
 use crate::ir::{Effect, RootId};
 
@@ -45,6 +46,8 @@ pub struct Summary {
     pub may_panic: bool,
     /// 会调用函数值 / 接口方法。
     pub may_call_back: bool,
+    /// 会往 stdout 写字节（`print` / `println`，含经被调方传递）。
+    pub prints: bool,
 }
 
 impl Summary {
@@ -54,9 +57,11 @@ impl Summary {
             self.writes_all,
             self.may_panic,
             self.may_call_back,
+            self.prints,
         );
         self.writes.extend(o.writes.iter().copied());
         self.writes_all |= o.writes_all;
+        self.prints |= o.prints;
         self.may_panic |= o.may_panic;
         self.may_call_back |= o.may_call_back;
         before
@@ -65,6 +70,7 @@ impl Summary {
                 self.writes_all,
                 self.may_panic,
                 self.may_call_back,
+                self.prints,
             )
     }
 }
@@ -79,16 +85,62 @@ enum Owner {
     Heap,
 }
 
+/// 摘要扫描要的静态上下文。
+///
+/// # 为什么必须带类型
+///
+/// 「写的是本地还是堆」取决于**底座是不是指针**：`s.f = 1`（`s` 是结构体值）
+/// 只改本地存储，`p.f = 1`（`p *S`）改的是**别人**的存储。HIR 的 place 两者
+/// 长得一样（`Field { base: Slot }`，Go 自动解引用），所以只能看槽的静态类型。
+///
+/// 少了这条，`func (p *P) add(d int) { p.x += d }` 的摘要就是「什么都不写」——
+/// 于是 `dce` 会把这个调用整个删掉（实测：`p.add(4)` 消失，输出少加一次）。
+struct Ctx<'a> {
+    /// 类型表。
+    tt: &'a TypeTable,
+    /// 本函数的槽类型（`Func::slot_types`）。
+    slots: &'a [TypeId],
+}
+
+impl Ctx<'_> {
+    /// 这个类型是**引用型**吗（指针 / 切片 / map，含具名与别名）。
+    ///
+    /// 三种都算：通过它们写，写的是**别人**的存储。`s[i] = v`（`s []int`）
+    /// 改的是底层数组，不是 `s` 这个槽 —— 判成「本地」的话摘要就会说
+    /// 「这个函数什么都不写」，`dce` 会把调用整个删掉（实测 `ken/array.go`：
+    /// `setpd(a)` 被删，`t` 一直是 0）。
+    fn is_ref(&self, t: TypeId) -> bool {
+        if t.index() >= self.tt.len() {
+            return false;
+        }
+        matches!(
+            self.tt.type_of(rgoc_types::underlying(self.tt, t)),
+            rgoc_types::typ::Type::Pointer(_)
+                | rgoc_types::typ::Type::Slice(_)
+                | rgoc_types::typ::Type::Map { .. }
+        )
+    }
+
+    /// 这个槽是引用型吗（越界 / 没登记 ⇒ 不是）。
+    fn slot_is_ref(&self, s: SlotId) -> bool {
+        self.slots.get(s.index()).is_some_and(|t| self.is_ref(*t))
+    }
+}
+
 /// 算整个包的摘要（按 `FuncId` 索引，与 `Program.funcs` 同长）。
 #[must_use]
-pub fn summarize(program: &Program) -> Vec<Summary> {
+pub fn summarize(program: &Program, tt: &TypeTable) -> Vec<Summary> {
     // ── ① 每个函数的**直接**副作用 + 直接调用边
     let mut direct: Vec<Summary> = Vec::with_capacity(program.funcs.len());
     let mut calls: Vec<Vec<FuncId>> = Vec::with_capacity(program.funcs.len());
     for f in &program.funcs {
         let mut s = Summary::default();
         let mut cs: Vec<FuncId> = Vec::new();
-        scan_block(&f.body, &mut s, &mut cs);
+        let cx = Ctx {
+            tt,
+            slots: &f.slot_types,
+        };
+        scan_block(&cx, &f.body, &mut s, &mut cs);
         cs.sort_unstable_by_key(|x| x.0);
         cs.dedup();
         direct.push(s);
@@ -128,6 +180,8 @@ pub fn builtin_summary(k: BuiltinKind) -> Summary {
         | BuiltinKind::Clear
         | BuiltinKind::Close => s.writes_all = true,
         BuiltinKind::Panic => s.may_panic = true,
+        // 输出是**可观察**的（`C9` 的合并流）：`print` 不写内存，但删了少一行
+        BuiltinKind::Print | BuiltinKind::Println => s.prints = true,
         // 纯读 / 纯分配：`new`/`make` 只写新分配的存储
         BuiltinKind::Len
         | BuiltinKind::Cap
@@ -137,27 +191,25 @@ pub fn builtin_summary(k: BuiltinKind) -> Summary {
         | BuiltinKind::Complex
         | BuiltinKind::Real
         | BuiltinKind::Imag
-        | BuiltinKind::Print
-        | BuiltinKind::Println
         | BuiltinKind::Recover => {}
     }
     s
 }
 
-fn scan_block(b: &HirBlock, s: &mut Summary, calls: &mut Vec<FuncId>) {
+fn scan_block(cx: &Ctx, b: &HirBlock, s: &mut Summary, calls: &mut Vec<FuncId>) {
     for st in &b.stmts {
-        scan_stmt(st, s, calls);
+        scan_stmt(cx, st, s, calls);
     }
 }
 
-fn scan_stmt(st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
+fn scan_stmt(cx: &Ctx, st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match st {
         Stmt::Assign { lhs, rhs, .. } => {
             for e in rhs {
-                scan_expr(e, s, calls);
+                scan_expr(cx, e, s, calls);
             }
             for p in lhs {
-                match owner_of_place(p) {
+                match owner_of_place(cx, p) {
                     Owner::Global(g) => {
                         s.writes.insert(g);
                     }
@@ -165,15 +217,15 @@ fn scan_stmt(st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
                     Owner::Heap => s.writes_all = true,
                 }
                 // 左值里嵌的表达式（`a[i()] = 1`）也要扫
-                scan_place_exprs(p, s, calls);
+                scan_place_exprs(cx, p, s, calls);
             }
         }
         Stmt::ShortDecl { rhs, .. } => {
             for e in rhs {
-                scan_expr(e, s, calls);
+                scan_expr(cx, e, s, calls);
             }
         }
-        Stmt::Expr(e) => scan_expr(e, s, calls),
+        Stmt::Expr(e) => scan_expr(cx, e, s, calls),
         Stmt::If {
             init,
             cond,
@@ -181,12 +233,12 @@ fn scan_stmt(st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
             els,
         } => {
             if let Some(i) = init {
-                scan_stmt(i, s, calls);
+                scan_stmt(cx, i, s, calls);
             }
-            scan_expr(cond, s, calls);
-            scan_block(then, s, calls);
+            scan_expr(cx, cond, s, calls);
+            scan_block(cx, then, s, calls);
             if let Some(e) = els {
-                scan_stmt(e, s, calls);
+                scan_stmt(cx, e, s, calls);
             }
         }
         Stmt::For {
@@ -197,15 +249,15 @@ fn scan_stmt(st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
             ..
         } => {
             if let Some(i) = init {
-                scan_stmt(i, s, calls);
+                scan_stmt(cx, i, s, calls);
             }
             if let Some(c) = cond {
-                scan_expr(c, s, calls);
+                scan_expr(cx, c, s, calls);
             }
             if let Some(p) = post {
-                scan_stmt(p, s, calls);
+                scan_stmt(cx, p, s, calls);
             }
-            scan_block(body, s, calls);
+            scan_block(cx, body, s, calls);
         }
         Stmt::Range {
             key,
@@ -214,122 +266,124 @@ fn scan_stmt(st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
             body,
             ..
         } => {
-            scan_expr(x, s, calls);
+            scan_expr(cx, x, s, calls);
             for p in [key, value].into_iter().flatten() {
-                if let Owner::Global(g) = owner_of_place(p) {
+                if let Owner::Global(g) = owner_of_place(cx, p) {
                     s.writes.insert(g);
                 }
-                scan_place_exprs(p, s, calls);
+                scan_place_exprs(cx, p, s, calls);
             }
-            scan_block(body, s, calls);
+            scan_block(cx, body, s, calls);
         }
         Stmt::Switch {
             init, tag, cases, ..
         } => {
             if let Some(i) = init {
-                scan_stmt(i, s, calls);
+                scan_stmt(cx, i, s, calls);
             }
             if let Some(t) = tag {
-                scan_expr(t, s, calls);
+                scan_expr(cx, t, s, calls);
             }
             for c in cases {
                 for e in &c.exprs {
-                    scan_expr(e, s, calls);
+                    scan_expr(cx, e, s, calls);
                 }
-                scan_block(&c.body, s, calls);
+                scan_block(cx, &c.body, s, calls);
             }
         }
         Stmt::TypeSwitch { init, x, cases, .. } => {
             if let Some(i) = init {
-                scan_stmt(i, s, calls);
+                scan_stmt(cx, i, s, calls);
             }
-            scan_expr(x, s, calls);
+            scan_expr(cx, x, s, calls);
             for c in cases {
-                scan_block(&c.body, s, calls);
+                scan_block(cx, &c.body, s, calls);
             }
         }
         Stmt::Return(es) => {
             for e in es {
-                scan_expr(e, s, calls);
+                scan_expr(cx, e, s, calls);
             }
         }
         Stmt::Branch { .. } | Stmt::Empty => {}
-        Stmt::Labeled { stmt, .. } => scan_stmt(stmt, s, calls),
-        Stmt::Block(b) => scan_block(b, s, calls),
-        Stmt::Defer { call } => scan_expr(call, s, calls),
+        Stmt::Labeled { stmt, .. } => scan_stmt(cx, stmt, s, calls),
+        Stmt::Block(b) => scan_block(cx, b, s, calls),
+        Stmt::Defer { call } => scan_expr(cx, call, s, calls),
     }
 }
 
-fn scan_expr(e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
+fn scan_expr(cx: &Ctx, e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match &e.kind {
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
-        ExprKind::Field { base, .. } => scan_expr(base, s, calls),
+        ExprKind::Field { base, .. } => scan_expr(cx, base, s, calls),
         ExprKind::Index { base, index, .. } => {
-            scan_expr(base, s, calls);
-            scan_expr(index, s, calls);
+            scan_expr(cx, base, s, calls);
+            scan_expr(cx, index, s, calls);
         }
         ExprKind::Slice {
             base, lo, hi, max, ..
         } => {
-            scan_expr(base, s, calls);
+            scan_expr(cx, base, s, calls);
             for o in [lo, hi, max].into_iter().flatten() {
-                scan_expr(o, s, calls);
+                scan_expr(cx, o, s, calls);
             }
         }
-        ExprKind::Deref(x) => scan_expr(x, s, calls),
-        ExprKind::Addr(p) => scan_place_exprs(p, s, calls),
-        ExprKind::AddrOf(x) => scan_expr(x, s, calls),
-        ExprKind::Unary { x, .. } => scan_expr(x, s, calls),
+        ExprKind::Deref(x) => scan_expr(cx, x, s, calls),
+        ExprKind::Addr(p) => scan_place_exprs(cx, p, s, calls),
+        ExprKind::AddrOf(x) => scan_expr(cx, x, s, calls),
+        ExprKind::Unary { x, .. } => scan_expr(cx, x, s, calls),
         ExprKind::Binary { x, y, .. } => {
-            scan_expr(x, s, calls);
-            scan_expr(y, s, calls);
+            scan_expr(cx, x, s, calls);
+            scan_expr(cx, y, s, calls);
         }
         ExprKind::Call { callee, args, .. } => {
             for a in args {
-                scan_expr(a, s, calls);
+                scan_expr(cx, a, s, calls);
             }
             match callee {
                 Callee::Func(fid) => calls.push(*fid),
                 Callee::Method { recv, func } => {
-                    scan_expr(recv, s, calls);
+                    scan_expr(cx, recv, s, calls);
                     calls.push(*func);
                 }
                 Callee::Builtin(k) => {
+                    // 逐字段手抄会漏：`prints` 就是漏掉的那一个（`println` 在函数体里
+                    // 不算这个函数的副作用 ⇒ 调用它的地方被 `dce` 删掉，输出少一半）。
+                    // 统一走 `merge_from`，加字段时不会再漏第二次。
                     let b = builtin_summary(*k);
-                    s.writes_all |= b.writes_all;
-                    s.may_panic |= b.may_panic;
+                    s.merge_from(&b);
                 }
                 // 函数值 / 接口方法：目标运行期才定 ⇒ 什么都能写、可能回调
                 Callee::Value(v) => {
-                    scan_expr(v, s, calls);
+                    scan_expr(cx, v, s, calls);
                     s.writes_all = true;
                     s.may_call_back = true;
                 }
                 Callee::Iface { recv, .. } => {
-                    scan_expr(recv, s, calls);
+                    scan_expr(cx, recv, s, calls);
                     s.writes_all = true;
                     s.may_call_back = true;
                 }
             }
         }
-        ExprKind::Convert { x, .. } => scan_expr(x, s, calls),
+        ExprKind::Convert { x, .. } => scan_expr(cx, x, s, calls),
         ExprKind::Composite(c) => {
             for it in &c.items {
                 match it {
-                    CompositeItem::Value(x) => scan_expr(x, s, calls),
+                    CompositeItem::Value(x) => scan_expr(cx, x, s, calls),
                     CompositeItem::Key(k, v) => {
-                        scan_expr(k, s, calls);
-                        scan_expr(v, s, calls);
+                        scan_expr(cx, k, s, calls);
+                        scan_expr(cx, v, s, calls);
                     }
                     CompositeItem::Field(_, x) | CompositeItem::Index(_, x) => {
-                        scan_expr(x, s, calls);
+                        scan_expr(cx, x, s, calls);
                     }
                 }
             }
         }
         ExprKind::FuncLit(_) => {}
-        ExprKind::Bound { recv, .. } => scan_expr(recv, s, calls),
-        ExprKind::TypeAssert { x, .. } => scan_expr(x, s, calls),
+        ExprKind::Bound { recv, .. } => scan_expr(cx, recv, s, calls),
+        ExprKind::TypeAssert { x, .. } => scan_expr(cx, x, s, calls),
         ExprKind::Make { kind, args } => {
             // `make` 分配新存储；但 `make([]T, n)` 之后对它写就是堆写，
             // 那会在赋值点被 `Owner::Heap` 捕获。这里只扫实参。
@@ -337,48 +391,53 @@ fn scan_expr(e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
                 MakeKind::Slice | MakeKind::Map | MakeKind::Chan => {}
             }
             for a in args {
-                scan_expr(a, s, calls);
+                scan_expr(cx, a, s, calls);
             }
         }
         ExprKind::New(_) => {}
         ExprKind::Builtin { kind, args, .. } => {
             for a in args {
-                scan_expr(a, s, calls);
+                scan_expr(cx, a, s, calls);
             }
+            // 与 `Callee::Builtin` 同一条纪律：走 `merge_from`，不逐字段手抄
+            // （`prints` 就是手抄漏掉的那一个 —— `println` 在函数体里不算副作用，
+            // 于是调用它的地方被 `dce` 删掉，`cplx0.go` 少打一半）。
             let b = builtin_summary(*kind);
-            s.writes_all |= b.writes_all;
-            s.may_panic |= b.may_panic;
+            s.merge_from(&b);
         }
     }
 }
 
-fn scan_place_exprs(p: &Place, s: &mut Summary, calls: &mut Vec<FuncId>) {
+fn scan_place_exprs(cx: &Ctx, p: &Place, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match p {
         Place::Slot(_) | Place::Global(_) => {}
-        Place::Field { base, .. } => scan_place_exprs(base, s, calls),
+        Place::Field { base, .. } => scan_place_exprs(cx, base, s, calls),
         Place::Index { base, index } => {
-            scan_expr(base, s, calls);
-            scan_expr(index, s, calls);
+            scan_expr(cx, base, s, calls);
+            scan_expr(cx, index, s, calls);
         }
-        Place::Deref(x) => scan_expr(x, s, calls),
+        Place::Deref(x) => scan_expr(cx, x, s, calls),
     }
 }
 
-fn owner_of_place(p: &Place) -> Owner {
+fn owner_of_place(cx: &Ctx, p: &Place) -> Owner {
     match p {
+        // 指针槽：`p.f = 1` / `p[0] = 1` 写的是它**指向**的存储
+        Place::Slot(s) if cx.slot_is_ref(*s) => Owner::Heap,
         Place::Slot(_) => Owner::Local,
         Place::Global(g) => Owner::Global(*g),
-        Place::Field { base, .. } => owner_of_place(base),
-        Place::Index { base, .. } => owner_of_expr(base),
+        Place::Field { base, .. } => owner_of_place(cx, base),
+        Place::Index { base, .. } => owner_of_expr(cx, base),
         Place::Deref(_) => Owner::Heap,
     }
 }
 
-fn owner_of_expr(e: &Expr) -> Owner {
+fn owner_of_expr(cx: &Ctx, e: &Expr) -> Owner {
     match &e.kind {
+        ExprKind::Slot(s) if cx.slot_is_ref(*s) => Owner::Heap,
         ExprKind::Slot(_) => Owner::Local,
         ExprKind::Global(g) => Owner::Global(*g),
-        ExprKind::Field { base, .. } => owner_of_expr(base),
+        ExprKind::Field { base, .. } => owner_of_expr(cx, base),
         // `s[i]`：`s` 是 slice 时元素在底层数组（堆）；是数组时在 s 的存储里。
         // 摘要层面不追类型（那要 `TypeTable`），一律按堆算 —— 保守方向。
         _ => Owner::Heap,
@@ -401,5 +460,6 @@ pub fn to_effect(s: &Summary) -> Effect {
         writes_all: s.writes_all,
         may_panic: s.may_panic,
         may_call_back: s.may_call_back,
+        prints: s.prints,
     }
 }
