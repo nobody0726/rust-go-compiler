@@ -256,16 +256,22 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 - Test: `rgoc/crates/rgoc-arm64/tests/frame_layout.rs`
 
 **Interfaces:**
-- Produces: `Frame { slots: BTreeMap<ValueId, Slot { off: i32, size: u32 }>, slot_area: BTreeMap<SlotId, Slot>, tmp_base: i32, frame_size: u32 }`、`layout(f: &SsaFunc, tt: &TypeTable) -> Frame`
-- Consumes: Task 8 的 `classify` / `slot_size`；`SsaFunc::{value_types, slot_types, params}`
+- Produces: `Frame { values: BTreeMap<ValueId, Slot>, addr_slots: BTreeMap<SlotId, Slot>, tmp_base: Option<i32>, tmp_slots: u32, frame_size: u32 }`、
+  `layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError>`、`Frame::sub_sp_imm()`
+- Consumes: Task 8 的 `slot_of`；`SsaFunc::{value_types, slot_types, blocks}`
 
-- [ ] 先写会红的测试：两个相邻槽写入不互相覆盖（用 `[3]int8` 与 `int64` 相邻）；`frame_size % 16 == 0`
-- [ ] 值槽按 `ValueId` 升序分配（确定性），偏移从 `-16` 起（`saved fp/lr` 占 +0/+8，槽区在 `fp` 之下）
-- [ ] `tmp_base` = 槽区之后的并行拷贝临时区，大小 = 最大边实参个数 × 8
-- [ ] `frame_size` = `saved(16)` + 槽区 + 临时区，向上取 16 的倍数
-- [ ] Commit：`feat(arm64): 帧布局（Task 9，T-NAT-01/04）`
+- [x] 值槽按 `ValueId` 升序分配（确定性），第一个槽 `off = -24`（`saved fp/lr` 占 +0/+8，
+      槽占 `[fp-24, fp-16)`）—— 判据里写死这个数，不是「看起来合理」
+- [x] 零大小值不推进游标（`struct{}` 的槽宽 0，与下一个槽末尾重合）
+- [x] `tmp_base` = 槽区之后的并行拷贝临时区，格数 = **所有边里最多的实参个数**（`If` 取两支较大者）
+- [x] `frame_size` = `saved(16)` + 槽区 + 临时区，**向上取 16 的倍数**；`sub_sp_imm = frame_size - 16`
+- [x] `FrameError::{Value{value,typ}, AddrSlot{slot,typ}}`：无布局的类型（泛型/`Invalid`/元组）
+      报错**带值号**，不许静默给个偏移
+- [x] 测试 11 条：区间不相交 / 零大小 / 大槽 / 临时区 / 帧大小恒 16 倍数 / 取址槽独立区 /
+      两次布局相同 / 两种报错
+- [x] Commit：`feat(arm64): 帧布局（Task 9，T-NAT-01/04）`
 
-**Verify:** `… cargo test -p rgoc-arm64 --test frame_layout`（≥4 条）
+**Verify:** `… cargo test -p rgoc-arm64 --test frame_layout`（11 条）
 
 ---
 
