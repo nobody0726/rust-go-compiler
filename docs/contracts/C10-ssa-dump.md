@@ -13,8 +13,8 @@
 > 本契约是**函数体**的中立 dump（IR 形状的对撞面）。两者都输出类型时不共用语法 ——
 > 本契约只写 `t<id>` 引用 + 末尾映射，避免把 `C7` 的 15 个标签复制一份（复制就会漂）。
 
-**状态**：**骨架**（M6 / Task 1）→ **定稿**（M6 / Task 51，届时与实现逐行对账）
-**契约级别**：骨架（格式已定，示例待实现回填核对）
+**状态**：**定稿**（M6 / Task 51：示例已由 `T-SSA-46` 的**文档驱动 golden** 逐字节对账）
+**契约级别**：正式（六条规则冻结；示例与实现互为判据 —— 谁改了另一个必须跟着改）
 **冻结范围**：行语法、编号顺序、禁止项。**不冻结**：dump 的用途（调试/对撞）、`--dump` 之外的通道
 
 ---
@@ -115,10 +115,10 @@ Go 源（等价）：`func g(p *int) int { if p == nil { panic("nil") }; return 
 # SSA v1
 # stage: ssa
 # func g blocks=3 values=5
-block b0 params=[v0] preds=[] succs=[b1,b2]
-  v1 = const nil : t2
+block b0 params=[v0] preds=[] succs=[b2,b1]
+  v1 = const 0 : t2
   v2 = bin eq v0 v1 : t0
-  v3 = const 0 : t1
+  v3 = const 0 : t2
   term if v2 -> b2 () | b1 ()
 block b1 params=[] preds=[b0] succs=[]
   v4 = load r0 v3 v0 : t1
@@ -131,10 +131,16 @@ block b2 params=[] preds=[b0] succs=[]
 # type t2 = *int
 ```
 
-这个例子钉住另外三件事：⑤ `term panic` 是**正常终止符**之一（`recover`/`defer` 才会被拒绝，`panic` 不会）；
+这个例子钉住另外四件事：⑤ `term panic` 是**正常终止符**之一（`recover`/`defer` 才会被拒绝，`panic` 不会）；
 ⑥ 访存指令带**根**与 **mem 令牌**（`load r0 v3 v0`：根 / mem / 地址）—— 根是显式字段，
-   不是从地址反推的；mem 是 `V6` 的比对面，`v3` 在这里只当「根 R0 的初始 mem」；
-⑦ `term unreachable` 不带操作数（见下）。
+   不是从地址反推的；mem 是 `V6` 的比对面，`v3` 在这里只当「根 R0 的初始 mem」
+   （所以它的类型是**根的地址类型** `*int` = `t2`，不是 `int`）；
+⑦ **`nil` 写成 `const 0 : t<指针>`** —— `ConstVal` 没有 `Nil` 变体，零值由
+   `typ` 决定（`R-20-1`）。这是「值 + 静态类型」模型的直接后果：`0` 是 `int` 的零值
+   还是 `*int` 的零值，只看类型；
+⑧ `succs` 保持**终止符里的顺序**（`if v2 -> b2 () | b1 ()` ⇒ `succs=[b2,b1]`），
+   不按块号重排 —— 重排会让「then 走哪边」在 dump 里看不出来。
+⑨ `term unreachable` 不带操作数（见下）。
 
 `term unreachable` 的片段（块可达、流到此为止；**不是**死块）：
 
@@ -168,4 +174,5 @@ block b3 params=[] preds=[b0] succs=[]
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-23 | **骨架创建**（M6/Task 1）：六条规则 + 完整示例 + 三条硬要求 | `M6-design.md` §3.2 / §4.3；`C6`/`C7` 的先例（`#` 头行 + 编号升序 + 禁止不可复现项） |
+| 2026-10-24 | **定稿**（M6/Task 51）：§3.2 的示例按**实现回填**三处 —— ① `succs=[b1,b2]` → `[b2,b1]`（`succs` 保终止符顺序，示例自己写反了）；② `v1 = const nil : t2` → `const 0 : t2`（`ConstVal` 没有 `Nil`）；③ `v3 = const 0 : t1` → `: t2`（mem 令牌的类型是根的地址类型）。`T-SSA-46` 的 golden 改成**从本文档读**，三处一次全被抓出 | 文档驱动 golden（`dump.rs::c10_block`）；`R-51-1` |
 | 2026-10-23 | **`R-16-1`**：规则 3 补两处 —— ① `load`/`store` 的第一个操作数是 **mem 令牌**（`V6` 的比对面；不写它 dump 里就看不见 mem 链）；② 可选操作数缺省写 `_`。§3.2 示例随之加一个 mem 种子值（`values` 4→5）。另明确 **`Effect` 不进 dump**（它是 pass 的输入，不是指令操作数） | `M6-plan.md` Task 16 实现期发现骨架漏了 mem 字段；`T-SSA-46` 的 golden 对账 |

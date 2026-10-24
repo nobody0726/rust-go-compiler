@@ -13,9 +13,10 @@
 //! `universe()`（表里已有 22 个基本类型），`bool` 会是 `t22`。golden 必须用
 //! 空表构建器，否则对不上 —— 这不是「为了测试改实现」，而是**编号是格式的一部分**。
 
+use rgoc_hir::BinOp;
 use rgoc_hir::types::ConstVal;
 use rgoc_ssa::dump::{DUMP_VERSION, dump_func, dump_module};
-use rgoc_ssa::ir::{BlockId, Instr, Term, ValueId};
+use rgoc_ssa::ir::{BlockId, Instr, Root, Term, ValueId};
 use rgoc_ssa::testsupport::{FnBuilder, module_of};
 
 fn const_bool(fb: &mut FnBuilder, blk: BlockId, v: ValueId, x: bool, tb: rgoc_types::TypeId) {
@@ -86,31 +87,118 @@ fn c10_example() -> (rgoc_ssa::ir::SsaFunc, rgoc_types::TypeTable) {
     fb.into_parts()
 }
 
+/// 读 `C10` 里 `heading` 之后的第一个 ```text 代码块（原样，含结尾换行）。
+///
+/// # 为什么不把示例抄进测试
+///
+/// 抄进测试的 golden 只能证明「实现与**那份副本**一致」—— 文档改了副本没改，
+/// 测试仍然绿，而契约已经漂了。`T-SSA-46` 要的是「文档里的语法行与真实 dump
+/// 逐行对得上」，所以期望值必须**从文档读**。
+fn c10_block(heading: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../docs/contracts/C10-ssa-dump.md");
+    let doc = std::fs::read_to_string(&path).expect("读不到 C10-ssa-dump.md");
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("C10 里找不到小节 {heading:?}"));
+    let rest = &doc[start..];
+    let open = rest
+        .find("```text")
+        .unwrap_or_else(|| panic!("{heading:?} 小节里没有 ```text 代码块"))
+        + "```text".len();
+    let after = rest[open..].strip_prefix('\n').unwrap_or(&rest[open..]);
+    let end = after
+        .find("```")
+        .unwrap_or_else(|| panic!("{heading:?} 的代码块没有闭合"));
+    after[..end].to_string()
+}
+
+/// `C10` §3.2 的示例：`func g(p *int) int { if p == nil { panic("nil") }; return *p }`。
+fn c10_example_g() -> (rgoc_ssa::ir::SsaFunc, rgoc_types::TypeTable) {
+    let mut fb = FnBuilder::bare("g");
+    let tb = fb.basic("bool"); // t0
+    let ti = fb.basic("int"); // t1
+    let tp = fb.ptr_to(ti); // t2
+    let b0 = fb.entry();
+    let b1 = fb.block();
+    let b2 = fb.block();
+    let v0 = fb.value(tp);
+    let v1 = fb.value(tp);
+    let v2 = fb.value(tb);
+    let v3 = fb.value(tp);
+    let v4 = fb.value(ti);
+    fb.set_params(b0, &[v0]);
+    let r0 = fb.root(Root::Heap);
+    // `nil` 在 IR 里就是「指针类型上的 `Int(0)`」（`R-20-1`）：`ConstVal` 没有
+    // `Nil` 变体，求值器按 `typ` 判定它是零值。
+    fb.instr(
+        b0,
+        Instr::Const {
+            dst: v1,
+            c: ConstVal::Int(0),
+            typ: tp,
+        },
+    );
+    fb.instr(
+        b0,
+        Instr::Bin {
+            dst: v2,
+            op: BinOp::Eq,
+            lhs: v0,
+            rhs: v1,
+            typ: tb,
+        },
+    );
+    fb.instr(
+        b0,
+        Instr::Const {
+            dst: v3,
+            c: ConstVal::Int(0),
+            typ: tp,
+        },
+    );
+    fb.term(
+        b0,
+        Term::If {
+            cond: v2,
+            then_: (b2, vec![]),
+            else_: (b1, vec![]),
+        },
+    );
+    fb.instr(
+        b1,
+        Instr::Load {
+            dst: v4,
+            mem: v3,
+            root: r0,
+            addr: v0,
+            typ: ti,
+        },
+    );
+    fb.term(b1, Term::Return(vec![v4]));
+    fb.term(b2, Term::Panic(v1));
+    fb.into_parts()
+}
+
 #[test]
 fn t_ssa_46_与_c10_示例逐字节一致() {
     let (f, tt) = c10_example();
-    let want = "\
-# SSA v1
-# stage: ssa
-# func f blocks=3 values=5
-block b0 params=[] preds=[] succs=[b1,b2]
-  v0 = const true : t0
-  v1 = const 0 : t1
-  term if v0 -> b1 () | b2 (v1)
-block b1 params=[] preds=[b0] succs=[b2]
-  v2 = const 1 : t1
-  term goto b2 (v2)
-block b2 params=[v3] preds=[b0,b1] succs=[]
-  v4 = bin add v3 v3 : t1
-  term return (v4)
-# type t0 = bool
-# type t1 = int
-";
     let m = module_of(vec![f]);
     assert_eq!(
         dump_module(&m, &tt),
-        want,
-        "dump 与 C10 §3.1 的示例必须逐字节一致（格式漂了就是契约漂了）"
+        c10_block("## 3. 完整示例"),
+        "dump 与 C10 §3 的示例必须逐字节一致（格式漂了就是契约漂了）"
+    );
+}
+
+#[test]
+fn t_ssa_46_第二个示例_panic_与根映射也逐字节一致() {
+    let (f, tt) = c10_example_g();
+    let m = module_of(vec![f]);
+    assert_eq!(
+        dump_module(&m, &tt),
+        c10_block("### 3.2 第二个示例"),
+        "dump 与 C10 §3.2 的示例必须逐字节一致（含 `# root` 行与 `term panic`）"
     );
 }
 

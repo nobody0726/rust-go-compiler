@@ -1,6 +1,7 @@
-# C4 契约（初稿）：SSA —— tuple / memory / Phi / 支配关系 / 调用边界
+# C4 契约：SSA —— tuple / memory / Phi / 支配关系 / 调用边界（M6 定稿）
 
-> **契约级别：spike 级** —— 从 S2 验证出的形状反推，**不是**完整设计。
+> **契约级别：正式**（M6 收口升正式；下面的「spike 级」是 M0 时的原文，保留作为历史）。
+> 最初是从 S2 验证出的形状反推，**不是**完整设计。
 >
 > ## ⚠️ M0 的 SSA 是**直线代码**（一个块、零条控制流边、零个 phi）
 >
@@ -9,10 +10,14 @@
 >
 > **反推来源**：`rgoc/crates/rgoc-spikes/src/{ssa,ssa_needs}.rs`（`SPIKE-ONLY`）、
 > `rgoc/crates/rgoc-hir/src/{hir,value}.rs`。
+>
+> ⚠️ **§1–§5 是 M0 的原文，读它们时请记住**：那五条「需求登记」在 M6 已经全部兑现，
+> 答案在 **§7**。本节不改写历史 —— 保留原文是为了让后来者看到「当时不知道什么」。
 > **消费方**（`M0-design.md` §7）：**codegen** 与 **liveness**。
 
-**状态**：初稿（Phase 4 / T51）　|　**门禁证据**：E6（T45）
+**状态**：**正式**（M6 收口 / Task 51 升正式）　|　**门禁证据**：E6（T45）+ `SSA-1..9`（`M6-manifest.json`）
 **消费者**：M6（SSA / verifier / 精简优化）、M7（codegen）
+**兑现落点**：§7（M6 逐条给答案；§1–§5 保留 M0 的反推原文，不改写历史）
 
 ---
 
@@ -165,3 +170,88 @@ M0 的图能给下游的**具体东西**：
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-07 | **初稿创建**（T51）。与 `ssa_needs.rs` 的需求清单逐条对齐 | Phase 3 的 S2（`T-S2-01/02/03`）+ 门禁 E6 |
+| 2026-10-24 | **升正式**（M6/Task 51）：补 §7 五项需求的兑现答案 + §8 差距表逐行关闭 | `M6-design.md` §3.2–§3.5；`M6-manifest.json` 的九条门禁 |
+
+---
+
+## 7. 五项需求的兑现（M6）
+
+每条都指到**决策**、**代码**、**判据**三处 —— 只写「已支持」是空话，任何人重写一遍都能再写一次。
+
+### 7.1 `S2-NEED-MEMORY` → 按根分区的 memory SSA
+
+| 项 | 内容 |
+|---|---|
+| **决策** | `D-M6-5`（按根分区：`Root::Global` / `Root::Slot` / `Root::Heap`）+ `D-M6-6`（指针是**普通值**，根标注在 `Load`/`Store` 上） |
+| **形状** | `Instr::Load { dst, mem, root, addr, typ }` / `Instr::Store { dst, mem, root, addr, val }`：`Store` **产出新的 mem**，同根的读写靠 mem 链保序 |
+| **代码** | `rgoc-ssa/src/{ir,build}.rs`（`store_root` / `store_to_unknown` / `mem_of`）；运行期在 `rgoc-interp/src/ssa_exec.rs` 按**真实地址**（`Value::Ptr` 的 `Cell`）访存，`root` 只用于静态定序 |
+| **判据** | `V6`（mem 支配 + 同块序）；`T-SSA-07`（反例）；`T-SSA-25`（写穿后读同一条 mem 链）；`T-SSA-36`（跨函数写穿）；`T-SSA-49`（变异：`Store` 不产出新 mem ⇒ 红） |
+
+**根归属是构造性的**（`Fb::ptr_root`）：只认 `AddrOf` / `Field` / `Index` / 指针转换；合并值、形参、调用结果一律「根未知」⇒ 写操作**扇出到所有根**（`store_to_unknown`）。猜堆根是静默丢写。
+
+### 7.2 `S2-NEED-TUPLE` → 多结果指令（tuple 不进 IR）
+
+| 项 | 内容 |
+|---|---|
+| **决策** | `D-M6-4`：多返回值 = **多结果指令**（`Instr::Call { dsts: Vec<ValueId> }`），tuple 不作为值存在 |
+| **形状** | `a, b := two()` ⇒ `v3, v4 = call func#1()`；`return f()` 直连（不落中间槽）；`g(f())` 实参直连 |
+| **代码** | `rgoc-ssa/src/build.rs`（`emit_call` / `expr_multi`） |
+| **判据** | `V5`（结果个数 == 签名）；`T-SSA-20/21/22`；`T-SSA-50`（变异：只取第一个结果 ⇒ 红） |
+
+### 7.3 `S2-NEED-CALL` → 显式调用边界 + effect 摘要
+
+| 项 | 内容 |
+|---|---|
+| **决策** | `D-M6-9`：调用的副作用**显式声明**（`Effect { writes, writes_all, may_panic, may_call_back, prints }`） |
+| **形状** | `Instr::Call { dsts, callee, args, dots, effect }`；`CalleeRef::{Func, Method{recv,func}, Builtin, Indirect}`；`dots` 区分 `append(s, xs)` 与 `append(s, xs...)`（`R-35-1`） |
+| **代码** | `rgoc-ssa/src/{ir,build,effect}.rs`；求值器 `Call` **只压帧**，`Return` 时先全读、再弹帧、再写调用方的 `ret_to`（递归不吃宿主栈） |
+| **判据** | `V5`（结果数/实参数与签名一致）；`T-SSA-23`；`T-SSA-29`（变参）；`T-SSA-30`（方法调用）；`T-SSA-50` |
+
+### 7.4 `S2-NEED-PHI` → 块参数（不用 phi 指令）
+
+| 项 | 内容 |
+|---|---|
+| **决策** | `D-M6-3`：phi = **块参数**（`Block.params` + 前驱在终止符里给实参） |
+| **形状** | `term if v0 -> b1 () \| b2 (v1)` + `block b2 params=[v3]`；`a, b = b, a` 在多轮 copy 后仍正确 |
+| **代码** | `rgoc-ssa/src/build.rs`（`join_into` / `join_branches` / `short_circuit` 的 `lead` 参数）；`ssa_exec.rs::jump`（**先全算边实参、再全写块参数**） |
+| **判据** | `V7`（实参个数 == 参数个数）；`V2`（支配，块参数是汇合点的定义）；`V4`（边与 preds/succs 互逆）；`T-SSA-08/16/28`；`T-SSA-52`（变异：顺序赋值 ⇒ 红，手搓回边对调） |
+
+### 7.5 `S2-NEED-VERIFIER` → 九条不变式
+
+| 项 | 内容 |
+|---|---|
+| **决策** | `D-M6-11`：反例必须是**手写 IR**（由构建器产出的反例等于用被测物证明被测物） |
+| **形状** | `verify(&SsaFunc, &TypeTable) -> Result<(), VerifyError{invariant, block, idx, detail}>`，`V1..V9` 固定顺序 |
+| **代码** | `rgoc-ssa/src/{verify,typing,cfg,dom}.rs` |
+| **判据** | `T-SSA-02..12`：**32 条反例**（每族至少一条，全部被拒且带 `block`/`idx`）+ **16 条正例**（合法图全过 —— 反向证明 verifier 不是一律拒）；`T-SSA-47/48`（变异：删 `V7` / 短路 `V2` ⇒ 红） |
+
+| 不变式 | 查什么 |
+|---|---|
+| `V1` | 每个值**恰好**一个定义点（块参数或指令 `dst`） |
+| `V2` | 使用点的定义必须**支配**它（`mem` 操作数除外 —— 归 `V6`，`R-12-2`） |
+| `V3` | 类型一致（`Bin`/`Un`/`Convert`/`If` 条件/块参数交接） |
+| `V4` | CFG 互逆：边指向存在的块、同一目标的两条边实参一致、入口无前驱 |
+| `V5` | 调用结果数 / 实参个数与签名一致（「查不了」不许当通过） |
+| `V6` | mem 操作数被支配 + 同块内按程序顺序 |
+| `V7` | 边实参个数 == 目标块参数个数 |
+| `V8` | 没有不可达块 |
+| `V9` | 取过地址的槽必须有根登记 |
+
+---
+
+## 8. §3 差距表的逐行关闭
+
+| 不变式 | §3 的状态 | M6 的结论 |
+|---|---|---|
+| 唯一定义点 | ✅ 具备 | ✅ 保持，并由 `V1` **检查**（不再只是结构性事实） |
+| 使用先于定义 | ✅ 直线程序内 | ✅ 升级为 `V2` 支配检查（跨块也成立） |
+| 控制流图 | ❌ | ✅ `cfg.rs` 现算 `preds/succs/edge_args`；`V4`/`V8` 检查 |
+| phi 正确性 | ❌ | ✅ 块参数 + `V7`/`V2`（见 §7.4） |
+| 支配关系 | ❌「从未被验证过」 | ✅ `dom.rs` 手写 CHK 算法；`V2` 是它的第一个消费者 |
+| 类型一致性 | ❌ | ✅ `V3` + `typing.rs`（`identical` 判等，不比 `TypeId` 下标） |
+| 副作用 / 内存 | ❌ | ✅ §7.1 |
+| 调用指令 | ❌ | ✅ §7.3 |
+
+> **一条仍然成立的边界**：verifier 只检查**图的不变式**，不检查「这张图是否等价于源码」。
+> 后者是 `SSA-4` 的三方差分（`HIR = SSA = go run`）负责的 —— 两者不能互相替代。
+

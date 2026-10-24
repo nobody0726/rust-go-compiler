@@ -12,9 +12,9 @@
     "plan": "docs/milestones/M6-plan.md（Task 1–53；进度台账 .superpowers/sdd/M6-plan/progress.md，不入库）",
     "report": "docs/milestones/M6-report.md（交付 B；Task 52）",
     "contracts": [
-      "docs/contracts/C4-ssa.md（Task 51 升正式）",
-      "docs/contracts/C10-ssa-dump.md（Task 1 新建 / Task 51 定稿）",
-      "docs/contracts/C9-values-and-output.md（Task 51 补「SSA 共用同一 Value 与合并流」节）"
+      "docs/contracts/C4-ssa.md（Task 51 已升正式：§7 五项需求逐条兑现 + §8 差距表关闭）",
+      "docs/contracts/C10-ssa-dump.md（Task 51 已定稿：§3.2 示例按实现回填三处，golden 改为从文档读）",
+      "docs/contracts/C9-values-and-output.md（Task 51 补 §7.5「SSA 共用同一 Value 与合并流」）"
     ]
   },
   "crates": [

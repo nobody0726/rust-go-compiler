@@ -208,6 +208,31 @@ println('A') / println(byte(65)) -> 65\n / 65\n
 
 ---
 
+## 7.5 SSA 求值器共用同一 `Value` 与同一合并流（M6/Task 51 补）
+
+`rgoc-interp/src/ssa_exec.rs`（M6 的 SSA 求值器）**不是**第三套运行时（`D-M6-7`）：
+
+| 项 | 共用方式 | 证据 |
+|---|---|---|
+| 值表示 | 直接用 `value::Value` / `Cell`；SSA 的 `ValueId` 只是**帧内下标**，不是值模型 | `ssa_exec.rs` 的 `SFrame.values: Vec<Option<Value>>` |
+| 零值 | 直接调 `zero_of(tt, typ)`（`Fb::mem_of` 的 `const 0 : *T` 也靠它定语义） | `t_ssa_35_数组与结构体字段` |
+| 键相等 | 与解释器同一个 `go_eq`（`map` 键）；M6 的 `map` 本身被白名单拒，这条只在 `clear`/`copy` 的路径上间接用到 | `ssa_reject` 的 `SSA-UNSUPPORTED-MAP` |
+| 算术 | 共用 `ops::bin_arith` / `ops::compare` / `interp::apply_unary` / `convert` / `slice_value` / `append_value`（后三个从 `Interp` 的方法提成 `pub(crate)` 自由函数） | `R-33-1` |
+| 输出 | **同一个**合并流：`print`/`println` 写同一个 `String`，`panic` 走同一个 `panic: <值>` 渲染 | `t_ssa_34_panic_走合并流且退出码_2` |
+| 退出码 | 与 §5 同口径：正常 0 / 未捕获 `panic` 2 / 预算耗尽 2 | `t_ssa_40_*` |
+
+**两条**差异（都是 M6 的实现限制，不是语义差异）：
+
+1. `panic` 在 SSA 里是**终止符**（`Term::Panic`），不是一次调用 —— 这样「panic 之后的语句」
+   在图上就是死代码。渲染仍走 §4.5 的同一个函数。
+2. `CalleeRef::Indirect`（函数值调用）在运行期报错（`G-M6-06`）；函数值本身已被白名单拒绝，
+   所以端到端语料碰不到。
+
+> 这条判据的强度来自**三方差分**（`SSA-4`）：同一个程序 `--via=hir` 与 `--via=ssa`
+> 的合并流必须逐字节一致。两套求值器若在「值怎么变成字节」上分了叉，那一条会红。
+
+---
+
 ## 8. 变更记录
 
 | 修订 | 日期 | 内容 | 触发 |
@@ -215,6 +240,7 @@ println('A') / println(byte(65)) -> 65\n / 65\n
 | `C9-1` | 2026-10-23 | 首次产出（收口期补写，从实现逐条核对） | Task 9 原漏产出 |
 | `C9-2` | 2026-10-23 | §4.3 明确「地址一律占位」；§4.4 补 `float32` 与指数两位的判据 | `print.rs` 实现与 `T-EX-24` 对齐 |
 | `C9-3` | 2026-10-23 | §5 补「`run` 独有的诊断去重」口径 | `run_cmd.rs` §④ 的实测（`F[int](1)` 推 8 次） |
+| `C9-4` | 2026-10-24 | 补 §7.5「SSA 求值器共用同一 `Value` 与同一合并流」（M6/Task 51） | `D-M6-7` 的兑现：值模型只有一个 crate；`opt_equiv`/`ssa_diff` 是它的判据 |
 
 **待办**：`U-M5-14`（非 UTF-8 字符串）兑现时要改 `I4` 与 §4.3 的 `string` 行 —— 届时升 `C9` 的
 次版本，并把 `literal.go` 从排除清单挪回（`M5-tests.md` §6.4）。

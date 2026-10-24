@@ -925,11 +925,11 @@
 **Files:**
 - Modify: `docs/contracts/C4-ssa.md`、`C10-ssa-dump.md`、`C9-values-and-output.md`
 
-- [ ] `C4`：五项需求登记逐条给答案（指向 `M6-design.md` §3.2–§3.5）
-- [ ] `C10`：定稿（去掉「骨架」字样，格式与实现逐行对账）
-- [ ] `C9`：补「SSA 求值器共用同一 `Value` 与合并流」一节
-- [ ] `T-SSA-46`：文档语法行与真实 dump 逐行对得上
-- [ ] Commit：`docs(m6): 契约定稿（Task 51）`
+- [x] `C4`：五项需求登记逐条给答案（§7 每项指到决策 / 代码 / 判据三处）+ §8 差距表逐行关闭
+- [x] `C10`：定稿（状态改「正式」；§3.2 示例按实现回填**三处**：`succs` 顺序 / `const nil` / mem 令牌类型）
+- [x] `C9`：补 §7.5「SSA 求值器共用同一 `Value` 与合并流」+ 两条实现限制
+- [x] `T-SSA-46`：golden **改成从文档读**（`dump.rs::c10_block`），两个示例都逐字节对账 ⇒ 文档一漂就红
+- [x] Commit：`docs(m6): 契约定稿（Task 51）`
 
 **Verify:** `… cargo test -p rgoc-driver --test ssa_cli dump_contract`
 
