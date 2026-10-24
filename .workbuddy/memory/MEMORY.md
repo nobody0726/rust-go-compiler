@@ -10,7 +10,7 @@
 
 ## 当前状态（2026-10-24）
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
-- **M6 执行中：Task 1–39 完成（Phase 1–3 收口：IR/verifier/构建/求值器/三方差分）**，下一 Task = 40（pass 框架）
+- **M6 执行中：Task 1–44 完成（Phase 1–4 收口：IR/verifier/构建/求值器/三方差分/四 pass）**，下一 Task = 45（值级活跃性）
   - 语料 **N=46 / M=23 已冻结**（`R-6-1`）：23 行三栏落 `tools/run-oracle/ssa-rejected.txt`
     （IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）；`ssa_slice.rs` 两向断言
   - **三方差分绿**：`run-collide.sh --ssa` ⇒ 69 = 绿 46 / 跳过 23 / 红 0；
@@ -36,6 +36,11 @@
   `Instr::Call::dots`（`append(s,xs...)` 的展开 vs 单个）。`Call` 只压帧，`Return` 先全读再弹帧再写
 - **语料闭环判据**：`rgoc-driver/tests/ssa_corpus_run.rs` —— 46 个 `N` 侧文件与官方 `.out`
   逐字节比（1.3 s）。这是「SSA 能不能跑真程序」的唯一强证据，别只看手写 fixture
+- ⚠️ **pass 的三条硬约束**：① 删指令后必须 `compact_values`（`V1` 要求**每个**值有定义点）
+  且同步 `f.params`；② `Effect.prints` 是独立维度（print 在内存效果上是纯的，删了少输出）；
+  ③ 摘要的存储归属要看**引用型**槽（指针/切片/map），`s[i]=v` 写的是堆
+- **pass 的唯一强判据是 `opt_equiv.rs`**（46 个 N 上 `--opt=all` == `--opt=none` 逐字节）；
+  单测只证明「变换发生了」，不证明「没改语义」
 
 ## 结构与改动前必读
 - **crate 顺序**：`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY，可整块删）
