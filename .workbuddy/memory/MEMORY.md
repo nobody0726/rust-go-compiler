@@ -10,7 +10,7 @@
 
 ## 当前状态（2026-10-24）
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
-- **M6 执行中：Task 1–34 完成（Phase 1–2 收口 + 求值器骨架/纯值/控制流）**，下一 Task = 35（访存与调用）
+- **M6 执行中：Task 1–35 完成（Phase 1–2 收口 + 求值器可跑真程序）**，下一 Task = 36（预算与退出码）
   - 语料**首次真实读数 N=46 / M=23**（未冻结，`R-6-1` 仍是 Task 39 的活）；M 侧全带白名单码
   - 白名单 **9 条**（`R-31-1` 补 FUNC-VALUE / RANGE-STR；`U-M6-05/06/07` 够不着 ⇒ 守卫测试 `R-31-2`）
   - `ssa` 子命令已接真管线（dump→stdout / 拒绝与 verify→stderr / 退出码 0·1·2）
@@ -28,6 +28,10 @@
 - ⚠️ **`ssa_exec` 的运行期内存模型**：按**真实地址**访存（`Value::Ptr` 里的 `Cell`），
   `root` 只用于静态定序；`RootId` 是函数内下标，跨帧指针靠真实 `Cell`。
   块参数交接必须「先全算边实参、再全写」（`a,b = b,a`）
+- ⚠️ **IR 的三处运行期信息**：`Module::global_types` / `SsaFunc::slot_types`（零值建存储）+
+  `Instr::Call::dots`（`append(s,xs...)` 的展开 vs 单个）。`Call` 只压帧，`Return` 先全读再弹帧再写
+- **语料闭环判据**：`rgoc-driver/tests/ssa_corpus_run.rs` —— 46 个 `N` 侧文件与官方 `.out`
+  逐字节比（1.3 s）。这是「SSA 能不能跑真程序」的唯一强证据，别只看手写 fixture
 
 ## 结构与改动前必读
 - **crate 顺序**：`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY，可整块删）
