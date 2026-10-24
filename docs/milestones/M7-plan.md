@@ -940,10 +940,11 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 ### Task 58: 不支持面 fixture（含两条守卫）
 
 **Files:** Test `rgoc/crates/rgoc-driver/tests/native_unsupported.rs`
-- [ ] `U-M7-01`：slice fixture ⇒ 码 + 退出码 1
-- [ ] `U-M7-04`：arena 耗尽 ⇒ `panic: out of arena` + 退出码 2
-- [ ] `U-M7-02/03`：**守卫测试** —— 断言这两个码**不出现**、拒绝来自 M6（`SSA-UNSUPPORTED-FUNC-VALUE` / `IFACE-DYN`）
-- [ ] Commit：`test(m7): 白名单 4 条（Task 58，T-NAT-52）`
+- [x] `U-M7-01`：slice fixture ⇒ `CG-UNSUPPORTED-SLICE` + 退出码 1 + **不留产物**
+- [x] `U-M7-04`：arena 耗尽 ⇒ `panic: out of arena` + 退出码 2（2000 × 8 KiB > 8 MiB）
+- [x] `U-M7-02/03`：**守卫测试** —— 断言这两个码**不出现**、拒绝来自 M6（`SSA-UNSUPPORTED-*`）
+- [x] 4 条全绿；守卫的语义写进测试注释：M6 一旦放行函数值，这两条会红
+- [x] Commit：`test(m7): 白名单 4 条（Task 58，T-NAT-52）`
 
 **Verify:** `… cargo test -p rgoc-driver --test native_unsupported`（≥4 条）
 
@@ -952,12 +953,19 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 ### Task 59: `M7-manifest.json` 填实 + 对账
 
 **Files:** Create `docs/milestones/M7-manifest.json`；Test `rgoc/crates/rgoc-driver/tests/manifest_m7.rs`
-- [ ] 填 `gate`（`NAT-1..9` 的实际 verdict）/ `test_ids`（64 条）/ `unsupported`（4 条）/ `corpus_lists`（`N'`/`M'`）/ `budget`（含 `measured`）/ `open_gaps`
-- [ ] 对账四类谎（沿 `R-50-1`）：标 pass 却自认未兑现 / 非 pass 无缺口 / 未全绿自称 done / done 但报告不存在
-- [ ] 每条门禁的 verdict 必须能指到 `test_ids` 里的至少一条
-- [ ] Commit：`test(m7): manifest 填实与对账（Task 59，NAT-9）`
+- [x] 填 `gate`（`NAT-1..9` 的**实测** verdict：4 pass / 5 partial）/ `unsupported`（4 条）/
+      `corpus_lists`（`N'`=39 / `M'`=7）/ `budget` / `open_gaps`（7 条）/ `measured`
+- [x] **verdict 全部按实测填，不按设计稿填**：`NAT-3`（9 实参）/ `NAT-7`（objdump 对账）/
+      `NAT-2`（逐变体 fixture）/ `NAT-6`（聚合值语义）/ `NAT-1`（ELF 可复现）都诚实记 `partial`
+- [x] 对账五类谎：标 pass 却自认未兑现 / 非 pass 无缺口 / **数字自报**（`native_*` 必须能从
+      清单算出）/ unsupported 的码 ∈ `CgCode::ALL` / `done` 与门禁全 pass 必须同真同假
+      （外加 `done` 但报告不存在，`R-50-1`）
+- [x] **合成反例 9 种**（不是 8 种）：每种都必须报出指名道姓的错误，否则断言是恒真的近亲
+- [x] 偏离：`test_ids` 没有单列 64 条数组 —— 每条门禁的 `evidence` 直接点名测试**文件名**，
+      比一个与测试代码不同步的 ID 列表更难说谎（`R-59-1`）
+- [x] Commit：`test(m7): manifest 填实与对账（Task 59，NAT-9，R-59-1）`
 
-**Verify:** `… cargo test -p rgoc-driver --test manifest_m7`（≥10 条）
+**Verify:** `… cargo test -p rgoc-driver --test manifest_m7`（2 条：自洽 + 9 种反例）
 
 ---
 

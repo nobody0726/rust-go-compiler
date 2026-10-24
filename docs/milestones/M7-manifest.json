@@ -1,0 +1,125 @@
+{
+  "stage": "M7",
+  "name": "native 代码生成（arm64 MVP）",
+  "generated_at": "2026-10-24T00:00:00Z",
+  "filled_at": "2026-10-25T00:00:00Z",
+  "fill_task": "M7-plan.md Task 59（按实测数字填；由 rgoc-driver/tests/manifest_m7.rs 对账）",
+  "status": "已执行（部分兑现）—— 产物能跑且与官方 oracle 逐字节一致；九条门禁 4 pass / 5 partial，缺口见 open_gaps",
+  "scope": "SSA（优化后）→ arm64 文本汇编 → clang 链接 → ELF；每值一个栈槽、freestanding C runtime、静态 arena、FRAME-MAP v1；验收 = 帧与 ABI（甲）+ 指令选择（乙）+ runtime 与输出（丙）+ 三方差分（丁）+ 装置与 CLI（戊）+ 反变异（反）",
+  "docs": {
+    "design": "docs/milestones/M7-design.md（D-M7-1..16 / F1–F18 / NAT-1..9 / 白名单 U-M7-01..04）",
+    "tests": "docs/milestones/M7-tests.md（64 个 T-NAT-*；修订表 R-1-1 / R-8-1 / R-8-2 / R-11-1 / R-11-2 / R-13-1..5）",
+    "plan": "docs/milestones/M7-plan.md（Task 1–65；进度台账 .superpowers/sdd/M7-plan/progress.md，不入库）",
+    "contracts": [
+      "docs/contracts/C5-abi.md（升正式：§6 调用约定 / §7 帧布局 / §8 FRAME-MAP v1 / §9 确定性）",
+      "docs/contracts/C9-values-and-output.md（输出字节与退出码的唯一口径，native 与解释器共用）"
+    ]
+  },
+  "crates": [
+    "rgoc/crates/rgoc-arm64（新：abi / frame / isel / module / emit / parallel_copy / diag）",
+    "rgoc/crates/rgoc-types（加 layout 模块：size/align/field_offsets + array_len_of）",
+    "rgoc/crates/rgoc-driver（加 build 子命令：-o / --emit / --keep-asm / --opt / --lang）",
+    "rgoc/crates/rgoc-ssa（修 live.rs 的漏根缺陷：safepoint 反向扫描种子加 term.uses()）",
+    "runtime/native/aarch64-unknown-linux-gnu/rt.c（freestanding，零 libc）",
+    "tools/run-oracle/run-native.sh + native-input.txt + native-rejected.txt"
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
+    "input": {
+      "file": "tools/run-oracle/native-input.txt",
+      "count": 46,
+      "note": "= 入选语料 69 − M6 拒绝面 23（即 M6 的 N 侧）"
+    },
+    "supported": {
+      "count": 39,
+      "frozen_by": "M7-plan Task 55（R-6-1 同款）",
+      "note": "39 个全部：构建成功 + 退出码 0 + stdout 与官方 .exp 逐字节一致"
+    },
+    "rejected": {
+      "file": "tools/run-oracle/native-rejected.txt",
+      "count": 7,
+      "codes": { "CG-UNSUPPORTED-SLICE": 7 },
+      "note": "7 个全是切片面（U-M7-01）；设计稿 Q2 原说保 4 个有输出的语料，实际 3 个（ken/string.go 用字符串切片）"
+    },
+    "output_split": {
+      "with_output": 3,
+      "empty_output": 36,
+      "with_output_files": [
+        "go_source_code/test/helloworld.go（13 B）",
+        "go_source_code/test/printbig.go（41 B）",
+        "go_source_code/test/ken/cplx0.go（28 B）"
+      ],
+      "note": "分栏是判据的牙齿：空输出栏的结论只能是「跑完 / 退出码 0 / 两流皆空」，不证明算对"
+    }
+  },
+  "gate": [
+    { "id": "NAT-1", "name": "产物与工具链", "status": "partial", "evidence": "emit_deterministic 7 条（同一输入两次 render 逐字节相同）；native_cli 的 --keep-asm / --emit 形态；ELF 的 file 双条件靠 M0 的 SM-M0-NATIVE-HELLO 与手工实测，**没有**自动化断言", "gap": "同一份 .s 两次链接 ELF 逐字节相同 未做自动化（clang 版本固定但 build-id/时间戳未讨论）" },
+    { "id": "NAT-2", "name": "指令选择完备", "status": "partial", "evidence": "14 个 Instr + 5 个 Term 全部有实现分支（`instr`/`term` 的 match 无通配，加变体必编译失败）；语料 39 个覆盖了绝大多数路径", "gap": "「每个变体至少一条 fixture」未逐条建（现靠语料 + 探针间接覆盖）；`T-NAT-1x` 的逐变体 fixture 未写" },
+    { "id": "NAT-3", "name": "调用与帧", "status": "partial", "evidence": "parallel_copy 10 条（含交换环与三轮换）；native_corpus_run 39 个里含递归、多返回值、结构体传参；probe5 钉住「调用后槽不变」", "gap": "**9 个以上实参**的 outgoing 区未测且实现可疑（`pass_args` 的 `xi >= 8` 分支把参数写到 `[sp, #k]`，那是帧内不是调用方分配区）；栈对齐未单独断言" },
+    { "id": "NAT-4", "name": "三方差分", "status": "pass", "evidence": "run-native.sh 在 46 个上：有输出 3/3 + 空输出 36/36（ok=39 skip=7 bad=0）；期望值来自官方 go run 的 .exp，不是手写", "gap": "—" },
+    { "id": "NAT-5", "name": "输出字节", "status": "pass", "evidence": "native_float.rs：C9 §4.4 六个冻结点逐字节 + 与解释器对撞 20 个刁钻值（5e-324 / 1.79e308 / 2^53+1 / 0.1+0.2）", "gap": "—" },
+    { "id": "NAT-6", "name": "基础对象", "status": "partial", "evidence": "new/arena/zerobase（zerosize.go 在 N' 里）；全局读写、指针写穿、复合字面量、数组/结构体按指针传（func.go / compos.go / newexpr.go 在 N' 里）", "gap": "「聚合拷贝后互不影响」缺一条**直接**断言（现靠语料里 `*p != x` 间接）；arena 只 bump 不回收，长循环会耗尽（U-M7-04 有 fixture）" },
+    { "id": "NAT-7", "name": "帧布局与 stack map", "status": "partial", "evidence": "frame_layout 11 条（区间不相交 / 零大小 / 帧大小恒 16 倍数 / 临时区）；frame_map 6 条（C5 §8 的行语法）；frame_zero 5 条", "gap": "**没有** objdump 逐偏移对账（`NAT-7` 的原文判据）；safepoint 的活值覆盖只用手搓 IR 验过，未在语料上验" },
+    { "id": "NAT-8", "name": "不支持面", "status": "pass", "evidence": "native_unsupported.rs 4 条：U-M7-01（码 + 退出码 1 + 不留产物）、U-M7-02/03（守卫：码不出现、拒绝来自 M6）、U-M7-04（panic: out of arena + 退出码 2）", "gap": "—" },
+    { "id": "NAT-9", "name": "回归与收口", "status": "partial", "evidence": "四条 cargo 全绿（fmt 0 / check 0 / clippy -D warnings 0 / test 192 suite 1954 passed 0 failed 1 ignored）；M6 的语料与门禁零回归", "gap": "报告（Task 63）与 GAP-01 的 M7 节未写；C5 的变更记录已折回但未做「文档驱动 golden」式的自洽测试" }
+  ],
+  "unsupported": [
+    { "id": "U-M7-01", "what": "[]T 全套（Instr::Slice / Make(slice) / Composite(slice) / 含切片的类型）", "code": "CG-UNSUPPORTED-SLICE", "exit": 1, "test_id": "T-NAT-52", "evidence": "native_unsupported::u_m7_01 + native-rejected.txt 的 7 行" },
+    { "id": "U-M7-02", "what": "间接调用（CalleeRef::Indirect）", "code": "CG-UNSUPPORTED-INDIRECT-CALL", "exit": 1, "test_id": "T-NAT-52", "evidence": "守卫（M6 先拒函数值；码不出现）" },
+    { "id": "U-M7-03", "what": "方法值 / 接口动态派发", "code": "CG-UNSUPPORTED-METHOD-VALUE", "exit": 1, "test_id": "T-NAT-52", "evidence": "守卫（M6 先拒）" },
+    { "id": "U-M7-04", "what": "arena 耗尽", "code": "panic: out of arena", "exit": 2, "test_id": "T-NAT-52", "evidence": "native_unsupported::u_m7_04（2000 × 8 KiB > 8 MiB）" }
+  ],
+  "coverage": {
+    "instr_variants": 14,
+    "term_variants": 5,
+    "match_without_wildcard": true,
+    "runtime_symbols": [
+      "rt_exit", "rt_write", "rt_memcpy", "rt_memset", "rt_memcmp", "rt_arena_alloc",
+      "rt_strcat", "rt_strcmp", "rt_i64_to_str",
+      "rt_print_space", "rt_print_nl", "rt_print_str", "rt_print_bool",
+      "rt_print_u64", "rt_print_i64", "rt_print_f64", "rt_print_complex", "rt_print_complex64",
+      "rt_panic_str", "rt_panic_i64", "rt_panic_f64", "rt_panic_complex",
+      "rt_panic_div_zero", "rt_panic_nil"
+    ],
+    "note": "「没有实现的入口故意不定义」——未实现时链接期 undefined reference，不许给「大概对」的版本"
+  },
+  "budget": {
+    "arena_bytes": 8388608,
+    "arena_note": "只 bump 不回收；1 MiB 在 turing.go（几千次字符串拼接）上会假性耗尽，提到 8 MiB",
+    "steps": "不适用（native 没有步数预算；M7 的「跑死循环」由 run-native.sh 的 timeout 20 兜住）"
+  },
+  "open_gaps": [
+    { "id": "G-M7-01", "gate": "NAT-3", "what": "**9 个以上实参**的 outgoing 参数区未实现/未测", "why": "`pass_args` 的 `xi >= 8` 分支把实参写进 `[sp, #k]`，那是**本帧**内部而不是调用方为被调方预留的区；正确做法是序言里多留一块 outgoing 区并把 `sp` 提到它之上", "owner": "M7 收口前（或 M9 的 ABI 完整化）" },
+    { "id": "G-M7-02", "gate": "NAT-7", "what": "`FRAME-MAP v1` 的偏移**没有**与 objdump 逐条对账", "why": "需要先有「从 .s 解析实际偏移」的小工具；现在只在 frame_layout 里做几何断言（区间不相交）", "owner": "M7 收口前" },
+    { "id": "G-M7-03", "gate": "NAT-2", "what": "14+5 个变体**没有逐条 fixture**", "why": "现在靠 39 个语料 + 11 个手写探针间接覆盖；「每个变体至少一条」是可执行的分母，值得补", "owner": "M7 收口前" },
+    { "id": "G-M7-04", "gate": "NAT-6", "what": "聚合的**值语义拷贝**缺一条直接断言（拷贝后改一个不影响另一个）", "why": "语料只在 newexpr/compos 间接覆盖；`copy()` 的 >8 字节走 rt_memcpy，路径是对的但没有专门判据", "owner": "M7 收口前" },
+    { "id": "G-M7-05", "gate": "NAT-1", "what": "ELF 的逐字节可复现未断言", "why": "`.s` 的可复现已断言（emit_deterministic）；ELF 还受 `-Wl,-s`、build-id、clang 版本影响", "owner": "M9（与工具链锁定一起做）" },
+    { "id": "G-M7-06", "gate": "NAT-9", "what": "M7-report.md 与 GAP-01 的 M7 节未写", "why": "Task 63 未执行", "owner": "M7 收口" },
+    { "id": "G-M7-07", "gate": "NAT-3", "what": "栈对齐只靠「帧大小恒 16 的倍数」间接保证，没有 `svc` 前的 `sp % 16 == 0` 断言", "why": "AArch64 的用户态 `svc` 不要求对齐，但 C 运行时（rt.c）假定 AAPCS64；现在靠 `sub sp` 恒 16 的倍数成立", "owner": "M7 收口前（补一条 objdump 断言即可）" }
+  ],
+  "phase_summary": {
+    "tasks_done": "Task 1–59（Task 60–65 未做：变异 / 报告 / 文档回写 / 全量回归 / 收口）",
+    "design_revisions": ["R-1-1", "R-8-1", "R-8-2", "R-11-1", "R-11-2", "R-13-1", "R-13-2", "R-13-3", "R-13-4", "R-13-5"],
+    "done": false
+  },
+  "measured": {
+    "workspace_suites": 193,
+    "workspace_tests": 1956,
+    "workspace_failed": 0,
+    "workspace_ignored": 1,
+    "m6_baseline_tests": 1859,
+    "native_input": 46,
+    "native_supported": 39,
+    "native_rejected": 7,
+    "native_with_output": 3,
+    "native_empty_output": 36,
+    "native_bad": 0,
+    "oracle_byte_exact": 39,
+    "rgoc_arm64_tests": 54,
+    "rgoc_types_layout_tests": 16,
+    "diag_codes": 103,
+    "cg_codes": 3,
+    "corpus_sha_ok": "15618/15618",
+    "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）"
+  }
+}
