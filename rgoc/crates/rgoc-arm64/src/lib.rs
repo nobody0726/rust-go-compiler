@@ -28,3 +28,4 @@ pub mod abi;
 pub mod diag;
 pub mod emit;
 pub mod frame;
+pub mod parallel_copy;

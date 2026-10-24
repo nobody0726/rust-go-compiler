@@ -73,7 +73,9 @@ pub fn slot_of(tt: &TypeTable, t: TypeId) -> Option<Slot> {
     let class = class_of(tt, t)?;
     let size = match class {
         // 标量一律一个 8 字节槽：`int8` 也占 8（浪费 7 字节，换来「槽宽恒定」）。
-        SlotClass::Int | SlotClass::Float | SlotClass::Complex64 => 8,
+        // ⚠️ 但 `string` 是 **16 字节**的标量（`(ptr, len)` 两个字）—— 一律写 8 会把它截断。
+        SlotClass::Int => round_up_8(l.size)?.max(8),
+        SlotClass::Float | SlotClass::Complex64 => 8,
         SlotClass::Complex128 => 16,
         SlotClass::Agg => round_up_8(l.size)?,
     };

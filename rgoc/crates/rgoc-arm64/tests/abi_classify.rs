@@ -66,8 +66,8 @@ fn 字符串占两个寄存器() {
     let s = t.add_basic(BasicId::String);
     assert_eq!(
         slot(&t, s),
-        (SlotClass::Int, 8),
-        "string 的**槽**是 8（一槽装两字）"
+        (SlotClass::Int, 16),
+        "string 的槽是 16 字节（ptr + len 两个字）"
     );
     // 但传参要两个 x：`(ptr, len)`。
     assert_eq!(reg_count(&t, s), Some(2), "string 传参占两个 x");
