@@ -911,9 +911,10 @@
 - Modify: `docs/milestones/M6-manifest.json`
 - Create: `rgoc/crates/rgoc-driver/tests/manifest_m6.rs`
 
-- [ ] 按 `M6-tests.md` §7 的门禁映射逐字段填
-- [ ] 对账测试：三类谎必须被拦（`T-SSA-44`）
-- [ ] Commit：`test(m6): manifest 填实与对账（Task 50）`
+- [x] 按 `M6-tests.md` §7 的门禁映射逐字段填（九条门禁全 `pass` + `measured` 实测数字 + 6 条 `open_gaps` + 2 条 `closed_gaps`）
+- [x] 对账测试：**四类**谎必须被拦（`T-SSA-44` + `R-50-1` 的「done 但报告不存在」）+ 五种改坏
+- [x] `T-SSA-41`（构建预算）**未实现** ⇒ `verdict: missing` + `G-M6-01` 点名（不假装 pass）
+- [x] Commit：`test(m6): manifest 填实与对账（Task 50）`
 
 **Verify:** `… cargo test -p rgoc-driver --test manifest_m6`
 
