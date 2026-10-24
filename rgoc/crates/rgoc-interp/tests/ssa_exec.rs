@@ -7,6 +7,8 @@
 //! 精确控制「块参数 / 边实参 / 内存根」这些端到端不好构造的形态。
 //! 工具用 `rgoc_ssa::testsupport`（`D-M6-11` 的地基）。
 
+use rgoc_hir::BinOp;
+use rgoc_hir::types::ConstVal;
 use rgoc_interp::{Options, run_ssa};
 use rgoc_ssa::ir::{CalleeRef, Effect, Instr, Module, Term};
 use rgoc_ssa::testsupport::{FnBuilder, module_of};
@@ -174,5 +176,159 @@ fn t_ssa_40_无限递归按帧深上限停下() {
     assert!(
         diag.contains("栈溢出") && diag.contains("1000"),
         "诊断要说明帧深上限，实际：{diag:?}"
+    );
+}
+
+// ── Task 49（T-SSA-52）：块参数交接必须是**并行**的 ─────────────────
+
+#[test]
+fn t_ssa_52_回边上对调两个块参数() {
+    // 手搓一个「回边把两个块参数对调」的图：
+    //
+    //   b0: v0=1; v1=2; v2=0; goto b1(v0,v1,v2)
+    //   b1(p0,p1,pc): v4 = lt pc 3; if v4 -> b2() | b3(p0,p1)
+    //   b2: v6 = add pc 1; goto b1(p1,p0,v6)      ← 实参是**本块参数自己**
+    //   b3(pa,pb): println(pa,pb); return
+    //
+    // # 为什么必须手搓
+    //
+    // 构建器**不会**产出这种边：HIR 的 `a, b = b, a` 靠「改名」解决
+    // （实测 dump：`goto b4 (v4,v3,v5)`，交的是 latch 自己的参数），
+    // 所以端到端 fixture 打不到 `jump` 的并行语义。
+    //
+    // # 判据
+    //
+    // 三轮交换 ⇒ 1,2 → 2,1 → 1,2 → 2,1。顺序赋值会得到 2,2（先写 p0←p1，
+    // 再读 p0 已经变了）—— 差一个数，但那是**静默**的。
+    let mut b = FnBuilder::new("main");
+    let int = b.basic("int");
+    let bt = b.basic("bool");
+    let b0 = b.entry();
+    let b1 = b.block();
+    let b2 = b.block();
+    let b3 = b.block();
+
+    let v0 = b.value(int);
+    let v1 = b.value(int);
+    let v2 = b.value(int);
+    b.instr(
+        b0,
+        Instr::Const {
+            dst: v0,
+            c: ConstVal::Int(1),
+            typ: int,
+        },
+    );
+    b.instr(
+        b0,
+        Instr::Const {
+            dst: v1,
+            c: ConstVal::Int(2),
+            typ: int,
+        },
+    );
+    b.instr(
+        b0,
+        Instr::Const {
+            dst: v2,
+            c: ConstVal::Int(0),
+            typ: int,
+        },
+    );
+    b.term(
+        b0,
+        Term::Goto {
+            to: b1,
+            args: vec![v0, v1, v2],
+        },
+    );
+
+    let p0 = b.value(int);
+    let p1 = b.value(int);
+    let pc = b.value(int);
+    b.set_params(b1, &[p0, p1, pc]);
+    let three = b.value(int);
+    let lt = b.value(bt);
+    b.instr(
+        b1,
+        Instr::Const {
+            dst: three,
+            c: ConstVal::Int(3),
+            typ: int,
+        },
+    );
+    b.instr(
+        b1,
+        Instr::Bin {
+            dst: lt,
+            op: BinOp::Lt,
+            lhs: pc,
+            rhs: three,
+            typ: bt,
+        },
+    );
+    b.term(
+        b1,
+        Term::If {
+            cond: lt,
+            then_: (b2, Vec::new()),
+            else_: (b3, vec![p0, p1]),
+        },
+    );
+
+    let one = b.value(int);
+    let next = b.value(int);
+    b.instr(
+        b2,
+        Instr::Const {
+            dst: one,
+            c: ConstVal::Int(1),
+            typ: int,
+        },
+    );
+    b.instr(
+        b2,
+        Instr::Bin {
+            dst: next,
+            op: BinOp::Add,
+            lhs: pc,
+            rhs: one,
+            typ: int,
+        },
+    );
+    // 这一条就是判据：实参 (p1, p0) 与块参数 (p0, p1) 互为别名
+    b.term(
+        b2,
+        Term::Goto {
+            to: b1,
+            args: vec![p1, p0, next],
+        },
+    );
+
+    let pa = b.value(int);
+    let pb = b.value(int);
+    b.set_params(b3, &[pa, pb]);
+    b.instr(
+        b3,
+        Instr::Call {
+            dsts: Vec::new(),
+            callee: CalleeRef::Builtin(rgoc_hir::BuiltinKind::Println),
+            args: vec![pa, pb],
+            dots: false,
+            effect: Effect::default(),
+        },
+    );
+    b.term(b3, Term::Return(Vec::new()));
+
+    let (f, tt) = b.into_parts();
+    let m = Module {
+        main: Some(rgoc_hir::FuncId(0)),
+        ..module_of(vec![f])
+    };
+    let out = run_ssa(&m, &tt, Options::default());
+    assert_eq!(out.exit, 0, "正常退出：{out:?}");
+    assert_eq!(
+        out.output, "2 1\n",
+        "三轮交换后应是 2,1；顺序赋值会得到 2,2（静默算错）"
     );
 }

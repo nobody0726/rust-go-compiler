@@ -896,9 +896,10 @@
 **Files:**
 - Create: `scripts/mutation-m6-notes.md`
 
-- [ ] 逐条施加 `T-SSA-47` / `T-SSA-48` / `T-SSA-49` / `T-SSA-50` / `T-SSA-51` / `T-SSA-52` / `T-SSA-53` / `T-SSA-54` 的变异（每次 `cargo clean -p` 对应 crate）→ 确认变红 → 复原
-- [ ] 记录施加点、红在哪、复原状态
-- [ ] Commit：`test(m6): 变异 8 条记录（Task 49）`
+- [x] 逐条施加 `T-SSA-47` … `T-SSA-54` 的变异（每次 `cargo clean -p` 对应 crate）→ 确认变红 → 复原
+- [x] 记录施加点、红在哪、复原状态（**8/8 全红**；`scripts/mutation-m6-notes.md`）
+- [x] `T-SSA-52` 的判据**改指向手搓 IR**（`R-49-1`：端到端的 `a, b = b, a` 不经块参数）
+- [x] Commit：`test(m6): 变异 8 条记录（Task 49）`
 
 **Verify:** 8/8 实证变红；workspace 回到全绿
 
