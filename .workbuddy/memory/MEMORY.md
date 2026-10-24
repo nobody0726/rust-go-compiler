@@ -8,13 +8,21 @@
 - git 身份 `nobody0726` / `102368194+nobody0726@users.noreply.github.com`；见到 `wangf <yhome@…local>` 即丢失，`git config --global` 重设
 - commit 纪律（2026-10-15 授权）：阶段收口即 commit + push（按交付块分 commit）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore；`tools/ast-oracle` vendor 入库
 
-## 当前状态（2026-10-23）
+## 当前状态（2026-10-24）
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
-- **M6 三件套 + manifest 骨架已就位，执行未开始**：`M6-design.md`（`D-M6-1..16` / `F1..F14` / 门禁 `SSA-1..9`）、
-  `M6-tests.md`（64 个 `T-SSA-*`，切片 `N`/`M` 待 Task 39 实测冻 `R-6-1`）、`M6-plan.md`（Task 1–53）、`M6-manifest.json`（gate 全 pending）
+- **M6 执行中：Task 1–31 完成（Phase 1–2 收口）**，下一 Task = 32b（包初始化）→ 32（`ssa_exec` 骨架）
+  - 语料**首次真实读数 N=46 / M=23**（未冻结，`R-6-1` 仍是 Task 39 的活）；M 侧全带白名单码
+  - 白名单 **9 条**（`R-31-1` 补 FUNC-VALUE / RANGE-STR；`U-M6-05/06/07` 够不着 ⇒ 守卫测试 `R-31-2`）
+  - `ssa` 子命令已接真管线（dump→stdout / 拒绝与 verify→stderr / 退出码 0·1·2）
+- **M6 三件套 + manifest**：`M6-design.md`（`D-M6-1..16` / `F1..F14` / 门禁 `SSA-1..9`）、
+  `M6-tests.md`（64 个 `T-SSA-*`）、`M6-plan.md`（Task 1–53 + 插入 32b）、`M6-manifest.json`（gate 全 pending，收口时填）
 - 五条 M6 铁决策：SSA 输入=**HIR**、**单包**、phi=**块参数**、多返回值=**多结果指令**（tuple 不进 IR）、memory **按根分区**（Global/取址 Slot/Heap）；
   代码落 `rgoc-ssa`（纯数据）+ `rgoc-interp::ssa_exec`（复用 `Value`）；passes = fold/dce/copy + **块内 CSE**
 - **里程碑收口的四要素**：代码 + 台账 + manifest 对账测试 + 报告。少一样就只是「跑得起来」，不是收口
+- ⚠️ **`Program::init_order` 没进 SSA**（`G-M6-07`）：`var g = f()` 的右侧只有解释器跑，
+  `build()` 不读它 ⇒ SSA 里全局是零值。Task 32b 修（`R-32-1`）；三方差分前必须补
+- ⚠️ **指针根归属是构造性记录**（`Fb::ptr_root`，只认 `AddrOf`/`Field`/`Index`/指针转换）：
+  合并/形参/调用结果一律「根未知」⇒ 写操作**扇出到所有根**（`store_to_unknown`），不猜堆根
 
 ## 结构与改动前必读
 - **crate 顺序**：`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY，可整块删）
