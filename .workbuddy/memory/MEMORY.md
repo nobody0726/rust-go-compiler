@@ -10,15 +10,20 @@
 
 ## 当前状态（2026-10-24）
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
-- **M6 执行中：Task 1–44 完成（Phase 1–4 收口：IR/verifier/构建/求值器/三方差分/四 pass）**，下一 Task = 45（值级活跃性）
+- **M6 已收口（2026-10-24，Task 1–53）**：九条门禁 9/9 pass；语料 **N=46 / M=23**；
+  `--via=hir` == `--via=ssa` 46/46；`--opt=all` == `none` 46/46；`SSA-LIVE v1` 可被只读文本的桩消费；
+  **176 suite / 1859 passed**；66 条变异全红。下一阶段 = **M7（native 代码生成）**
   - 语料 **N=46 / M=23 已冻结**（`R-6-1`）：23 行三栏落 `tools/run-oracle/ssa-rejected.txt`
     （IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）；`ssa_slice.rs` 两向断言
   - **三方差分绿**：`run-collide.sh --ssa` ⇒ 69 = 绿 46 / 跳过 23 / 红 0；
     `run --via={hir,ssa}` 两条通路在 46 个上逐字节一致（`ssa_diff.rs` + `ssa_corpus_run.rs`）
   - 白名单 **9 条**（`R-31-1` 补 FUNC-VALUE / RANGE-STR；`U-M6-05/06/07` 够不着 ⇒ 守卫测试 `R-31-2`）
   - `ssa` 子命令已接真管线（dump→stdout / 拒绝与 verify→stderr / 退出码 0·1·2）
-- **M6 三件套 + manifest**：`M6-design.md`（`D-M6-1..16` / `F1..F14` / 门禁 `SSA-1..9`）、
-  `M6-tests.md`（64 个 `T-SSA-*`）、`M6-plan.md`（Task 1–53 + 插入 32b）、`M6-manifest.json`（gate 全 pending，收口时填）
+- **M6 五件套**：`M6-design.md`（`D-M6-1..16` / `F1..F14` / 门禁 `SSA-1..9`）、`M6-tests.md`（64 个 `T-SSA-*` + 44 条修订）、
+  `M6-plan.md`（Task 1–53 + 插入 32b/33b）、`M6-manifest.json`（已填实，`phase_summary.done`）、`M6-report.md`（交付 B）
+- ⚠️ **`T-SSA-41`（构建预算 1e5）未实现**（`G-M6-01`）：设计稿有判据、计划无 Task。M7 补
+- ⚠️ **文档驱动 golden 是唯一能防契约漂的写法**（`R-51-1`）：抄进测试的期望值只能证明
+  「实现与那份副本一致」—— 改成从 `C10` 读之后一次抓出三处文档错
 - 五条 M6 铁决策：SSA 输入=**HIR**、**单包**、phi=**块参数**、多返回值=**多结果指令**（tuple 不进 IR）、memory **按根分区**（Global/取址 Slot/Heap）；
   代码落 `rgoc-ssa`（纯数据）+ `rgoc-interp::ssa_exec`（复用 `Value`）；passes = fold/dce/copy + **块内 CSE**
 - **里程碑收口的四要素**：代码 + 台账 + manifest 对账测试 + 报告。少一样就只是「跑得起来」，不是收口

@@ -736,8 +736,8 @@
   "phase_summary": {
     "tasks": 53,
     "gates": 9,
-    "status": "in_progress",
-    "note": "Task 50 填实（九条门禁已 pass）；Task 52 写报告、Task 53 全量回归后翻 done"
+    "status": "done",
+    "note": "九条门禁全 pass；open_gaps 6 条（均为 M7–M9 的已知边界，不是失败）；Task 53 全量回归后翻 done"
   },
   "test_ids_total": 64,
   "closed_gaps": [
@@ -754,7 +754,7 @@
   ],
   "measured": {
     "workspace_suites": 176,
-    "workspace_tests": 1858,
+    "workspace_tests": 1859,
     "workspace_failed": 0,
     "workspace_ignored": 1,
     "m5_baseline_tests": 1608,
@@ -768,6 +768,8 @@
     "live_functions": 140,
     "mutations_red": 66,
     "diag_codes": 103,
-    "corpus_sha_ok": "15618/15618"
+    "corpus_sha_ok": "15618/15618",
+    "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
+    "collide_forms": "--run 69 绿 / --three-way 69 绿 / --ssa 46 绿 23 跳过 0 红 / --ssa --three-way 同上"
   }
 }

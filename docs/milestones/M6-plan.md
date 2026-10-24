@@ -954,9 +954,11 @@
 **Files:**
 - Modify: `.superpowers/sdd/M6-plan/progress.md`
 
-- [ ] 四条 cargo + 五条既有自检 + `run-collide` 五形态 + `--ssa` 形态
-- [ ] `T-SSA-42` / `T-SSA-43` / `T-SSA-45`：全绿、测试数 ≥ 1608、语料 hash 通过
-- [ ] Commit：`chore(m6): 全量回归（Task 53）`
+- [x] 四条 cargo（fmt / check / clippy / test）+ 五条既有自检（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）
+- [x] `run-collide` 四形态：`--run --list` 69 绿 / `--three-way` 69 绿 / `--ssa` 46 绿 23 跳过 0 红 / `--ssa --three-way` 同上
+- [x] `T-SSA-42` / `T-SSA-43` / `T-SSA-45`：全绿、**1859** ≥ 1608、语料 hash 15618/15618
+- [x] `phase_summary.status` 翻 `done`（报告已落地，对账测试的第四类谎不再触发）
+- [x] Commit：`chore(m6): 全量回归（Task 53）`
 
 **Verify:** 四条 cargo exit 0；`bash tools/run-oracle/run-collide.sh --run --ssa` 全绿；`shasum -a 256 -c corpus-manifest.sha256` 通过
 
