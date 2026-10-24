@@ -241,7 +241,17 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
         }
         // 反向扫：`after[i]` = 执行完第 i 条之后还活着的值
         let mut after: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); blk.instrs.len()];
+        // ⚠️ 种子必须是 `live_out ∪ 终止符的读`（`R-11-1`）。
+        //
+        // 终止符不是指令，`live_out` 里也没有它的操作数（`live_out` 只由**后继**的
+        // `live_in` 与边实参构成）。所以只从 `live_out` 起步，会漏掉「只在本块终止符里
+        // 被读」的值 —— 它们从定义点一直活到块尾，却在 `after[*]` 里整个消失。
+        //
+        // 后果不是「少一个数」：safepoint 的 `live` 会漏根，M10 拿它扫栈就会把
+        // 还活着的对象当成垃圾回收掉。M6 的 5 条 liveness 测试没抓到它，
+        // 因为那些用例的返回值/边实参**同时也被别的指令用过**。
         let mut cur = live_out[bi].clone();
+        cur.extend(blk.term.uses());
         for ii in (0..blk.instrs.len()).rev() {
             after[ii] = cur.clone();
             for d in blk.instrs[ii].dsts() {

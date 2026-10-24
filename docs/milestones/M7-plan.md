@@ -306,16 +306,22 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 - Test: `rgoc/crates/rgoc-arm64/tests/frame_map.rs`
 
 **Interfaces:**
-- Produces: `render_frame_map(f: &SsaFunc, fr: &Frame, live: &Liveness, tt: &TypeTable) -> String`
-- Consumes: Task 9 的 `Frame`；`rgoc_ssa::live::{Liveness, analyze}`
+- Produces: `render_frame_map(f: &SsaFunc, fr: &Frame, lv: &Liveness) -> String`（不需要 `tt`：`ptrs` 已由 `live` 算好）
+- Consumes: Task 9 的 `Frame`；`rgoc_ssa::live::{Liveness, analyze}`、`rgoc_ssa::cfg::Cfg`
 
-- [ ] 先写会红的测试：格式符合 `C5` §4（头两行 + `slot` 行按 `ValueId` 升序 + `safepoint` 行按块号/下标升序）
-- [ ] `frame=` 等于 `frame_size`；`slot` 行的 `off`/`size` 来自 `Frame`
-- [ ] `safepoint` 的 `offs` 覆盖 `SSA-LIVE v1` 在该位点的**全部**活值（少一个即红）
-- [ ] 两次渲染逐字节相同
-- [ ] Commit：`feat(arm64): FRAME-MAP v1（Task 11，T-NAT-51）`
+- [x] 格式符合 `C5` §8：头两行 + `slot` 行按 `ValueId` 升序 + `safepoint` 行按 `(块号, 指令下标)` 升序
+- [x] `frame=` 等于 `frame_size`；`offs` 是**偏移**列表（数值升序）而不是值号列表 ——
+      消费者（M10 的栈扫描器）要的是「扫哪几个字」
+- [x] `safepoint` 的 `offs` 覆盖该位点**全部**活值；`ptrs ⊆ offs`
+- [x] 两次渲染逐字节相同
+- [x] **抓到一个 M6 的真错（`R-11-1`）**：`live.rs` 的 `after[]` 反向扫描只从 `live_out` 起步，
+      漏掉「只在本块终止符里被读」的值 ⇒ safepoint 的 `live`/`ptrs` **漏根**。
+      已修（种子改为 `live_out ∪ term.uses()`）+ 两条回归测试（`rgoc-ssa/tests/live.rs`）+
+      变异验证（去掉修复 ⇒ `r_11_1_…return…` 必红，已实测）
+- [x] `type=` 写 `t<id>`（`R-11-2`：C5 §8 原示例写 `int`/`complex128`，那要再造一个类型渲染器）
+- [x] Commit：`feat(arm64): FRAME-MAP v1（Task 11，T-NAT-51，R-11-1）`
 
-**Verify:** `… cargo test -p rgoc-arm64 --test frame_map`（≥4 条）
+**Verify:** `… cargo test -p rgoc-arm64 --test frame_map`（6 条）；`… cargo test -p rgoc-ssa --test live`（8 条）
 
 ---
 

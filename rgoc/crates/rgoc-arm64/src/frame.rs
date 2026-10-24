@@ -237,3 +237,70 @@ fn round_up(n: u32, align: u32) -> u32 {
 fn neg(n: u32) -> i32 {
     i32::try_from(n).map_or(i32::MIN, |v| -v)
 }
+
+/// 渲染 `FRAME-MAP v1`（`C5` §8）。
+///
+/// # 四件事决定了这份文本的形状
+///
+/// 1. **行语法与排序键**：`slot` 按 `ValueId` 升序、`safepoint` 按 `(块号, 指令下标)` 升序 ——
+///    后者 `rgoc_ssa::live` 已经排好，这里不重排（重排就等于有第二个排序口径）。
+/// 2. **`offs` 是偏移列表**，不是值号列表：这份文本的消费者（M10 的栈扫描器）
+///    要的是「扫哪几个字」，值号对它没用。
+/// 3. **`ptrs` 是 `offs` 的子集**：只收指针类型的值（`live` 已经算好）。
+/// 4. **空集写 `[]`，不省略字段** —— 消费方不必猜「缺了是空还是没有」（`C10` 同口径）。
+///
+/// `type=` 写 `t<id>`（与 `C10` 的类型引用同形）：一份帧图里不需要把类型的结构展开，
+/// 要展开的场合有 `C7` 的 dump。
+#[must_use]
+pub fn render_frame_map(f: &SsaFunc, fr: &Frame, lv: &rgoc_ssa::live::Liveness) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    out.push_str("# FRAME-MAP v1\n");
+    let _ = writeln!(
+        out,
+        "# func {} frame={} slots={}",
+        f.name,
+        fr.frame_size,
+        fr.values.len()
+    );
+    for (v, s) in &fr.values {
+        let typ = f
+            .value_types
+            .get(v.index())
+            .map_or_else(|| "-".to_string(), |t| format!("t{}", t.index()));
+        let _ = writeln!(
+            out,
+            "# slot v{} off={} size={} type={}",
+            v.0, s.off, s.size, typ
+        );
+    }
+    for sp in &lv.safepoints {
+        let offs = offsets_of(fr, &sp.live);
+        let ptrs = offsets_of(fr, &sp.ptrs);
+        let _ = writeln!(
+            out,
+            "# safepoint b{}:{} offs=[{}] ptrs=[{}]",
+            sp.block.0,
+            sp.idx,
+            join(&offs),
+            join(&ptrs)
+        );
+    }
+    out
+}
+
+/// 一组值 → 它们的偏移（**数值升序**、去重）。
+fn offsets_of(fr: &Frame, vals: &[ValueId]) -> Vec<i32> {
+    let mut v: Vec<i32> = vals
+        .iter()
+        .filter_map(|x| fr.values.get(x).map(|s| s.off))
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// 逗号连接（空集 ⇒ 空串，外层写 `[]`）。
+fn join(v: &[i32]) -> String {
+    v.iter().map(i32::to_string).collect::<Vec<_>>().join(",")
+}

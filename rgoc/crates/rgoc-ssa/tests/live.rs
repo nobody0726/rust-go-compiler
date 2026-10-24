@@ -604,3 +604,93 @@ fn t_ssa_59_两次输出逐字节相同() {
     // b1 的 idx 0 是那条 `const`，调用在 idx 1
     assert_eq!(keys, vec![(0, 1), (1, 1)], "safepoint 按块号+指令下标升序");
 }
+
+// ── `R-11-1`：终止符的读必须进 `after[]`（M7/Task 11 抓到的 M6 缺陷） ─────
+
+#[test]
+fn r_11_1_只在_return_里用的值仍跨过_safepoint_活着() {
+    // b0: v0 = 1; v1 = const 0 : *int; print(v0); return v1
+    //
+    // `v1` **只在终止符里被读**（`Return`）。它从定义点一直活到块尾，
+    // 所以 `print` 这个 safepoint 的 `live` 里必须有它 —— 否则帧图漏根，
+    // M10 扫栈时会把还活着的对象当垃圾回收掉。
+    //
+    // 修复前：`after[]` 从 `live_out[b0]` 起步，而 `live_out` 只由**后继**的
+    // `live_in` 与边实参构成（`Return` 没有后继）⇒ `v1` 在 `after[1]` 里整个消失。
+    // M6 的 5 条 liveness 测试没抓到，因为那些用例的返回值同时也被别的指令用过。
+    let mut fb = FnBuilder::new("f");
+    let int = fb.basic("int");
+    let pint = fb.ptr_to(int);
+    let e = fb.entry();
+    let v0 = konst(&mut fb, e, ConstVal::Int(1), int);
+    let v1 = konst(&mut fb, e, ConstVal::Int(0), pint);
+    fb.instr(
+        e,
+        Instr::Call {
+            dsts: Vec::new(),
+            callee: CalleeRef::Builtin(BuiltinKind::Print),
+            args: vec![v0],
+            dots: false,
+            effect: Effect::default(),
+        },
+    );
+    fb.term(e, Term::Return(vec![v1]));
+    let (f, tt) = fb.into_parts();
+    let lv = analyze(&f, &tt);
+
+    let sp = lv.safepoints.first().expect("print 是 safepoint");
+    assert!(
+        sp.live.contains(&v1),
+        "只在 return 里用的 v1 必须跨过 safepoint 活着，实际 live={:?}",
+        sp.live
+    );
+    assert!(
+        sp.ptrs.contains(&v1),
+        "v1 是指针 ⇒ 必须进 ptrs（帧图的根集），实际 ptrs={:?}",
+        sp.ptrs
+    );
+}
+
+#[test]
+fn r_11_1_只在_goto_边实参里用的值也算活着() {
+    // b0: v0 = 1; v1 = 2; print(v0); goto b1(v1)
+    // b1(p2): return p2
+    //
+    // `v1` 只在 `goto` 的边实参里被读 —— 与上一条同源，但走的是边实参而不是
+    // `Return`。`live_out[b0]` 会含 v1（边实参进 live_out），所以这条**修复前也过**；
+    // 留着它是为了把「两条路都对」钉住（防止有人把修复写成只补 `Return`）。
+    let mut fb = FnBuilder::new("f");
+    let int = fb.basic("int");
+    let e = fb.entry();
+    let b1 = fb.block();
+    let v0 = konst(&mut fb, e, ConstVal::Int(1), int);
+    let v1 = konst(&mut fb, e, ConstVal::Int(2), int);
+    let p2 = fb.value(int);
+    fb.set_params(b1, &[p2]);
+    fb.instr(
+        e,
+        Instr::Call {
+            dsts: Vec::new(),
+            callee: CalleeRef::Builtin(BuiltinKind::Print),
+            args: vec![v0],
+            dots: false,
+            effect: Effect::default(),
+        },
+    );
+    fb.term(
+        e,
+        Term::Goto {
+            to: b1,
+            args: vec![v1],
+        },
+    );
+    fb.term(b1, Term::Return(vec![p2]));
+    let (f, tt) = fb.into_parts();
+    let lv = analyze(&f, &tt);
+    let sp = lv.safepoints.first().expect("print 是 safepoint");
+    assert!(
+        sp.live.contains(&v1),
+        "边实参里的 v1 也要活着：{:?}",
+        sp.live
+    );
+}

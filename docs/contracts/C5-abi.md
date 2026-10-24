@@ -308,14 +308,17 @@ roadmap §M7 明确「**不用 Go internal ABI 作门槛**」，而 M7 的所有
 ```text
 # FRAME-MAP v1
 # func <name> frame=<n> slots=<n>
-# slot <v> off=<n> size=<n> type=<t>
+# slot <v> off=<n> size=<n> type=t<id>
 # safepoint b<k>:<idx> offs=[<n>,<n>] ptrs=[<n>]
 ```
 
 - 头两行**固定顺序**，字段不可省。
 - `slot` 行按 `ValueId` **升序**；`off` 是**相对 `fp` 的负偏移**（与 `add x, sp, #off` 的立即数一致）。
 - `safepoint` 行按「块号升序、块内指令下标升序」；位点记法与 `SSA-LIVE v1` **完全相同**（入口写 `b<k>:-1`）。
-- `offs` 是该位点活值的偏移列表（升序）；`ptrs` 只含**指针类型**的偏移。
+- `type=` 写 `t<id>`（与 `C10` 的类型引用**同形**）：帧图不需要展开类型结构，
+  要展开的场合有 `C7` 的 dump。**不写** `int` / `complex128` 这类名字 ——
+  那要求这里再实现一个类型渲染器，而它必然与 `C7` 漂（`R-11-1`）。
+- `offs` 是该位点活值的偏移列表（**数值**升序，`-32` 在 `-24` 之前）；`ptrs` 只含**指针类型**的偏移。
 - 空集写 `[]`，**不省略字段**（与 `C10` 的 `params=[]` 同口径）。
 
 ### 8.2 完整示例
@@ -323,9 +326,9 @@ roadmap §M7 明确「**不用 Go internal ABI 作门槛**」，而 M7 的所有
 ```text
 # FRAME-MAP v1
 # func main frame=64 slots=7
-# slot v0 off=-16 size=8 type=int
-# slot v3 off=-32 size=16 type=complex128
-# safepoint b1:0 offs=[-16,-32] ptrs=[]
+# slot v0 off=-24 size=8 type=t45
+# slot v3 off=-32 size=16 type=t52
+# safepoint b1:0 offs=[-32,-24] ptrs=[]
 ```
 
 ### 8.3 三条实现决定
@@ -385,5 +388,6 @@ roadmap §M7 明确「**不用 Go internal ABI 作门槛**」，而 M7 的所有
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-07 | **初稿创建**（T52）。六项记录逐条对应 `T-S3-04`；补记链接可复现性的完整定位过程 | Phase 3 的 S3（`T-S3-01`…`05`）+ 门禁 E6 / E7 |
+| 2026-10-25 | §8 的 `type=` 定为 `t<id>`（`R-11-2`）；`offs` 明确为**数值**升序 | 写 `FRAME-MAP v1` 时发现原示例写的是类型名，那要求这里再造一个渲染器，必然与 `C7` 漂 |
 | 2026-10-24 | §6.1 复数传参改精确：`complex64` **1 个 `v`** / `complex128` **2 个 `v`**；§7.2 补零大小类型的 `zerobase` 约束（`M7-tests.md` `R-8-2`） | Task 8 实测：`complex64` 是 8 字节、align 4，两个 `f32` 打包进一个 `v`；`zerosize.go` 要求 `new([0]int)` 两次同址 |
 | 2026-10-24 | **升正式（MVP 级）**：新增 §6 调用约定 / §7 帧布局 / §8 `FRAME-MAP v1` / §9 确定性；§1–§5 原样保留为历史证据；原 §6/§7 顺延为 §10/§11 | M7 / Task 1（`R-1-1`：设计稿原写「新建 C11」，实际应升 C5）。§6–§9 的正文来自 `M7-design.md` §3.2–§3.10 |
