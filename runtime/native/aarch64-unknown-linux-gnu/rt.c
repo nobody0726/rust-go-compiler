@@ -80,19 +80,39 @@ void *rt_memset(void *dst, int c, u64 n) {
     return dst;
 }
 
+/* 逐字节比较（聚合的 `==` / `!=`）。返回 -1 / 0 / 1。 */
+i64 rt_memcmp(const void *a, const void *b, u64 n) {
+    const u8 *x = (const u8 *)a;
+    const u8 *y = (const u8 *)b;
+    for (u64 i = 0; i < n; i++) {
+        if (x[i] != y[i]) {
+            return x[i] < y[i] ? -1 : 1;
+        }
+    }
+    return 0;
+}
+
 /* ── 分配：静态 arena + bump（`C5` §7.2 / `D-M7-7`）── */
 
-#define ARENA_SIZE (1024UL * 1024UL)
+/* 8 MiB：M7 只 bump 不回收，而「每个字符串拼接 / `string(i)` 一次分配」意味着
+ * 循环里会持续吃内存。1 MiB 在 `turing.go` 这种几千次迭代的程序上会假性耗尽
+ * （`panic: out of arena` 是**诚实的失败**，但它掩盖了真正的错）。
+ * 这是 `.bss`，不进文件体积。 */
+#define ARENA_SIZE (8UL * 1024UL * 1024UL)
 
 static u8 arena[ARENA_SIZE];
 static u64 arena_used;
 
-/* 零大小对象的固定地址（`zerosize.go` 要求 `new([0]int)` 两次相等）。 */
-static u8 zerobase;
+/* 零大小对象的固定地址（`zerosize.go` 要求 `new([0]int)` 两次相等）。
+ *
+ * ⚠️ 这个符号**不在这里定义**：它由生成的 `.s` 定义（`module.rs` ①），
+ * 因为零大小**全局**也要落在同一地址上（`.set g<id>, rt_zerobase`）。
+ * 「同一个地址」只能有一处来源 —— 两边各自定义就变成两个地址了。 */
+extern u8 rt_zerobase[];
 
 void *rt_arena_alloc(u64 size, u64 align) {
     if (size == 0) {
-        return &zerobase;
+        return rt_zerobase;
     }
     if (align == 0) {
         align = 8;
@@ -111,6 +131,91 @@ void *rt_arena_alloc(u64 size, u64 align) {
     void *r = (void *)(arena + p);
     arena_used = p + size;
     rt_memset(r, 0, size);
+    return r;
+}
+
+/* ── 字符串（`C9` §4.3：`string` = `(ptr, len)`，比较按字节）── */
+
+/* `(ptr, len)` 的 16 字节聚合。AAPCS64 下**按两个 `x` 寄存器**传参与返回
+ * （≤16 字节、非 HFA 的复合类型）—— 正好对上 `isel` 的 `x0/x1`、`x2/x3` 约定。 */
+typedef struct {
+    const char *p;
+    u64 n;
+} rstr;
+
+/* `a + b`：结果落在 arena 里（M7 没有 GC，只 bump）。 */
+rstr rt_strcat(rstr a, rstr b) {
+    u64 n = a.n + b.n;
+    /* 空结果也要有**可用的地址**（Go 允许 `len(s)==0` 时取 `&s[0]`）。 */
+    char *p = (char *)rt_arena_alloc(n == 0 ? 1 : n, 1);
+    for (u64 i = 0; i < a.n; i++) {
+        p[i] = a.p[i];
+    }
+    for (u64 i = 0; i < b.n; i++) {
+        p[a.n + i] = b.p[i];
+    }
+    rstr r;
+    r.p = p;
+    r.n = n;
+    return r;
+}
+
+/* 字典序：返回 -1 / 0 / 1。
+ *
+ * 按**无符号字节**比较（Go 的字符串就是字节序列，不是 Unicode 码点）。
+ * 用 `signed char` 会让 `0xFF` 排到 `0x01` 前面 —— 只在非 ASCII 上出错，
+ * 正是「看起来对」的那类错。 */
+i64 rt_strcmp(rstr a, rstr b) {
+    u64 m = a.n < b.n ? a.n : b.n;
+    for (u64 i = 0; i < m; i++) {
+        u8 x = (u8)a.p[i];
+        u8 y = (u8)b.p[i];
+        if (x != y) {
+            return x < y ? -1 : 1;
+        }
+    }
+    if (a.n == b.n) {
+        return 0;
+    }
+    return a.n < b.n ? -1 : 1;
+}
+
+/* `string(i)`：把整数当**码点**编码成 UTF-8（Go 的 `string(rune)` 语义）。
+ *
+ * 三条容易漏的规则：
+ * - 负数、`> 0x10FFFF`、以及代理区 `0xD800..0xDFFF` 一律给 `U+FFFD`（不是截断）；
+ * - `U+FFFD` 是 3 字节 `EF BF BD`；
+ * - 结果落在 arena 里，**即使 1 字节**也要有稳定地址（`&s[0]` 合法）。 */
+rstr rt_i64_to_str(i64 v) {
+    char *p = (char *)rt_arena_alloc(4, 1);
+    u64 n;
+    if (v < 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) {
+        p[0] = (char)0xEF;
+        p[1] = (char)0xBF;
+        p[2] = (char)0xBD;
+        n = 3;
+    } else if (v < 0x80) {
+        p[0] = (char)v;
+        n = 1;
+    } else if (v < 0x800) {
+        p[0] = (char)(0xC0 | (v >> 6));
+        p[1] = (char)(0x80 | (v & 0x3F));
+        n = 2;
+    } else if (v < 0x10000) {
+        p[0] = (char)(0xE0 | (v >> 12));
+        p[1] = (char)(0x80 | ((v >> 6) & 0x3F));
+        p[2] = (char)(0x80 | (v & 0x3F));
+        n = 3;
+    } else {
+        p[0] = (char)(0xF0 | (v >> 18));
+        p[1] = (char)(0x80 | ((v >> 12) & 0x3F));
+        p[2] = (char)(0x80 | ((v >> 6) & 0x3F));
+        p[3] = (char)(0x80 | (v & 0x3F));
+        n = 4;
+    }
+    rstr r;
+    r.p = p;
+    r.n = n;
     return r;
 }
 
@@ -590,8 +695,16 @@ static int fmt_bits(u64 m, int e, int neg, char *out) {
 static int is_nan_f64(u64 bits) { return ((bits >> 52) & 0x7ff) == 0x7ff && (bits & ((1ULL << 52) - 1)) != 0; }
 static int is_inf_f64(u64 bits) { return ((bits >> 52) & 0x7ff) == 0x7ff && (bits & ((1ULL << 52) - 1)) == 0; }
 
+/* 浮点/复数的输出通道：`1` = stdout（`println`），`2` = stderr（`panic`）。
+ *
+ * `rt_print_f64` 里所有 `write_all` 都走这个变量 —— 否则要给「打印」和「panic」
+ * 各写一份格式化，两份必然漂。单线程，不需要保护。 */
+static i64 g_out_fd = FD_STDOUT;
+
 /* `println` 一个浮点（`x0` = is32）。 */
 void rt_print_f64(double v, i64 is32) {
+    /* 通道由**入口**决定（`rt_panic_*` 设成 stderr 后直接 `exit`，
+     * 所以这里不需要重置 —— 重置反而会把 panic 的通道改回 stdout）。 */
     u64 bits;
     /* 用位模式取值，避免任何隐式转换 */
     if (is32) {
@@ -600,9 +713,9 @@ void rt_print_f64(double v, i64 is32) {
         bits = (u64)b32;
         if (((b32 >> 23) & 0xff) == 0xff) {
             if ((b32 & 0x7fffff) != 0) {
-                write_all(FD_STDOUT, "NaN", 3);
+                write_all(g_out_fd, "NaN", 3);
             } else {
-                write_all(FD_STDOUT, (b32 >> 31) ? "-Inf" : "+Inf", (b32 >> 31) ? 4 : 4);
+                write_all(g_out_fd, (b32 >> 31) ? "-Inf" : "+Inf", (b32 >> 31) ? 4 : 4);
             }
             return;
         }
@@ -619,19 +732,19 @@ void rt_print_f64(double v, i64 is32) {
         }
         char out[64];
         int n = fmt_bits(m, e, (int)(b32 >> 31), out);
-        write_all(FD_STDOUT, out, (u64)n);
+        write_all(g_out_fd, out, (u64)n);
         return;
     }
     bits = *(u64 *)&v;
     if (is_nan_f64(bits)) {
-        write_all(FD_STDOUT, "NaN", 3);
+        write_all(g_out_fd, "NaN", 3);
         return;
     }
     if (is_inf_f64(bits)) {
         if (bits >> 63) {
-            write_all(FD_STDOUT, "-Inf", 4);
+            write_all(g_out_fd, "-Inf", 4);
         } else {
-            write_all(FD_STDOUT, "+Inf", 4);
+            write_all(g_out_fd, "+Inf", 4);
         }
         return;
     }
@@ -648,35 +761,55 @@ void rt_print_f64(double v, i64 is32) {
     }
     char out[64];
     int n = fmt_bits(m, e, (int)(bits >> 63), out);
-    write_all(FD_STDOUT, out, (u64)n);
+    write_all(g_out_fd, out, (u64)n);
 }
 
 /* `println` 复数：`(re+imi)`（`C9` §4.3）。 */
 void rt_print_complex(double re, double im) {
-    write_all(FD_STDOUT, "(", 1);
+    write_all(g_out_fd, "(", 1);
     rt_print_f64(re, 0);
     if (*(u64 *)&im >> 63) {
-        write_all(FD_STDOUT, "-", 1);
+        write_all(g_out_fd, "-", 1);
         double a = -im;
         rt_print_f64(a, 0);
     } else {
-        write_all(FD_STDOUT, "+", 1);
+        write_all(g_out_fd, "+", 1);
         rt_print_f64(im, 0);
     }
-    write_all(FD_STDOUT, "i)", 2);
+    write_all(g_out_fd, "i)", 2);
 }
 
 void rt_print_complex64(float re, float im) {
-    write_all(FD_STDOUT, "(", 1);
+    write_all(g_out_fd, "(", 1);
     double dre = (double)re;
     rt_print_f64(dre, 1);
     if (im < 0.0f || (im == 0.0f && 1.0f / im < 0.0f)) {
-        write_all(FD_STDOUT, "-", 1);
+        write_all(g_out_fd, "-", 1);
         double a = (double)(-im);
         rt_print_f64(a, 1);
     } else {
-        write_all(FD_STDOUT, "+", 1);
+        write_all(g_out_fd, "+", 1);
         rt_print_f64((double)im, 1);
     }
-    write_all(FD_STDOUT, "i)", 2);
+    write_all(g_out_fd, "i)", 2);
+}
+
+/* `panic(float)`：与 `println` 同一份格式化，只是走 stderr（`C9` §5）。
+ *
+ * 直接把槽里的位模式当整数打（`rt_panic_i64`）会打出 `1107296256` 这种
+ * 「看起来像个大整数」的东西 —— 静默错，而且很容易被当成真值。 */
+void rt_panic_f64(double v, i64 is32) {
+    write_all(FD_STDERR, "panic: ", 7);
+    g_out_fd = FD_STDERR;
+    rt_print_f64(v, is32);
+    write_all(FD_STDERR, "\n", 1);
+    rt_exit(2);
+}
+
+void rt_panic_complex(double re, double im) {
+    write_all(FD_STDERR, "panic: ", 7);
+    g_out_fd = FD_STDERR;
+    rt_print_complex(re, im);
+    write_all(FD_STDERR, "\n", 1);
+    rt_exit(2);
 }

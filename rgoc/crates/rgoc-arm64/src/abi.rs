@@ -164,8 +164,13 @@ pub fn arg_kind(class: SlotClass) -> ArgKind {
 #[must_use]
 pub fn reg_count(tt: &TypeTable, t: TypeId) -> Option<u32> {
     let s = slot_of(tt, t)?;
-    // `complex128`：实部与虚部各占一个 `v`。
-    if s.class == SlotClass::Complex128 {
+    // `complex128`：实部与虚部各占一个 `d`。
+    // `complex64`：**两个 `f32` 的 HFA** ⇒ 两个 `s`（`R-13-2`）。
+    //
+    // `R-8-2` 曾把它记成「1 个 `v`（两个 f32 打包）」—— 那是按**大小**算的，
+    // 而 AAPCS64 对 HFA 按**元素个数**分配寄存器。打包写法要求每次进出都
+    // `fmov` 拆合，多两个中间寄存器，而且和 `print_value`（读 `s0`/`s1`）不一致。
+    if matches!(s.class, SlotClass::Complex128 | SlotClass::Complex64) {
         return Some(2);
     }
     // 8 字节以上的**标量**只有 `string`（`(ptr, len)` 两个字）。

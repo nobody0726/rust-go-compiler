@@ -47,21 +47,39 @@ impl std::fmt::Display for CompileError {
 pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     let mut asm = Asm::new();
 
-    // ① 包级全局（`.data`，全零）。
+    // ① 零大小对象的**唯一地址**（`runtime.zerobase` 的等价物）。
+    //
+    // `zerosize.go` 要求 `&x == new([0]int)`：零大小全局与 `new` 出来的零大小对象
+    // 必须是**同一个地址**。所以这个符号由**我们**定义（`rt.c` 里只 `extern` 引用），
+    // 零大小全局用 `.set` 别名到它 —— 让「同一个地址」只有一处来源。
+    asm.global("rt_zerobase");
+    asm.data_named("rt_zerobase", &[0u8; 8]);
+
+    // ② 包级全局（`.data`，全零）。
     for (i, g) in m.globals.iter().enumerate() {
         let ty = m.global_types.get(i).copied();
         let size = ty.and_then(|t| layout(tt, t)).map_or(8, |l| l.size);
-        let zeros = vec![0u8; size as usize];
-        asm.data_named(&format!("g{}", g.0), &zeros);
+        if size == 0 {
+            // 零大小：别名到 `rt_zerobase`，不占独立地址。
+            asm.alias(&format!("g{}", g.0), "rt_zerobase");
+        } else {
+            let zeros = vec![0u8; size as usize];
+            asm.data_named(&format!("g{}", g.0), &zeros);
+        }
     }
 
-    // ② 逐函数。
+    // ③ 逐函数。
+    //
+    // 先把 `FuncId → 函数` 建起来：调用点的寄存器分配由**被调方的形参类型**
+    // 决定（`R-13-3`），`isel` 需要能按 `FuncId` 查到那些类型。
+    let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
+        m.funcs.iter().map(|f| (f.src, f)).collect();
     for f in &m.funcs {
         let fr = frame::layout(f, tt).map_err(CompileError::Frame)?;
-        isel::func(f, &fr, tt, &mut asm).map_err(CompileError::Cg)?;
+        isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
     }
 
-    // ③ 除零的统一出口。
+    // ④ 除零的统一出口。
     //
     // `isel` 在 `sdiv` 前发 `cbz x11, .Ldiv0`（`M7-design.md` §3.9 的检查点之一）。
     // 这个标签必须**定义一次**且全模块可见 —— 每条除法都跳到同一处，
@@ -70,7 +88,7 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     asm.ins("bl rt_panic_div_zero");
     asm.ins("brk #1");
 
-    // ④ `_start`：init → main → exit(0)。
+    // ⑤ `_start`：init → main → exit(0)。
     asm.global("_start");
     asm.label("_start");
     // `Module::init` 是**在 `funcs` 里的下标**（不是 `FuncId`）；`main` 是 `FuncId`。

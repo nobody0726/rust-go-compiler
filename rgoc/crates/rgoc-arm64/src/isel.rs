@@ -45,6 +45,8 @@ pub struct Ctx<'a> {
     pub fr: &'a Frame,
     /// 包级类型表。
     pub tt: &'a TypeTable,
+    /// `FuncId → 该函数`（调用点要按**被调方**的形参类型决定寄存器，`R-13-3`）。
+    pub siblings: &'a std::collections::BTreeMap<rgoc_hir::FuncId, &'a SsaFunc>,
 }
 
 impl<'a> Ctx<'a> {
@@ -61,6 +63,13 @@ impl<'a> Ctx<'a> {
     /// 值 → 槽。
     fn slot(&self, v: ValueId) -> Slot {
         self.fr.values[&v]
+    }
+
+    /// 被调函数的形参类型（`i` 是第几个实参）；查不到 ⇒ `None`。
+    fn param_ty(&self, callee: rgoc_hir::FuncId, i: usize) -> Option<TypeId> {
+        let c = self.siblings.get(&callee)?;
+        let p = c.params.get(i)?;
+        c.value_types.get(p.index()).copied()
     }
 
     /// 类型是不是 `float32`（决定用 `s` 还是 `d` 寄存器）。
@@ -192,8 +201,27 @@ fn mask_to(asm: &mut Asm, reg: &str, tt: &TypeTable, t: TypeId) {
 /// # Errors
 ///
 /// 遇到 M7 明确不支持的面（`[]T` / 间接调用 / 方法值）。
-pub fn func(f: &SsaFunc, fr: &Frame, tt: &TypeTable, asm: &mut Asm) -> Result<(), CgCode> {
-    let cx = Ctx { f, fr, tt };
+pub fn func(
+    f: &SsaFunc,
+    fr: &Frame,
+    tt: &TypeTable,
+    siblings: &std::collections::BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    asm: &mut Asm,
+) -> Result<(), CgCode> {
+    // `U-M7-01`：整个函数的类型面一旦碰到切片就拒，**在发第一条指令之前**。
+    //
+    // 位置很关键：如果先发指令再拒，模块级发射器可能已经把半截函数写进 `.s`
+    // （`func` 返回 `Err` 时 `module.rs` 只在末尾统一处理），产物里就会留下
+    // 一个「看起来有、实际不完整」的符号。
+    if func_has_slice(f, tt) {
+        return Err(CgCode::Slice);
+    }
+    let cx = Ctx {
+        f,
+        fr,
+        tt,
+        siblings,
+    };
     // ⚠️ 符号名用 `fn<HIR FuncId>`，**不用** `f.name`：
     // ① 名字会撞（两个类型各有一个 `M` 方法）；
     // ② 调用点只能看到 `FuncId`（`CalleeRef::Func`），看不到名字 ——
@@ -205,6 +233,17 @@ pub fn func(f: &SsaFunc, fr: &Frame, tt: &TypeTable, asm: &mut Asm) -> Result<()
 
     // 形参：入口块的 `params` 从寄存器落到槽里。
     bind_params(&cx, asm);
+
+    // 逃逸的取址槽：存储从 arena 拿，指针存进帧里的指针格。
+    //
+    // **必须在 `bind_params` 之后**：`rt_arena_alloc` 是普通 C 函数，
+    // 会按 AAPCS64 覆盖 `x0..x3`（也就是形参）。放在前面等于把形参丢了。
+    for h in fr.heap.values() {
+        load_imm(asm, "x0", i64::from(h.size));
+        load_imm(asm, "x1", i64::from(h.align));
+        asm.ins("bl rt_arena_alloc");
+        st_x(asm, "x0", h.cell);
+    }
 
     for (bi, blk) in f.blocks.iter().enumerate() {
         // 入口块没有前驱 ⇒ 直接落下；其余块要有标签（可能被多处跳转）。
@@ -270,8 +309,14 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
         let class = cx.class(*p);
         let s = cx.slot(*p);
         match class {
-            SlotClass::Float | SlotClass::Complex64 => {
-                if cx.is_f32(cx.ty(*p)) || class == SlotClass::Complex64 {
+            // `complex64` 是**两个 `f32` 的 HFA** ⇒ 占两个 `s` 寄存器（`R-13-2`）。
+            SlotClass::Complex64 => {
+                st_s(asm, &format!("s{vi}"), s.off);
+                st_s(asm, &format!("s{}", vi + 1), s.off + 4);
+                vi += 2;
+            }
+            SlotClass::Float => {
+                if cx.is_f32(cx.ty(*p)) {
                     st_s(asm, &format!("s{vi}"), s.off);
                 } else {
                     st_d(asm, &format!("d{vi}"), s.off);
@@ -284,9 +329,22 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
                 vi += 2;
             }
             // 聚合按指针传（`C5` §6.1），所以这里落到槽里的是**地址**。
-            SlotClass::Int | SlotClass::Agg => {
+            SlotClass::Agg => {
                 st_x(asm, &format!("x{xi}"), s.off);
                 xi += 1;
+            }
+            // ⚠️ `Int` 类里 `string` 是 **16 字节**（`(ptr,len)` 两个字）。
+            // 只存 `x{xi}` 会丢掉长度 —— 于是 `mk("ab")` 返回的 len 是**上一个
+            // 调用留下的寄存器值**，表现为「内容对但比较/拼接全错」。
+            // 实测 `probe2.go`：`mk("ab")==mk("ab")` 给 0、`+"b"` 触发
+            // `panic: out of arena`（拿一个巨大的 len 去分配）。
+            SlotClass::Int => {
+                st_x(asm, &format!("x{xi}"), s.off);
+                xi += 1;
+                if s.size > 8 {
+                    st_x(asm, &format!("x{xi}"), s.off + 8);
+                    xi += 1;
+                }
             }
         }
     }
@@ -343,6 +401,24 @@ fn konst(cx: &Ctx<'_>, dst: ValueId, c: &ConstVal, typ: TypeId, asm: &mut Asm) {
             load_imm(asm, "x10", i64::from(*b));
             st_x(asm, "x10", s.off);
         }
+        // ⚠️ **整数值的常量也可能是浮点类型**：`if s1 != 35` 里的 `35` 在 SSA 里
+        // 就是 `const 35 : float32`（常量已按上下文收敛了类型，但 `ConstVal` 仍是
+        // `Int`）。当整数装立即数会让槽里是 `35` 而不是 `35.0` 的位模式 ——
+        // 浮点比较/运算拿到 `0x23`（≈ 5e-44）。
+        ConstVal::Int(i) if cx.class(dst) == SlotClass::Float => {
+            if cx.is_f32(typ) {
+                let bits = u64::from((*i as f32).to_bits());
+                let lbl = asm.rodata_f64(bits);
+                load_addr(asm, "x10", &lbl);
+                asm.ins("ldr s10, [x10]");
+                st_s(asm, "s10", s.off);
+            } else {
+                let lbl = asm.rodata_f64((*i as f64).to_bits());
+                load_addr(asm, "x10", &lbl);
+                asm.ins("ldr d10, [x10]");
+                st_d(asm, "d10", s.off);
+            }
+        }
         ConstVal::Int(i) => {
             load_imm(asm, "x10", *i as i64);
             mask_to(asm, "x10", cx.tt, typ);
@@ -363,14 +439,28 @@ fn konst(cx: &Ctx<'_>, dst: ValueId, c: &ConstVal, typ: TypeId, asm: &mut Asm) {
             }
         }
         ConstVal::Complex(re, im) => {
-            let lo = asm.rodata_f64(re.to_bits());
-            let hi = asm.rodata_f64(im.to_bits());
-            load_addr(asm, "x10", &lo);
-            asm.ins("ldr d10, [x10]");
-            st_d(asm, "d10", s.off);
-            load_addr(asm, "x10", &hi);
-            asm.ins("ldr d10, [x10]");
-            st_d(asm, "d10", s.off + 8);
+            // ⚠️ `complex64` 是 4+4 字节、`complex128` 是 8+8 —— 步长必须按类型选。
+            // 一律写 8 会让 `complex64` 的虚部落到**槽外**（`probe`：`booltest(5+6i,…)`
+            // 收到 `(0+0i)`，因为虚部覆盖了相邻槽）。
+            if cx.class(dst) == SlotClass::Complex64 {
+                let lo = asm.rodata_f64(u64::from((*re as f32).to_bits()));
+                let hi = asm.rodata_f64(u64::from((*im as f32).to_bits()));
+                load_addr(asm, "x10", &lo);
+                asm.ins("ldr s10, [x10]");
+                st_s(asm, "s10", s.off);
+                load_addr(asm, "x10", &hi);
+                asm.ins("ldr s10, [x10]");
+                st_s(asm, "s10", s.off + 4);
+            } else {
+                let lo = asm.rodata_f64(re.to_bits());
+                let hi = asm.rodata_f64(im.to_bits());
+                load_addr(asm, "x10", &lo);
+                asm.ins("ldr d10, [x10]");
+                st_d(asm, "d10", s.off);
+                load_addr(asm, "x10", &hi);
+                asm.ins("ldr d10, [x10]");
+                st_d(asm, "d10", s.off + 8);
+            }
         }
         ConstVal::Str(bytes) => {
             let lbl = asm.rodata_bytes(bytes.as_bytes());
@@ -421,8 +511,47 @@ fn bin(
 ) {
     let d = cx.slot(dst);
     let (l, r) = (cx.slot(lhs), cx.slot(rhs));
-    match cx.class(dst) {
-        SlotClass::Float if cx.is_f32(typ) => {
+
+    // ⚠️ 字符串必须先分流：它的 `SlotClass` 是 `Int`（16 字节标量），
+    // 落到下面就会把 `(ptr,len)` 当整数做**指针运算** —— 静默错，不崩。
+    // 实测 `probe2.go`：`mk("ab") == mk("ab")` 给 0、`mk("a")+"b"` 给空串。
+    // 两个操作数的类型才是判据（`dst` 在比较里是 `bool`）。
+    if is_string_ty(cx.tt, cx.ty(lhs)) {
+        ld_x(asm, "x0", l.off);
+        ld_x(asm, "x1", l.off + 8);
+        ld_x(asm, "x2", r.off);
+        ld_x(asm, "x3", r.off + 8);
+        match op {
+            // `rt_strcat` 按 AAPCS64 用 `x0/x1` 返回 16 字节的 `{ptr,len}`。
+            BinOp::Add => {
+                asm.ins("bl rt_strcat");
+                st_x(asm, "x0", d.off);
+                st_x(asm, "x1", d.off + 8);
+            }
+            // `rt_strcmp` 返回 -1/0/1（字典序，按**字节**比较 —— Go 的 `<` 是字节序）。
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                asm.ins("bl rt_strcmp");
+                asm.ins("cmp x0, #0");
+                let cond = icmp_cond(op, false).unwrap_or("eq");
+                asm.ins(&format!("cset x12, {cond}"));
+                st_x(asm, "x12", d.off);
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    // ⚠️ 比较的**结果**是 `bool`（`Int` 类），所以按 `dst` 分类会把浮点比较
+    // 送进整数分支 —— `1.5 < 2` 变成「两个位模式比大小」，静默错。
+    // 比较一律按**操作数**分类；算术仍按 `dst`（两者同型）。
+    let is_cmp = matches!(
+        op,
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+    );
+    let opnd = cx.ty(lhs);
+    let class = if is_cmp { cx.class(lhs) } else { cx.class(dst) };
+    match class {
+        SlotClass::Float if cx.is_f32(opnd) => {
             // `float32`：`s` 寄存器 + 每次运算后按 `f32` 舍入（`ops::normalize` 同口径）。
             ld_s(asm, "s10", l.off);
             ld_s(asm, "s11", r.off);
@@ -468,12 +597,29 @@ fn bin(
         SlotClass::Complex128 => complex_bin(op, l.off, r.off, d.off, asm),
         SlotClass::Complex64 => complex_bin_f32(op, l.off, r.off, d.off, asm),
         SlotClass::Agg => {
-            // 聚合不支持算术（前端拒），走到这里就是内部不一致。
+            // 聚合的比较按**字节**（Go 的可比较聚合就是逐字段/逐元素比）。
+            //
+            // 不做这一步，`[2]int{1,2} == [2]int{1,2}` 的结果槽永远是垃圾 ——
+            // 实测 `newexpr.go` 的 `*p != x`（`x` 是 `[2]int`）直接 panic。
+            // 结构体的**填充字节**在 Go 里不参与比较，但我们的槽在写入前已清零
+            // （`composite` 先清），所以逐字节比等价于逐字段比。
+            if is_cmp {
+                addr(asm, l.off);
+                asm.ins("mov x0, x9");
+                addr(asm, r.off);
+                asm.ins("mov x1, x9");
+                load_imm(asm, "x2", i64::from(l.size));
+                asm.ins("bl rt_memcmp");
+                asm.ins("cmp x0, #0");
+                let cond = icmp_cond(op, false).unwrap_or("eq");
+                asm.ins(&format!("cset x12, {cond}"));
+                st_x(asm, "x12", d.off);
+            }
         }
         SlotClass::Int => {
             ld_x(asm, "x10", l.off);
             ld_x(asm, "x11", r.off);
-            if let Some(cond) = icmp_cond(op, cx.is_unsigned(typ)) {
+            if let Some(cond) = icmp_cond(op, cx.is_unsigned(opnd)) {
                 asm.ins("cmp x10, x11");
                 asm.ins(&format!("cset x12, {cond}"));
                 st_x(asm, "x12", d.off);
@@ -490,10 +636,32 @@ fn bin(
                 BinOp::AndNot => {
                     asm.ins("bic x12, x10, x11");
                 }
-                BinOp::Shl => asm.ins("lsl x12, x10, x11"),
-                BinOp::Shr => {
-                    let ins = if signed { "asr" } else { "lsr" };
-                    asm.ins(&format!("{ins} x12, x10, x11"));
+                // ⚠️ **移位计数达到位宽时结果由 Go 规定，不是硬件行为**。
+                //
+                // Go：`x << n` 等价于「移 n 次 1 位」，n **没有上限** ——
+                // 所以 n ≥ 位宽时结果恒为 0（`asr` 则全是符号位）。
+                // AArch64 的 `lsl/asr/lsr` 只取寄存器操作数的低 6 位，于是
+                // `1234 << 1025` 变成 `1234 << 1 = 2468`（实测 `ken/shift.go`）。
+                BinOp::Shl | BinOp::Shr => {
+                    let bits = i64::from(cx.width(opnd).max(1) * 8);
+                    asm.ins(&format!("cmp x11, #{bits}"));
+                    match op {
+                        BinOp::Shl => {
+                            asm.ins("lsl x12, x10, x11");
+                            asm.ins("mov x14, #0");
+                        }
+                        _ if signed => {
+                            asm.ins("asr x12, x10, x11");
+                            // 全是符号位 = 把符号位铺满（`asr #63` 得到 0 / -1）。
+                            asm.ins("asr x14, x10, #63");
+                        }
+                        _ => {
+                            asm.ins("lsr x12, x10, x11");
+                            asm.ins("mov x14, #0");
+                        }
+                    }
+                    // `csel` 用的是 `cmp` 留下的标志（移位不设标志，`mov` 也不设）。
+                    asm.ins("csel x12, x12, x14, lo");
                 }
                 BinOp::Div | BinOp::Rem => {
                     // 除零是运行期 panic（`C9` §5：退出码 2）。
@@ -616,20 +784,77 @@ fn complex_bin(op: BinOp, l: i32, r: i32, d: i32, asm: &mut Asm) {
     }
 }
 
-/// `complex64` 的加减（两个 `s` 打包在一个槽里）。
+/// `complex64` 的算术（两个 `f32` 并排放在一个 8 字节槽里）。
+///
+/// # 为什么按 `f32` 算，不「升到 f64 算完再降回来」
+///
+/// Go 规定 `complex64` 的四则按 `float32` 做（每一步都舍入到 `f32`）。
+/// 用 f64 中间量只在最后舍入一次 —— 结果**更准**，但不是 Go 的结果，
+/// 末位会差。判据是「与解释器逐字节相同」，所以必须照 Go 的精度做。
 fn complex_bin_f32(op: BinOp, l: i32, r: i32, d: i32, asm: &mut Asm) {
-    if !matches!(op, BinOp::Add | BinOp::Sub) {
-        return;
+    match op {
+        BinOp::Add | BinOp::Sub => {
+            let ins = if op == BinOp::Add { "fadd" } else { "fsub" };
+            for k in [0, 4] {
+                ld_s(asm, "s10", l + k);
+                ld_s(asm, "s11", r + k);
+                asm.ins(&format!("{ins} s12, s10, s11"));
+                st_s(asm, "s12", d + k);
+            }
+        }
+        BinOp::Mul => {
+            // (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+            ld_s(asm, "s10", l); // a
+            ld_s(asm, "s11", l + 4); // b
+            ld_s(asm, "s12", r); // c
+            ld_s(asm, "s13", r + 4); // d
+            asm.ins("fmul s14, s10, s12"); // ac
+            asm.ins("fmul s15, s11, s13"); // bd
+            asm.ins("fsub s16, s14, s15"); // re
+            asm.ins("fmul s14, s10, s13"); // ad
+            asm.ins("fmul s15, s11, s12"); // bc
+            asm.ins("fadd s17, s14, s15"); // im
+            st_s(asm, "s16", d);
+            st_s(asm, "s17", d + 4);
+        }
+        BinOp::Div => {
+            // (a+bi)/(c+di) = ((ac+bd) + (bc-ad)i) / (c²+d²)
+            ld_s(asm, "s10", l);
+            ld_s(asm, "s11", l + 4);
+            ld_s(asm, "s12", r);
+            ld_s(asm, "s13", r + 4);
+            asm.ins("fmul s18, s12, s12"); // c²
+            asm.ins("fmul s19, s13, s13"); // d²
+            asm.ins("fadd s18, s18, s19"); // den
+            asm.ins("fmul s14, s10, s12"); // ac
+            asm.ins("fmul s15, s11, s13"); // bd
+            asm.ins("fadd s16, s14, s15"); // ac+bd
+            asm.ins("fdiv s16, s16, s18");
+            asm.ins("fmul s14, s11, s12"); // bc
+            asm.ins("fmul s15, s10, s13"); // ad
+            asm.ins("fsub s17, s14, s15"); // bc-ad
+            asm.ins("fdiv s17, s17, s18");
+            st_s(asm, "s16", d);
+            st_s(asm, "s17", d + 4);
+        }
+        BinOp::Eq | BinOp::Ne => {
+            ld_s(asm, "s10", l);
+            ld_s(asm, "s11", r);
+            asm.ins("fcmp s10, s11");
+            asm.ins("cset x10, eq");
+            ld_s(asm, "s10", l + 4);
+            ld_s(asm, "s11", r + 4);
+            asm.ins("fcmp s10, s11");
+            asm.ins("cset x11, eq");
+            asm.ins("and x10, x10, x11");
+            if op == BinOp::Ne {
+                asm.ins("eor x10, x10, #1");
+            }
+            st_x(asm, "x10", d);
+        }
+        // `complex` 没有 `<` / `>`（Go 直接拒），走到这里是上游违约。
+        _ => {}
     }
-    let ins = if op == BinOp::Add { "fadd" } else { "fsub" };
-    ld_s(asm, "s10", l);
-    ld_s(asm, "s11", r);
-    asm.ins(&format!("{ins} s12, s10, s11"));
-    st_s(asm, "s12", d);
-    ld_s(asm, "s10", l + 4);
-    ld_s(asm, "s11", r + 4);
-    asm.ins(&format!("{ins} s12, s10, s11"));
-    st_s(asm, "s12", d + 4);
 }
 
 /// 一元运算。
@@ -640,6 +865,23 @@ fn un(cx: &Ctx<'_>, dst: ValueId, op: UnOp, x: ValueId, typ: TypeId, asm: &mut A
             ld_d(asm, "d10", s.off);
             asm.ins("fneg d12, d10");
             st_d(asm, "d12", d.off);
+        }
+        // 复数取负：实部虚部各自 `fneg`。
+        // 落到下面的整数分支会把 16 字节的复数当整数 `neg` —— 实部变成
+        // 「虚部的补码」，虚部原样不动，产物是彻底的垃圾。
+        (UnOp::Neg, SlotClass::Complex128) => {
+            for k in [0, 8] {
+                ld_d(asm, "d10", s.off + k);
+                asm.ins("fneg d12, d10");
+                st_d(asm, "d12", d.off + k);
+            }
+        }
+        (UnOp::Neg, SlotClass::Complex64) => {
+            for k in [0, 4] {
+                ld_s(asm, "s10", s.off + k);
+                asm.ins("fneg s12, s10");
+                st_s(asm, "s12", d.off + k);
+            }
         }
         (UnOp::Neg, _) => {
             ld_x(asm, "x10", s.off);
@@ -672,6 +914,21 @@ fn convert(cx: &Ctx<'_>, dst: ValueId, x: ValueId, typ: TypeId, asm: &mut Asm) {
     let from = cx.ty(x);
     let to_class = cx.class(dst);
     let from_class = cx.class(x);
+
+    // `string(i)`：整数按**码点**编码成 UTF-8（`C9` §4.3）。
+    //
+    // 这一条必须先判：`string` 与整数同属 `Int` 类，落到下面那条
+    // `(Int, Int)` 分支会原样搬 8 字节 —— 于是「字符串」的 `ptr` 是个小整数、
+    // `len` 是上一个值的残留。实测 `probe3.go`：`println(string(53))` 打空行，
+    // `"x" + s` 拿一个巨大的 `len` 去分配 ⇒ `panic: out of arena`。
+    if is_string_ty(cx.tt, typ) && !is_string_ty(cx.tt, from) && from_class == SlotClass::Int {
+        ld_x(asm, "x0", s.off);
+        asm.ins("bl rt_i64_to_str");
+        st_x(asm, "x0", d.off);
+        st_x(asm, "x1", d.off + 8);
+        return;
+    }
+
     match (from_class, to_class) {
         (SlotClass::Int, SlotClass::Int) => {
             ld_x(asm, "x10", s.off);
@@ -728,7 +985,51 @@ fn convert(cx: &Ctx<'_>, dst: ValueId, x: ValueId, typ: TypeId, asm: &mut Asm) {
                 }
             }
         }
-        // 其余组合（指针/聚合/复数转换）在 Go 里要么非法、要么归 M9。
+        // 复数之间 / 实数到复数的转换。
+        //
+        // 落到下面的 `_ => copy` 会把 8 字节当整数搬：`complex128(ce)` 的实部
+        // 变成「两个 f32 的位模式拼起来」，虚部是相邻槽的内容。实测 `cplx2.go`：
+        // `real(complex128(ce))` 给 `8192.0019…`（正好是两个 f32 的位模式）。
+        (SlotClass::Complex64, SlotClass::Complex128) => {
+            ld_s(asm, "s10", s.off);
+            ld_s(asm, "s11", s.off + 4);
+            asm.ins("fcvt d10, s10");
+            asm.ins("fcvt d11, s11");
+            st_d(asm, "d10", d.off);
+            st_d(asm, "d11", d.off + 8);
+        }
+        (SlotClass::Complex128, SlotClass::Complex64) => {
+            ld_d(asm, "d10", s.off);
+            ld_d(asm, "d11", s.off + 8);
+            asm.ins("fcvt s10, d10");
+            asm.ins("fcvt s11, d11");
+            st_s(asm, "s10", d.off);
+            st_s(asm, "s11", d.off + 4);
+        }
+        // `complex128(x)` / `complex64(x)`（`x` 是实数）：虚部为 0。
+        (SlotClass::Float, SlotClass::Complex128) => {
+            if cx.is_f32(from) {
+                ld_s(asm, "s10", s.off);
+                asm.ins("fcvt d10, s10");
+            } else {
+                ld_d(asm, "d10", s.off);
+            }
+            st_d(asm, "d10", d.off);
+            asm.ins("fmov d11, xzr");
+            st_d(asm, "d11", d.off + 8);
+        }
+        (SlotClass::Float, SlotClass::Complex64) => {
+            if cx.is_f32(from) {
+                ld_s(asm, "s10", s.off);
+            } else {
+                ld_d(asm, "d10", s.off);
+                asm.ins("fcvt s10, d10");
+            }
+            st_s(asm, "s10", d.off);
+            asm.ins("fmov s11, wzr");
+            st_s(asm, "s11", d.off + 4);
+        }
+        // 其余组合（指针/聚合转换）在 Go 里要么非法、要么归 M9。
         _ => copy(cx, dst, x, asm),
     }
 }
@@ -740,7 +1041,13 @@ fn addr_of(cx: &Ctx<'_>, dst: ValueId, root: &rgoc_ssa::ir::RootId, asm: &mut As
     let root = cx.f.roots[root.index()];
     match root {
         Root::Slot(slot) => {
-            if let Some(s) = cx.fr.addr_slots.get(&slot) {
+            if cx.fr.heap.contains_key(&slot) {
+                // 逃逸槽：帧里那一格是 arena 指针，直接读出来（`R-13-5`）。
+                if let Some(h) = cx.fr.heap.get(&slot) {
+                    ld_x(asm, "x10", h.cell);
+                    st_x(asm, "x10", d.off);
+                }
+            } else if let Some(s) = cx.fr.addr_slots.get(&slot) {
                 // ⚠️ 不能用 `addr()` 再 `st_x(asm, "x9", …)`：`st_x` 自己会先
                 // `add x9, x29, #off`，把刚算好的地址覆盖掉。所以地址进 `x10`。
                 asm.ins(&format!("add x10, x29, #{}", s.off));
@@ -808,11 +1115,88 @@ fn elem_size_of(tt: &TypeTable, ptr_ty: TypeId) -> u32 {
             Type::Pointer(e) => cur = *e,
             Type::Named(id) => cur = tt.named_underlying(*id),
             Type::Alias(id) => cur = tt.alias_rhs(*id),
+            // `s[i]` 里的 `s` 是 `string`：元素是 **1 字节**。
+            // 落到 `_ => 8` 会按 8 字节步长走 —— 实测 `turing.go`：
+            // `prog[pc]` 全读到字符串尾之后，brainfuck 程序一个字符都不执行，
+            // 结果 `r` 是空串。
+            Type::Basic(rgoc_types::BasicId::String | rgoc_types::BasicId::UntypedString) => {
+                return 1;
+            }
             Type::Array { elem, .. } => return layout(tt, *elem).map_or(8, |l| l.size.max(1)),
             _ => return 8,
         }
     }
     8
+}
+
+/// 类型是不是 `string`（含 `untyped string`；剥命名/别名）。
+///
+/// `string` 在 ABI 里是 `Int` 类的 16 字节标量 —— 类别看不出它是字符串，
+/// 所以「是不是字符串」必须单独判，不能靠 `SlotClass`。
+fn is_string_ty(tt: &TypeTable, t: TypeId) -> bool {
+    matches!(
+        basic_of(tt, t),
+        Some(BasicId::String | BasicId::UntypedString)
+    )
+}
+
+/// 类型里是否**含**切片（`U-M7-01` 的完整边界）。
+///
+/// # 为什么要在类型层扫，而不是逐个指令判
+///
+/// `[]T` 能出现在很多地方：`make`、切片表达式、复合字面量、函数返回值、形参、
+/// 结构体字段、数组元素。逐条指令判会漏 —— 实测 `escape3.go` 就是
+/// `v := []T1{{X: f(), Z: f()}}`：`Instr::Composite` 的 `typ` 是切片，
+/// 而 `composite()` 按「数组/结构体」去算偏移，第 0 项被写到切片头的
+/// **数据指针**位置上，于是 `v[0].Y` 落在野地址上 ⇒ `Segmentation fault`。
+///
+/// 一个类型层的扫法把「完整边界」变成一处判据，加新指令也不用回来补。
+fn has_slice(tt: &TypeTable, t: TypeId) -> bool {
+    fn go(tt: &TypeTable, t: TypeId, depth: u32) -> bool {
+        use rgoc_types::typ::Type;
+        if depth > 64 {
+            return false;
+        }
+        match tt.type_of(t) {
+            Type::Slice(_) => true,
+            Type::Pointer(e) => go(tt, *e, depth + 1),
+            Type::Array { elem, .. } => go(tt, *elem, depth + 1),
+            Type::Named(id) => go(tt, tt.named_underlying(*id), depth + 1),
+            Type::Alias(id) => go(tt, tt.alias_rhs(*id), depth + 1),
+            Type::Struct(sid) => tt
+                .struct_def(*sid)
+                .fields
+                .iter()
+                .any(|f| go(tt, f.typ, depth + 1)),
+            Type::Tuple(tid) => tt
+                .tuple_def(*tid)
+                .vars
+                .iter()
+                .any(|(_, v)| go(tt, *v, depth + 1)),
+            Type::Signature(sid) => {
+                let sig = tt.signature_def(*sid);
+                sig.recv.is_some_and(|r| go(tt, r, depth + 1))
+                    || go(tt, sig.params, depth + 1)
+                    || go(tt, sig.results, depth + 1)
+            }
+            _ => false,
+        }
+    }
+    go(tt, t, 0)
+}
+
+/// 一个函数里是否碰到切片面：值类型、取址槽类型、以及 `Slice`/`Make` 指令。
+fn func_has_slice(f: &SsaFunc, tt: &TypeTable) -> bool {
+    f.value_types.iter().any(|t| has_slice(tt, *t))
+        || f.slot_types.iter().any(|(_, t)| has_slice(tt, *t))
+        || f.blocks.iter().any(|b| {
+            b.instrs.iter().any(|i| match i {
+                Instr::Slice { .. } => true,
+                Instr::Make { typ, .. } => has_slice(tt, *typ),
+                Instr::Composite { typ, .. } => has_slice(tt, *typ),
+                _ => false,
+            })
+        })
 }
 
 /// 类型是不是指针（剥命名/别名后看 `Type::Pointer`）。
@@ -923,12 +1307,22 @@ fn load(cx: &Ctx<'_>, dst: ValueId, addr_v: ValueId, typ: TypeId, asm: &mut Asm)
         _ => asm.ins("ldr x11, [x10]"),
     }
     // 窄类型要按符号/零扩展（槽里恒为 64 位）。
+    //
+    // ⚠️ 扩展宽度必须是**该类型自己的宽度**，不是 `sxtw`（32 位）。
+    // 实测 `intcvt.go`：`int8(-128)` 存在 `.data` 里是 `0x80`，`ldrb` 零扩展成
+    // `w11 = 0x80`，再 `sxtw` 得到 **128** 而不是 `-128`。`sxtw` 只从第 31 位
+    // 复制符号位，对 1/2 字节的类型等于「符号位在 8/16 位、扩展点在 32 位」。
     if cx.width(typ) < 8 {
-        if cx.is_unsigned(typ) || basic_of(cx.tt, typ) == Some(BasicId::Bool) {
-            asm.ins("uxtw x11, w11");
-        } else {
-            asm.ins("sxtw x11, w11");
-        }
+        let unsigned = cx.is_unsigned(typ) || basic_of(cx.tt, typ) == Some(BasicId::Bool);
+        let ins = match (cx.width(typ), unsigned) {
+            (1, true) => "uxtb x11, w11",
+            (1, false) => "sxtb x11, w11",
+            (2, true) => "uxth x11, w11",
+            (2, false) => "sxth x11, w11",
+            (_, true) => "uxtw x11, w11",
+            (_, false) => "sxtw x11, w11",
+        };
+        asm.ins(ins);
     }
     st_x(asm, "x11", d.off);
 }
@@ -964,17 +1358,24 @@ fn call(
     asm: &mut Asm,
 ) -> Result<(), CgCode> {
     match callee {
-        CalleeRef::Builtin(b) => builtin(cx, *b, args, asm),
+        CalleeRef::Builtin(b) => builtin(cx, *b, args, dsts, asm),
         CalleeRef::Func(fid) => {
-            pass_args(cx, args, asm);
+            pass_args(cx, Some(*fid), args, asm);
             asm.ins(&format!("bl {}", cx.tt_fn_name(*fid)));
             take_results(cx, dsts, asm);
             Ok(())
         }
         CalleeRef::Method { recv, func } => {
-            // 接收者按指针传（`C5` §6.1 的聚合规则）。
-            pass_args(cx, args, asm);
-            let _ = recv;
+            // ⚠️ **接收者是第 0 个实参**（`Func.params[0]`，见 `build.rs::call` 的注释）。
+            // `CalleeRef::Method` 把它单独放一个字段，所以这里必须自己拼回实参表。
+            //
+            // 漏掉它 ⇒ 被调方从 `x0` 读到一个没写过的寄存器，`t.x` 落在野地址上，
+            // 表现为 `Segmentation fault`。这个错在「不访问接收者」的方法上完全看不出来，
+            // 所以 `func.go`（`(t *T) m10`）是唯一能抓到它的语料。
+            let mut all: Vec<ValueId> = Vec::with_capacity(args.len() + 1);
+            all.push(*recv);
+            all.extend_from_slice(args);
+            pass_args(cx, Some(*func), &all, asm);
             asm.ins(&format!("bl {}", cx.tt_fn_name(*func)));
             take_results(cx, dsts, asm);
             Ok(())
@@ -997,24 +1398,67 @@ impl Ctx<'_> {
 }
 
 /// 装实参（`C5` §6.1：`x`/`v` 两个序列独立计数）。
-fn pass_args(cx: &Ctx<'_>, args: &[ValueId], asm: &mut Asm) {
+///
+/// # 类别必须来自**被调方**的形参，不是实参
+///
+/// `R-13-3`：同一个值在不同上下文里可以有不同的表示，而寄存器分配只由
+/// **形参类型**决定。实测 `cplx1.go`：`booltest(5+6i, true)` 的实参是
+/// **无类型复数**（默认类型 `complex128` ⇒ 走 `d0`），形参却是 `complex64`
+/// （⇒ 期望 `s0/s1`）。按实参走，被调方读到 `d0` 的低 32 位 —— 也就是 `0`，
+/// 于是整个 `(0+0i)`。`float32` 形参配无类型浮点常量同理。
+fn pass_args(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], asm: &mut Asm) {
     let mut xi = 0usize;
     let mut vi = 0usize;
     let mut stack = 0u32;
-    for a in args {
+    for (i, a) in args.iter().enumerate() {
         let s = cx.slot(*a);
-        match cx.class(*a) {
-            SlotClass::Float | SlotClass::Complex64 => {
-                if cx.is_f32(cx.ty(*a)) || cx.class(*a) == SlotClass::Complex64 {
-                    ld_s(asm, &format!("s{vi}"), s.off);
+        // 有被调方就用它的形参类型；查不到（内建/外部）退回实参类型。
+        let want = callee
+            .and_then(|c| cx.param_ty(c, i))
+            .unwrap_or_else(|| cx.ty(*a));
+        let wcls = slot_of(cx.tt, want).map_or(SlotClass::Int, |s| s.class);
+        let wsize = slot_of(cx.tt, want).map_or(s.size, |s| s.size);
+        let acls = cx.class(*a);
+        match wcls {
+            // 形参是 `complex64`，实参可能是 `complex128`（无类型复数的默认类型）——
+            // 必须**在这里降精度**，否则被调方读到的是 f64 的低 32 位。
+            SlotClass::Complex64 => {
+                if acls == SlotClass::Complex128 {
+                    ld_d(asm, "d10", s.off);
+                    ld_d(asm, "d11", s.off + 8);
+                    asm.ins(&format!("fcvt s{vi}, d10"));
+                    asm.ins(&format!("fcvt s{}, d11", vi + 1));
                 } else {
-                    ld_d(asm, &format!("d{vi}"), s.off);
+                    ld_s(asm, &format!("s{vi}"), s.off);
+                    ld_s(asm, &format!("s{}", vi + 1), s.off + 4);
+                }
+                vi += 2;
+            }
+            SlotClass::Float => {
+                match (cx.is_f32(cx.ty(*a)), cx.is_f32(want)) {
+                    (true, true) => ld_s(asm, &format!("s{vi}"), s.off),
+                    (false, false) => ld_d(asm, &format!("d{vi}"), s.off),
+                    (true, false) => {
+                        ld_s(asm, "s10", s.off);
+                        asm.ins(&format!("fcvt d{vi}, s10"));
+                    }
+                    (false, true) => {
+                        ld_d(asm, "d10", s.off);
+                        asm.ins(&format!("fcvt s{vi}, d10"));
+                    }
                 }
                 vi += 1;
             }
             SlotClass::Complex128 => {
-                ld_d(asm, &format!("d{vi}"), s.off);
-                ld_d(asm, &format!("d{}", vi + 1), s.off + 8);
+                if acls == SlotClass::Complex64 {
+                    ld_s(asm, "s10", s.off);
+                    ld_s(asm, "s11", s.off + 4);
+                    asm.ins(&format!("fcvt d{vi}, s10"));
+                    asm.ins(&format!("fcvt d{}, s11", vi + 1));
+                } else {
+                    ld_d(asm, &format!("d{vi}"), s.off);
+                    ld_d(asm, &format!("d{}", vi + 1), s.off + 8);
+                }
                 vi += 2;
             }
             SlotClass::Agg => {
@@ -1024,7 +1468,7 @@ fn pass_args(cx: &Ctx<'_>, args: &[ValueId], asm: &mut Asm) {
                 xi += 1;
             }
             SlotClass::Int => {
-                if s.size > 8 {
+                if wsize > 8 {
                     // `string`：两个字分别进 `x{xi}` 与 `x{xi+1}`。
                     ld_x(asm, &format!("x{xi}"), s.off);
                     ld_x(asm, &format!("x{}", xi + 1), s.off + 8);
@@ -1050,8 +1494,13 @@ fn take_results(cx: &Ctx<'_>, dsts: &[ValueId], asm: &mut Asm) {
     for d in dsts {
         let s = cx.slot(*d);
         match cx.class(*d) {
-            SlotClass::Float | SlotClass::Complex64 => {
-                if cx.is_f32(cx.ty(*d)) || cx.class(*d) == SlotClass::Complex64 {
+            SlotClass::Complex64 => {
+                st_s(asm, &format!("s{vi}"), s.off);
+                st_s(asm, &format!("s{}", vi + 1), s.off + 4);
+                vi += 2;
+            }
+            SlotClass::Float => {
+                if cx.is_f32(cx.ty(*d)) {
                     st_s(asm, &format!("s{vi}"), s.off);
                 } else {
                     st_d(asm, &format!("d{vi}"), s.off);
@@ -1078,7 +1527,13 @@ fn take_results(cx: &Ctx<'_>, dsts: &[ValueId], asm: &mut Asm) {
 }
 
 /// 内建调用。
-fn builtin(cx: &Ctx<'_>, b: BuiltinKind, args: &[ValueId], asm: &mut Asm) -> Result<(), CgCode> {
+fn builtin(
+    cx: &Ctx<'_>,
+    b: BuiltinKind,
+    args: &[ValueId],
+    dsts: &[ValueId],
+    asm: &mut Asm,
+) -> Result<(), CgCode> {
     match b {
         BuiltinKind::Print | BuiltinKind::Println => {
             let is_ln = b == BuiltinKind::Println;
@@ -1099,7 +1554,106 @@ fn builtin(cx: &Ctx<'_>, b: BuiltinKind, args: &[ValueId], asm: &mut Asm) -> Res
             }
             Ok(())
         }
-        // 其余内建（`len`/`cap`/`append`/`new`/`make`/`copy`/…）在 Task 30 前后补。
+        // `len` / `cap`：字符串读第二个字；数组是**常量**（长度在类型里）。
+        // 切片/映射/通道在 `func_has_slice` 那一层就拒了，走不到这里。
+        BuiltinKind::Len | BuiltinKind::Cap => {
+            let (Some(a), Some(d)) = (args.first(), dsts.first()) else {
+                return Ok(());
+            };
+            let t = cx.ty(*a);
+            if is_string_ty(cx.tt, t) {
+                let (sa, sd) = (cx.slot(*a), cx.slot(*d));
+                ld_x(asm, "x10", sa.off + 8);
+                st_x(asm, "x10", sd.off);
+            } else if let Some(n) = rgoc_types::layout::array_len_of(cx.tt, t) {
+                let sd = cx.slot(*d);
+                load_imm(asm, "x10", i64::from(n));
+                st_x(asm, "x10", sd.off);
+            }
+            Ok(())
+        }
+        // `complex(re, im)`：两个分量并排放（`complex64` 是 4+4）。
+        BuiltinKind::Complex => {
+            let (Some(re), Some(im), Some(d)) = (args.first(), args.get(1), dsts.first()) else {
+                return Ok(());
+            };
+            let (sr, si, sd) = (cx.slot(*re), cx.slot(*im), cx.slot(*d));
+            let step = if sd.size == 8 { 4 } else { 8 };
+            if step == 4 {
+                ld_s(asm, "s10", sr.off);
+                ld_s(asm, "s11", si.off);
+                st_s(asm, "s10", sd.off);
+                st_s(asm, "s11", sd.off + 4);
+            } else {
+                ld_d(asm, "d10", sr.off);
+                ld_d(asm, "d11", si.off);
+                st_d(asm, "d10", sd.off);
+                st_d(asm, "d11", sd.off + 8);
+            }
+            Ok(())
+        }
+        // `real(c)` / `imag(c)`：取复数的实部 / 虚部。
+        BuiltinKind::Real | BuiltinKind::Imag => {
+            let (Some(c), Some(d)) = (args.first(), dsts.first()) else {
+                return Ok(());
+            };
+            let (sc, sd) = (cx.slot(*c), cx.slot(*d));
+            let off = if b == BuiltinKind::Imag {
+                if sc.size == 8 { 4 } else { 8 }
+            } else {
+                0
+            };
+            if cx.is_f32(cx.ty(*d)) {
+                ld_s(asm, "s10", sc.off + off);
+                st_s(asm, "s10", sd.off);
+            } else {
+                ld_d(asm, "d10", sc.off + off);
+                st_d(asm, "d10", sd.off);
+            }
+            Ok(())
+        }
+        // `min` / `max`：两元；整数走 `csel`，浮点走 `fmin/fmax`。
+        BuiltinKind::Min | BuiltinKind::Max => {
+            let (Some(a), Some(b2), Some(d)) = (args.first(), args.get(1), dsts.first()) else {
+                return Ok(());
+            };
+            let (sa, sb, sd) = (cx.slot(*a), cx.slot(*b2), cx.slot(*d));
+            if cx.class(*d) == SlotClass::Float {
+                let is32 = cx.is_f32(cx.ty(*d));
+                let ins = if b == BuiltinKind::Min {
+                    "fmin"
+                } else {
+                    "fmax"
+                };
+                if is32 {
+                    ld_s(asm, "s10", sa.off);
+                    ld_s(asm, "s11", sb.off);
+                    asm.ins(&format!("{ins} s12, s10, s11"));
+                    st_s(asm, "s12", sd.off);
+                } else {
+                    ld_d(asm, "d10", sa.off);
+                    ld_d(asm, "d11", sb.off);
+                    asm.ins(&format!("{ins} d12, d10, d11"));
+                    st_d(asm, "d12", sd.off);
+                }
+            } else {
+                let unsigned = cx.is_unsigned(cx.ty(*d));
+                ld_x(asm, "x10", sa.off);
+                ld_x(asm, "x11", sb.off);
+                asm.ins("cmp x10, x11");
+                let cond = match (b, unsigned) {
+                    (BuiltinKind::Min, false) => "lt",
+                    (BuiltinKind::Min, true) => "lo",
+                    (_, false) => "gt",
+                    (_, true) => "hi",
+                };
+                asm.ins(&format!("csel x12, x10, x11, {cond}"));
+                st_x(asm, "x12", sd.off);
+            }
+            Ok(())
+        }
+        // 其余内建（`append`/`copy`/`delete`/`clear`/`close`/`recover`）在 M6 的
+        // 拒绝面里，走不到这里；真走到了说明上游漏判 —— 宁可少发也不发错。
         _ => Ok(()),
     }
 }
@@ -1152,13 +1706,41 @@ fn print_value(cx: &Ctx<'_>, v: ValueId, asm: &mut Asm) {
 /// `panic(v)`：写一行到 stderr 后 `exit(2)`。
 fn panic_value(cx: &Ctx<'_>, v: ValueId, asm: &mut Asm) {
     let s = cx.slot(v);
-    if cx.class(v) == SlotClass::Int && s.size > 8 {
-        ld_x(asm, "x0", s.off);
-        ld_x(asm, "x1", s.off + 8);
-        asm.ins("bl rt_panic_str");
-    } else {
-        ld_x(asm, "x0", s.off);
-        asm.ins("bl rt_panic_i64");
+    match cx.class(v) {
+        // `panic(1.5)` 必须打成 `1.5`，不是 `4609434218613702656`。
+        SlotClass::Float => {
+            let is32 = cx.is_f32(cx.ty(v));
+            if is32 {
+                ld_s(asm, "s0", s.off);
+            } else {
+                ld_d(asm, "d0", s.off);
+            }
+            asm.ins(&format!("mov x0, #{}", u8::from(is32)));
+            asm.ins("bl rt_panic_f64");
+        }
+        SlotClass::Complex128 => {
+            ld_d(asm, "d0", s.off);
+            ld_d(asm, "d1", s.off + 8);
+            asm.ins("bl rt_panic_complex");
+        }
+        // `complex64` 没有单独的 panic 入口：升到 `complex128` 再打（值相同）。
+        SlotClass::Complex64 => {
+            ld_s(asm, "s0", s.off);
+            ld_s(asm, "s1", s.off + 4);
+            asm.ins("fcvt d0, s0");
+            asm.ins("fcvt d1, s1");
+            asm.ins("bl rt_panic_complex");
+        }
+        _ => {
+            if s.size > 8 {
+                ld_x(asm, "x0", s.off);
+                ld_x(asm, "x1", s.off + 8);
+                asm.ins("bl rt_panic_str");
+            } else {
+                ld_x(asm, "x0", s.off);
+                asm.ins("bl rt_panic_i64");
+            }
+        }
     }
 }
 
@@ -1210,14 +1792,24 @@ fn edge_copy(cx: &Ctx<'_>, to: rgoc_ssa::ir::BlockId, args: &[ValueId], asm: &mu
         // `V7` 保证相等；不等说明上游违约，宁可少发也不要错发。
         return;
     }
-    let pairs: Vec<(i32, i32)> = target
-        .params
-        .iter()
-        .zip(args.iter())
-        .map(|(p, a)| (cx.slot(*p).off, cx.slot(*a).off))
-        .collect();
     let tmp = cx.fr.tmp_base.unwrap_or(-8);
-    for m in parallel_copy::schedule(&pairs, tmp) {
+    // ⚠️ 一个参数可能有**多个字**（`string` 是 16 字节）。
+    //
+    // 按「一个参数 = 一条 8 字节搬运」发，`string` 只搬了指针、长度留在原地 ——
+    // 于是下一块拿到的 `len` 是上一个值的残留。实测 `simpswitch.go`：
+    // `switch` 的每个 case 都是一条边，`r += …` 在 case 里 ⇒ 拼接时拿一个
+    // 巨大的 `len` 去分配 ⇒ `panic: out of arena`。
+    //
+    // 展开成**按字**的对是安全的：块参数是互不相同的槽，每个字只属于一个参数。
+    let mut words: Vec<(i32, i32)> = Vec::with_capacity(target.params.len());
+    for (p, a) in target.params.iter().zip(args.iter()) {
+        let size = cx.slot(*p).size.max(cx.slot(*a).size);
+        for k in 0..size.div_ceil(8) {
+            let k = i32::try_from(k).unwrap_or(0) * 8;
+            words.push((cx.slot(*p).off + k, cx.slot(*a).off + k));
+        }
+    }
+    for m in parallel_copy::schedule(&words, tmp) {
         ld_x(asm, "x10", m.src);
         st_x(asm, "x10", m.dst);
     }
@@ -1230,6 +1822,11 @@ fn return_values(cx: &Ctx<'_>, vals: &[ValueId], asm: &mut Asm) {
     for v in vals {
         let s = cx.slot(*v);
         match cx.class(*v) {
+            SlotClass::Complex64 => {
+                ld_s(asm, &format!("s{vi}"), s.off);
+                ld_s(asm, &format!("s{}", vi + 1), s.off + 4);
+                vi += 2;
+            }
             SlotClass::Float => {
                 if cx.is_f32(cx.ty(*v)) {
                     ld_s(asm, &format!("s{vi}"), s.off);

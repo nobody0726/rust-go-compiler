@@ -157,6 +157,15 @@ impl Asm {
         }
     }
 
+    /// 把 `name` 定义成 `target` 的**别名**（同一个地址，两个符号）。
+    ///
+    /// 只用于零大小全局：`zerosize.go` 要求「零大小变量与 `new([0]int)` 同址」，
+    /// 而 `.set` 是唯一不引入第二块存储的写法。`target` 必须在本文件里**先定义**
+    /// （GNU as 的 `.set` 不做前向符号别名）。
+    pub fn alias(&mut self, name: &str, target: &str) {
+        let _ = writeln!(self.data, ".set {name}, {target}");
+    }
+
     /// 拼成最终文本。**固定顺序**：`.text` → `.rodata` → `.data`。
     #[must_use]
     pub fn render(&self) -> String {

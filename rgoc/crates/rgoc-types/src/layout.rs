@@ -159,6 +159,27 @@ fn array_len(tt: &TypeTable, len: Option<rgoc_const::consts::ConstId>) -> Option
     }
 }
 
+/// 类型 `t` 是数组时的元素个数（剥命名/别名）；不是数组 ⇒ `None`。
+///
+/// # 为什么放在这里
+///
+/// 数组长度存的是**常量表下标**（`Type::Array.len: Option<ConstId>`），
+/// 解析它要 `TypeTable::consts()`。后端只拿得到 `&TypeTable`，如果自己解一遍，
+/// 「长度怎么读」就有第二个口径 —— 而 `layout()` 已经有一个了。
+#[must_use]
+pub fn array_len_of(tt: &TypeTable, t: TypeId) -> Option<u32> {
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Array { len, .. } => return array_len(tt, *len),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// 结构体的布局与每个字段的偏移。
 fn struct_layout(tt: &TypeTable, id: StructId, depth: u32) -> Option<Layout> {
     let def = tt.struct_def(id);

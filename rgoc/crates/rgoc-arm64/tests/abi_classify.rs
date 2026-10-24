@@ -141,7 +141,9 @@ fn 复数的寄存器个数() {
     let c64_ = t.add_basic(BasicId::Complex64);
     let c128 = t.add_basic(BasicId::Complex128);
     let i = t.add_basic(BasicId::Int);
-    assert_eq!(reg_count(&t, c64_), Some(1), "complex64 打包进一个 v");
+    // `R-13-2`：`complex64` 是**两个 `f32` 的 HFA** ⇒ AAPCS64 按元素分配寄存器
+    // （两个 `s`），不是按大小打包进一个 `d`。
+    assert_eq!(reg_count(&t, c64_), Some(2), "complex64 是两个 s 寄存器");
     assert_eq!(reg_count(&t, c128), Some(2), "complex128 实部虚部各一个 v");
     assert_eq!(reg_count(&t, i), Some(1));
 }

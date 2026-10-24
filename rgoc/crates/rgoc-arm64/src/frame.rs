@@ -33,7 +33,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use rgoc_hir::SlotId;
-use rgoc_ssa::ir::{SsaFunc, Term, ValueId};
+use rgoc_ssa::ir::{CalleeRef, Instr, Root, SsaFunc, Term, ValueId};
 use rgoc_types::{TypeId, TypeTable};
 
 use crate::abi::slot_of;
@@ -47,13 +47,30 @@ pub struct Slot {
     pub size: u32,
 }
 
+/// 一个**逃逸**的取址槽：存储不在帧里，在 arena 里。
+///
+/// 帧里只留一个 8 字节的**指针格**（`cell`），指向 arena 里那块存储。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeapSlot {
+    /// 指针格在帧里的偏移（负数）。
+    pub cell: i32,
+    /// 存储大小（字节，取自 `rgoc_types::layout`）。
+    pub size: u32,
+    /// 存储对齐。
+    pub align: u32,
+}
+
 /// 一个函数的帧。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Frame {
     /// 值 → 槽（`ValueId` 升序）。
     pub values: BTreeMap<ValueId, Slot>,
     /// **取过地址**的槽 → 槽（`slot_types` 里登记的那些）。
+    ///
+    /// 逃逸槽在这里的 `size` 是 **8**（指针格），存储本身见 [`Frame::heap`]。
     pub addr_slots: BTreeMap<SlotId, Slot>,
+    /// 逃逸的取址槽（存储进 arena，`R-13-5`）。
+    pub heap: BTreeMap<SlotId, HeapSlot>,
     /// 并行拷贝临时区的起点（相对 `fp`，负数）；`None` ⇒ 该函数没有边实参。
     pub tmp_base: Option<i32>,
     /// 临时区有几个 8 字节格。
@@ -92,9 +109,14 @@ impl Frame {
     /// 统一走 `add x9, x29, #off`（GAS 会把负立即数编成 `sub`）+ `str [x9, #k]`（k ≥ 0），
     /// 一条路径、没有边界。
     pub fn zero_init(&self, asm: &mut crate::emit::Asm) {
-        for s in self.addr_slots.values() {
+        for (slot, s) in &self.addr_slots {
             if s.size == 0 {
                 // 零大小槽没有字节要清（它的地址由分配器给，见 `C5` §7.2）。
+                continue;
+            }
+            // 逃逸槽的帧里那一格是**指针**，arena 那块存储由 `rt_arena_alloc`
+            // 建零值。清它会把刚存进去的指针抹掉 ⇒ `addr-of` 拿到 0。
+            if self.heap.contains_key(slot) {
                 continue;
             }
             asm.ins(&format!("add x9, x29, #{}", s.off));
@@ -151,7 +173,12 @@ const SAVED: u32 = 16;
 ///
 /// 任一值或取址槽的类型没有运行期布局（泛型 / `Invalid` / 元组）。
 pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
-    let mut cur = SAVED;
+    // `cur` 是**槽区**的游标（从 0 起，不含保存区）。
+    // 槽的偏移一律是 `-(SAVED + cur)`：保存区占 `[fp-16, fp)`，槽区在它下面。
+    //
+    // 从 `SAVED` 起算再 `sub = round_up(cur,16)` 会让空函数也 `sub 16`（白占 16 字节），
+    // 而且「`sub` 要 ≥ 最低槽」这条约束会写得不直观。
+    let mut cur: u32 = 0;
     let mut values = BTreeMap::new();
 
     // ① 值槽：按 `ValueId` 升序（`value_types` 的下标就是 `ValueId`）。
@@ -167,28 +194,45 @@ pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
         values.insert(
             v,
             Slot {
-                off: neg(cur),
+                off: neg(SAVED + cur),
                 size: s.size,
             },
         );
     }
 
     // ② 取址槽：`slot_types` 是 `BTreeMap`，天然按 `SlotId` 升序。
+    //
+    // 逃逸的那些（`R-13-5`）不占帧存储，只占一个 8 字节指针格，存储在 arena。
+    let esc = escaping_slots(f);
     let mut addr_slots = BTreeMap::new();
+    let mut heap = BTreeMap::new();
     for (slot, typ) in &f.slot_types {
         let s = slot_of(tt, *typ).ok_or(FrameError::AddrSlot {
             slot: *slot,
             typ: *typ,
         })?;
+        let is_esc = esc.contains(slot);
+        let width = if is_esc { 8 } else { s.size };
         cur = round_up(cur, 8);
-        cur = cur.checked_add(s.size).expect("帧大小溢出 u32");
+        cur = cur.checked_add(width).expect("帧大小溢出 u32");
         addr_slots.insert(
             *slot,
             Slot {
-                off: neg(cur),
-                size: s.size,
+                off: neg(SAVED + cur),
+                size: width,
             },
         );
+        if is_esc {
+            let l = rgoc_types::layout::layout(tt, *typ);
+            heap.insert(
+                *slot,
+                HeapSlot {
+                    cell: neg(SAVED + cur),
+                    size: s.size,
+                    align: l.map_or(8, |l| l.align.max(1)),
+                },
+            );
+        }
     }
 
     // ③ 并行拷贝临时区：格数 = 所有边里最多的实参个数。
@@ -197,15 +241,37 @@ pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
         None
     } else {
         cur = cur.checked_add(tmp_slots * 8).expect("帧大小溢出 u32");
-        Some(neg(cur))
+        Some(neg(SAVED + cur))
     };
 
     // ④ 帧大小向上取 16（`sp` 恒 16 对齐）。
-    let frame_size = round_up(cur, 16).max(SAVED);
+    //
+    // ⚠️ `sub sp` 的量必须**覆盖到最低的槽**，不是「总大小减去 saved」。
+    //
+    // 槽 `off = -(SAVED + cur)` 是该槽**最低**的地址，所以全部槽的最低点是
+    // `-(SAVED + cur)`。`sp = fp - sub` 必须 ≤ 那个点 ⇒ `sub ≥ cur`。
+    //
+    // 旧写法 `sub = round_up(cur,16) - 16` 会让 `sp` 比最低槽**高 16 字节**：
+    // 被调方的 `stp x29,x30,[sp,#-16]!` 正好覆盖那一段，于是「最后一次写入的槽」
+    // 在调用后变成垃圾。实测 `probe5.go`：`show(complex, bool)` 的 `bool` 槽在
+    // `fp-40`、`sp` 在 `fp-32`，`rt_print_complex` 一返回 `bool` 就变成 `true`。
+    //
+    // 这个错在「函数里没有调用」或「最后一个槽恰好没人再读」时完全看不出来 ——
+    // 46 个语料里有 32 个照样绿（`R-13-4`）。
+    // 槽区从 `fp-16` 往下长 `cur`，所以最低点是 `fp-16-cur` ⇒
+    // `sp = fp - sub` 必须 ≤ 它 ⇒ `sub ≥ SAVED + cur`。
+    // 没有槽时不必 `sub`（空函数就是 16 字节，一条指令都不多）。
+    let sub = if cur == 0 {
+        0
+    } else {
+        round_up(SAVED + cur, 16)
+    };
+    let frame_size = SAVED + sub;
 
     Ok(Frame {
         values,
         addr_slots,
+        heap,
         tmp_base,
         tmp_slots,
         frame_size,
@@ -303,4 +369,91 @@ fn offsets_of(fr: &Frame, vals: &[ValueId]) -> Vec<i32> {
 /// 逗号连接（空集 ⇒ 空串，外层写 `[]`）。
 fn join(v: &[i32]) -> String {
     v.iter().map(i32::to_string).collect::<Vec<_>>().join(",")
+}
+
+/// 哪些取址槽的地址会**活着离开这个函数**（`R-13-5`）。
+///
+/// # 为什么必须有这一步
+///
+/// 帧存储的生命周期是「一次调用」。把它的地址返回出去（`return &T{1}`）、
+/// 存进全局或堆（`g = &x`）、或者传给别的函数，下一个调用就会复用同一块内存 ——
+/// Go 要求每次调用得到**不同**的地址。实测 `compos.go`：
+/// `f()` 两次返回 `&T{1}`，`x == y` 为真，程序自检 panic。
+///
+/// # 为什么是「保守判定」
+///
+/// 判错的代价不对称：
+/// - **漏判**（该逃逸却留在帧里）⇒ 静默的别名错，最难查；
+/// - **多判**（不该逃逸却进了 arena）⇒ 多分配几个字节，最坏是 `panic: out of arena`。
+///
+/// 所以只在「明确不逃逸」时才留在帧里。`print`/`println` 这类内建不收指针，
+/// 不算逃逸位置。
+fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut origin: BTreeMap<ValueId, SlotId> = BTreeMap::new();
+    let mut out: BTreeSet<SlotId> = BTreeSet::new();
+
+    for b in &f.blocks {
+        for i in &b.instrs {
+            if let Instr::AddrOf { dst, root } = i {
+                // `root` 是 `RootId`（函数内下标），要过 `f.roots` 才是根本身。
+                if let Root::Slot(s) = f.roots[root.index()] {
+                    origin.insert(*dst, s);
+                }
+            }
+        }
+    }
+    // 指针的别名（`copy` / `convert` / 取字段 / 取下标）都继承同一个槽。
+    // 两遍足够：SSA 里值号是定义序，跨块前向引用不存在。
+    for _ in 0..2 {
+        for b in &f.blocks {
+            for i in &b.instrs {
+                let (dst, src) = match i {
+                    Instr::Copy { dst, src } => (*dst, *src),
+                    Instr::Convert { dst, x, .. } => (*dst, *x),
+                    Instr::Field { dst, base, .. } => (*dst, *base),
+                    Instr::Index { dst, base, .. } => (*dst, *base),
+                    _ => continue,
+                };
+                if let Some(s) = origin.get(&src).copied() {
+                    origin.insert(dst, s);
+                }
+            }
+        }
+    }
+    let mark = |v: &ValueId, out: &mut BTreeSet<SlotId>| {
+        if let Some(s) = origin.get(v) {
+            out.insert(*s);
+        }
+    };
+    for b in &f.blocks {
+        for i in &b.instrs {
+            match i {
+                // 传给别的函数（被调方可能留下来）。内建不算。
+                Instr::Call {
+                    callee: CalleeRef::Func(_) | CalleeRef::Method { .. },
+                    args,
+                    ..
+                } => {
+                    for a in args {
+                        mark(a, &mut out);
+                    }
+                }
+                // 写进全局 / 堆 ⇒ 地址活得比这一帧长。
+                Instr::Store {
+                    root, addr, val, ..
+                } if !matches!(f.roots[root.index()], Root::Slot(_)) => {
+                    mark(addr, &mut out);
+                    mark(val, &mut out);
+                }
+                _ => {}
+            }
+        }
+        if let Term::Return(vals) = &b.term {
+            for v in vals {
+                mark(v, &mut out);
+            }
+        }
+    }
+    out
 }

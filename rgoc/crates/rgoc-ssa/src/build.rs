@@ -4171,10 +4171,22 @@ impl Fb<'_> {
             entry: BlockId(0),
             // 只有**取过地址**的槽需要类型：它们的存储是本帧的根，
             // 进帧时要按类型建零值（求值器的 `root_cell`）。
+            //
+            // ⚠️ 构建器私有的槽（`&CompositeLit` 的落点、`range` 下标）**不在**
+            // `f.slot_types` 里，类型记在 `extra_slots`。只查前者会把它们整个丢掉 ——
+            // 后端拿不到偏移，`addr-of` 变成「读一个没写过的槽」，
+            // 实测 `compos.go` / `newexpr.go` 因此 `Segmentation fault`。
             slot_types: self
                 .slot_root
                 .keys()
-                .filter_map(|s| self.f.slot_types.get(s.index()).map(|t| (*s, *t)))
+                .filter_map(|s| {
+                    self.f
+                        .slot_types
+                        .get(s.index())
+                        .copied()
+                        .or_else(|| self.extra_slots.get(s).copied())
+                        .map(|t| (*s, t))
+                })
                 .collect(),
             roots: self.roots,
             slot_root: self.slot_root,

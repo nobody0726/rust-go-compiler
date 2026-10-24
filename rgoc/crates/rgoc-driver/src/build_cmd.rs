@@ -147,7 +147,27 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
     }
 
     // ⑤ 汇编
-    let asm = rgoc_arm64::module::compile(&module, &tt).map_err(|e| e.to_string())?;
+    //
+    // ⚠️ `CgCode` 是**静态拒绝**（不支持面），不是内部失败 —— 退出码必须是 1。
+    // 走 `?` 会变成 `Err(String)` ⇒ 退出码 2，于是「M7 不支持切片」被记成
+    // 「编译器自己炸了」，语料分类器（`run-collide --native`）也会把它算成坏。
+    let asm = match rgoc_arm64::module::compile(&module, &tt) {
+        Ok(a) => a,
+        // 静态拒绝：不支持面 ⇒ 退出码 1，码本身是给人看的诊断。
+        Err(rgoc_arm64::module::CompileError::Cg(code)) => {
+            use std::fmt::Write as _;
+            let _ = writeln!(stderr, "{}", code.as_str());
+            return Ok(BuildOutcome {
+                stderr,
+                exit: 1,
+                ..BuildOutcome::default()
+            });
+        }
+        // 没有运行期布局的类型走到后端 = 上游漏了收敛，是**内部**失败 ⇒ 2。
+        Err(e @ rgoc_arm64::module::CompileError::Frame(_)) => {
+            return Err(format!("帧布局失败：{e}"));
+        }
+    };
 
     // ⑥ 输出路径
     let stem = cmd

@@ -42,6 +42,7 @@ fn 空函数的帧只有保存区() {
     let mut t = TypeTable::new();
     let f = func(Vec::new(), one_block(Term::Return(Vec::new())));
     let fr = layout(&f, &t).unwrap();
+    // `R-13-4`：`frame_size = SAVED + sub_sp_imm`，所以空函数是 16 + 0。
     assert_eq!(fr.frame_size, 16, "只有 saved fp/lr");
     assert_eq!(fr.sub_sp_imm(), 0, "stp 已经动了 16，sub 就是 0");
     assert_eq!(fr.tmp_base, None);
@@ -66,7 +67,12 @@ fn 相邻槽的区间不相交() {
         a.off + a.size as i32 <= b.off || b.off + b.size as i32 <= a.off,
         "槽区间相交：{a:?} 与 {b:?}"
     );
-    assert_eq!(fr.frame_size, 32, "16 保存 + 16 两个槽");
+    // `R-13-4`（帧太小）：`sub sp` 必须覆盖到**最低槽** `-32`
+    // ⇒ `sub = round_up(32,16) = 32`，`frame_size = 16 + 32 = 48`。
+    // 旧写法 `frame_size=32 ⇒ sub=16` 会让 `sp = fp-16`，两个槽全在被调方
+    // 的 `stp x29,x30,[sp,#-16]!` 覆盖范围内。
+    assert_eq!(fr.sub_sp_imm(), 32, "sub 要盖住最低槽");
+    assert_eq!(fr.frame_size, 48, "16 保存 + 32 sub");
 }
 
 #[test]
@@ -102,9 +108,9 @@ fn 大槽按自身宽度占位() {
         (fr.values[&ValueId(1)].off, fr.values[&ValueId(1)].size),
         (-40, 8)
     );
-    // 16 + 16 + 8 = 40 → 向上取 16 = 48
-    assert_eq!(fr.frame_size, 48);
-    assert_eq!(fr.sub_sp_imm(), 32);
+    // 游标走 16 + 16 + 8 = 40 → 向上取 16 = 48（= sub），frame_size = 16 + 48 = 64。
+    assert_eq!(fr.sub_sp_imm(), 48, "sub 要盖住最低槽 -40");
+    assert_eq!(fr.frame_size, 64);
 }
 
 #[test]
@@ -119,8 +125,9 @@ fn 临时区按最大边实参() {
     let f = func(vec![i, i, i], one_block(term));
     let fr = layout(&f, &t).unwrap();
     assert_eq!(fr.tmp_slots, 3);
-    // 16 + 3*8 = 40（槽） + 3*8 = 64（临时区）
-    assert_eq!(fr.frame_size, 64);
+    // 游标 16 + 3*8（槽）+ 3*8（临时区）= 64 ⇒ sub = 64，frame_size = 16 + 64 = 80。
+    assert_eq!(fr.sub_sp_imm(), 64);
+    assert_eq!(fr.frame_size, 80);
     assert_eq!(fr.tmp_base, Some(-64), "临时区起点 = 帧底");
 }
 
