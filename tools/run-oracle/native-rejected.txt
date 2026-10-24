@@ -1,0 +1,29 @@
+# tools/run-oracle/native-rejected.txt —— M7 native 的**冻结**拒绝面（`M'`）
+#
+# 判据来源：**实测**，不是从设计稿推的（`R-6-1` 同款）。生成方式见下方「复现」。
+# 与 `ssa-rejected.txt` 的关系：那张是 M6 拒的（连 SSA 都没有），这张是
+# **SSA 有了、但 arm64 后端拒**的。两者**不相交**（M6 拒的文件根本到不了后端）。
+#
+# 格式：三栏，`\t` 分隔 —— `<路径>` `<码>` `<原因/证据>`。
+#
+# 冻结值：`|N'| = 39`，`|M'| = 7`，`|N'| + |M'| = 46`（= `N` 侧全集）。
+#
+# 复现：
+#   bash tools/run-oracle/run-native.sh tools/run-oracle/native-input.txt
+#
+# 两向断言在 `rgoc/crates/rgoc-driver/tests/native_slice.rs`：
+#   ① `N'` + `M'` == 46（分母）；
+#   ② 拒绝集合 == 本文件的路径集合（冻结后新增/消失都必须红）；
+#   ③ 每条的码 ∈ `CgCode::ALL`（不许有码表外的字符串）。
+#
+# # 全部落在 `U-M7-01`（`[]T` 全集）上
+#
+# 7 个全都是「用到了切片」，没有一个是别的面。这不是巧合：M7 的 `N'` 是
+# 「按实测切」切出来的，切的唯一标准就是「这条程序用不用 `[]T`」。
+go_source_code/test/escape3.go	CG-UNSUPPORTED-SLICE	`v := []T1{{X: f(), Z: f()}}`（切片复合字面量）
+go_source_code/test/initcomma.go	CG-UNSUPPORTED-SLICE	`var a = []int{1, 2, }`（切片复合字面量）
+go_source_code/test/ken/array.go	CG-UNSUPPORTED-SLICE	数组与切片互转 / `[]T` 形参
+go_source_code/test/ken/convert.go	CG-UNSUPPORTED-SLICE	`[]int` 与字符串/数组的转换
+go_source_code/test/ken/slicearray.go	CG-UNSUPPORTED-SLICE	数组切片的边界与共享
+go_source_code/test/ken/sliceslice.go	CG-UNSUPPORTED-SLICE	切片再切片的重叠语义
+go_source_code/test/ken/string.go	CG-UNSUPPORTED-SLICE	字符串切片（`c[0:3]` / `c[3:]`）

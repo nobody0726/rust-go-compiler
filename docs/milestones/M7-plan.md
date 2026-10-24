@@ -877,25 +877,37 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 
 ## Phase 5：集成与切片（Task 54–60）
 
-### Task 54: 三方差分装置接线
+### Task 54: native 对撞装置（**独立脚本**，不改 `run-collide.sh`）
 
-**Files:** Modify `tools/run-oracle/run-collide.sh`（`--native` 接实）
-- [ ] `--native` 列：`build` 产物 vs `--via=hir` vs `go run`
-- [ ] 失败时保存：源文件、`.s`、两侧输出、期望、`objdump` 片段
-- [ ] Commit：`feat(m7): --native 三方差分接线（Task 54，T-NAT-41）`
+**Files:** Create `tools/run-oracle/run-native.sh`；Create `tools/run-oracle/native-input.txt`
+- [x] 为什么不塞进 `run-collide.sh`：那份脚本的三条通道（`--run` / `--ssa` / `--three-way`）
+      都围绕**解释器**的缓存组织，加第四列会把「哪种通路失败」的责任混在一起。
+      新脚本只做一件事：`build` → 跑 → 与官方 `.exp` 逐字节比
+- [x] 退出码三分：`0` 通过 / `1` 静态拒绝（归 `M'`）/ 其它 = 坏。
+      **必须分开** —— 把静止拒绝算成坏，等于把「M7 不支持切片」记成「编译器炸了」
+- [x] 挖到一个装置自己的 bug：产物名用 `basename` 时
+      `test/convert.go` 与 `test/ken/convert.go` 撞名，后者的诊断覆盖前者 ——
+      清单里的「拒绝原因」其实是**另一个文件**的。改用 slug（`/` → `_`）
+- [x] 挖到第二个装置 bug：`if ! cmd; then rc=$?` 里 `$?` 是**取反后**的状态（恒 0），
+      于是所有静态拒绝都被记成 `build0`（坏）
+- [x] Commit：`feat(m7): native 对撞装置（Task 54，T-NAT-41）`
 
-**Verify:** `bash tools/run-oracle/run-collide.sh --native --list tools/run-oracle/run-selected.txt`（此时期望部分红）
+**Verify:** `bash tools/run-oracle/run-native.sh tools/run-oracle/native-input.txt` ⇒
+`有输出 3/3 + 空输出 36/36（ok=39 skip=7 bad=0 / 46）`
 
 ---
 
 ### Task 55: 切片实测与冻结（`N'`/`M'`）
 
-**Files:** Modify `tools/run-oracle/native-classify.sh`；Create `tools/run-oracle/native-rejected.txt`；Test `rgoc/crates/rgoc-driver/tests/native_slice.rs`
-- [ ] 分类器跑 46 个，落两栏（路径 + 码）
-- [ ] 冻结值写进 `native-rejected.txt` 头部注释与 `native_slice.rs` 的常量
-- [ ] 两向断言：`N'+M'==46`；拒绝集合 == 实测集合；码 ∈ `CgCode::ALL`
-- [ ] **4 个有输出的文件必须在 `N'` 里**（`T-NAT-42` 的硬约束），否则写明原因并登记
-- [ ] Commit：`test(m7): native 切片冻结（Task 55，T-NAT-40，R-6-1 同款）`
+**Files:** Create `tools/run-oracle/native-rejected.txt`；Test `rgoc/crates/rgoc-driver/tests/native_slice.rs`
+- [x] 冻结值：`|N'| = 39` / `|M'| = 7` / 合计 46；`M'` 三栏（路径、码、原因/证据）
+- [x] 三向断言（`native_slice.rs`，3 条）：分母 `N'+M'==46`；`M'` 集合 == 冻结文件；
+      每条码 ∈ `CgCode::ALL`；**另加**「`native-input.txt` == 入选 − M6 拒绝」
+- [x] **设计稿说保 4 个有输出的语料，实际只能保 3 个**：`ken/string.go` 用字符串切片
+      （`c[0:3]` / `string(z1[0:])`），属 `[]T` 面 ⇒ 进 `M'`。已写进测试注释与
+      `native-rejected.txt`，不让它变成「说 4 做 3 而没人提」（`Q2` 的口径修正）
+- [x] 7 个拒绝**全是** `CG-UNSUPPORTED-SLICE` —— 说明切的标准就是「用不用 `[]T`」
+- [x] Commit：`test(m7): native 切片冻结（Task 55，T-NAT-40，R-6-1 同款）`
 
 **Verify:** `… cargo test -p rgoc-driver --test native_slice`（≥4 条）
 
@@ -903,10 +915,12 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 
 ### Task 56: 有输出 / 空输出分栏报告
 
-**Files:** Modify `run-collide.sh`（汇总行分两栏）；Test 并入 `native_slice.rs`
-- [ ] 汇总行必须写「有输出 a/4 + 空输出 b/42」，**不许**只写「N'/N' 绿」
-- [ ] 空输出栏的结论文案固定为「跑完 / 退出码 0 / 两流皆空」
-- [ ] Commit：`feat(m7): 分栏汇总（Task 56，T-NAT-42/43）`
+**Files:** `run-native.sh` 的汇总行；`native_corpus_run.rs` 的第三条断言
+- [x] 汇总行固定写「有输出 a/A + 空输出 b/B（合计 ok/skip/bad / 总数）」
+- [x] 空输出栏的结论只能是「跑完 / 退出码 0 / 两流皆空」——**不许**写成「算对了」
+- [x] `native_corpus_run.rs` 把这条做成**断言**：`with_output >= 3`。
+      没有它，「全绿」可能只是「全空」，而全空不构成证据
+- [x] Commit：`feat(m7): 分栏汇总（Task 56，T-NAT-42/43）`
 
 **Verify:** 汇总行含 `有输出` 与 `空输出` 两个词
 
