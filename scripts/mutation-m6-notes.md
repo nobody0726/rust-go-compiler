@@ -92,3 +92,22 @@
 | `M19` 不查步数上限 | `steps >= max_steps` → `if false` | `t_ssa_32_步数上限要能停住` | ✅ 红 |
 | `M20` 缺 `main` 假装成功 | `Err(Halt::NoMain)` → `Ok(())` | `t_ssa_32_没有_main_要报错而不是假装成功` | ✅ 红 |
 | `M21` `Return` 当不可达 | `Term::Return` → `Halt::Unreachable` | `t_ssa_32_空函数立即返回` | ✅ 红 |
+
+## Task 33b：`&&` / `||` 短路（5 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut33b.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M22` 短路退回一条 `bin` | `expr` 的 `LAnd/LOr` 分支建 `Bin` | `t_ssa_33b_and_建成控制流而不是一条_bin` | ✅ 红 |
+| `M23` 两支不对调 | `(t, f)` 恒为 `(rhs_b, short_b)` | `t_ssa_33b_or_的短路出口是_true_且两支对调` | ✅ 红 |
+| `M24` 出口值反了 | `const_bool(!is_and)` → `const_bool(is_and)` | `t_ssa_33b_and_建成控制流而不是一条_bin` | ✅ 红 |
+| `M25` 汇合处不带上 mem | 右支 `BranchOut.mem` 清空 | `t_ssa_33b_右支里的访存要在汇合处合上` | ✅ 红 |
+| `M26` 出口常量用缓存 `bool` | `e.typ` → `self.bool_ty()` | `t_ssa_33b_短路出口要跟结果类型而不是缓存_bool` | ✅ 红 |
+
+### 语料实测抓到的第七个真错
+
+`&&` 的结果类型可能是 **`untyped bool`**（`x < 3 && y` 的左操作数是比较表达式，
+Go 规范说比较产生 untyped boolean）。短路支的常量若用缓存的 `bool`，
+汇合块两条边就是两种类型 ⇒ `V3` 拒 **5 个语料文件**（`float_lit.go` / `simassign.go` /
+`ken/array.go` / `ken/divmod.go` / `ken/string.go`）。修法：`const_bool(b, t)` 由调用者给类型。

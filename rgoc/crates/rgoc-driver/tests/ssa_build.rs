@@ -2394,3 +2394,206 @@ fn t_ssa_36_初始化式里的不支持面要带码拒绝() {
     );
     assert!(out.module.init.is_none(), "被拒就不该有 init");
 }
+
+// ── Task 33b：`&&` / `||` 短路（`G-M6-08`）──────────────────────────
+
+/// 入口块的 `if` 两条出边（`(then, else)`）。
+fn if_edges(f: &SsaFunc) -> (BlockId, BlockId) {
+    match &f.blocks[0].term {
+        Term::If { then_, else_, .. } => (then_.0, else_.0),
+        t => panic!("入口块不是 `if`：{t:?}"),
+    }
+}
+
+/// 某块 `goto` 的实参。
+fn goto_args(f: &SsaFunc, b: BlockId) -> Vec<ValueId> {
+    match &f.blocks[b.index()].term {
+        Term::Goto { args, .. } => args.clone(),
+        t => panic!("b{} 不是 `goto`：{t:?}", b.0),
+    }
+}
+
+/// 某块的前驱个数。
+fn pred_count(f: &SsaFunc, b: BlockId) -> usize {
+    let c = cfg_of(f);
+    c.preds(b).len()
+}
+
+#[test]
+fn t_ssa_33b_and_建成控制流而不是一条_bin() {
+    // `a && b` 必须是 `if` + 两个块 + 汇合：`Bin` 表达不出「b 不被求值」。
+    let (program, mut tt) = program_of(
+        "short-and",
+        "package main\n\nfunc f(a, b bool) bool {\n\treturn a && b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    assert_eq!(
+        count_kind(f, "bin"),
+        0,
+        "短路不该产生 `bin`：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert_eq!(
+        f.blocks.len(),
+        4,
+        "entry + 右支 + 短路支 + 汇合：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    let (rhs_b, short_b) = if_edges(f);
+    assert_eq!(
+        pred_count(f, rhs_b),
+        1,
+        "右支只能从 entry 进来（否则「不求值」不成立）：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert_eq!(
+        pred_count(f, short_b),
+        1,
+        "短路支只能从 entry 进来：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    // 短路支送出的实参必须是常量 `false`
+    let sa = goto_args(f, short_b);
+    assert_eq!(sa.len(), 1, "一个结果实参");
+    assert!(
+        matches!(
+            def_instr(f, sa[0]),
+            Some(Instr::Const {
+                c: rgoc_hir::types::ConstVal::Bool(false),
+                ..
+            })
+        ),
+        "`&&` 的短路出口是 `false`：{:?}",
+        def_instr(f, sa[0])
+    );
+}
+
+#[test]
+fn t_ssa_33b_or_的短路出口是_true_且两支对调() {
+    let (program, mut tt) = program_of(
+        "short-or",
+        "package main\n\nfunc f(a, b bool) bool {\n\treturn a || b\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let (then_b, else_b) = if_edges(f);
+    // `||`：lhs 为**真**走短路支 ⇒ 短路支是 then 边
+    let sa = goto_args(f, then_b);
+    assert!(
+        matches!(
+            def_instr(f, sa[0]),
+            Some(Instr::Const {
+                c: rgoc_hir::types::ConstVal::Bool(true),
+                ..
+            })
+        ),
+        "`||` 的短路出口是 `true`：{:?}",
+        def_instr(f, sa[0])
+    );
+    // 右支在 else 边
+    assert_eq!(
+        pred_count(f, else_b),
+        1,
+        "右支只能从 entry 进来：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_33b_右支里的访存要在汇合处合上() {
+    // `a && (*p == 1)`：右支里有 `Load`（用 heap 根的 mem），汇合块必须带
+    // mem 参数 —— 只合值会把右支的访存从链上摘掉（`V6` 的同类错）。
+    let (program, mut tt) = program_of(
+        "short-mem",
+        "package main\n\nfunc f(a bool, p *int) bool {\n\treturn a && *p == 1\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 汇合块 = 参数最多的那个（结果 + mem）
+    let join = f
+        .blocks
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, b)| b.params.len())
+        .map(|(i, _)| BlockId(i as u32))
+        .expect("至少一个块");
+    assert_eq!(
+        f.blocks[join.index()].params.len(),
+        2,
+        "汇合块要有「结果 + heap 的 mem」两个参数：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_33b_嵌套短路() {
+    let (program, mut tt) = program_of(
+        "short-nest",
+        "package main\n\nfunc f(a, b, c bool) bool {\n\treturn a && b && c\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    assert!(
+        f.blocks.len() >= 6,
+        "两次短路至少 6 块：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+    assert_eq!(count_kind(f, "bin"), 0, "一条 `bin` 都不该有");
+}
+
+#[test]
+fn t_ssa_33b_短路出口要跟结果类型而不是缓存_bool() {
+    // `x < 3 && y`：左操作数是**比较表达式**，Go 规范说比较产生 `untyped boolean`，
+    // 于是 `&&` 的结果类型也是 `untyped bool`。短路支的常量若用缓存的 `bool`，
+    // 汇合块两条边就是两种类型（`V3` 拒 —— 实测 5 个语料文件）。
+    let (program, mut tt) = program_of(
+        "short-untyped",
+        "package main\n\nfunc f(x int, y bool) bool {\n\treturn x < 3 && y\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 汇合块的两条边实参类型必须一致（`V3` 已经查了，这里再钉一次具体形态）
+    let join = f
+        .blocks
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, b)| b.params.len())
+        .map(|(i, _)| BlockId(i as u32))
+        .expect("至少一个块");
+    assert!(
+        !f.blocks[join.index()].params.is_empty(),
+        "汇合块要有结果参数：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}

@@ -2222,6 +2222,13 @@ impl Fb<'_> {
             // （`a + 1` 里的 `1` 是 untyped int），而 `V3` 要求同型 —— 隐式转换
             // 在 lowering 里没有落成节点，只能在**使用点**物化（与 `coerce_to`
             // 在写入点做的事同源，`R-22-2`）。
+            // `&&` / `||` **必须在求 rhs 之前分叉**：短路是控制流，不是一条 `Bin`
+            // （`Task 33b`；缺口 `G-M6-08`）。
+            ExprKind::Binary {
+                op: op @ (BinOp::LAnd | BinOp::LOr),
+                x,
+                y,
+            } => self.short_circuit(e, *op, x, y),
             ExprKind::Binary { op, x, y } => {
                 let mut lhs = self.expr(x);
                 let mut rhs = self.expr(y);
@@ -2231,14 +2238,7 @@ impl Fb<'_> {
                         lhs = self.coerce_to(e.typ, lhs);
                     }
                     // 比较与逻辑：结果是 `bool`，两侧只要**互相**同型
-                    BinOp::Eq
-                    | BinOp::Ne
-                    | BinOp::Lt
-                    | BinOp::Le
-                    | BinOp::Gt
-                    | BinOp::Ge
-                    | BinOp::LAnd
-                    | BinOp::LOr => {
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                         let lt = self.values[lhs.index()];
                         rhs = self.coerce_to(lt, rhs);
                     }
@@ -3212,6 +3212,103 @@ impl Fb<'_> {
         dst
     }
 
+    /// 一个 `bool` 常量，**类型由调用者给**（短路表达式的出口值，`Task 33b`）。
+    ///
+    /// 不给 `bool_ty()`：`&&` 的结果类型可能是 `untyped bool`（`x < 3 && y`
+    /// 里的左操作数是比较表达式，Go 规范说比较产生 untyped boolean）。
+    /// 用缓存的那个 `bool` 会让汇合块两条边类型不一致（`V3` 拒，实测 5 个语料文件）。
+    fn const_bool(&mut self, b: bool, t: TypeId) -> ValueId {
+        let dst = self.new_value(t);
+        self.emit(Instr::Const {
+            dst,
+            c: rgoc_hir::types::ConstVal::Bool(b),
+            typ: t,
+        });
+        dst
+    }
+
+    /// `a && b` / `a || b`：**短路**必须建成控制流（`Task 33b`；缺口 `G-M6-08`）。
+    ///
+    /// # 为什么不能建成一条 `Bin`
+    ///
+    /// `Bin` 的两个操作数都**已经求值**（它们的定义在别的指令里），所以
+    /// 「`f() && g()` 在 `f()` 为假时不调 `g`」这条语义在一条 `Bin` 里根本
+    /// 表达不出来。结果值仍然对（false && x == false），副作用却多执行一次 ——
+    /// 这是**静默错**：单元测试只要不看副作用就全绿，只有三方差分能抓。
+    ///
+    /// # 图
+    ///
+    /// ```text
+    ///   c0:      c = <lhs>
+    ///            if c -> rhs_b | short_b      （`||` 把两支对调）
+    ///   rhs_b:   r = <rhs>          （可能又建块，尾块是 self.cur）
+    ///            goto join (r, …)
+    ///   short_b: s = const false    （`||` 给 true）
+    ///            goto join (s, …)
+    ///   join:    params = [结果, 槽…, mem…]
+    /// ```
+    ///
+    /// 汇合处**值与 mem 都要合**（沿 `join_into` 的纪律）：`f() && (x = 1)` 里
+    /// 右支的写不能在汇合后消失。
+    fn short_circuit(&mut self, e: &Expr, op: BinOp, x: &Expr, y: &Expr) -> ValueId {
+        let is_and = op == BinOp::LAnd;
+        let lhs = self.expr(x);
+        let rhs_b = self.new_block();
+        let short_b = self.new_block();
+        // `&&`：lhs 真才求 rhs；`||`：lhs 假才求 rhs
+        let (t, f) = if is_and {
+            (rhs_b, short_b)
+        } else {
+            (short_b, rhs_b)
+        };
+        self.set_term(Term::If {
+            cond: lhs,
+            then_: (t, Vec::new()),
+            else_: (f, Vec::new()),
+        });
+
+        // lhs 求完后的状态：两条支的起点
+        let base = (self.val.clone(), self.mem.clone());
+        let mut outs: Vec<BranchOut> = Vec::with_capacity(2);
+
+        // ── 短路支：常量出口
+        self.cur = short_b;
+        self.terminated = false;
+        let sv = self.const_bool(!is_and, e.typ);
+        outs.push(BranchOut {
+            block: short_b,
+            val: base.0.clone(),
+            mem: base.1.clone(),
+        });
+
+        // ── 右支
+        self.cur = rhs_b;
+        self.terminated = false;
+        self.val = base.0;
+        self.mem = base.1;
+        // 右支的值要收敛到 `&&` 的结果类型：比较表达式在 Go 里是
+        // **untyped bool**（规范如此），而 `a && (*p == 1)` 的上下文类型是 `bool`。
+        // 不收敛的话汇合块的两条边会送两种类型（`V3` 当场拒，实测）。
+        let rv = self.expr(y);
+        let rv = self.coerce_to(e.typ, rv);
+        // `expr(y)` 可能又建了块 ⇒ 尾块是 `self.cur`
+        outs.push(BranchOut {
+            block: self.cur,
+            val: self.val.clone(),
+            mem: self.mem.clone(),
+        });
+
+        // ── 汇合
+        let p = self.new_value(e.typ);
+        let join = self.new_block();
+        let (_, val, mem) = self.join_into(join, outs, Some((p, vec![sv, rv])));
+        self.cur = join;
+        self.terminated = false;
+        self.val = val;
+        self.mem = mem;
+        p
+    }
+
     /// 带标签的普通语句（`L: x = 1`）—— `goto` 的唯一合法目标（`Task 25`）。
     ///
     /// `M5` 的 lowering 已经把 `L: for/switch` 的标签转交给循环/`switch` 自己的
@@ -3272,7 +3369,7 @@ impl Fb<'_> {
             }
             (layout, v, m)
         } else {
-            self.join_into(b, outs)
+            self.join_into(b, outs, None)
         };
         if let Some(x) = self.labels.get_mut(name) {
             x.layout = Some(layout);
@@ -3425,7 +3522,7 @@ impl Fb<'_> {
             return None;
         }
         let join = self.new_block();
-        let (_, val, mem) = self.join_into(join, outs);
+        let (_, val, mem) = self.join_into(join, outs, None);
         self.cur = join;
         self.terminated = false;
         self.val = val;
@@ -3447,6 +3544,7 @@ impl Fb<'_> {
         &mut self,
         join: BlockId,
         outs: Vec<BranchOut>,
+        lead: Option<(ValueId, Vec<ValueId>)>,
     ) -> (
         ParamLayout,
         BTreeMap<SlotId, ValueId>,
@@ -3457,6 +3555,19 @@ impl Fb<'_> {
         let mut args: Vec<Vec<ValueId>> = vec![Vec::new(); outs.len()];
         let mut merged_val: BTreeMap<SlotId, ValueId> = BTreeMap::new();
         let mut merged_mem: BTreeMap<RootId, ValueId> = BTreeMap::new();
+
+        // ── 额外的前置参数（短路表达式的结果，`Task 33b`）
+        //
+        // 槽与根是「环境」，短路要合的是**一个表达式值**，它不属于任何槽。
+        // 放在最前面而不是追加在后面：`layout` 只描述槽/根，追加在后面会让
+        // 「参数下标 ↔ 布局下标」的对应关系按调用点而变。
+        if let Some((p, vs)) = lead {
+            debug_assert_eq!(vs.len(), outs.len(), "每条分支一个前置实参");
+            params.push(p);
+            for (k, v) in vs.iter().enumerate() {
+                args[k].push(*v);
+            }
+        }
 
         // ── 槽
         let mut slots: BTreeSet<SlotId> = BTreeSet::new();
