@@ -199,5 +199,6 @@ pub fn module_of(funcs: Vec<SsaFunc>) -> Module {
         funcs,
         globals: Vec::new(),
         main: None,
+        init: None,
     }
 }

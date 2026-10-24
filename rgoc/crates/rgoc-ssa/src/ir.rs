@@ -100,7 +100,33 @@ pub struct Module {
     pub globals: Vec<GlobalId>,
     /// `main`（可执行程序必有）。
     pub main: Option<FuncId>,
+    /// **包初始化函数**在 `funcs` 里的下标（`Task 32b`）。
+    ///
+    /// # 它是什么
+    ///
+    /// HIR 的包级初始化**不在任何函数体里**：`Program::init_order` 是
+    /// 「`var g = f()` 的右侧表达式」的列表，解释器在跑 `main` 之前逐组求值。
+    /// SSA 侧必须把它也变成图 —— 否则全局永远是零值，而**没有任何一处会报错**
+    /// （实测：`var g = 7` 的 SSA 模块里 `main` 读到 0）。
+    ///
+    /// 所以构建期合成一个无参无结果的函数（`name == "init"`，`src` 是哨兵
+    /// [`SYNTHETIC_FUNC`]）：按 `init_order` 顺序写全局根，再依次调用各文件的
+    /// `init()`，最后 `Return`。执行顺序由 `ssa_exec` 保证：**init → main**。
+    ///
+    /// # 与 mem 种子的关系
+    ///
+    /// mem 值是**函数内**的：init 里的 `Store` 产出的是 init 的 mem，`main` 看不到它。
+    /// 这没问题 —— mem 种子表示「进入本函数时的内存状态」，而 init 一定先跑完。
+    /// 跨函数的内存效果由 `Call.effect` 表达，不是 mem 链。
+    pub init: Option<usize>,
 }
+
+/// 合成函数的 `src` 哨兵（`Task 32b`）。
+///
+/// 包初始化函数在 HIR 里**没有**对应的 `Func`（它由 `Program::init_order` 合成），
+/// 而 `SsaFunc::src` 是 `FuncId`。用 `u32::MAX` 当哨兵而不是把它改成 `Option`：
+/// 只有诊断定位用它，而哨兵值不会与任何真实下标相撞（`funcs.len()` 远小于它）。
+pub const SYNTHETIC_FUNC: FuncId = FuncId(u32::MAX);
 
 /// 一个函数的 SSA 形态。
 #[derive(Clone, Debug)]

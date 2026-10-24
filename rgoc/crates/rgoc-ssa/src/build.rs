@@ -24,7 +24,9 @@ use rgoc_hir::{Func, FuncId, GlobalId, Program};
 use rgoc_types::{TypeId, TypeTable};
 
 use crate::diag::{Reject, SsaCode};
-use crate::ir::{Block, BlockId, CalleeRef, Effect, Instr, Module, Sig, SsaFunc, Term, ValueId};
+use crate::ir::{
+    Block, BlockId, CalleeRef, Effect, Instr, Module, SYNTHETIC_FUNC, Sig, SsaFunc, Term, ValueId,
+};
 
 /// 空白标识符 `_` 的槽（HIR 约定：`_` 用 `SlotId(u32::MAX)` 占位）。
 ///
@@ -52,7 +54,7 @@ pub struct BuildOutcome {
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
     let effs = crate::effect::summarize(program);
-    let mut funcs = Vec::with_capacity(program.funcs.len());
+    let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
     let mut rejected = Vec::new();
     for (i, f) in program.funcs.iter().enumerate() {
         let id = FuncId(i as u32);
@@ -61,6 +63,22 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
             Err(r) => rejected.push(r),
         }
     }
+
+    // 包级初始化（`Task 32b`）：**先扫后建**。
+    // 扫的理由：`init_order` 的右侧不在任何函数体里，`build_func` 的预扫描看不见它 ——
+    // `var m = map[int]int{}` 会一路走进 `todo!()`（panic），而不是带码拒绝。
+    let mut init = None;
+    if let Some((code, detail)) = unsupported_init(program, tt) {
+        rejected.push(Reject {
+            func: SYNTHETIC_FUNC,
+            code,
+            detail,
+        });
+    } else if let Some(sf) = build_init(program, &effs, tt) {
+        init = Some(funcs.len());
+        funcs.push(sf);
+    }
+
     BuildOutcome {
         module: Module {
             funcs,
@@ -68,9 +86,85 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
                 .map(|i| GlobalId(i as u32))
                 .collect(),
             main: program.main,
+            init,
         },
         rejected,
     }
+}
+
+/// 扫**包级初始化式**（`Program::init_order` 的右侧）里的不支持面。
+///
+/// 与 `unsupported()` 同一套判据，只是入口不同：那边扫函数体，这边扫初始化式。
+/// 报的 `func` 是哨兵 [`SYNTHETIC_FUNC`]，`detail` 里点明「包级初始化式」。
+fn unsupported_init(program: &Program, tt: &TypeTable) -> Option<(SsaCode, String)> {
+    for (i, g) in program.init_order.iter().enumerate() {
+        if let Some((code, detail)) = g.rhs.iter().find_map(|e| unsup_expr(tt, e)) {
+            return Some((code, format!("包级初始化式（第 {} 组）：{detail}", i + 1)));
+        }
+    }
+    None
+}
+
+/// 合成包初始化函数（`Task 32b`；`Module::init` 指向它）。
+///
+/// # 顺序与解释器一致
+///
+/// `interp` 的顶层阶段是 `Globals(0..)` → `Inits(0..)` → `Main`，这里照抄：
+/// 先按 `init_order` 逐组求值写全局根，再依次调用各文件的 `init()`。
+///
+/// # 为什么可以只建一个块
+///
+/// 初始化式是**表达式**，没有语句、没有分支（Go 规范里包级初始化式不能含控制流）。
+/// 所以合成函数永远是单块直线图 —— 不需要块参数、不需要汇合。
+fn build_init(
+    program: &Program,
+    effs: &[crate::effect::Summary],
+    tt: &mut TypeTable,
+) -> Option<SsaFunc> {
+    if program.init_order.is_empty() && program.inits.is_empty() {
+        return None;
+    }
+    // 合成函数在 HIR 里没有对应的 `Func`：造一个空壳（无参无结果无槽）。
+    let fake = Func::placeholder("init");
+    // 根表 = **全部**全局根（下标 == GlobalId，`RootId(g.0)` 的约定靠它）。
+    // 不预先建槽根：初始化式里没有局部变量。
+    let roots: Vec<Root> = (0..program.globals.len())
+        .map(|i| Root::Global(GlobalId(i as u32)))
+        .collect();
+    let mut fb = Fb::new(
+        tt,
+        &fake,
+        program,
+        effs,
+        FbInit {
+            roots,
+            slot_root: BTreeMap::new(),
+            promoted: BTreeSet::new(),
+            goto_mode: false,
+        },
+    );
+
+    for g in &program.init_order {
+        // 右侧**全部先求值**再逐个写（与赋值语句同一套语义）
+        let vs = fb.rhs_values(&g.rhs, g.globals.len());
+        for (gid, v) in g.globals.iter().zip(vs) {
+            let root = RootId(gid.0);
+            let t = fb.elem_type(root);
+            let v = fb.coerce_to(t, v);
+            let addr = fb.addr_of(root);
+            fb.store_root(root, addr, v);
+        }
+    }
+
+    for &fid in &program.inits {
+        let (rtypes, sig, _) = fb.sig_of(fid, false);
+        fb.call_sigs.insert(fid, sig);
+        let eff = crate::effect::to_effect(&effs[fid.index()]);
+        fb.emit_call(CalleeRef::Func(fid), Vec::new(), &rtypes, eff);
+    }
+
+    fb.set_term(Term::Return(Vec::new()));
+    Some(fb.finish(SYNTHETIC_FUNC))
 }
 
 // ── 拒绝面（Task 31）────────────────────────────────────────────────
@@ -372,33 +466,18 @@ fn build_func(
             .collect()
     };
 
-    let mut fb = Fb {
+    let mut fb = Fb::new(
         tt,
         f,
         program,
         effs,
-        globals: &program.globals,
-        call_sigs: BTreeMap::new(),
-        values: Vec::new(),
-        blocks: vec![Block::default()],
-        cur: BlockId(0),
-        val: BTreeMap::new(),
-        mem: BTreeMap::new(),
-        roots,
-        slot_root,
-        promoted,
-        ptr_ty: BTreeMap::new(),
-        ptr_root: BTreeMap::new(),
-        terminated: false,
-        bool_ty: None,
-        int_ty: None,
-        extra_slots: BTreeMap::new(),
-        next_tmp: u32::MAX - 1,
-        fallthrough: None,
-        labels: BTreeMap::new(),
-        regions: Vec::new(),
-        goto_mode,
-    };
+        FbInit {
+            roots,
+            slot_root,
+            promoted,
+            goto_mode,
+        },
+    );
     fb.entry_params();
 
     let body = &f.body;
@@ -1209,6 +1288,18 @@ struct BranchOut {
 ///
 /// 一个没有任何 `Load/Store` 的函数不该出现 mem 常量（`T-SSA-26`：纯函数里
 /// 连一条访存指令都不该有）。所以令牌在**第一次真正访存**时才建。
+/// `Fb::new` 的「非默认输入」：两个入口（普通函数 / 合成 init）只有这几项不同。
+struct FbInit {
+    /// 根表（下标即 `RootId`）。
+    roots: Vec<Root>,
+    /// 取过地址的槽 → 根。
+    slot_root: BTreeMap<SlotId, RootId>,
+    /// 提升成纯值的槽。
+    promoted: BTreeSet<SlotId>,
+    /// 含 `goto` ⇒ 一律不提升。
+    goto_mode: bool,
+}
+
 struct Fb<'a> {
     tt: &'a mut TypeTable,
     f: &'a Func,
@@ -1256,6 +1347,47 @@ struct Fb<'a> {
 }
 
 impl Fb<'_> {
+    /// 装配一个构建器（`build_func` 与合成的包初始化函数共用）。
+    ///
+    /// 抽出来是为了**不让两份字段清单漂开**：合成 init 的根表、提升集、
+    /// `goto_mode` 与普通函数不同，但其余二十来个字段必须一模一样 ——
+    /// 复制一份 struct literal 的那种写法，加字段时必然只改一处。
+    fn new<'a>(
+        tt: &'a mut TypeTable,
+        f: &'a Func,
+        program: &'a Program,
+        effs: &'a [crate::effect::Summary],
+        init: FbInit,
+    ) -> Fb<'a> {
+        Fb {
+            tt,
+            f,
+            program,
+            effs,
+            globals: &program.globals,
+            call_sigs: BTreeMap::new(),
+            values: Vec::new(),
+            blocks: vec![Block::default()],
+            cur: BlockId(0),
+            val: BTreeMap::new(),
+            mem: BTreeMap::new(),
+            roots: init.roots,
+            slot_root: init.slot_root,
+            promoted: init.promoted,
+            ptr_ty: BTreeMap::new(),
+            ptr_root: BTreeMap::new(),
+            terminated: false,
+            bool_ty: None,
+            int_ty: None,
+            extra_slots: BTreeMap::new(),
+            next_tmp: u32::MAX - 1,
+            fallthrough: None,
+            labels: BTreeMap::new(),
+            regions: Vec::new(),
+            goto_mode: init.goto_mode,
+        }
+    }
+
     fn new_value(&mut self, t: TypeId) -> ValueId {
         self.values.push(t);
         ValueId((self.values.len() - 1) as u32)

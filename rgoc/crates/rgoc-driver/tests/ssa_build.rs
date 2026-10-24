@@ -2175,3 +2175,222 @@ fn t_ssa_22_间接调用的结果个数取自函数类型() {
         rgoc_ssa::dump::dump_func(f, &tt)
     );
 }
+
+// ── Task 32b：包级初始化（`G-M6-07`）─────────────────────────────────
+
+/// 合成 init 函数（没有就 panic，消息里带上模块里有什么）。
+fn init_func(out: &rgoc_ssa::build::BuildOutcome) -> &SsaFunc {
+    let i = out
+        .module
+        .init
+        .unwrap_or_else(|| panic!("没有合成 init（funcs = {:?}）", names(&out.module)));
+    &out.module.funcs[i]
+}
+
+fn names(m: &rgoc_ssa::ir::Module) -> Vec<String> {
+    m.funcs.iter().map(|f| f.name.clone()).collect()
+}
+
+#[test]
+fn t_ssa_36_包级初始化式建出_init_函数() {
+    // `var g = 7` 的右侧**不在任何函数体里**（`Program::init_order`）。
+    // 不合成 init，`main` 读到的就是零值 —— 而且不会有任何一处报错。
+    let (program, mut tt) = program_of(
+        "init-global",
+        "package main\n\nvar g = 7\n\nfunc main() {\n\tprintln(g)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    assert!(out.rejected.is_empty(), "不该被拒：{:?}", out.rejected);
+    let init = init_func(&out);
+    assert_eq!(init.name, "init", "合成函数的名字");
+    assert_eq!(init.src, rgoc_ssa::ir::SYNTHETIC_FUNC, "src 是哨兵");
+    assert!(init.params.is_empty() && init.blocks.len() == 1, "无参单块");
+    if let Err(e) = verify(init, &tt) {
+        panic!(
+            "init 必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(init, &tt)
+        );
+    }
+    // 一条 Store 写到 `g` 的全局根，值是 7
+    let ss = stores(init);
+    assert_eq!(
+        ss.len(),
+        1,
+        "一组初始化式一条 Store：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+    assert!(
+        matches!(init.roots.get(ss[0].0.index()), Some(Root::Global(_))),
+        "写的是全局根：{:?}",
+        init.roots.get(ss[0].0.index())
+    );
+    let seven = instrs(init).into_iter().any(|i| {
+        matches!(
+            i,
+            Instr::Const {
+                c: rgoc_hir::types::ConstVal::Int(7),
+                ..
+            }
+        )
+    });
+    assert!(
+        seven,
+        "值 7 要在 init 里：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+    // main 读 g 走 Load（同一个全局根）
+    let m = func_named(&out, "main");
+    if let Err(e) = verify(m, &tt) {
+        panic!("main 必须过 verifier：{e}");
+    }
+    let reads_global = instrs(m).into_iter().any(|i| {
+        matches!(i, Instr::Load { root, .. } if matches!(m.roots.get(root.index()), Some(Root::Global(_))))
+    });
+    assert!(reads_global, "`println(g)` 要 Load 全局根");
+}
+
+#[test]
+fn t_ssa_36_初始化顺序按声明序且同根保序() {
+    // `var b = a + 1` 依赖 `var a = 1`：两条 Store 必须同根、且第二条用第一条的 mem。
+    let (program, mut tt) = program_of(
+        "init-order",
+        "package main\n\nvar a = 1\n\nvar b = a + 1\n\nfunc main() {\n\tprintln(b)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    assert!(out.rejected.is_empty());
+    let init = init_func(&out);
+    if let Err(e) = verify(init, &tt) {
+        panic!(
+            "init 必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(init, &tt)
+        );
+    }
+    let ss = stores(init);
+    assert_eq!(
+        ss.len(),
+        2,
+        "两组两条 Store：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+    assert!(
+        ss[0].0.index() < ss[1].0.index(),
+        "按**声明序**写：先 a 的根再 b 的根（根表顺序就是 GlobalId 顺序）：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_36_初始化式读到的全局走_load() {
+    // `var b = a + 1`：读 `a` 必须是一条 Load（而不是常量 1 直接折叠 —— 那是 M6d 的事）。
+    let (program, mut tt) = program_of(
+        "init-read",
+        "package main\n\nvar a = 1\n\nvar b = a + 1\n\nfunc main() {\n\tprintln(b)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    let init = init_func(&out);
+    let loads = instrs(init)
+        .into_iter()
+        .filter(|i| matches!(i, Instr::Load { .. }))
+        .count();
+    assert_eq!(
+        loads,
+        1,
+        "读一次全局：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+    // 第二条 Store 的 mem 必须是**第一条 Store 产出的**（同一个根）
+    // 同根保序：读 `a` 的 Load 必须用写 `a` 的那条 Store 产出的 mem
+    let (load_mem, load_root) = instrs(init)
+        .into_iter()
+        .find_map(|i| match i {
+            Instr::Load { mem, root, .. } => Some((*mem, *root)),
+            _ => None,
+        })
+        .expect("没有 Load");
+    let write_a = stores(init)
+        .into_iter()
+        .find(|s| s.0 == load_root)
+        .expect("`a` 必须有一条 Store");
+    assert_eq!(
+        load_mem,
+        write_a.2,
+        "读 `a` 要用写 `a` 产出的 mem（同根保序）：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_36_多值初始化式展平成多个_store() {
+    let (program, mut tt) = program_of(
+        "init-multi",
+        "package main\n\nfunc pair() (int, int) {\n\treturn 1, 2\n}\n\nvar a, b = pair()\n\nfunc main() {\n\tprintln(a, b)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    assert!(out.rejected.is_empty(), "{:?}", out.rejected);
+    let init = init_func(&out);
+    if let Err(e) = verify(init, &tt) {
+        panic!(
+            "init 必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(init, &tt)
+        );
+    }
+    let calls = instrs(init)
+        .into_iter()
+        .filter(|i| matches!(i, Instr::Call { .. }))
+        .count();
+    assert_eq!(calls, 1, "一次调用");
+    assert_eq!(stores(init).len(), 2, "两个全局两条 Store");
+}
+
+#[test]
+fn t_ssa_36_文件的_init_被合成_init_调用() {
+    let (program, mut tt) = program_of(
+        "init-func",
+        "package main\n\nvar g int\n\nfunc init() {\n\tg = 3\n}\n\nfunc main() {\n\tprintln(g)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    let init = init_func(&out);
+    let fid = func_id(&program, "init");
+    let called = instrs(init).into_iter().any(|i| {
+        matches!(
+            i,
+            Instr::Call {
+                callee: rgoc_ssa::ir::CalleeRef::Func(f),
+                ..
+            } if *f == fid
+        )
+    });
+    assert!(
+        called,
+        "合成 init 要调用文件的 init()：{}",
+        rgoc_ssa::dump::dump_func(init, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_36_没有初始化式时不合成_init() {
+    let (program, mut tt) = program_of("init-none", "package main\n\nfunc main() {}\n");
+    let out = build(&program, &mut tt);
+    assert!(out.module.init.is_none(), "没有初始化式就没有 init");
+    assert_eq!(names(&out.module), vec!["main".to_string()]);
+}
+
+#[test]
+fn t_ssa_36_初始化式里的不支持面要带码拒绝() {
+    // `var m = map[int]int{}`：init_order 的表达式**不在任何函数体里**，
+    // 函数体的预扫描扫不到它 ⇒ 必须在 build() 里单独扫。
+    let (program, mut tt) = program_of(
+        "init-map",
+        // `main` **不碰** map：这样唯一该被拒的就是初始化式
+        "package main\n\nvar m = map[int]int{1: 2}\n\nfunc main() {\n\tprintln(1)\n}\n",
+    );
+    let out = build(&program, &mut tt);
+    assert_eq!(out.rejected.len(), 1, "一条拒绝：{:?}", out.rejected);
+    assert_eq!(out.rejected[0].code, rgoc_ssa::diag::SsaCode::Map);
+    assert!(
+        out.rejected[0].detail.contains("初始化"),
+        "说明要指出是包级初始化式：{}",
+        out.rejected[0].detail
+    );
+    assert!(out.module.init.is_none(), "被拒就不该有 init");
+}

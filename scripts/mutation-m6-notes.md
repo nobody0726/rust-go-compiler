@@ -71,3 +71,14 @@
 
 另修一条 `typing` 判据：常量 `Float`/`Complex` 不认**未类型化**的 `untyped float/complex`
 （`float_lit.go` / `ken/cplx*.go` 一片假拒绝），并让 `basic()` 走 `underlying`（具名数值类型）。
+
+## Task 32b：合成包初始化函数（4 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut32b.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M15` 不合成 init | `build()` 不 push 合成函数 | `t_ssa_36_包级初始化式建出_init_函数` | ✅ 红 |
+| `M16` 不写初始化式 | `build_init` 里 `vs` 恒空 | `t_ssa_36_包级初始化式建出_init_函数` | ✅ 红 |
+| `M17` 不扫初始化式 | `unsupported_init` 恒 `None` | `t_ssa_36_初始化式里的不支持面要带码拒绝` | ✅ 红 |
+| `M18` 不调用文件的 `init` | 循环里 `continue` | `t_ssa_36_文件的_init_被合成_init_调用` | ✅ 红 |
