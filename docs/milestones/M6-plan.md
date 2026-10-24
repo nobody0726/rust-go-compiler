@@ -669,16 +669,22 @@
 
 ---
 
-### Task 35: 调用、内建与输出
+### Task 35: 访存、调用与内建（执行期修订：`R-35-4` 作废「按 root 索引 mem」）
 
 **Files:**
-- Modify: `ssa_exec.rs`
+- Modify: `rgoc-ssa/src/{ir,build,dump}.rs`、`rgoc-interp/src/{ssa_exec,interp}.rs`
 
-- [ ] `CalleeRef::Func/Method/Indirect`：建新帧；`Builtin`：`print/println/len/cap/append/copy/...` 走 M5 的 `print::format_operand` 与内建实现
-- [ ] `Load/Store`：按 `root` 索引 mem（`Vec<Value>` by `RootId`）
-- [ ] Commit：`feat(interp): 调用/内建/访存（Task 35）`
+- [x] `CalleeRef::Func/Method/Indirect`：`Func`/`Method` **只压帧**（`ret_to = dsts`），控制权回主循环 ——
+      不能「压帧 + 驱动到底」（那是宿主栈递归，`max_frames` 挡不住）；`Indirect` 是 M6 面外，运行期报错
+- [x] `Builtin`：`print/println/len/cap/append/copy/min/max/complex/real/imag/new/clear`，
+      复用 M5 的 `print::format_operand` 与 `interp` 的纯函数（`append_value` 抽成两套求值器共用）
+- [x] `Load/Store`：运行期**按真实地址**访存（`Value::Ptr` 的 `Cell`），`root` 只用于静态定序（`R-35-4`）
+- [x] IR 补三项运行期必需的信息：`Module::global_types`、`SsaFunc::slot_types`、`Instr::Call::dots`（`R-35-1`）
+- [x] `Term::Return` 把结果写进调用方的 `ret_to`（先全读、再弹帧、再写）
+- [x] 端到端 `rgoc-driver/tests/ssa_run.rs`（Task 35 部分 18 条）+ 语料闭环 `ssa_corpus_run.rs`（46 个 `N` 全绿）
+- [x] Commit：`feat(interp): SSA 访存、调用与内建（Task 35）`
 
-**Verify:** `… cargo test -p rgoc-interp --test ssa_exec calls`
+**Verify:** `… cargo test -p rgoc-driver --test ssa_run --test ssa_corpus_run`
 
 ---
 

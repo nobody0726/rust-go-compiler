@@ -591,6 +591,7 @@ fn t_ssa_06_v5_结果个数与签名不符() {
             dsts: vec![r0, r1],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![a],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );
@@ -621,6 +622,7 @@ fn t_ssa_06_v5_实参个数与签名不符() {
             dsts: vec![r0],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![a, c], // 给了 2 个
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );
@@ -644,6 +646,7 @@ fn t_ssa_06_v5_被调方没有签名记录() {
             dsts: vec![r0],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(7)),
             args: vec![],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );

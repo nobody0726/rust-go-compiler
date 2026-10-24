@@ -2412,62 +2412,15 @@ impl<'a> Interp<'a> {
             return;
         }
         let base = vals.remove(0);
-        let elem_typ = slice_elem(self.tt, slice_typ);
         let extra: Vec<Value> = if dots {
-            match vals.pop() {
-                Some(Value::Slice(sv)) => (0..sv.len)
-                    .map(|i| sv.arr[sv.off + i].borrow().deep_copy())
-                    .collect(),
-                Some(Value::Nil(_)) | None => Vec::new(),
-                Some(other) => vec![other],
-            }
+            expand_spread(vals.pop())
         } else {
             vals
         };
-        let (arr, off, len, cap) = match base {
-            Value::Slice(sv) => (sv.arr, sv.off, sv.len, sv.cap),
-            Value::Nil(_) => (Rc::new(Vec::new()), 0, 0, 0),
-            other => {
-                self.fail(RtError::Message(format!(
-                    "runtime error: append to non-slice {}",
-                    print::format_operand(&other, self.tt, slice_typ)
-                )));
-                return;
-            }
-        };
-        let need = len + extra.len();
-        if need <= cap {
-            for (i, v) in extra.into_iter().enumerate() {
-                let idx = off + len + i;
-                if let Some(c) = arr.get(idx) {
-                    *c.borrow_mut() = v;
-                }
-            }
-            self.values.push(Value::Slice(SliceVal {
-                arr,
-                off,
-                len: need,
-                cap,
-            }));
-            return;
+        match append_value(self.tt, base, extra, slice_typ) {
+            Ok(v) => self.values.push(v),
+            Err(e) => self.fail(e),
         }
-        let newcap = grow_cap(cap, need);
-        let mut cells: Vec<Cell> = Vec::with_capacity(newcap);
-        for i in 0..newcap {
-            if i < len {
-                cells.push(cell(arr[off + i].borrow().deep_copy()));
-            } else if i - len < extra.len() {
-                cells.push(cell(extra[i - len].clone()));
-            } else {
-                cells.push(cell(zero_of(self.tt, elem_typ)));
-            }
-        }
-        self.values.push(Value::Slice(SliceVal {
-            arr: Rc::new(cells),
-            off: 0,
-            len: need,
-            cap: newcap,
-        }));
     }
 
     // ───────────── 值构造 ─────────────
@@ -2881,7 +2834,7 @@ fn peel(c: &Cell) -> Cell {
     cur
 }
 
-fn peel_value(v: &Value) -> Value {
+pub(crate) fn peel_value(v: &Value) -> Value {
     let mut cur = v.clone();
     for _ in 0..64 {
         match cur {
@@ -2994,7 +2947,7 @@ fn read_target(t: &Target) -> Result<Value, RtError> {
     }
 }
 
-fn bounds(i: i128, len: usize) -> Result<usize, RtError> {
+pub(crate) fn bounds(i: i128, len: usize) -> Result<usize, RtError> {
     match usize::try_from(i) {
         Ok(i) if i < len => Ok(i),
         _ => Err(RtError::IndexOutOfRange {
@@ -3004,7 +2957,7 @@ fn bounds(i: i128, len: usize) -> Result<usize, RtError> {
     }
 }
 
-fn len_of(v: &Value) -> usize {
+pub(crate) fn len_of(v: &Value) -> usize {
     match peel_value(v) {
         Value::Str(s) => s.len(),
         Value::Array(c) => c.len(),
@@ -3014,7 +2967,7 @@ fn len_of(v: &Value) -> usize {
     }
 }
 
-fn cap_of(v: &Value) -> usize {
+pub(crate) fn cap_of(v: &Value) -> usize {
     match peel_value(v) {
         Value::Array(c) => c.len(),
         Value::Slice(sv) => sv.cap,
@@ -3022,7 +2975,7 @@ fn cap_of(v: &Value) -> usize {
     }
 }
 
-fn grow_cap(cap: usize, need: usize) -> usize {
+pub(crate) fn grow_cap(cap: usize, need: usize) -> usize {
     if cap == 0 {
         return need;
     }
@@ -3033,7 +2986,7 @@ fn grow_cap(cap: usize, need: usize) -> usize {
     c
 }
 
-fn copy_into(dst: Value, src: &Value) -> Result<usize, RtError> {
+pub(crate) fn copy_into(dst: Value, src: &Value) -> Result<usize, RtError> {
     let (darr, doff, dlen) = match dst {
         Value::Slice(sv) => (sv.arr, sv.off, sv.len),
         _ => return Ok(0),
@@ -3256,6 +3209,77 @@ pub(crate) fn convert(tt: &TypeTable, v: Value, to: TypeId, from: TypeId) -> Val
     }
 }
 
+/// `append` 的核心（**两套求值器共用一份**，`D-M6-7`）。
+///
+/// `extra` 已经展开过（`dots` 的处理在 [`expand_spread`]）：这里只管
+/// 「够不够容量 / 要不要重新分配」。
+pub(crate) fn append_value(
+    tt: &TypeTable,
+    base: Value,
+    extra: Vec<Value>,
+    slice_typ: TypeId,
+) -> Result<Value, RtError> {
+    let elem_typ = slice_elem(tt, slice_typ);
+    let (arr, off, len, cap) = match base {
+        Value::Slice(sv) => (sv.arr, sv.off, sv.len, sv.cap),
+        Value::Nil(_) => (Rc::new(Vec::new()), 0, 0, 0),
+        other => {
+            return Err(RtError::Message(format!(
+                "runtime error: append to non-slice {}",
+                print::format_operand(&other, tt, slice_typ)
+            )));
+        }
+    };
+    let need = len + extra.len();
+    if need <= cap {
+        // 容量够 ⇒ 原地写进底层数组（与 M5 的语义一致：共享底层数组）
+        for (i, v) in extra.into_iter().enumerate() {
+            let idx = off + len + i;
+            if let Some(c) = arr.get(idx) {
+                *c.borrow_mut() = v;
+            }
+        }
+        return Ok(Value::Slice(SliceVal {
+            arr,
+            off,
+            len: need,
+            cap,
+        }));
+    }
+    let newcap = grow_cap(cap, need);
+    let mut cells: Vec<Cell> = Vec::with_capacity(newcap);
+    for i in 0..newcap {
+        if i < len {
+            cells.push(cell(arr[off + i].borrow().deep_copy()));
+        } else if i - len < extra.len() {
+            cells.push(cell(extra[i - len].clone()));
+        } else {
+            cells.push(cell(zero_of(tt, elem_typ)));
+        }
+    }
+    Ok(Value::Slice(SliceVal {
+        arr: Rc::new(cells),
+        off: 0,
+        len: need,
+        cap: newcap,
+    }))
+}
+
+/// `xs...` 的展开：`append(s, xs...)` / `println(xs...)` / `append(b, "bar"...)`。
+///
+/// 字符串展开成字节（Go 规范：`append([]byte, string...)` 合法）。
+pub(crate) fn expand_spread(v: Option<Value>) -> Vec<Value> {
+    match v {
+        Some(Value::Slice(sv)) => (0..sv.len)
+            .map(|i| sv.arr[sv.off + i].borrow().deep_copy())
+            .collect(),
+        Some(Value::Array(cells)) => cells.iter().map(|c| c.borrow().deep_copy()).collect(),
+        Some(Value::Str(s)) => s.bytes().map(|b| Value::Int(i128::from(b))).collect(),
+        Some(Value::Nil(_)) | None => Vec::new(),
+        Some(other) => vec![other],
+    }
+}
+
 pub(crate) fn slice_value(
     base: &Value,
     lo: Option<Value>,
@@ -3363,7 +3387,7 @@ pub(crate) fn apply_unary(op: UnOp, v: Value, typ: TypeId, tt: &TypeTable) -> Va
     }
 }
 
-fn cmp_values(a: &Value, b: &Value) -> Ordering {
+pub(crate) fn cmp_values(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),
         (Value::Str(x), Value::Str(y)) => x.as_bytes().cmp(y.as_bytes()),
@@ -3381,7 +3405,7 @@ fn to_i128(v: &Value) -> i128 {
     }
 }
 
-fn to_f64(v: &Value) -> f64 {
+pub(crate) fn to_f64(v: &Value) -> f64 {
     match v {
         Value::Float(f) => *f,
         Value::Int(i) => *i as f64,
@@ -3390,7 +3414,7 @@ fn to_f64(v: &Value) -> f64 {
     }
 }
 
-fn as_complex(v: &Value) -> (f64, f64) {
+pub(crate) fn as_complex(v: &Value) -> (f64, f64) {
     match v {
         Value::Complex(r, i) => (*r, *i),
         Value::Float(f) => (*f, 0.0),
@@ -3399,7 +3423,7 @@ fn as_complex(v: &Value) -> (f64, f64) {
     }
 }
 
-fn slice_elem(tt: &TypeTable, t: TypeId) -> TypeId {
+pub(crate) fn slice_elem(tt: &TypeTable, t: TypeId) -> TypeId {
     match tt.type_of(underlying(tt, unalias(tt, t))) {
         Type::Slice(e) => *e,
         Type::Array { elem, .. } => *elem,

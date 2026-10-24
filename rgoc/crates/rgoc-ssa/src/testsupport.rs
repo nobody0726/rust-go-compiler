@@ -37,6 +37,8 @@ pub struct FnBuilder {
     call_sigs: BTreeMap<rgoc_hir::FuncId, Sig>,
     /// 取过址的槽 → 根（`V9` 的比对面）。
     slot_root: BTreeMap<rgoc_hir::SlotId, RootId>,
+    /// 取过址的槽 → 类型（求值器进帧时按它建零值存储）。
+    slot_types: BTreeMap<rgoc_hir::SlotId, TypeId>,
 }
 
 impl FnBuilder {
@@ -52,6 +54,7 @@ impl FnBuilder {
             basics: BTreeMap::new(),
             call_sigs: BTreeMap::new(),
             slot_root: BTreeMap::new(),
+            slot_types: BTreeMap::new(),
         }
     }
 
@@ -71,6 +74,7 @@ impl FnBuilder {
             basics: BTreeMap::new(),
             call_sigs: BTreeMap::new(),
             slot_root: BTreeMap::new(),
+            slot_types: BTreeMap::new(),
         }
     }
 
@@ -121,6 +125,14 @@ impl FnBuilder {
     /// 登记「这个槽取过址、它的根是 `root`」（`V9` 要查）。
     pub fn slot_root(&mut self, slot: rgoc_hir::SlotId, root: RootId) {
         self.slot_root.insert(slot, root);
+    }
+
+    /// 登记「这个槽的类型」（求值器要按它建根存储的零值）。
+    ///
+    /// 不登记 ⇒ 求值器把根存储建成 `nil`：`Store` 整块覆盖仍然对，
+    /// 但 `Index`/`Field` 的**取址**会当场失败（那才是该失败的时候）。
+    pub fn slot_typ(&mut self, slot: rgoc_hir::SlotId, typ: TypeId) {
+        self.slot_types.insert(slot, typ);
     }
 
     /// 登记一个被调方的签名（`V5` 要查；不登记就等于「查不了」）。
@@ -185,6 +197,7 @@ impl FnBuilder {
             entry: BlockId(0),
             roots: self.roots,
             slot_root: self.slot_root,
+            slot_types: self.slot_types,
             value_types: self.value_types,
             call_sigs: self.call_sigs,
         };
@@ -198,6 +211,7 @@ pub fn module_of(funcs: Vec<SsaFunc>) -> Module {
     Module {
         funcs,
         globals: Vec::new(),
+        global_types: Vec::new(),
         main: None,
         init: None,
     }

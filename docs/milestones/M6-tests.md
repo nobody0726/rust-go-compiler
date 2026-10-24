@@ -301,4 +301,12 @@ M = 拒绝的个数         （每行带 §5 的码）
 | `R-33-1` | 2026-10-24 | Task 33 只做**不碰内存**的值计算（`Const/Copy/Bin/Un/Convert/Composite/Make/Slice` + `print`/`println`）；`Field/Index/AddrOf` 并入 Task 35。`ops` 的实际接口是 `bin_arith` / `compare`（**没有**计划稿写的 `apply_binary`/`apply_unary`） | ① 地址类指令要 `Cell`，与 `Load/Store` 是同一套运行期设施，拆开做只会写两遍；② 没有 `print`/`println` 就没有**观察通道**，Task 33 的判据无从落地；③ 计划稿的接口名是设计期猜的，实际 `ops` 只导出了 `bin_arith`/`compare`/`normalize` |
 | `R-33-2` | 2026-10-24 | **`&&` / `||` 在 SSA 里没有短路**（`G-M6-08`）：`build.rs` 把 `Binary{LAnd}` 建成一条 `Bin`，两侧都求值 | M5 的解释器有 `Task::Short` 做短路；SSA 侧漏了。结果值仍然正确、副作用（调用/panic）多执行一次 ⇒ **静默错**，只有三方差分能抓。插入 **Task 33b** 修 |
 
+| `R-35-1` | 2026-10-24 | `Instr::Call` 增加 `dots: bool`；`C10` 的 `call` 行在实参表后写 ` ...` | `append(s, xs)` 与 `append(s, xs...)` 的**实参个数一样**，差别只在「展开 vs 单个」。不记这一位，IR 表达不出语义，求值器只能猜（猜错 = 静默算错）。实测：`c := append(a, b...)` 原先只追加一个元素（`len(c)==3`） |
+| `R-35-2` | 2026-10-24 | 「指针底座」三处修正：① `expr_addr_root` 对**指针类型**的表达式先分流（值本身就是地址）；② `place_addr_root(Field)` 的指针底座用 `read_place`；③ `scan_place_root`/`scan_value_root` **不把**指针底座标成根 | 实测 `func (c *Counter) Add()` 的 `c.n += d` 建成了「指针的指针取字段」（`addr-of r_c` 再 `field`），运行期报「取字段的底座不是结构体」。③ 是**提升**面的修正（不标根 ⇒ 指针形参留在值里）；① 才是正确性面 |
+| `R-35-3` | 2026-10-24 | `switch` 判定链改成**逐表达式短路**（每个 case 表达式一个 `if` 块），不再用 `bin lor` 串 | Go 规范：case 表达式自左向右求值，第一个相等的生效。`case f(2), f(3):` 用 `bin lor` 意味着两个操作数**都已求值** ⇒ `f(3)` 被多调一次（与 `R-33-2` 同一个坑）。实测 `ken/simpswitch.go` 因此运行期报「逻辑运算出现在 Bin 里」 |
+| `R-35-4` | 2026-10-24 | 运行期**按真实地址访存**（`Value::Ptr` 里的 `Cell`），计划稿写的「按 `root` 索引 mem（`Vec<Value>` by `RootId`）」**作废** | `RootId` 是**函数内**下标：`&a` 传给 `inc(p *int)` 之后，被调方必须指回调用方的槽 —— 只有真实 `Cell` 能做到。`root` 只用于静态定序（`D-M6-5`） |
+| `R-35-5` | 2026-10-24 | `range` 的计数器改用**私有槽**，用户的下标槽只在**体首**被赋值 | 实测 `for i = range [5]int{} {}` 结束后 `i == 5`，而 Go 规范要求 `4`（最后一次迭代的下标）。拿用户槽当计数器时，出口送出的是「越过末尾」的那个值（`for.go` 的 `assertequal(i, 4, ...)`） |
+| `R-35-6` | 2026-10-24 | 值语义的**两处** `deep_copy`（`Load` 与 `Store`）登记为**互为冗余**：判据只钉「至少一处生效」 | 实测（变异 `M34`）：单独去掉任一处，全部用例仍绿（另一处把拷贝做了）；**两处一起去掉**才红。原因是「元素/字段写」会把槽标成根（`partial`），赋值必然走 `Store` 而读必然走 `Load`。所以判据写成端到端的「`b := a` 之后改 `b` 不影响 `a`」，而不是「某一行必须拷贝」 |
+| `R-35-7` | 2026-10-24 | `stmt_labeled` 的「死代码跳过」加**全函数 goto 目标预扫描**（`goto_targets`） | `goto X; ...; L: ...; X: goto L` 里 `L` 写下时还没有入边，之后才被指到。跳过它留下空块（`unreachable`），运行期走到就报「执行到了 Unreachable 块」—— 实测 `ken/label.go` |
+
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m6.rs` 会对账 `test_ids` 集合。

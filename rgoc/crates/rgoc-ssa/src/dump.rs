@@ -192,12 +192,18 @@ fn render_instr(i: &Instr) -> String {
             v(*val)
         ),
         Instr::Call {
-            dsts, callee, args, ..
+            dsts,
+            callee,
+            args,
+            dots,
+            ..
         } => format!(
-            "{} = call {}({})",
+            "{} = call {}({}){}",
             vs(dsts),
             render_callee(callee),
-            vs(args)
+            vs(args),
+            // `...` 是**语义**（展开 vs 单个），不是排版（`R-35-1`）
+            if *dots { " ..." } else { "" }
         ),
     }
 }

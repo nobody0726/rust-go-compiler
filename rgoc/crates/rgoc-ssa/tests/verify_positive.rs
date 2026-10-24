@@ -174,6 +174,7 @@ fn 多结果调用与零结果调用() {
             dsts: vec![r0, r1],
             callee: CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![a],
+            dots: false,
             effect: Effect::default(),
         },
     );
@@ -184,6 +185,7 @@ fn 多结果调用与零结果调用() {
             dsts: vec![],
             callee: CalleeRef::Func(rgoc_hir::FuncId(2)),
             args: vec![r0],
+            dots: false,
             effect: Effect::default(),
         },
     );
@@ -315,6 +317,7 @@ fn 变参调用按至少算实参() {
             dsts: vec![r0],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![a],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );
@@ -341,6 +344,7 @@ fn 间接调用没有签名可查时跳过_v5检查() {
             dsts: vec![r0],
             callee: rgoc_ssa::ir::CalleeRef::Indirect(fv),
             args: vec![],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );
@@ -585,6 +589,7 @@ fn kitchen_sink() -> (SsaFunc, TypeTable) {
             dsts: vec![call_r],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![conv],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );

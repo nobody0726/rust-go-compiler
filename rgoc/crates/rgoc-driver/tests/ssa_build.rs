@@ -138,7 +138,7 @@ fn t_ssa_27_取址分析认出被取址的槽() {
         .expect("没有 f");
     let (declared, addressed) = short_decl_addr(&func.body);
 
-    let set = scan_addressed(&tt, &func.body);
+    let set = scan_addressed(&tt, func);
     assert_eq!(
         set.iter().copied().collect::<Vec<_>>(),
         vec![addressed],
@@ -147,7 +147,7 @@ fn t_ssa_27_取址分析认出被取址的槽() {
     assert_ne!(declared, addressed, "被取址的是 a，不是 p");
     assert!(!set.contains(&declared), "p 本身没有被取址");
 
-    let (roots, slot_root) = roots_of(&tt, &func.body);
+    let (roots, slot_root) = roots_of(&tt, func);
     assert_eq!(roots, vec![Root::Slot(addressed)], "一个槽根");
     assert_eq!(slot_root.get(&addressed), Some(&rgoc_ssa::ir::RootId(0)));
 }
@@ -161,7 +161,7 @@ fn t_ssa_27_结构体字段取址也算槽被取址() {
     );
     let func = program.funcs.iter().find(|x| x.name == "g").unwrap();
     let (_, addressed) = short_decl_addr(&func.body);
-    let set = scan_addressed(&tt, &func.body);
+    let set = scan_addressed(&tt, func);
     assert_eq!(set.len(), 1, "只有 s 一个槽：{set:?}");
     assert!(set.contains(&addressed), "被取址的槽必须是 s");
 }
@@ -175,7 +175,7 @@ fn t_ssa_27_slice_元素取址不建槽根() {
         "package main\n\nfunc h() {\n\ts := []int{1}\n\tp := &s[0]\n\t_ = p\n}\n\nfunc main() {}\n",
     );
     let func = program.funcs.iter().find(|x| x.name == "h").unwrap();
-    let set = scan_addressed(&tt, &func.body);
+    let set = scan_addressed(&tt, func);
     assert!(set.is_empty(), "slice 元素取址不该产生槽根：{set:?}");
 }
 
@@ -188,7 +188,7 @@ fn t_ssa_27_数组元素取址要让数组槽成根() {
         "package main\n\nfunc k() {\n\tvar arr [3]int\n\tp := &arr[0]\n\t_ = p\n}\n\nfunc main() {}\n",
     );
     let func = program.funcs.iter().find(|x| x.name == "k").unwrap();
-    let set = scan_addressed(&tt, &func.body);
+    let set = scan_addressed(&tt, func);
     assert_eq!(set.len(), 1, "数组槽必须成为根：{set:?}");
 }
 
@@ -199,8 +199,8 @@ fn t_ssa_27_没有取址就没有根() {
         "package main\n\nfunc m() {\n\tvar a int\n\ta = 1\n\t_ = a\n}\n\nfunc main() {}\n",
     );
     let func = program.funcs.iter().find(|x| x.name == "m").unwrap();
-    assert!(scan_addressed(&tt, &func.body).is_empty());
-    let (roots, slot_root) = roots_of(&tt, &func.body);
+    assert!(scan_addressed(&tt, func).is_empty());
+    let (roots, slot_root) = roots_of(&tt, func);
     assert!(roots.is_empty() && slot_root.is_empty());
 }
 
@@ -942,7 +942,9 @@ fn t_ssa_18_switch_有_tag() {
         "入口块应该是判定：{:?}",
         f.blocks[0].term
     );
-    // `case 1, 2` 是一个 case ⇒ 一个 `LOr` 合并两个 `Eq`
+    // `case 1, 2` 是**两个**判定，不是一条 `LOr`（`R-35-3`）：
+    // `case f(), g():` 里 `f()` 命中就不该求值 `g()`，而一条 `bin lor` 意味着
+    // 两个操作数都已经求值过了（副作用做了两次）。所以判据是「没有 `LOr`」。
     let eqs = instrs(f)
         .iter()
         .filter(|i| {
@@ -968,7 +970,16 @@ fn t_ssa_18_switch_有_tag() {
         })
         .count();
     assert_eq!(eqs, 3, "三个 case 表达式各一次 Eq");
-    assert_eq!(ors, 1, "只有 `case 1, 2` 需要一次 Or");
+    assert_eq!(
+        ors, 0,
+        "判定链里不许有 `LOr`（那是「两个操作数都已求值」的形态，会重复副作用）"
+    );
+    // `case 1, 2` 的两个判定必须是**两块**：第一个不中才去求第二个
+    assert!(
+        f.blocks.len() >= 5,
+        "三个 case 判定 + 体块 + 出口，至少 5 块：{:#?}",
+        f.blocks.len()
+    );
 }
 
 #[test]

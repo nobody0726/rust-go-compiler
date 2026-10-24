@@ -126,6 +126,7 @@ fn all_instrs() -> Vec<Instr> {
             dsts: vec![v(13)],
             callee: CalleeRef::Func(FuncId(0)),
             args: vec![v(0)],
+            dots: false,
             effect: Effect::default(),
         },
     ]

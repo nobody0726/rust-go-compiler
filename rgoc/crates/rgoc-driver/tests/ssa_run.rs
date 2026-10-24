@@ -216,3 +216,197 @@ fn t_ssa_34_短路真的不执行右侧() {
         "`false && side()` 的右支不该被求值（短路必须是控制流）"
     );
 }
+
+// ── Task 35：访存、调用与内建 ───────────────────────────────────────
+
+#[test]
+fn t_ssa_35_函数调用与递归() {
+    // 递归同时验证三件事：压帧、`Return` 结果交接、帧深不靠宿主栈
+    expect_out(
+        "call-fib",
+        "package main\n\nfunc fib(n int) int {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}\n\nfunc main() {\n\tprintln(fib(10))\n}\n",
+        "55\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_多返回值与结果直连() {
+    expect_out(
+        "call-multi",
+        "package main\n\nfunc two() (int, int) {\n\treturn 3, 4\n}\n\nfunc sum(a, b int) int {\n\treturn a + b\n}\n\nfunc main() {\n\tx, y := two()\n\tprintln(x, y, sum(two()))\n}\n",
+        "3 4 7\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_方法调用_指针接收者写回() {
+    expect_out(
+        "call-method",
+        "package main\n\ntype Counter struct{ n int }\n\nfunc (c *Counter) Add(d int) {\n\tc.n += d\n}\n\nfunc main() {\n\tvar c Counter\n\tc.Add(3)\n\tc.Add(4)\n\tprintln(c.n)\n}\n",
+        "7\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_指针形参写回调用方() {
+    // `&x` 的地址要能穿过帧边界指回调用方的槽（`RootId` 是函数内的，
+    // 所以运行期只能靠 `Value::Ptr` 里的真实 `Cell`）
+    expect_out(
+        "call-ptr",
+        "package main\n\nfunc inc(p *int) {\n\t*p = *p + 1\n}\n\nfunc main() {\n\tx := 41\n\tinc(&x)\n\tprintln(x)\n}\n",
+        "42\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_数组与结构体字段() {
+    expect_out(
+        "mem-agg",
+        "package main\n\ntype P struct {\n\tx int\n\ty int\n}\n\nfunc main() {\n\tvar a [3]int\n\ta[1] = 7\n\tvar p P\n\tp.x = 2\n\tp.y = a[1] + 1\n\tprintln(a[1], p.x, p.y)\n}\n",
+        "7 2 8\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_全局变量与初始化顺序() {
+    // `b` 的初始化式读 `a`：init 里必须同根保序（读用写产出的 mem）
+    expect_out(
+        "mem-global",
+        "package main\n\nvar a = 1\n\nvar b = a + 1\n\nfunc main() {\n\tprintln(a, b)\n\ta = 10\n\tprintln(b, a)\n}\n",
+        "1 2\n2 10\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_切片共享底层数组() {
+    expect_out(
+        "mem-slice-share",
+        "package main\n\nfunc main() {\n\ts := []int{1, 2, 3}\n\tt := s\n\tt[0] = 9\n\tprintln(s[0], t[0], len(s))\n}\n",
+        "9 9 3\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_内建_len_cap_append_copy() {
+    expect_out(
+        "builtin-seq",
+        "package main\n\nfunc main() {\n\ts := make([]int, 2, 4)\n\ts[0] = 1\n\ts[1] = 2\n\ts = append(s, 3)\n\td := make([]int, len(s))\n\tn := copy(d, s)\n\tprintln(len(s), cap(s), n, d[2])\n}\n",
+        "3 4 3 3\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_内建_min_max_complex() {
+    expect_out(
+        "builtin-num",
+        "package main\n\nfunc main() {\n\tprintln(min(3, 1, 2), max(3, 1, 2))\n\tc := complex(1, 2)\n\tprintln(real(c), imag(c))\n}\n",
+        "1 3\n1 2\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_append_展开() {
+    // `append(s, xs...)` 展开**一串**元素；`append(s, xs)` 只追加**一个**
+    // （后者对 []int 是类型错，所以只测前者）。dots 位是 IR 的语义（`R-35-1`）。
+    expect_out(
+        "builtin-append-dots",
+        "package main\n\nfunc main() {\n\ta := []int{1, 2}\n\tb := []int{3, 4}\n\tc := append(a, b...)\n\tprintln(len(c), c[3])\n}\n",
+        "4 4\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_new_与_clear() {
+    expect_out(
+        "builtin-new",
+        "package main\n\nfunc main() {\n\tp := new(int)\n\t*p = 5\n\tprintln(*p)\n\ts := []int{1, 2}\n\tclear(s)\n\tprintln(s[0], s[1])\n}\n",
+        "5\n0 0\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_goto_循环() {
+    // `goto_mode` 把全部槽建成根（`R-25-1`）⇒ 全走 AddrOf/Load/Store
+    expect_out(
+        "goto-loop",
+        "package main\n\nfunc main() {\n\ti := 0\nloop:\n\tif i < 3 {\n\t\tprintln(i)\n\t\ti++\n\t\tgoto loop\n\t}\n}\n",
+        "0\n1\n2\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_字符串下标取字节() {
+    expect_out(
+        "str-index",
+        "package main\n\nfunc main() {\n\ts := \"abc\"\n\tprintln(s[0], s[2], len(s))\n}\n",
+        "97 99 3\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_nil_指针解引用走_panic_通道() {
+    let (out, exit, _) = run_ssa_src(
+        "nil-deref",
+        "package main\n\nfunc main() {\n\tvar p *int\n\tprintln(\"before\")\n\tprintln(*p)\n}\n",
+    );
+    assert_eq!(exit, 2, "nil 解引用 ⇒ 退出码 2");
+    assert_eq!(
+        out, "before\npanic: runtime error: invalid memory address or nil pointer dereference\n",
+        "文本要与 Go 一致"
+    );
+}
+
+#[test]
+fn t_ssa_35_数组赋值是拷贝() {
+    // Go 的数组/结构体是**值语义**：`b := a` 之后改 `b` 不影响 `a`。
+    // 运行期靠 `Store` 的 `deep_copy`；提升成纯值时靠 `Copy` —— 而 `Copy` 是
+    // **重命名**（块参数交接用），所以赋值点必须自己保证拷贝（`R-35-4`）。
+    expect_out(
+        "mem-array-copy",
+        "package main\n\nfunc main() {\n\ta := [3]int{1, 2, 3}\n\tb := a\n\tb[0] = 9\n\tprintln(a[0], b[0])\n}\n",
+        "1 9\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_结构体赋值是拷贝() {
+    expect_out(
+        "mem-struct-copy",
+        "package main\n\ntype P struct{ x int }\n\nfunc main() {\n\tp := P{1}\n\tq := p\n\tq.x = 9\n\tprintln(p.x, q.x)\n}\n",
+        "1 9\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_range_结束后下标是最后一个() {
+    // `for i = range [5]int{}` 结束后 `i == 4`（Go 规范）。计数器是**私有槽**：
+    // 拿用户的下标槽当计数器会让出口值变成 5（`R-35-5`）。
+    expect_out(
+        "range-key-after",
+        "package main\n\nfunc main() {\n\ti := 0\n\tfor i = range [5]int{} {\n\t}\n\tprintln(i)\n\tj := 0\n\tfor j := range [3]int{} {\n\t\t_ = j\n\t}\n\tprintln(j)\n}\n",
+        "4\n0\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_switch_的_case_表达式逐个短路() {
+    // `case f(2), f(3):` 里 `f(2)` 命中就不该求值 `f(3)`（Go 规范：case 表达式
+    // 自左向右，第一个相等的生效）。初版用一条 `bin lor` 把两个比较串起来 ——
+    // 两个操作数**都已经求值**，于是 `calls == 2`（`R-35-3`）。
+    expect_out(
+        "switch-case-short",
+        "package main\n\nvar calls int\n\nfunc f(n int) int {\n\tcalls++\n\treturn n\n}\n\nfunc main() {\n\tx := 2\n\tswitch x {\n\tcase f(2), f(3):\n\t\tprintln(\"hit\", calls)\n\tdefault:\n\t\tprintln(\"miss\", calls)\n\t}\n}\n",
+        "hit 1\n",
+    );
+}
+
+#[test]
+fn t_ssa_35_通过指针读字段() {
+    // `p.n`（`p *S`）的底座是**指针值**，不是「`p` 这个变量的地址」。
+    // 写成后者就是「指针的指针取字段」，运行期当场报「底座不是结构体」（`R-35-2`）。
+    expect_out(
+        "ptr-field-read",
+        "package main\n\ntype S struct{ n int }\n\nfunc get(p *S) int {\n\treturn p.n\n}\n\nfunc main() {\n\tvar s S\n\ts.n = 5\n\tprintln(get(&s))\n}\n",
+        "5\n",
+    );
+}

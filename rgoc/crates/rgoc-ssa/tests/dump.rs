@@ -306,6 +306,7 @@ fn t_ssa_14_每种指令都在_dump_里有稳定形状() {
             dsts: vec![call_r],
             callee: rgoc_ssa::ir::CalleeRef::Func(rgoc_hir::FuncId(1)),
             args: vec![conv],
+            dots: false,
             effect: rgoc_ssa::ir::Effect::default(),
         },
     );

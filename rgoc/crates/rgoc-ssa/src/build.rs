@@ -85,6 +85,7 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
             globals: (0..program.globals.len())
                 .map(|i| GlobalId(i as u32))
                 .collect(),
+            global_types: program.globals.iter().map(|g| g.typ).collect(),
             main: program.main,
             init,
         },
@@ -160,7 +161,7 @@ fn build_init(
         let (rtypes, sig, _) = fb.sig_of(fid, false);
         fb.call_sigs.insert(fid, sig);
         let eff = crate::effect::to_effect(&effs[fid.index()]);
-        fb.emit_call(CalleeRef::Func(fid), Vec::new(), &rtypes, eff);
+        fb.emit_call(CalleeRef::Func(fid), Vec::new(), &rtypes, false, eff);
     }
 
     fb.set_term(Term::Return(Vec::new()));
@@ -413,7 +414,7 @@ fn build_func(
 
     let unsafe_slots = unsafe_slots_of(f);
     // 需要根的槽 = 取址 ∪ 部分写 ∪ **读前可能未赋值**
-    let mut rooted: BTreeSet<SlotId> = scan_rooted(tt, &f.body);
+    let mut rooted: BTreeSet<SlotId> = scan_rooted(tt, f);
     rooted.extend(unsafe_slots.iter().copied());
     rooted.remove(&BLANK_SLOT);
 
@@ -540,6 +541,11 @@ struct Scanned {
     /// SSA 没有「改一个字段」的指令（只有整值 `Composite`），把 `s` 提升成值
     /// 就再也写不进 `s.f` 了。M6 的口径是：部分写 ⇒ 整个槽走内存。
     partial: BTreeSet<SlotId>,
+    /// 槽 → 静态类型（只用来判「字段底座是不是指针」，`R-35-2`）。
+    ///
+    /// 放进 `Scanned` 而不是给每个 scan 函数加参数：这几个函数是纯递归的，
+    /// 加一个参数要改十几处签名与调用点，而 `Scanned` 本来就一路传下去了。
+    slots: Vec<TypeId>,
 }
 
 impl Scanned {
@@ -564,17 +570,23 @@ impl Scanned {
 ///   **堆根**（或别的函数的根），不是本函数的槽。
 /// * `Place::Global(_)`：包级变量有它自己的根（`Root::Global`），不进 `slot_root`。
 #[must_use]
-pub fn scan_addressed(tt: &TypeTable, b: &HirBlock) -> BTreeSet<SlotId> {
-    let mut sc = Scanned::default();
-    scan_block(tt, b, &mut sc);
+pub fn scan_addressed(tt: &TypeTable, f: &Func) -> BTreeSet<SlotId> {
+    let mut sc = Scanned {
+        slots: f.slot_types.clone(),
+        ..Scanned::default()
+    };
+    scan_block(tt, &f.body, &mut sc);
     sc.addressed
 }
 
 /// 收集**需要内存根**的槽（取址 ∪ 部分写）。
 #[must_use]
-pub fn scan_rooted(tt: &TypeTable, b: &HirBlock) -> BTreeSet<SlotId> {
-    let mut sc = Scanned::default();
-    scan_block(tt, b, &mut sc);
+pub fn scan_rooted(tt: &TypeTable, f: &Func) -> BTreeSet<SlotId> {
+    let mut sc = Scanned {
+        slots: f.slot_types.clone(),
+        ..Scanned::default()
+    };
+    scan_block(tt, &f.body, &mut sc);
     sc.rooted()
 }
 
@@ -583,10 +595,10 @@ pub fn scan_rooted(tt: &TypeTable, b: &HirBlock) -> BTreeSet<SlotId> {
 /// 顺序固定（槽号升序 ⇒ `RootId` 升序）：dump 要确定性，`RootId` 的分配顺序
 /// 进了 `C10` 的 `r<k>` 编号，不能随遍历顺序漂。
 #[must_use]
-pub fn roots_of(tt: &TypeTable, b: &HirBlock) -> (Vec<Root>, BTreeMap<SlotId, RootId>) {
+pub fn roots_of(tt: &TypeTable, f: &Func) -> (Vec<Root>, BTreeMap<SlotId, RootId>) {
     let mut roots = Vec::new();
     let mut slot_root = BTreeMap::new();
-    for slot in scan_rooted(tt, b) {
+    for slot in scan_rooted(tt, f) {
         let id = RootId(roots.len() as u32);
         roots.push(Root::Slot(slot));
         slot_root.insert(slot, id);
@@ -820,10 +832,24 @@ fn scan_value_root(tt: &TypeTable, e: &Expr, sc: &mut Scanned, addressed: bool) 
                 sc.partial.insert(*s);
             }
         }
+        // 指针底座（`p.f`，`p *S`）：写/取址的是**指针指向**的存储，
+        // 它不在本函数的槽里 ⇒ 不能把 `p` 标成根（`p` 只是个指针值）。
+        ExprKind::Field { base, .. } if is_pointer_ty(tt, base.typ) => scan_expr(tt, base, sc),
         ExprKind::Field { base, .. } => scan_value_root(tt, base, sc, addressed),
         // 其余形态：存储不在本函数的槽里，但仍要扫它们内部有没有 `&x`
         _ => scan_expr(tt, e, sc),
     }
+}
+
+/// 是否是**指针**（含具名指针类型、别名）。
+fn is_pointer_ty(tt: &TypeTable, t: TypeId) -> bool {
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, t)),
+        rgoc_types::typ::Type::Pointer(_)
+    )
 }
 
 /// 是否是**聚合类型**（结构体 / 数组，含具名与别名）。
@@ -880,6 +906,37 @@ fn scan_lhs_place(tt: &TypeTable, p: &Place, sc: &mut Scanned) {
     }
 }
 
+/// 字段底座是不是**指针类型的槽**（`p.n`，`p *S`）。
+///
+/// 只看「底座直接是个槽」这一层：`p.q.r`（`q` 是指针字段）需要结构体字段的
+/// 静态类型，这里算不出来 ⇒ 保守标成「部分写」（槽进内存，语义仍然对，
+/// 只是少了一次提升）。这条保守是**有意的**，不是漏。
+fn base_is_pointer(tt: &TypeTable, sc: &Scanned, base: &Place) -> bool {
+    match base {
+        Place::Slot(s) => sc
+            .slots
+            .get(s.index())
+            .is_some_and(|t| is_pointer_ty(tt, *t)),
+        _ => false,
+    }
+}
+
+/// 只扫 place **内部**的表达式（不标记任何槽）。
+///
+/// 给「指针底座」用：`p.f = 1` 里 `p` 只是个指针值，写的是它指向的存储；
+/// 但 `p` 自己的求值式里可能还有 `&x`（`(*(&s)).f` 这类），不能漏扫。
+fn scan_place_inner(tt: &TypeTable, p: &Place, sc: &mut Scanned) {
+    match p {
+        Place::Slot(_) | Place::Global(_) => {}
+        Place::Field { base, .. } => scan_place_inner(tt, base, sc),
+        Place::Index { base, index } => {
+            scan_expr(tt, base, sc);
+            scan_expr(tt, index, sc);
+        }
+        Place::Deref(e) => scan_expr(tt, e, sc),
+    }
+}
+
 /// `place` 的底座槽归入「被取址」（`addressed = true`）或「被部分写」（`false`）。
 fn scan_place_root(tt: &TypeTable, p: &Place, sc: &mut Scanned, addressed: bool) {
     match p {
@@ -891,6 +948,10 @@ fn scan_place_root(tt: &TypeTable, p: &Place, sc: &mut Scanned, addressed: bool)
             }
         }
         Place::Global(_) => {}
+        // 指针底座：写的是指针指向的存储（别的帧 / 堆），槽本身没被部分写
+        Place::Field { base, .. } if base_is_pointer(tt, sc, base) => {
+            scan_place_inner(tt, base, sc)
+        }
         Place::Field { base, .. } => scan_place_root(tt, base, sc, addressed),
         Place::Index { base, index } => {
             if is_array(tt, base.typ) {
@@ -953,6 +1014,58 @@ struct Def<'a> {
 ///
 /// `for i := 0; i < 3; i++ { a = 1 }; print(a)` 里的 `a` 会被判成「读前未写」
 /// （循环可能 0 次）⇒ 留在内存。正确，只是少提升一个槽。
+/// 全函数里 `goto` 指向的标签名。
+fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
+    fn walk(b: &HirBlock, out: &mut BTreeSet<String>) {
+        for s in &b.stmts {
+            stmt(s, out);
+        }
+    }
+    fn stmt(s: &Stmt, out: &mut BTreeSet<String>) {
+        match s {
+            Stmt::Branch {
+                kind: BranchKind::Goto,
+                label: Some(l),
+            } => {
+                out.insert(l.clone());
+            }
+            Stmt::Branch { .. }
+            | Stmt::Assign { .. }
+            | Stmt::ShortDecl { .. }
+            | Stmt::Expr(_)
+            | Stmt::Return(_)
+            | Stmt::Defer { .. }
+            | Stmt::Empty => {}
+            Stmt::If { then, els, .. } => {
+                walk(then, out);
+                if let Some(e) = els {
+                    stmt(e, out);
+                }
+            }
+            Stmt::For { body, .. } | Stmt::Range { body, .. } => walk(body, out),
+            Stmt::Switch { cases, .. } => {
+                for c in cases {
+                    walk(&c.body, out);
+                }
+            }
+            Stmt::TypeSwitch { cases, .. } => {
+                for c in cases {
+                    walk(&c.body, out);
+                }
+            }
+            Stmt::Labeled { stmt, .. } => stmt_stmt(stmt, out),
+            Stmt::Block(b) => walk(b, out),
+        }
+    }
+    // `Stmt::Labeled` 里是 `Box<Stmt>`，与 `stmt` 同名参数区分一下
+    fn stmt_stmt(s: &Stmt, out: &mut BTreeSet<String>) {
+        stmt(s, out);
+    }
+    let mut out = BTreeSet::new();
+    walk(b, &mut out);
+    out
+}
+
 fn unsafe_slots_of(f: &Func) -> BTreeSet<SlotId> {
     let mut d = Def {
         f,
@@ -1344,6 +1457,18 @@ struct Fb<'a> {
     regions: Vec<Region>,
     /// 本函数含 `goto` ⇒ **不提升**（见 `build_func` 的说明），标签块按「全部根」定参数。
     goto_mode: bool,
+    /// 全函数里 `goto` 指向的标签名（`stmt_labeled` 判「这段是不是真的死代码」）。
+    ///
+    /// # 为什么需要它
+    ///
+    /// `stmt_labeled` 在「此刻没人跳进来」时会把标签体当死代码跳过。但**前向**
+    /// 判断不了 `goto`：`goto X; ...; L: ...; X: goto L` 里 `L` 在写下时没有入边，
+    /// 之后才被 `goto L` 指到。跳过它就留下一个空块（`unreachable`），
+    /// 运行期走到那里就报「执行到了 Unreachable 块」—— 实测 `ken/label.go`。
+    ///
+    /// 预扫描一次（与 `Scanned` 同为独立小 pass）就能把「有没有人跳进来」
+    /// 变成静态事实，而不是「到目前为止有没有」。
+    goto_targets: BTreeSet<String>,
 }
 
 impl Fb<'_> {
@@ -1385,6 +1510,7 @@ impl Fb<'_> {
             labels: BTreeMap::new(),
             regions: Vec::new(),
             goto_mode: init.goto_mode,
+            goto_targets: goto_targets(&f.body),
         }
     }
 
@@ -1705,7 +1831,14 @@ impl Fb<'_> {
                 (self.addr_of(root), Some(root))
             }
             Place::Field { base, index } => {
-                let (base_v, root) = self.place_addr_root(base);
+                // 指针底座（`p.n = 1`，`p *S`）：底座是**指针值**，不是它的地址
+                let bt = self.place_value_type(base);
+                let (base_v, root) = if is_pointer_ty(self.tt, bt) {
+                    let v = self.read_place(base);
+                    (v, self.ptr_hint(v))
+                } else {
+                    self.place_addr_root(base)
+                };
                 let t = self.values[base_v.index()];
                 let dst = self.new_value(t);
                 self.emit(Instr::Field {
@@ -1773,13 +1906,7 @@ impl Fb<'_> {
     }
 
     fn is_pointer(&self, t: TypeId) -> bool {
-        if t.index() >= self.tt.len() {
-            return false;
-        }
-        matches!(
-            self.tt.type_of(rgoc_types::underlying(self.tt, t)),
-            rgoc_types::typ::Type::Pointer(_)
-        )
+        is_pointer_ty(self.tt, t)
     }
 
     /// 一个**表达式**作为「存储位置」时的地址 + 根（`s.f` / `s.a.b` / `p.f` / `g.f`）。
@@ -1792,15 +1919,20 @@ impl Fb<'_> {
     ///
     /// 返回 `None` 表示**不可取址**：调用结果、常量、字面量 —— 它们没有存储。
     fn expr_addr_root(&mut self, e: &Expr) -> Option<(ValueId, Option<RootId>)> {
+        // 指针类型的表达式：它**本身的值**就是所指对象的地址。
+        //
+        // 这一条必须排在最前面：`p.n`（`p *S`）里 `p` 是个指针**值**，
+        // 取字段的底座是那个值，不是「`p` 这个变量的地址」。
+        // 初版把 `slot_root` 的判断放在前面 ⇒ 一旦 `p` 因为别处取过址而成了根，
+        // `p.n` 就变成「指针的指针」的字段，运行期当场报「底座不是结构体」。
+        if self.is_pointer(e.typ) {
+            let v = self.expr(e);
+            return Some((v, self.ptr_hint(v)));
+        }
         match &e.kind {
             ExprKind::Slot(s) => {
                 if let Some(&root) = self.slot_root.get(s) {
                     return Some((self.addr_of(root), Some(root)));
-                }
-                // 提升过的指针槽：值本身就是地址
-                if self.is_pointer(e.typ) {
-                    let v = self.expr(e);
-                    return Some((v, self.ptr_hint(v)));
                 }
                 None
             }
@@ -1832,11 +1964,6 @@ impl Fb<'_> {
             ExprKind::Deref(x) => {
                 let addr = self.expr(x);
                 Some((addr, self.ptr_hint(addr)))
-            }
-            // 指针底座（`f().x` 之类）：值本身就是地址
-            _ if self.is_pointer(e.typ) => {
-                let v = self.expr(e);
-                Some((v, self.ptr_hint(v)))
             }
             _ => None,
         }
@@ -1989,18 +2116,28 @@ impl Fb<'_> {
             } => self.call(e, callee, args, *spread, *variadic),
             // HIR 把 `len` / `append` / `println` 这类单独放一个变体（不带 `callee`）。
             // 它与 `Callee::Builtin` 是同一件事的两种写法，所以走同一个 `emit_builtin`。
-            ExprKind::Builtin { kind, args, .. } => self.emit_builtin(e, *kind, args),
+            ExprKind::Builtin {
+                kind,
+                args,
+                variadic,
+            } => self.emit_builtin(e, *kind, args, *variadic),
             _ => vec![self.expr(e)],
         }
     }
 
     /// 内建调用的公共出口（`Callee::Builtin` 与 `ExprKind::Builtin` 共用）。
-    fn emit_builtin(&mut self, e: &Expr, kind: BuiltinKind, args: &[Expr]) -> Vec<ValueId> {
+    fn emit_builtin(
+        &mut self,
+        e: &Expr,
+        kind: BuiltinKind,
+        args: &[Expr],
+        dots: bool,
+    ) -> Vec<ValueId> {
         let avs = self.eval_args(args, 0);
         let n = builtin_results(kind);
         let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![e.typ] };
         let eff = crate::effect::to_effect(&crate::effect::builtin_summary(kind));
-        self.emit_call(CalleeRef::Builtin(kind), avs, &rtypes, eff)
+        self.emit_call(CalleeRef::Builtin(kind), avs, &rtypes, dots, eff)
     }
 
     /// 实参表：`spread > 0` 时唯一实参是多值调用，按它的结果数展平。
@@ -2039,7 +2176,7 @@ impl Fb<'_> {
                 let avs = self.eval_args(args, spread);
                 let avs = self.pack_variadic(avs, &sig, vty, dots);
                 let eff = crate::effect::to_effect(&self.effs[fid.index()]);
-                self.emit_call(CalleeRef::Func(*fid), avs, &rtypes, eff)
+                self.emit_call(CalleeRef::Func(*fid), avs, &rtypes, dots, eff)
             }
             Callee::Method { recv, func } => {
                 let (rtypes, sig, vty) = self.sig_of(*func, true);
@@ -2055,10 +2192,11 @@ impl Fb<'_> {
                     },
                     avs,
                     &rtypes,
+                    false,
                     eff,
                 )
             }
-            Callee::Builtin(k) => self.emit_builtin(e, *k, args),
+            Callee::Builtin(k) => self.emit_builtin(e, *k, args, dots),
             Callee::Value(v) => {
                 let fv = self.expr(v);
                 let avs = self.eval_args(args, spread);
@@ -2074,7 +2212,7 @@ impl Fb<'_> {
                     may_panic: true,
                     may_call_back: true,
                 };
-                self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, eff)
+                self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, false, eff)
             }
             Callee::Iface { .. } => {
                 todo!("M6/Task 31：接口动态派发要报 `SSA-UNSUPPORTED-IFACE-DYN`")
@@ -2174,6 +2312,7 @@ impl Fb<'_> {
         callee: CalleeRef,
         args: Vec<ValueId>,
         rtypes: &[TypeId],
+        dots: bool,
         effect: Effect,
     ) -> Vec<ValueId> {
         let mut dsts: Vec<ValueId> = Vec::with_capacity(rtypes.len());
@@ -2185,6 +2324,7 @@ impl Fb<'_> {
             dsts: dsts.clone(),
             callee,
             args,
+            dots,
             effect,
         });
         dsts
@@ -2374,8 +2514,12 @@ impl Fb<'_> {
                 });
                 dst
             }
-            ExprKind::Builtin { kind, args, .. } => {
-                let vs = self.emit_builtin(e, *kind, args);
+            ExprKind::Builtin {
+                kind,
+                args,
+                variadic,
+            } => {
+                let vs = self.emit_builtin(e, *kind, args, *variadic);
                 match vs.len() {
                     1 => vs[0],
                     0 => todo!("0 结果的内建（`println` 等）不能当值使用"),
@@ -2847,10 +2991,19 @@ impl Fb<'_> {
                 } else {
                     self.new_block()
                 };
-                self.cur = chain;
                 let bt = self.bool_ty();
-                let mut cond: Option<ValueId> = None;
-                for e in &cases[i].exprs {
+                let m = cases[i].exprs.len();
+                debug_assert!(m > 0, "非 default 的 case 至少有一个表达式");
+                // 逐个 case 表达式建判定 —— **不能用 `bin lor` 串起来**。
+                //
+                // `case f(), g():` 里 `f()` 命中就不该求值 `g()`（Go 规范：case
+                // 表达式自左向右求值，第一个相等的生效）。一条 `bin lor` 意味着
+                // 两个操作数**都已经被求值**，副作用做了两次、顺序也不对。
+                // 这与 `&&`/`||` 是同一个坑（`G-M6-08`），只是发生在 switch 的
+                // 判定链里（`R-35-3`）。
+                for (j, e) in cases[i].exprs.iter().enumerate() {
+                    self.cur = chain;
+                    self.terminated = false;
                     let ev = self.expr(e);
                     let ev = match tagv {
                         // 有 tag：`tag == e`（两侧类型对齐，`untyped` 常量要物化转换）
@@ -2870,27 +3023,17 @@ impl Fb<'_> {
                         // 无 tag：表达式本身就是条件（`switch { case x > 0: }`）
                         None => self.coerce_to(bt, ev),
                     };
-                    cond = Some(match cond {
-                        None => ev,
-                        Some(p) => {
-                            let dst = self.new_value(bt);
-                            self.emit(Instr::Bin {
-                                dst,
-                                op: rgoc_hir::BinOp::LOr,
-                                lhs: p,
-                                rhs: ev,
-                                typ: bt,
-                            });
-                            dst
-                        }
+                    // 本 case 还有下一个表达式 ⇒ 不命中时去求它
+                    let else_to = if j + 1 == m { no } else { self.new_block() };
+                    self.set_term(Term::If {
+                        cond: ev,
+                        then_: (bodies[i], Vec::new()),
+                        else_: (else_to, Vec::new()),
                     });
+                    if j + 1 < m {
+                        chain = else_to;
+                    }
                 }
-                let cond = cond.expect("非 default 的 case 至少有一个表达式");
-                self.set_term(Term::If {
-                    cond,
-                    then_: (bodies[i], Vec::new()),
-                    else_: (no, Vec::new()),
-                });
                 if !last {
                     chain = no;
                 }
@@ -2960,25 +3103,38 @@ impl Fb<'_> {
         let xs = self.expr(x);
         let int_ty = self.int_ty();
 
-        // 下标槽：优先用 HIR 的 key；`_` 或没有 key 时用私有槽。
-        let key_slot = match key {
-            Some(Place::Slot(s)) if *s != BLANK_SLOT => *s,
-            _ => self.fresh_slot(int_ty),
+        // 用户给的下标目标（`for i = range x` 里的 `i`）：**它只是结果存放处**，
+        // 不充当计数器 —— 见下面 `idx_slot` 的说明。
+        let user_key = match key {
+            Some(Place::Slot(s)) if *s != BLANK_SLOT => Some(*s),
+            _ => None,
         };
+        // 计数器用**私有槽**。
+        //
+        // 踩过：初版直接拿用户的下标槽当计数器，于是 `for i = range [5]int{} {}`
+        // 结束后 `i == 5`（计数器在最后一次检查时越过了末尾），而 Go 规范要求
+        // `i == 4`（最后一次迭代的下标）。实测 `for.go` 的
+        // `assertequal(i, 4, "incorrect index value after range loop")`。
+        // 拆成两个槽之后：**体首**写 `i = 计数器`，出口送出的自然是最后一次的值。
+        //
         // 下标槽的类型**可能就是具名类型**：`for i := range MyInt(4)` 的 `i` 是
         // `MyInt`（`range3.go` 实测）。拿 `int` 去比它就成了一条
         // `lt MyInt int`，`V3` 拒。
-        let key_ty = self.slot_typ(key_slot);
+        let key_ty = user_key.map_or(int_ty, |s| self.slot_typ(s));
+        let idx_slot = self.fresh_slot(key_ty);
 
         // ── 初始化 idx = 0（在 preheader 里）
         let zero = self.const_int(0, key_ty);
-        self.write_slot(key_slot, zero);
+        self.write_slot(idx_slot, zero);
 
         let base = (self.val.clone(), self.mem.clone());
 
         // 循环体的副作用 + 下标 + value 槽
         let mut eff = scan_loop_effects(self.tt, &self.slot_root, body, None);
-        eff.slots.insert(key_slot);
+        eff.slots.insert(idx_slot);
+        if let Some(k) = user_key {
+            eff.slots.insert(k);
+        }
         let val_slot: Option<SlotId> = match value {
             Some(Place::Slot(s)) if *s != BLANK_SLOT => Some(*s),
             _ => None,
@@ -3031,7 +3187,7 @@ impl Fb<'_> {
             let n = self.emit_len(xs);
             self.coerce_to(key_ty, n)
         };
-        let idx_v = self.read_slot(key_slot);
+        let idx_v = self.read_slot(idx_slot);
         let bt = self.bool_ty();
         let cond = self.new_value(bt);
         self.emit(Instr::Bin {
@@ -3071,9 +3227,14 @@ impl Fb<'_> {
         self.terminated = false;
         self.val = bstate.0;
         self.mem = bstate.1;
+        // 下标目标 = 本轮的计数器值（**体首**赋值：出口才拿得到最后一次的值）
+        if let Some(k) = user_key {
+            let iv = self.read_slot(idx_slot);
+            self.write_slot(k, iv);
+        }
         // value = xs[idx]
         if let (Some(p), false) = (value, matches!(kind, RangeKind::Int)) {
-            let cur_idx = self.read_slot(key_slot);
+            let cur_idx = self.read_slot(idx_slot);
             let vt = match val_slot {
                 Some(s) => self.slot_typ(s),
                 None => TypeId::from_index(0),
@@ -3117,7 +3278,7 @@ impl Fb<'_> {
                 self.terminated = false;
                 self.val = args_state.0;
                 self.mem = args_state.1;
-                let cur_idx = self.read_slot(key_slot);
+                let cur_idx = self.read_slot(idx_slot);
                 // 自增也要同型（`key_ty` 可能是具名类型）
                 let one = self.const_int(1, key_ty);
                 let inc = self.new_value(key_ty);
@@ -3128,7 +3289,7 @@ impl Fb<'_> {
                     rhs: one,
                     typ: key_ty,
                 });
-                self.write_slot(key_slot, inc);
+                self.write_slot(idx_slot, inc);
                 let args = self.args_for(l, &layout, &self.val.clone(), &self.mem.clone());
                 self.set_term(Term::Goto { to: header, args });
             } else {
@@ -3196,6 +3357,7 @@ impl Fb<'_> {
             dsts: vec![dst],
             callee: CalleeRef::Builtin(BuiltinKind::Len),
             args: vec![xs],
+            dots: false,
             effect: eff,
         });
         dst
@@ -3349,9 +3511,9 @@ impl Fb<'_> {
                 mem: self.mem.clone(),
             });
         }
-        if outs.is_empty() {
-            // 既不可达、也没人跳进来 ⇒ 整段都是死代码。**不建块**（死块会被 `V8` 拒）。
-            // 已知边界：此后若有 `goto` 指向它，会报「标签不可达」（语料里没有这种写法）。
+        if outs.is_empty() && !self.goto_targets.contains(name) {
+            // 既不可达、也没人跳进来（**全函数**范围都没有）⇒ 整段都是死代码。
+            // **不建块**：死块会被 `V8` 拒。
             self.terminated = true;
             return;
         }
@@ -3990,6 +4152,13 @@ impl Fb<'_> {
             params: self.blocks[0].params.clone(),
             blocks: self.blocks,
             entry: BlockId(0),
+            // 只有**取过地址**的槽需要类型：它们的存储是本帧的根，
+            // 进帧时要按类型建零值（求值器的 `root_cell`）。
+            slot_types: self
+                .slot_root
+                .keys()
+                .filter_map(|s| self.f.slot_types.get(s.index()).map(|t| (*s, *t)))
+                .collect(),
             roots: self.roots,
             slot_root: self.slot_root,
             value_types: self.values,

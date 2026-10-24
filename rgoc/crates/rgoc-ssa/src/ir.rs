@@ -98,6 +98,15 @@ pub struct Module {
     pub funcs: Vec<SsaFunc>,
     /// 包级变量（与 HIR 的 `GlobalId` 同编号空间）。
     pub globals: Vec<GlobalId>,
+    /// 每个包级变量的类型（与 `globals` 同序）。
+    ///
+    /// # 为什么求值器需要它
+    ///
+    /// 全局的存储要在跑 `init` 之前**按类型建零值**：`var a [3]int` 的
+    /// `a[1] = 7` 走 `Index(AddrOf(r_g))`，若那块存储是 `nil`，取下标当场失败。
+    /// 而 `Root::Global` 只有一个 `GlobalId`，类型信息不在 IR 里 ——
+    /// 补这张表，比让求值器回头去问 HIR 便宜得多（`D-M6-2` 的单包前提）。
+    pub global_types: Vec<TypeId>,
     /// `main`（可执行程序必有）。
     pub main: Option<FuncId>,
     /// **包初始化函数**在 `funcs` 里的下标（`Task 32b`）。
@@ -145,6 +154,12 @@ pub struct SsaFunc {
     pub roots: Vec<Root>,
     /// 取过地址的槽 → 根（`V9` 查它）。
     pub slot_root: BTreeMap<SlotId, RootId>,
+    /// 槽 → 静态类型（只有**取过地址**的槽需要：它们的存储是本帧的根，
+    /// 进帧时要按类型建零值）。
+    ///
+    /// 用 `BTreeMap` 而不是 `Vec`：与 `slot_root` 同形，且不必为没登记的槽
+    /// 编一个「占位类型」——那种占位会在运行期变成「零值建错了但没人报」。
+    pub slot_types: BTreeMap<SlotId, TypeId>,
     /// `ValueId → TypeId`（长度必须等于值个数；`V3` 查它）。
     pub value_types: Vec<TypeId>,
     /// 本函数**调用到的**已知函数签名（`V5` 查它；只记直接调用与方法调用）。
@@ -361,6 +376,16 @@ pub enum Instr {
         callee: CalleeRef,
         /// 实参。
         args: Vec<ValueId>,
+        /// 调用点是否写了 `...`（`append(s, xs...)` / `println(xs...)`）。
+        ///
+        /// # 为什么这条必须进 IR
+        ///
+        /// 用户函数的变参在**调用点**就打包成 slice（`pack_variadic`），所以
+        /// `f(xs...)` 与 `f(xs)` 到被调方手上是同一个东西。内建不行：`append(s, xs)`
+        /// 追加**一个**元素，`append(s, xs...)` 展开**一串**元素 —— 两者实参个数
+        /// 一样，差别只在「要不要展开」。不记这个位，IR 就表达不出语义，
+        /// 求值器只能猜（猜错的后果是静默算错，而不是报错）。
+        dots: bool,
         /// 副作用摘要。
         effect: Effect,
     },
