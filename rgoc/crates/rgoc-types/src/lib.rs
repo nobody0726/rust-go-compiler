@@ -55,6 +55,7 @@ pub mod identical;
 pub mod implements;
 pub mod infer;
 pub mod instantiate;
+pub mod layout;
 pub mod methodset;
 pub mod object;
 pub mod scope;
@@ -77,6 +78,7 @@ pub use infer::{
     GenericArgSite, infer_for_call, infer_from_args, infer_from_assignment, rename_tparams,
 };
 pub use instantiate::{MAX_INSTANTIATION_DEPTH, instantiate};
+pub use layout::{Layout, field_offset, field_offsets, layout};
 pub use methodset::{MSetEntry, methodset};
 pub use object::{ObjKind, Object};
 pub use scope::{Scope, ScopeId, ScopeKind, ScopeRef, ScopeTable};

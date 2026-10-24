@@ -224,15 +224,28 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 - Test: `rgoc/crates/rgoc-arm64/tests/abi_classify.rs`
 
 **Interfaces:**
-- Produces: `SlotClass { Int, Float, Complex, Agg { size: u32, align: u32 } }`、`classify(tt: &TypeTable, t: TypeId) -> SlotClass`、`slot_size(&SlotClass) -> u32`（8 的倍数）、`arg_reg_kind(&SlotClass) -> ArgKind { X, V, Ptr }`
-- Consumes: `rgoc_types::{TypeTable, TypeId}`
+- Produces: `rgoc_types::layout::{layout, field_offset, field_offsets, Layout}`（**新建，`R-8-1`**）；
+  `rgoc_arm64::abi::{slot_of, arg_kind, reg_count, SlotClass, Slot, ArgKind}`
+- Consumes: `rgoc_types::{TypeTable, TypeId}`、`rgoc_const::Sizes`
 
-- [ ] 先写会红的表驱动测试：`bool`/`int*`/`uint*`/指针 ⇒ `Int` 8；`float32/64` ⇒ `Float` 8；`complex64` ⇒ `Complex` 8；`complex128` ⇒ `Complex` 16；`[3]int8` ⇒ `Agg{3→8}`；`struct{a int8; b int64}` ⇒ `Agg{16}`
-- [ ] 实现 `classify`：走 `rgoc_types` 的布局，**不自算**字段偏移
-- [ ] `slot_size` 向上取 8 的倍数；零大小类型 ⇒ `Agg{size:0}`（仍占 0 字节，但地址可算）
-- [ ] Commit：`feat(arm64): 值分类与槽宽（Task 8，T-NAT-01/02）`
+> **`R-8-1`（开工即修正）**：设计稿 §7.3 写「偏移一律来自 `rgoc-types` 的布局」，
+> 但 M7 开工时 **`rgoc-types` 里没有任何布局代码** —— 解释器用的是字段**下标**
+> （`Value::Struct(Rc<Vec<Cell>>)`），从来不需要字节偏移。所以第一步是**把布局建起来**，
+> 落点选 `rgoc-types::layout`（不是 `rgoc-arm64`）：M9/M10 也要用，且「唯一来源」才守得住。
 
-**Verify:** `… cargo test -p rgoc-arm64 --test abi_classify`（≥10 条）
+- [x] `rgoc-types::layout`：`layout()` / `field_offsets()` / `field_offset()`，覆盖
+      Basic/Pointer/Slice/Array/Struct/Interface/Map/Chan/Signature/Named/Alias；
+      `Tuple`/`TypeParam`/`Union`/`Invalid`/`[...]T` ⇒ `None`；别名环有 64 层深度守卫
+- [x] **每个数字都是实测的**（`go run` + `unsafe.Sizeof/Alignof/Offsetof`，15 条测试）：
+      `complex64` 的 align 是 **4** 不是 8 / `[0]int` 是 **0 字节但 align 8** /
+      `struct{a int64; b struct{}}` 是 **16**（末尾零大小 +1）/ `struct{b struct{}}` 是 **0**（不 +1）
+- [x] `abi::slot_of`：标量一律 8；`complex64` 8 / `complex128` 16；聚合向上取 8 的倍数；
+      零大小 ⇒ 0；命名类型按本体分类（`type MyFloat float64` 必须走浮点寄存器）
+- [x] `arg_kind` / `reg_count`：`string` 传参占 **2 个 `x`**；`complex64` **1 个 `v`**、
+      `complex128` **2 个 `v`**（**`R-8-2`**：C5 §6.1 原写「complex 占 2 个 v」不够精确，已改）
+- [x] Commit：`feat(arm64): 对象布局与值分类（Task 8，T-NAT-01/02，R-8-1/R-8-2）`
+
+**Verify:** `… cargo test -p rgoc-types --test layout`（15 条）；`… cargo test -p rgoc-arm64 --test abi_classify`（11 条）
 
 ---
 
