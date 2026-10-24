@@ -127,3 +127,20 @@ Go 规范说比较产生 untyped boolean）。短路支的常量若用缓存的 
 `apply_unary` / `const_value` / `nil_of` / `convert` / `slice_value` 提到 `pub(crate)`，
 其中 `convert` 与 `slice_value` 原本是 `Interp` 的方法（只用到 `self.tt`）——
 改成自由函数后两套求值器共用**同一份**语义（`D-M6-7` 的要求）。
+
+## Task 34：控制流与块参数（3 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut34.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M30` 边算边写（破坏并行） | `jump` 改成「逐个读→逐个写」 | `t_ssa_34_并行赋值交换` | ✅ 红 |
+| `M31` `if` 恒走 then | `cond` → `true` | `t_ssa_34_if_else_分支` | ✅ 红 |
+| `M32` `Panic` 不终止 | `Term::Panic` → 弹帧 | `t_ssa_34_panic_走合并流且退出码_2` | ✅ 红 |
+
+### 顺手补的构建期缺口
+
+`panic(v)` 原先建成 `Call Builtin(Panic)`（一条普通调用），于是「panic 之后的语句」
+仍被建进同一个块 —— 图上看不出这里断了，可达性分析也跟着错。
+现在 `Stmt::Expr` 特判：`panic(v)` ⇒ `Term::Panic(v)`（`Term::Panic` 本来就是为它准备的）。
+运行期另留一条兜底（漏网的 `Builtin(Panic)` 仍按 Go 语义终止），双保险。

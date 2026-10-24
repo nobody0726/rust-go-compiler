@@ -112,6 +112,8 @@ enum Halt {
     Unreachable,
     /// 运行期错误（除零 / 越界 / nil 解引用 …）—— 文本是 Go 的 panic 文本。
     Runtime(String),
+    /// `panic(v)`（`Term::Panic`）：值交给 `print::panic_text` 渲染。
+    Panic(Value),
 }
 
 impl Exec<'_> {
@@ -149,15 +151,56 @@ impl Exec<'_> {
             }
             // 指令走完了 ⇒ 终止符
             match &block.term {
+                // 单层（`main` / `init`）直接弹帧；被调方的返回值交接在 Task 35
                 Term::Return(_) => {
                     self.frames.pop();
                 }
-                Term::Goto { .. } | Term::If { .. } => {
-                    todo!("M6/Task 34：控制流（Goto / If）还没进来")
+                Term::Goto { to, args } => {
+                    let (to, args) = (*to, args.clone());
+                    self.jump(to, &args)?;
                 }
-                Term::Panic(_) => todo!("M6/Task 34：Panic 还没进来"),
+                Term::If { cond, then_, else_ } => {
+                    let (cond, then_, else_) = (*cond, then_.clone(), else_.clone());
+                    let c = self.read_cur(cond)?.as_bool().unwrap_or(false);
+                    let (to, args) = if c { then_ } else { else_ };
+                    self.jump(to, &args)?;
+                }
+                Term::Panic(v) => {
+                    let v = *v;
+                    let val = self.read_cur(v)?;
+                    return Err(Halt::Panic(val));
+                }
                 Term::Unreachable => return Err(Halt::Unreachable),
             }
+        }
+        Ok(())
+    }
+
+    /// 读当前帧里的一个值（终止符的操作数用它）。
+    fn read_cur(&self, v: ValueId) -> Result<Value, Halt> {
+        let frame = self.frames.last().expect("帧栈非空");
+        get(&frame.values, v)
+    }
+
+    /// 跳到 `to`，并把边实参写进目标块的块参数。
+    ///
+    /// # 必须**先全部求值、再全部写入**（并行语义）
+    ///
+    /// `a, b = b, a` 编译成「跳到汇合块，实参是 `(b, a)`」。如果边算边写
+    /// （先写 `a ← b`，再读 `a` 给 `b`），交换就变成「两个都是 b」。
+    /// 这不是假想：`T-SSA-28` 的判据就是它（`M6-tests.md` 的 `T-SSA-52` 变异）。
+    fn jump(&mut self, to: BlockId, args: &[ValueId]) -> Result<(), Halt> {
+        let m = self.m;
+        let frame = self.frames.last_mut().expect("帧栈非空");
+        let mut vals: Vec<Value> = Vec::with_capacity(args.len());
+        for a in args {
+            vals.push(get(&frame.values, *a)?);
+        }
+        frame.block = to;
+        frame.idx = 0;
+        let params = m.funcs[frame.func].blocks[to.index()].params.clone();
+        for (p, v) in params.iter().zip(vals) {
+            frame.values[p.index()] = Some(v);
         }
         Ok(())
     }
@@ -263,6 +306,15 @@ impl Exec<'_> {
             Instr::Call {
                 dsts, callee, args, ..
             } => {
+                // `panic(v)` 正常应由构建期落成 `Term::Panic`；这里兜住「漏网的」
+                // （防御：真出现时语义仍与 Go 一致，而不是 panic 到宿主）
+                if let CalleeRef::Builtin(BuiltinKind::Panic) = callee {
+                    let v = match args.first() {
+                        Some(a) => get(vals, *a)?,
+                        None => Value::Nil(crate::value::NilKind::Iface),
+                    };
+                    return Err(Halt::Panic(v));
+                }
                 if let CalleeRef::Builtin(k @ (BuiltinKind::Print | BuiltinKind::Println)) = callee
                 {
                     let mut out = String::new();
@@ -296,6 +348,13 @@ impl Exec<'_> {
             Ok(()) => Outcome {
                 output,
                 exit: 0,
+                diag: None,
+                steps,
+            },
+            // `panic(v)`：与 M5 同一个渲染（`panic: <文本>` 进合并流、退出码 2）
+            Err(Halt::Panic(v)) => Outcome {
+                output: format!("{output}panic: {}\n", print::panic_text(&v)),
+                exit: 2,
                 diag: None,
                 steps,
             },

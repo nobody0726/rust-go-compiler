@@ -3787,6 +3787,26 @@ impl Fb<'_> {
                 }
             },
             Stmt::Expr(e) => {
+                // `panic(v)` 是**终止符**，不是普通调用：它不返回，所以之后的语句
+                // 是死代码（`Term::Panic` 就是为它准备的）。建成 `Call` 的话
+                // 「panic 之后的语句」仍会被建进同一个块，运行期靠 `Halt` 兜住 ——
+                // 图上看不出「这里断了」，可达性分析也跟着错。
+                if let ExprKind::Builtin {
+                    kind: BuiltinKind::Panic,
+                    args,
+                    ..
+                } = &e.kind
+                {
+                    let v = match args.first() {
+                        Some(a) => self.expr(a),
+                        None => {
+                            let t = self.int_ty();
+                            self.const_int(0, t)
+                        }
+                    };
+                    self.set_term(Term::Panic(v));
+                    return;
+                }
                 // 表达式语句可以没有值（`println(...)`）⇒ 走多值入口并丢弃
                 let _ = self.expr_multi(e);
             }

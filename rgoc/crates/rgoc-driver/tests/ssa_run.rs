@@ -127,3 +127,92 @@ fn t_ssa_33_一元运算() {
         "-5 -6 false\n",
     );
 }
+
+// ── Task 34：控制流、块参数与 Panic ─────────────────────────────────
+
+#[test]
+fn t_ssa_34_if_else_分支() {
+    expect_out(
+        "if-else",
+        "package main\n\nfunc main() {\n\tx := 3\n\tif x > 2 {\n\t\tprintln(\"big\")\n\t} else {\n\t\tprintln(\"small\")\n\t}\n}\n",
+        "big\n",
+    );
+}
+
+#[test]
+fn t_ssa_34_循环累加() {
+    // 回边 + 块参数：`sum` 每轮携带新值
+    expect_out(
+        "loop",
+        "package main\n\nfunc main() {\n\tsum := 0\n\tfor i := 1; i <= 5; i++ {\n\t\tsum += i\n\t}\n\tprintln(sum)\n}\n",
+        "15\n",
+    );
+}
+
+#[test]
+fn t_ssa_34_并行赋值交换() {
+    // `a, b = b, a`：边实参必须**先全算再全写**（`T-SSA-28` 的求值面）
+    expect_out(
+        "swap",
+        "package main\n\nfunc main() {\n\ta, b := 1, 2\n\ta, b = b, a\n\tprintln(a, b)\n}\n",
+        "2 1\n",
+    );
+}
+
+#[test]
+fn t_ssa_34_switch_与_fallthrough() {
+    expect_out(
+        "switch",
+        "package main\n\nfunc main() {\n\tx := 2\n\tswitch x {\n\tcase 1:\n\t\tprintln(\"one\")\n\tcase 2:\n\t\tprintln(\"two\")\n\t\tfallthrough\n\tcase 3:\n\t\tprintln(\"three\")\n\tdefault:\n\t\tprintln(\"other\")\n\t}\n}\n",
+        "two\nthree\n",
+    );
+}
+
+#[test]
+fn t_ssa_34_break_与_continue() {
+    expect_out(
+        "break-continue",
+        "package main\n\nfunc main() {\n\tsum := 0\n\tfor i := 0; i < 10; i++ {\n\t\tif i == 5 {\n\t\t\tbreak\n\t\t}\n\t\tif i%2 == 0 {\n\t\t\tcontinue\n\t\t}\n\t\tsum += i\n\t}\n\tprintln(sum)\n}\n",
+        // 1 + 3 = 4（0/2/4 被 continue 跳过，5 处 break）
+        "4\n",
+    );
+}
+
+#[test]
+fn t_ssa_34_labeled_break() {
+    expect_out(
+        "labeled-break",
+        "package main\n\nfunc main() {\n\tn := 0\nouter:\n\tfor i := 0; i < 3; i++ {\n\t\tfor j := 0; j < 3; j++ {\n\t\t\tif j == 1 {\n\t\t\t\tbreak outer\n\t\t\t}\n\t\t\tn++\n\t\t}\n\t}\n\tprintln(n)\n}\n",
+        // 只有 (0,0) 会 +1
+        "1\n",
+    );
+}
+
+// `goto` 的运行期判据在 Task 35：`goto_mode` 会把**所有槽**建成根
+// （`R-25-1`），于是 `i++` 走 `AddrOf`/`Load`/`Store` —— 那是 Task 35 的面。
+
+#[test]
+fn t_ssa_34_panic_走合并流且退出码_2() {
+    let (out, exit, diag) = run_ssa_src(
+        "panic",
+        "package main\n\nfunc main() {\n\tprintln(\"before\")\n\tpanic(\"boom\")\n}\n",
+    );
+    assert_eq!(out, "before\npanic: boom\n", "panic 文本进合并流");
+    assert_eq!(exit, 2, "未捕获 panic ⇒ 退出码 2");
+    assert!(diag.is_none(), "panic 不是诊断（与 M5 同口径）");
+}
+
+#[test]
+fn t_ssa_34_短路真的不执行右侧() {
+    // `f() && g()`：`g` 不能被调用。这里用「调用有输出」的可见副作用验证：
+    // `side()` 打印一次，`false && side()` 的右支不该跑。
+    let (out, exit, _) = run_ssa_src(
+        "short-side-effect",
+        "package main\n\nfunc side() bool {\n\tprintln(\"side\")\n\treturn true\n}\n\nfunc main() {\n\tif false && side() {\n\t\tprintln(\"never\")\n\t}\n\tprintln(\"done\")\n}\n",
+    );
+    assert_eq!(exit, 0, "正常退出");
+    assert_eq!(
+        out, "done\n",
+        "`false && side()` 的右支不该被求值（短路必须是控制流）"
+    );
+}
