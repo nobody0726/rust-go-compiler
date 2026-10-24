@@ -282,15 +282,20 @@ Task 50 接线后去掉 ignore，三条必须真绿。
 - Test: `rgoc/crates/rgoc-arm64/tests/frame_zero.rs`
 
 **Interfaces:**
-- Produces: `Frame::zero_init(&self, asm: &mut Asm)` —— 按 `slot_types` 的槽逐个 `str xzr` / `memset`
+- Produces: `Frame::zero_init(&self, asm: &mut Asm)` —— 只清**取址槽**，按 8 字节步长 `str xzr`
 - Consumes: Task 9 的 `Frame`
 
-- [ ] 先写会红的测试：`var a [3]int` 的帧里三个字都是 0（反汇编里能看到清零指令，且不在每个元素上重复清）
-- [ ] 实现：8 字节槽用 `str xzr`；聚合按 8 字节步长循环 `str xzr`
-- [ ] 零大小槽**不生成**任何指令（`T-NAT-02`）
-- [ ] Commit：`feat(arm64): 帧槽零值初始化（Task 10，T-NAT-03）`
+- [x] **只清取址槽，不清值槽**：值槽的每次读都被 `V2` 保证「前面写过」，清它是多余指令；
+      取址槽不同 —— `var a [3]int` 源码里没写过，`&a` 之后必须读到零值
+- [x] 指令形态统一走 `add x9, x29, #off` + `str xzr, [x9, #k]`（k ≥ 0）。
+      **实测原因**：AArch64 的 `STR` 无符号 scaled imm12 **偏移必须非负**，负偏移要用 `STUR`（±256）；
+      统一走 add+str 就少一个「偏移超范围」的分支（`clang -c` 实测：`add x9, x29, #-24`
+      被编成 `sub x9, x29, #0x18`，正确）
+- [x] 零大小槽**不生成**任何指令（地址由分配器给，`C5` §7.2）
+- [x] 测试 5 条：8 字节清一次 / `[3]int64` 清三次 / 零大小零指令 / 值槽不清 / 多槽按槽号升序
+- [x] Commit：`feat(arm64): 帧槽零值初始化（Task 10，T-NAT-03）`
 
-**Verify:** `… cargo test -p rgoc-arm64 --test frame_zero`（≥3 条）
+**Verify:** `… cargo test -p rgoc-arm64 --test frame_zero`（5 条）
 
 ---
 

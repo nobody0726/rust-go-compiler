@@ -76,6 +76,35 @@ impl Frame {
     pub fn off_of(&self, v: ValueId) -> Option<i32> {
         self.values.get(&v).map(|s| s.off)
     }
+
+    /// 生成**取址槽**的零值初始化（`C5` §7.2）。
+    ///
+    /// # 为什么只清取址槽，不清值槽
+    ///
+    /// 值槽的每一次读都被 `V2`（定义支配使用）保证「前面写过」，所以清它是**多余的**
+    /// —— 而且会白花指令。取址槽不同：`var a [3]int` 在源码里就没有写，`&a` 之后
+    /// 通过指针读到的必须是**零值**。所以只有它们需要进帧时清零。
+    ///
+    /// # 为什么用 `add` + `str` 而不是 `str [x29, #负偏移]`
+    ///
+    /// AArch64 的 `STR`（无符号 scaled imm12）**偏移必须是非负的 8 的倍数**；
+    /// 负偏移要用 `STUR`（unscaled，±256）。两条路都写，就多出一个「偏移超了怎么办」的分支。
+    /// 统一走 `add x9, x29, #off`（GAS 会把负立即数编成 `sub`）+ `str [x9, #k]`（k ≥ 0），
+    /// 一条路径、没有边界。
+    pub fn zero_init(&self, asm: &mut crate::emit::Asm) {
+        for s in self.addr_slots.values() {
+            if s.size == 0 {
+                // 零大小槽没有字节要清（它的地址由分配器给，见 `C5` §7.2）。
+                continue;
+            }
+            asm.ins(&format!("add x9, x29, #{}", s.off));
+            let mut k: u32 = 0;
+            while k < s.size {
+                asm.ins(&format!("str xzr, [x9, #{k}]"));
+                k += 8;
+            }
+        }
+    }
 }
 
 /// 布局失败：某个值的静态类型没有运行期布局。
