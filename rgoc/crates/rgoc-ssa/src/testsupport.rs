@@ -39,6 +39,10 @@ pub struct FnBuilder {
     slot_root: BTreeMap<rgoc_hir::SlotId, RootId>,
     /// 取过址的槽 → 类型（求值器进帧时按它建零值存储）。
     slot_types: BTreeMap<rgoc_hir::SlotId, TypeId>,
+    /// `elem → *elem`（`ptr_to` 的缓存，避免同一元素建出多个指针类型）。
+    ptrs: BTreeMap<TypeId, TypeId>,
+    /// `(len, elem) → [len]elem`（`array_of` 的缓存）。
+    arrays: BTreeMap<(i64, TypeId), TypeId>,
 }
 
 impl FnBuilder {
@@ -55,6 +59,8 @@ impl FnBuilder {
             call_sigs: BTreeMap::new(),
             slot_root: BTreeMap::new(),
             slot_types: BTreeMap::new(),
+            ptrs: BTreeMap::new(),
+            arrays: BTreeMap::new(),
         }
     }
 
@@ -75,6 +81,8 @@ impl FnBuilder {
             call_sigs: BTreeMap::new(),
             slot_root: BTreeMap::new(),
             slot_types: BTreeMap::new(),
+            ptrs: BTreeMap::new(),
+            arrays: BTreeMap::new(),
         }
     }
 
@@ -120,6 +128,51 @@ impl FnBuilder {
         let id = self.tt.add_basic(b);
         self.basics.insert(name.to_string(), id);
         id
+    }
+
+    /// 取一个指针类型 `*elem`（同一个 `elem` 复用同一个 `TypeId`）。
+    ///
+    /// 活跃性的 `ptrs` 只收指针类型（`live.rs` 模块头），所以测试必须造得出
+    /// 指针 —— `basic()` 只给基本类型。
+    pub fn ptr_to(&mut self, elem: TypeId) -> TypeId {
+        if let Some(&id) = self.ptrs.get(&elem) {
+            return id;
+        }
+        let id = self.tt.add_pointer(elem);
+        self.ptrs.insert(elem, id);
+        id
+    }
+
+    /// 取一个数组类型 `[len]elem`（同一个 `(len, elem)` 复用同一个 `TypeId`）。
+    ///
+    /// 活跃性的 `ptrs` / 派生指针判据要真实类型（`Index` 的底座是
+    /// `*[N]T`，元素地址是 `*T`），`basic()` 与 `ptr_to()` 造不出来。
+    pub fn array_of(&mut self, len: i64, elem: TypeId) -> TypeId {
+        if let Some(&id) = self.arrays.get(&(len, elem)) {
+            return id;
+        }
+        let c = self
+            .tt
+            .consts_mut()
+            .add(rgoc_const::Const::Int(rgoc_const::BigInt::from_i64(len)));
+        let id = self.tt.add_array(Some(c), elem);
+        self.arrays.insert((len, elem), id);
+        id
+    }
+
+    /// 取一个结构体类型（字段名 + 类型；同一次构建里**总是新建**）。
+    pub fn struct_of(&mut self, fields: &[(&str, TypeId)]) -> TypeId {
+        let fs: Vec<rgoc_types::table::Field> = fields
+            .iter()
+            .map(|(n, t)| rgoc_types::table::Field {
+                name: Some((*n).to_string()),
+                typ: *t,
+                tag: None,
+                embedded: false,
+            })
+            .collect();
+        let sid = self.tt.add_struct(fs);
+        self.tt.struct_type(sid)
     }
 
     /// 登记「这个槽取过址、它的根是 `root`」（`V9` 要查）。

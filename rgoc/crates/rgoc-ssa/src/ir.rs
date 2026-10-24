@@ -180,6 +180,102 @@ impl SsaFunc {
     }
 }
 
+impl Instr {
+    /// 这条指令定义的**值**（`Call` 有多个；其余恰好一个）。
+    ///
+    /// # 为什么放在 IR 而不是 `opt`
+    ///
+    /// 「一条指令定义哪些值」是 IR 的**形状**，不是某个 pass 的私有知识。
+    /// 活跃性（`live`）与四个 pass（`opt`）都要用同一份答案 —— 抄两份的话，
+    /// 新增一个指令变体时必然只改一处，而漏的那一处会安静地把值算错。
+    #[must_use]
+    pub fn dsts(&self) -> Vec<ValueId> {
+        match self {
+            Instr::Const { dst, .. }
+            | Instr::Copy { dst, .. }
+            | Instr::Bin { dst, .. }
+            | Instr::Un { dst, .. }
+            | Instr::Convert { dst, .. }
+            | Instr::AddrOf { dst, .. }
+            | Instr::Field { dst, .. }
+            | Instr::Index { dst, .. }
+            | Instr::Slice { dst, .. }
+            | Instr::Composite { dst, .. }
+            | Instr::Make { dst, .. }
+            | Instr::Load { dst, .. }
+            | Instr::Store { dst, .. } => vec![*dst],
+            Instr::Call { dsts, .. } => dsts.clone(),
+        }
+    }
+
+    /// 这条指令**读**的值（程序顺序；`Call` 的间接被调方与接收者在前）。
+    #[must_use]
+    pub fn uses(&self) -> Vec<ValueId> {
+        let mut out = Vec::new();
+        match self {
+            Instr::Const { .. } | Instr::AddrOf { .. } => {}
+            Instr::Copy { src, .. } => out.push(*src),
+            Instr::Bin { lhs, rhs, .. } => {
+                out.push(*lhs);
+                out.push(*rhs);
+            }
+            Instr::Un { x, .. } | Instr::Convert { x, .. } => out.push(*x),
+            Instr::Field { base, .. } => out.push(*base),
+            Instr::Index { base, i, .. } => {
+                out.push(*base);
+                out.push(*i);
+            }
+            Instr::Slice {
+                base, lo, hi, max, ..
+            } => {
+                out.push(*base);
+                out.extend(lo.iter().chain(hi.iter()).chain(max.iter()).copied());
+            }
+            Instr::Composite { items, .. } => out.extend(items.iter().copied()),
+            Instr::Make { len, cap, .. } => {
+                out.extend(len.iter().chain(cap.iter()).copied());
+            }
+            // `mem` 也是操作数：它是「这条读看在哪个时间点」的令牌（`V6`）
+            Instr::Load { mem, addr, .. } => {
+                out.push(*mem);
+                out.push(*addr);
+            }
+            Instr::Store { mem, addr, val, .. } => {
+                out.push(*mem);
+                out.push(*addr);
+                out.push(*val);
+            }
+            Instr::Call { callee, args, .. } => {
+                match callee {
+                    CalleeRef::Indirect(v) => out.push(*v),
+                    CalleeRef::Method { recv, .. } => out.push(*recv),
+                    CalleeRef::Func(_) | CalleeRef::Builtin(_) => {}
+                }
+                out.extend(args.iter().copied());
+            }
+        }
+        out
+    }
+}
+
+impl Term {
+    /// 终止符读的值（边实参**也算**：它们在跳转时被读走）。
+    #[must_use]
+    pub fn uses(&self) -> Vec<ValueId> {
+        match self {
+            Term::Goto { args, .. } => args.clone(),
+            Term::If { cond, then_, else_ } => {
+                let mut out = vec![*cond];
+                out.extend(then_.1.iter().chain(else_.1.iter()).copied());
+                out
+            }
+            Term::Return(vs) => vs.clone(),
+            Term::Panic(v) => vec![*v],
+            Term::Unreachable => Vec::new(),
+        }
+    }
+}
+
 /// 一个基本块。
 #[derive(Clone, Debug, Default)]
 pub struct Block {

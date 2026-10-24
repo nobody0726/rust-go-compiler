@@ -22,6 +22,7 @@ pub mod dom;
 pub mod dump;
 pub mod effect;
 pub mod ir;
+pub mod live;
 pub mod opt;
 pub mod testsupport;
 pub mod typing;

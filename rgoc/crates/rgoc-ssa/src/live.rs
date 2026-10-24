@@ -1,0 +1,444 @@
+//! 值级活跃性 + `SSA-LIVE v1` 协议（`D-M6-10`；门禁 `SSA-8`）。
+//!
+//! # 这里到底算什么
+//!
+//! 三样东西：
+//!
+//! 1. **块级活跃集** `live_in` / `live_out`（含回边，迭代到不动点）；
+//! 2. **值级区间** `[def, last_use]`（按「块号 + 指令下标」排序的位点）；
+//! 3. **safepoint 的存活集合** —— 逐函数一段确定性文本（`SSA-LIVE v1`）。
+//!
+//! # 为什么 phi（块参数）要特殊处理
+//!
+//! 块参数 `Block.params` 是 phi 的容身处（`D-M6-3`）。它在**目标块入口**定义，
+//! 实参在**前驱块的终止符**读。所以：
+//!
+//! ```text
+//! live_out[p] = ⋃ over succ s: (live_in[s] − params(s)) ∪ edge_args(p→s)
+//! ```
+//!
+//! 关键是**两块**：块参数算作「块入口已定义」（所以 `use` 里不含它、`live_in`
+//! 也不含它），而前驱的出口要额外带上**边实参**（它们在跳转时被读走）。
+//!
+//! ⚠️ 上式里的 `− params(s)` 在当前 use/def 约定下是**冗余**的：块参数既然算
+//! 「入口已定义」，`live_in[s]` 里就永远不会有它。这一项留着是为了让公式本身
+//! 自洽（而不是靠另一处的约定兜住），但它**不宣称有判据覆盖** —— 变异打不掉
+//! 它。真正有判据的是「边实参进 `live_out`」与「块参数不进 `live_in`」。
+//!
+//! # safepoint 的定义
+//!
+//! **能调出去或能分配**的指令：`Call`（任何被调方 —— 用户函数、方法、内建）
+//! 与 `Make`（`make` / `new`）。理由：这两类是指令流里唯一「别的代码可能跑起来」
+//! 的点，也就是 GC 唯一可能发生的地方。`Load`/`Store` 不分配也不调用，不算。
+//!
+//! safepoint 的 `live` 是「**跨过这条指令还活着**的值」∪「这条指令自己读的值」
+//! （传进调用的指针在调用期间当然还活着）。
+//!
+//! # 保守策略：派生指针 ⇒ 根也活（`D-M6-10`）
+//!
+//! M6 **不做对象级**分析。`q := &s.n` 是从根 `&s` 派生的指针：即使 `q` 之后
+//! 只被 `Load` 用过、`&s` 本身看起来「没人用了」，只要 `q` 活着，`&s` 指向的
+//! 那块存储就必须活着 —— 否则 `q` 会指向已经回收的存储。所以 safepoint 的
+//! `live` 会**闭包**到根（`root_of`），并在文档里如实说明它是保守的：
+//! 它可能多留一个值，但不会少留。
+//!
+//! 反过来说：`ptrs` 只收**指针类型**（`*T`）。切片与 `map` 的底层存储属于
+//! M9 的对象模型，M6 没有它的表示 —— 把它们塞进 `ptrs` 是假承诺。
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use rgoc_types::{Type, TypeId, TypeTable};
+
+use crate::cfg::Cfg;
+use crate::ir::{BlockId, Instr, SsaFunc, ValueId};
+
+/// 协议版本行（改动等于契约变更；`C10` 的 `SSA v1` 是另一份契约）。
+pub const LIVE_VERSION: &str = "# SSA-LIVE v1";
+
+/// 一个位点：`block` 块的第 `idx` 条指令之前。
+///
+/// `idx == -1` 表示**块入口**（块参数在这里定义）。用 `i32` 而不是 `usize`
+/// 就是为了这个 -1 —— 造一个「比任何指令都小」的哨兵值，比给 `Pos` 加一个
+/// `enum { Entry, Instr(usize) }` 更省事，且排序天然正确。
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct Pos {
+    /// 块号。
+    pub block: u32,
+    /// 指令下标（`-1` = 块入口）。
+    pub idx: i32,
+}
+
+impl Pos {
+    /// 块入口。
+    #[must_use]
+    pub const fn entry(block: u32) -> Pos {
+        Pos { block, idx: -1 }
+    }
+
+    /// 第 `idx` 条指令之前。
+    #[must_use]
+    pub const fn instr(block: u32, idx: usize) -> Pos {
+        Pos {
+            block,
+            idx: idx as i32,
+        }
+    }
+}
+
+/// 一个值的活跃区间 `[def, last]`。
+///
+/// # 它不是「线性扫描寄存器分配能用」的区间
+///
+/// 位点是**位置序**（块号 + 指令下标），不是执行序。循环里「块 5 定义、块 3 用」
+/// （回边）的区间会看起来反的 —— 这里用 `max` 兜住，不假装它是执行序。
+/// 真正的线性扫描需要 M7 的循环嵌套信息。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Interval {
+    /// 定义点。
+    pub def: Pos,
+    /// 最后一次使用（没有使用 ⇒ 等于 `def`）。
+    pub last: Pos,
+}
+
+/// 一个 safepoint（能调出去 / 能分配的指令）。
+#[derive(Clone, Debug)]
+pub struct Safepoint {
+    /// 所在块。
+    pub block: BlockId,
+    /// 指令下标（块内）。
+    pub idx: usize,
+    /// 存活的值（**已闭包到根**，见模块头）。
+    pub live: Vec<ValueId>,
+    /// `live` 里类型是指针的那些（`ptrs ⊆ live`）。
+    pub ptrs: Vec<ValueId>,
+}
+
+/// 一个函数的活跃性结果。
+#[derive(Clone, Debug, Default)]
+pub struct Liveness {
+    /// 每块的 `live_in`（`Vec` 下标即 `BlockId`）。
+    pub live_in: Vec<BTreeSet<ValueId>>,
+    /// 每块的 `live_out`。
+    pub live_out: Vec<BTreeSet<ValueId>>,
+    /// 值 → 区间（只含**有定义点**的值）。
+    pub intervals: BTreeMap<ValueId, Interval>,
+    /// safepoint（按 `(块号, 指令下标)` 升序）。
+    pub safepoints: Vec<Safepoint>,
+}
+
+/// 算一个函数的活跃性。
+#[must_use]
+pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
+    let n = f.blocks.len();
+    let mut use_b: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); n];
+    let mut def_b: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); n];
+
+    // ── ① 每块的 use / def
+    //
+    // `use` 的判据是「**读到之前**没被本块定义过」：块参数先算作已定义，
+    // 然后按程序顺序走指令。这样 `v = v + 1`（不合法 SSA，但手写 IR 造得出）
+    // 也不会把自己算成 use。
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let mut defined: BTreeSet<ValueId> = BTreeSet::new();
+        for p in &blk.params {
+            defined.insert(*p);
+            def_b[bi].insert(*p);
+        }
+        for ins in &blk.instrs {
+            for u in ins.uses() {
+                if !defined.contains(&u) {
+                    use_b[bi].insert(u);
+                }
+            }
+            for d in ins.dsts() {
+                defined.insert(d);
+                def_b[bi].insert(d);
+            }
+        }
+        // 终止符的读（含边实参）：同样按「本块已定义」过滤
+        for u in blk.term.uses() {
+            if !defined.contains(&u) {
+                use_b[bi].insert(u);
+            }
+        }
+    }
+
+    // ── ② 不动点
+    let mut live_in: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); n];
+    let mut live_out: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); n];
+    // 逆序起步：回边（→ 低块号）在前几轮就能把信息带上去，收敛快一些。
+    // 这只是性能，不影响结果（不动点唯一）。
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for bi in (0..n).rev() {
+            let b = BlockId(bi as u32);
+            let mut out: BTreeSet<ValueId> = BTreeSet::new();
+            for s in cfg.succs(b) {
+                // 目标块的块参数在**目标**定义，不算「从这里活着出去」
+                let params: BTreeSet<ValueId> = f
+                    .blocks
+                    .get(s.index())
+                    .map(|x| x.params.iter().copied().collect())
+                    .unwrap_or_default();
+                out.extend(live_in[s.index()].iter().filter(|v| !params.contains(v)));
+                // 边实参在前驱的终止符里读走 ⇒ 它们也是「出去时活着的」
+                out.extend(cfg.edge_args(b, *s).iter().copied());
+            }
+            let mut inn = use_b[bi].clone();
+            inn.extend(out.iter().filter(|v| !def_b[bi].contains(v)).copied());
+            if out != live_out[bi] || inn != live_in[bi] {
+                live_out[bi] = out;
+                live_in[bi] = inn;
+                changed = true;
+            }
+        }
+    }
+
+    // ── ③ 区间
+    let mut intervals: BTreeMap<ValueId, Interval> = BTreeMap::new();
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let b = bi as u32;
+        for p in &blk.params {
+            intervals.entry(*p).or_insert(Interval {
+                def: Pos::entry(b),
+                last: Pos::entry(b),
+            });
+        }
+        for (ii, ins) in blk.instrs.iter().enumerate() {
+            let pos = Pos::instr(b, ii);
+            for d in ins.dsts() {
+                // `entry`：重复定义（不合法 SSA）时保留**第一次**的定义点
+                intervals.entry(d).or_insert(Interval {
+                    def: pos,
+                    last: pos,
+                });
+            }
+            for u in ins.uses() {
+                touch(&mut intervals, u, pos);
+            }
+        }
+        let end = Pos::instr(b, blk.instrs.len());
+        for u in blk.term.uses() {
+            touch(&mut intervals, u, end);
+        }
+    }
+    // 兜底：区间必须 `last >= def`（回边上「定义在后面的块、用在前面」）
+    for iv in intervals.values_mut() {
+        if iv.last < iv.def {
+            iv.last = iv.def;
+        }
+    }
+
+    // ── ④ safepoint
+    let root_of = root_values(f);
+    let mem_values = mem_tokens(f);
+    let mut safepoints: Vec<Safepoint> = Vec::new();
+    for (bi, blk) in f.blocks.iter().enumerate() {
+        let b = BlockId(bi as u32);
+        if !cfg.reachable(b) {
+            continue;
+        }
+        // 反向扫：`after[i]` = 执行完第 i 条之后还活着的值
+        let mut after: Vec<BTreeSet<ValueId>> = vec![BTreeSet::new(); blk.instrs.len()];
+        let mut cur = live_out[bi].clone();
+        for ii in (0..blk.instrs.len()).rev() {
+            after[ii] = cur.clone();
+            for d in blk.instrs[ii].dsts() {
+                cur.remove(&d);
+            }
+            cur.extend(blk.instrs[ii].uses());
+        }
+        for (ii, ins) in blk.instrs.iter().enumerate() {
+            if !is_safepoint(ins) {
+                continue;
+            }
+            // 这条指令自己读的也算（传进调用的指针在调用期间活着）
+            let mut set = after[ii].clone();
+            set.extend(ins.uses());
+            // 闭包到根（保守，见模块头）
+            let closure: BTreeSet<ValueId> = set.iter().map(|v| root_of_of(&root_of, *v)).collect();
+            set.extend(closure);
+            let live: Vec<ValueId> = set.into_iter().collect();
+            let ptrs: Vec<ValueId> = live
+                .iter()
+                .copied()
+                .filter(|v| {
+                    // mem 令牌是「时间点」而不是对象地址：它的类型确实是 `*T`
+                    // （构建器用 `const 0 : *T` 起头，见 `Fb::mem_of`），
+                    // 但它**不是**一个可以回收的指针。不排掉它，`ptrs` 里会
+                    // 混进一堆常量 0。
+                    !mem_values.contains(v) && is_ptr_ty(tt, f.value_types.get(v.index()).copied())
+                })
+                .collect();
+            safepoints.push(Safepoint {
+                block: b,
+                idx: ii,
+                live,
+                ptrs,
+            });
+        }
+    }
+
+    Liveness {
+        live_in,
+        live_out,
+        intervals,
+        safepoints,
+    }
+}
+
+/// 一条指令是不是 safepoint（能调出去 / 能分配）。
+fn is_safepoint(i: &Instr) -> bool {
+    match i {
+        // 任何调用：用户函数、方法、内建（`append` 会分配，`println` 会调出去）
+        Instr::Call { .. } => true,
+        // 分配点：`make` / `new`（`new` 是 `len=cap=None` 且 `typ` 为指针的 `Make`）
+        Instr::Make { .. } => true,
+        _ => false,
+    }
+}
+
+fn touch(iv: &mut BTreeMap<ValueId, Interval>, v: ValueId, pos: Pos) {
+    // 用了一个**没有定义点**的值（不合法 SSA）：不编造区间。
+    // 这种图会被 `V1` 拒；活跃性只需要不 panic。
+    if let Some(x) = iv.get_mut(&v)
+        && pos > x.last
+    {
+        x.last = pos;
+    }
+}
+
+/// `ValueId → 它的根值`（`AddrOf` 的结果）。
+///
+/// 只认**构造性**的派生链：`AddrOf` / `Field` / `Index` / `Copy` / `Convert`。
+/// 与构建期的 `Fb::ptr_root` 同一个纪律（`D-M6-5`）：合并值、形参、调用结果
+/// 一律「根就是它自己」—— 保守，但不猜。
+fn root_values(f: &SsaFunc) -> BTreeMap<ValueId, ValueId> {
+    let mut map: BTreeMap<ValueId, ValueId> = BTreeMap::new();
+    for blk in &f.blocks {
+        for ins in &blk.instrs {
+            if let Instr::AddrOf { dst, .. } = ins {
+                map.insert(*dst, *dst);
+            }
+        }
+    }
+    // 不动点：`Field`/`Index` 的底座可能在后面的块里（回边）或者链在 `Copy` 后面
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for blk in &f.blocks {
+            for ins in &blk.instrs {
+                let (dst, base) = match ins {
+                    Instr::Field { dst, base, .. } | Instr::Index { dst, base, .. } => {
+                        (*dst, *base)
+                    }
+                    Instr::Copy { dst, src } => (*dst, *src),
+                    Instr::Convert { dst, x, .. } => (*dst, *x),
+                    _ => continue,
+                };
+                if let Some(r) = map.get(&base).copied()
+                    && map.get(&dst).copied() != Some(r)
+                {
+                    map.insert(dst, r);
+                    changed = true;
+                }
+            }
+        }
+    }
+    map
+}
+
+/// 全部 **mem 令牌**（`Load`/`Store` 的 `mem` 操作数 + `Store` 的 `dst`）。
+///
+/// mem 值的静态类型是指针（`Fb::mem_of` 用 `const 0 : *T` 起头），但它的语义是
+/// 「这块存储在第几个时间点」，不是「一个指向对象的指针」。`ptrs` 要排除它。
+fn mem_tokens(f: &SsaFunc) -> BTreeSet<ValueId> {
+    let mut out = BTreeSet::new();
+    for blk in &f.blocks {
+        for ins in &blk.instrs {
+            match ins {
+                Instr::Load { mem, .. } => {
+                    out.insert(*mem);
+                }
+                Instr::Store { mem, dst, .. } => {
+                    out.insert(*mem);
+                    out.insert(*dst);
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// 根闭包用：没有记录的 ⇒ 自己是自己的根。
+fn root_of_of(map: &BTreeMap<ValueId, ValueId>, v: ValueId) -> ValueId {
+    map.get(&v).copied().unwrap_or(v)
+}
+
+fn is_ptr_ty(tt: &TypeTable, t: Option<TypeId>) -> bool {
+    let Some(t) = t else { return false };
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(tt.type_of(rgoc_types::underlying(tt, t)), Type::Pointer(_))
+}
+
+/// 渲染 `SSA-LIVE v1`（逐函数一段；排序键 = 块号 + 指令下标）。
+///
+/// ```text
+/// # SSA-LIVE v1
+/// # func f blocks=4 values=9
+/// # safepoint b1 0 live=[v3,v5] ptrs=[v5]
+/// # interval v3 def=b0:2 last=b1:0
+/// ```
+///
+/// 空集合写 `[]`（与 `C10` 的 `params=[]` 同口径），不省略字段 —— 消费方不必
+/// 猜「缺了是空还是没有」。块入口的定义点写 `def=b<k>:-1`。
+#[must_use]
+pub fn render(f: &SsaFunc, lv: &Liveness) -> String {
+    let mut out = String::new();
+    out.push_str(LIVE_VERSION);
+    out.push('\n');
+    out.push_str(&format!(
+        "# func {} blocks={} values={}\n",
+        f.name,
+        f.block_count(),
+        f.value_count()
+    ));
+    for sp in &lv.safepoints {
+        out.push_str(&format!(
+            "# safepoint b{} {} live={} ptrs={}\n",
+            sp.block.0,
+            sp.idx,
+            vlist(&sp.live),
+            vlist(&sp.ptrs)
+        ));
+    }
+    // `BTreeMap` 的键序就是 `ValueId` 升序
+    for (v, iv) in &lv.intervals {
+        out.push_str(&format!(
+            "# interval v{} def=b{}:{} last=b{}:{}\n",
+            v.0, iv.def.block, iv.def.idx, iv.last.block, iv.last.idx
+        ));
+    }
+    out
+}
+
+/// 渲染整个模块（每个函数一段，中间空行分隔）。
+#[must_use]
+pub fn render_module(m: &crate::ir::Module, tt: &TypeTable) -> String {
+    let mut out = String::new();
+    for f in &m.funcs {
+        let cfg = Cfg::build(f);
+        let lv = analyze(f, &cfg, tt);
+        out.push_str(&render(f, &lv));
+    }
+    out
+}
+
+fn vlist(xs: &[ValueId]) -> String {
+    let body: Vec<String> = xs.iter().map(|v| format!("v{}", v.0)).collect();
+    format!("[{}]", body.join(","))
+}

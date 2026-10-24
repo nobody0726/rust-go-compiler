@@ -363,10 +363,21 @@ pub fn verify(f: &SsaFunc, tt: &TypeTable) -> Result<(), VerifyError>;
 
 ```text
 # SSA-LIVE v1
-# func <name> blocks=<n> values=<n>
-# safepoint <block> <instr_idx> live=<v1,v2,...> ptrs=<v3,...>
-# interval v<k> def=<block:idx> last=<block:idx>
+# func f blocks=4 values=9
+# safepoint b1 0 live=[v3,v5] ptrs=[v5]
+# interval v3 def=b0:2 last=b1:0
 ```
+
+三处**实现决定**（`R-46-1`）：列表带方括号（与 `C10` 的 `params=[]` 同口径，
+空集写 `[]` 而**不省略字段** —— 消费方不必猜「缺了是空还是没有」）；块入口的
+定义点写 `b<k>:-1`（块参数在入口定义，`-1` 比任何指令下标都小）；
+`safepoint` 的 `live` 是**保守集**（含根闭包，见 §3.7 第一条），
+`live_in/live_out` 保持精确值级。
+
+safepoint 的定义（`R-48-1`）：**能调出去或能分配的指令** —— `Call`（任何被调方）
+与 `Make`（`make`/`new`）。`ptrs` 只收 `*T` 类型，并**排除 mem 令牌**
+（它的静态类型也是 `*T`，但语义是「时间点」不是对象地址）；切片 / `map` 的
+底层存储属于 M9 的对象模型，M6 不承诺。
 
 消费方桩测试（`SSA-8`）：解析这段文本、断言字段自洽（`live` 里的值都有区间、`ptrs` 都是指针类型），证明「codegen 可消费」。
 

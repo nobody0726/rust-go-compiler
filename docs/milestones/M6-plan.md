@@ -841,8 +841,9 @@
 **Interfaces:**
 - Produces: `analyze(&SsaFunc, &Cfg) -> Liveness { live_in: Vec<BTreeSet<ValueId>>, live_out: .., intervals: BTreeMap<ValueId, (Pos, Pos)> }`
 
-- [ ] 迭代到不动点（含回边）；`live_out[b] = ∪ live_in[succ]`，`live_in = use ∪ (live_out − def)`
-- [ ] `T-SSA-55`：直线 / 分支 / 循环（回边上变量活跃）各一
+- [x] 迭代到不动点（含回边）；`live_out[b] = ∪ (live_in[succ] − params) ∪ edge_args`，`live_in = use ∪ (live_out − def)`
+- [x] `T-SSA-55`：直线 / 分支 / 循环（回边上变量活跃）各一，**手算对照**（6 条测试，含 `verify` 前置）
+- [x] `Instr::dsts()` / `Instr::uses()` / `Term::uses()` 进 IR（`R-45-1`：活跃性与四个 pass 共用一份）
 - [ ] Commit：`feat(ssa): 活跃性（Task 45）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test live`
@@ -854,8 +855,8 @@
 **Files:**
 - Modify: `src/live.rs`（`render`）
 
-- [ ] 逐行格式照设计 §3.7；排序键 = 块号 + 指令下标
-- [ ] `T-SSA-56` / `T-SSA-59`：字段自洽 + 两次逐字节相同
+- [x] 逐行格式照设计 §3.7（`R-46-1` 定稿方括号列表与 `-1` 入口位点）；排序键 = 块号 + 指令下标
+- [x] `T-SSA-56` / `T-SSA-59`：字段自洽（live ⊆ 区间、ptrs ⊆ live 且类型为指针）+ 两次逐字节相同
 - [ ] Commit：`feat(ssa): SSA-LIVE v1（Task 46）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test live render`
@@ -867,8 +868,8 @@
 **Files:**
 - Create: `rgoc/crates/rgoc-driver/tests/live_consumer.rs`
 
-- [ ] 桩只解析文本（不碰 IR 内部），构造「每个 safepoint 的存活指针集合」并断言非空
-- [ ] `T-SSA-57`
+- [x] 桩只解析文本（签名只收 `&str`，不碰 IR 内部），构造「每个 safepoint 的存活指针集合」
+- [x] `T-SSA-57`：**46 个入选文件 / 140 个函数 / 678 个 safepoint / 48 个有存活指针**（分母写出来）
 - [ ] Commit：`test(ssa): 协议消费方桩（Task 47）`
 
 **Verify:** `… cargo test -p rgoc-driver --test live_consumer`
@@ -880,8 +881,8 @@
 **Files:**
 - Modify: `src/live.rs`
 
-- [ ] 派生指针（`Field/Index` 出来的指针）活跃 ⇒ 其根活跃；协议 `ptrs` 含根
-- [ ] `T-SSA-58`
+- [x] 派生指针（`Field/Index`/`Copy`/`Convert` 链）活跃 ⇒ 其根活跃；协议 `ptrs` 含根（`R-48-1`）
+- [x] `T-SSA-58`：根的「纯值最后使用」在派生点之后仍被判活（判据同时钉住区间不被污染）
 - [ ] Commit：`feat(ssa): 派生指针保守策略（Task 48）`
 
 **Verify:** `… cargo test -p rgoc-ssa --test live derived`

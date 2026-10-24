@@ -231,3 +231,34 @@ bash tools/run-oracle/run-collide.sh --run --list --ssa --three-way tools/run-or
 
 这条偏差说明一件事：**「我改了某个判断」不等于「变异打到了那个判断」**。
 变异全绿时先怀疑锚点，再怀疑用例。
+
+## Task 45/46/48：活跃性与 `SSA-LIVE v1`（11 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut45_48.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M56` 块参数不算已定义 | `defined.insert(*p)` 去掉 | `t_ssa_55_直线_…`（`live_in[b1]` 会多出块参数） | ✅ 红 |
+| `M57` `live_in` 不减 `def` | `inn.extend(out)` 不过滤 `def_b` | `t_ssa_55_直线_…`（`live_in[b0]` 会多出 v0/v1） | ✅ 红 |
+| `M58` 不迭代到不动点 | 单轮 + 正序（两处一起改） | `t_ssa_55_循环_回边上变量活跃` | ✅ 红 |
+| `M65` `live_out` 不含边实参 | 删掉 `out.extend(cfg.edge_args…)` | `t_ssa_55_直线_…` | ✅ 红 |
+| `M67` safepoint 判定恒假 | `Instr::Call { .. } => false` | `t_ssa_56_协议字段自洽`（一条 safepoint 都没有） | ✅ 红 |
+| `M59` safepoint 不并入自身操作数 | 删掉 `set.extend(ins.uses())` | `t_ssa_56_协议字段自洽`（实参 v0 不在 live 里） | ✅ 红 |
+| `M60` `ptrs` 不排 mem 令牌 | 去掉 `!mem_values.contains(v)` | `t_ssa_56_协议字段自洽`（ptrs 变 `[1,2]`） | ✅ 红 |
+| `M61` 不做根闭包 | 删掉闭包两行 | `t_ssa_58_派生指针活跃则根也活跃` | ✅ 红 |
+| `M62` 区间 `last` 不更新 | `touch` 体置空 | `t_ssa_58_…`（v1 的 last 停在定义点） | ✅ 红 |
+| `M63` safepoint 不按块序 | 块循环加 `.rev()` | `t_ssa_59_两次输出逐字节相同` | ✅ 红 |
+| `M64` 头行 `values=` 写块数 | 两个字段对调 | `t_ssa_56_协议字段自洽` | ✅ 红 |
+
+### `M58` 为什么必须两处一起改
+
+只去掉不动点（`while changed` → 单轮）而保留**逆序**遍历，我的循环 fixture
+恰好一轮就收敛（b3 → b2 → b1 → b0 正好是信息流方向）—— 变异是**绿的**。
+加上「改成正序」才红。这条偏差记下来：**fixture 的块序本身在帮逆序遍历收敛**，
+将来换 fixture 要重新确认这一点。
+
+### 一条诚实的例外：`− params(s)` 打不掉
+
+`live_out` 公式里的 `− params(s)` 在当前 use/def 约定下**永远不起作用**
+（块参数算「入口已定义」⇒ `live_in[s]` 里没有它）。所以没有变异能杀掉它，
+已在 `R-45-2` 里登记为冗余，不假装有覆盖。
