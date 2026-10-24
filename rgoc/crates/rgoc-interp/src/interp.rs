@@ -642,7 +642,7 @@ impl<'a> Interp<'a> {
                 let h = if hi { Some(self.pop()) } else { None };
                 let l = if lo { Some(self.pop()) } else { None };
                 let base = self.pop();
-                match self.slice_value(&base, l, h, mx, typ) {
+                match slice_value(&base, l, h, mx, typ) {
                     Ok(v) => self.values.push(v),
                     Err(e) => self.fail(e),
                 }
@@ -673,7 +673,7 @@ impl<'a> Interp<'a> {
             }
             Task::Convert { to, from } => {
                 let v = self.pop();
-                let out = self.convert(v, to, from);
+                let out = convert(self.tt, v, to, from);
                 self.values.push(out);
             }
             Task::Assert {
@@ -2594,99 +2594,6 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn convert(&mut self, v: Value, to: TypeId, from: TypeId) -> Value {
-        if is_iface(self.tt, to) {
-            if is_iface(self.tt, from) {
-                return v;
-            }
-            // **typed nil** 不是 nil 接口（`T-EX-29` 的核心）：
-            // `var p *T; var i I = p` ⇒ `i != nil`，动态类型是 `*T`、动态值是
-            // nil 指针。判据必须看**静态类型**是不是无类型 nil，而不是看值
-            // 「长得像 nil」—— 后者会把每个 nil 指针 / nil map / nil slice
-            // 装箱成 nil 接口，`val(pt)`（`pt` 为 nil `*T1`）随即在接口分派处
-            // 报「nil 指针解引用」（`method.go` 实测）。
-            let from_untyped_nil = matches!(
-                self.tt.type_of(unalias(self.tt, from)),
-                Type::Basic(BasicId::UntypedNil)
-            );
-            if from_untyped_nil || matches!(v, Value::Nil(NilKind::Iface)) {
-                return Value::Iface {
-                    typ: None,
-                    data: Box::new(Value::Nil(NilKind::Iface)),
-                };
-            }
-            return Value::Iface {
-                typ: Some(from),
-                data: Box::new(v),
-            };
-        }
-        // `[]byte(s)` / `[]rune(s)`：把字符串**拆**成字节或 rune。
-        //
-        // 为什么必须在 `basic_of` 之前分出去：`to` 是 slice，`basic_of` 给
-        // `None`，于是落到下面那条「不是基本型就原样返回」的兜底 ——
-        // `[]rune("é")` 会变成那个字符串本身，`len` 得 2（字节数）而不是 1
-        // （`T-EX-16` 实测）。
-        if let Value::Str(sv) = &v
-            && let Type::Slice(elem) = self.tt.type_of(underlying(self.tt, unalias(self.tt, to)))
-        {
-            let e = ops::basic_of(self.tt, *elem);
-            if e == Some(BasicId::Uint8) {
-                let cells: Vec<Cell> = sv
-                    .as_bytes()
-                    .iter()
-                    .map(|b| cell(Value::Int(i128::from(*b))))
-                    .collect();
-                let n = cells.len();
-                return Value::Slice(SliceVal {
-                    arr: Rc::new(cells),
-                    off: 0,
-                    len: n,
-                    cap: n,
-                });
-            }
-            if e == Some(BasicId::Int32) {
-                let cells: Vec<Cell> = sv
-                    .chars()
-                    .map(|c| cell(Value::Int(i128::from(u32::from(c)))))
-                    .collect();
-                let n = cells.len();
-                return Value::Slice(SliceVal {
-                    arr: Rc::new(cells),
-                    off: 0,
-                    len: n,
-                    cap: n,
-                });
-            }
-        }
-        let Some(b) = ops::basic_of(self.tt, to) else {
-            if v.is_nil() {
-                return nil_of(self.tt, to);
-            }
-            return v;
-        };
-        if b.is_integer() {
-            let i = to_i128(&v);
-            return Value::Int(ops::normalize(i, b));
-        }
-        if b.is_float() {
-            let f = to_f64(&v);
-            return Value::Float(if b == BasicId::Float32 {
-                f64::from(f as f32)
-            } else {
-                f
-            });
-        }
-        if b.is_complex() {
-            let (re, im) = as_complex(&v);
-            return Value::Complex(re, im);
-        }
-        match b {
-            BasicId::String => string_convert(self.tt, &v, from),
-            BasicId::Bool => Value::Bool(v.as_bool().unwrap_or(false)),
-            _ => v,
-        }
-    }
-
     fn type_assert(&mut self, to: TypeId, iface: TypeId, comma_ok: bool) {
         let v = self.pop();
         let (dt, data) = match v {
@@ -2818,89 +2725,6 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn slice_value(
-        &mut self,
-        base: &Value,
-        lo: Option<Value>,
-        hi: Option<Value>,
-        max: Option<Value>,
-        _typ: TypeId,
-    ) -> Result<Value, RtError> {
-        let as_usize = |v: &Option<Value>, dflt: usize| -> i128 {
-            v.as_ref().and_then(Value::as_int).unwrap_or(dflt as i128)
-        };
-        match peel_value(base) {
-            Value::Str(s) => {
-                let n = s.len();
-                let l = as_usize(&lo, 0);
-                let h = as_usize(&hi, n);
-                if l < 0 || h < l || h as usize > n {
-                    return Err(RtError::SliceBounds {
-                        what: "string",
-                        val: h,
-                        max: n as i128,
-                    });
-                }
-                let out = &s.as_bytes()[l as usize..h as usize];
-                Ok(Value::Str(String::from_utf8_lossy(out).into_owned().into()))
-            }
-            Value::Array(cells) => {
-                let n = cells.len();
-                let l = as_usize(&lo, 0);
-                let h = as_usize(&hi, n);
-                let c = as_usize(&max, n);
-                if l < 0 || h < l || c < h || c as usize > n {
-                    return Err(RtError::SliceBounds {
-                        what: "array",
-                        val: h,
-                        max: n as i128,
-                    });
-                }
-                Ok(Value::Slice(SliceVal {
-                    arr: cells,
-                    off: l as usize,
-                    len: (h - l) as usize,
-                    cap: (c - l) as usize,
-                }))
-            }
-            Value::Slice(sv) => {
-                let l = as_usize(&lo, 0);
-                let h = as_usize(&hi, sv.len);
-                let c = as_usize(&max, sv.cap);
-                if l < 0 || h < l || c < h || c as usize > sv.cap {
-                    return Err(RtError::SliceBounds {
-                        what: "slice",
-                        val: h,
-                        max: sv.cap as i128,
-                    });
-                }
-                Ok(Value::Slice(SliceVal {
-                    arr: sv.arr,
-                    off: sv.off + l as usize,
-                    len: (h - l) as usize,
-                    cap: (c - l) as usize,
-                }))
-            }
-            Value::Nil(NilKind::Slice) => {
-                let l = as_usize(&lo, 0);
-                let h = as_usize(&hi, 0);
-                if l != 0 || h != 0 {
-                    return Err(RtError::SliceBounds {
-                        what: "slice",
-                        val: h,
-                        max: 0,
-                    });
-                }
-                Ok(Value::Nil(NilKind::Slice))
-            }
-            _ => Err(RtError::SliceBounds {
-                what: "slice",
-                val: 0,
-                max: 0,
-            }),
-        }
-    }
-
     // ───────────── 目标读写 ─────────────
 
     fn write_target(&mut self, t: Target, v: Value) -> Result<(), RtError> {
@@ -3008,7 +2832,7 @@ fn callee_extra(c: &Callee) -> usize {
 /// 最接近的 f32，不是 f64 的 `1e-10`。若这里原样保留 f64，随后 `a == 1/b`
 /// （两侧都是 float32 运算，`bin_arith` 会舍入到 f32）就会判成不等
 /// （`literal.go` 的 `f09` / `f13` / `f15` 实测）。
-fn const_value(c: &rgoc_hir::types::ConstVal, typ: TypeId, tt: &TypeTable) -> Value {
+pub(crate) fn const_value(c: &rgoc_hir::types::ConstVal, typ: TypeId, tt: &TypeTable) -> Value {
     use rgoc_hir::types::ConstVal as C;
     let basic = ops::basic_of(tt, typ);
     let f32_ctx = matches!(basic, Some(BasicId::Float32) | Some(BasicId::Complex64));
@@ -3024,7 +2848,7 @@ fn const_value(c: &rgoc_hir::types::ConstVal, typ: TypeId, tt: &TypeTable) -> Va
     }
 }
 
-fn nil_of(tt: &TypeTable, typ: TypeId) -> Value {
+pub(crate) fn nil_of(tt: &TypeTable, typ: TypeId) -> Value {
     match tt.type_of(underlying(tt, unalias(tt, typ))) {
         Type::Map { .. } => Value::Nil(NilKind::Map),
         Type::Slice(_) => Value::Nil(NilKind::Slice),
@@ -3339,7 +3163,182 @@ fn decode_rune(b: &[u8]) -> (u32, usize) {
     }
 }
 
-fn apply_unary(op: UnOp, v: Value, typ: TypeId, tt: &TypeTable) -> Value {
+pub(crate) fn convert(tt: &TypeTable, v: Value, to: TypeId, from: TypeId) -> Value {
+    if is_iface(tt, to) {
+        if is_iface(tt, from) {
+            return v;
+        }
+        // **typed nil** 不是 nil 接口（`T-EX-29` 的核心）：
+        // `var p *T; var i I = p` ⇒ `i != nil`，动态类型是 `*T`、动态值是
+        // nil 指针。判据必须看**静态类型**是不是无类型 nil，而不是看值
+        // 「长得像 nil」—— 后者会把每个 nil 指针 / nil map / nil slice
+        // 装箱成 nil 接口，`val(pt)`（`pt` 为 nil `*T1`）随即在接口分派处
+        // 报「nil 指针解引用」（`method.go` 实测）。
+        let from_untyped_nil = matches!(
+            tt.type_of(unalias(tt, from)),
+            Type::Basic(BasicId::UntypedNil)
+        );
+        if from_untyped_nil || matches!(v, Value::Nil(NilKind::Iface)) {
+            return Value::Iface {
+                typ: None,
+                data: Box::new(Value::Nil(NilKind::Iface)),
+            };
+        }
+        return Value::Iface {
+            typ: Some(from),
+            data: Box::new(v),
+        };
+    }
+    // `[]byte(s)` / `[]rune(s)`：把字符串**拆**成字节或 rune。
+    //
+    // 为什么必须在 `basic_of` 之前分出去：`to` 是 slice，`basic_of` 给
+    // `None`，于是落到下面那条「不是基本型就原样返回」的兜底 ——
+    // `[]rune("é")` 会变成那个字符串本身，`len` 得 2（字节数）而不是 1
+    // （`T-EX-16` 实测）。
+    if let Value::Str(sv) = &v
+        && let Type::Slice(elem) = tt.type_of(underlying(tt, unalias(tt, to)))
+    {
+        let e = ops::basic_of(tt, *elem);
+        if e == Some(BasicId::Uint8) {
+            let cells: Vec<Cell> = sv
+                .as_bytes()
+                .iter()
+                .map(|b| cell(Value::Int(i128::from(*b))))
+                .collect();
+            let n = cells.len();
+            return Value::Slice(SliceVal {
+                arr: Rc::new(cells),
+                off: 0,
+                len: n,
+                cap: n,
+            });
+        }
+        if e == Some(BasicId::Int32) {
+            let cells: Vec<Cell> = sv
+                .chars()
+                .map(|c| cell(Value::Int(i128::from(u32::from(c)))))
+                .collect();
+            let n = cells.len();
+            return Value::Slice(SliceVal {
+                arr: Rc::new(cells),
+                off: 0,
+                len: n,
+                cap: n,
+            });
+        }
+    }
+    let Some(b) = ops::basic_of(tt, to) else {
+        if v.is_nil() {
+            return nil_of(tt, to);
+        }
+        return v;
+    };
+    if b.is_integer() {
+        let i = to_i128(&v);
+        return Value::Int(ops::normalize(i, b));
+    }
+    if b.is_float() {
+        let f = to_f64(&v);
+        return Value::Float(if b == BasicId::Float32 {
+            f64::from(f as f32)
+        } else {
+            f
+        });
+    }
+    if b.is_complex() {
+        let (re, im) = as_complex(&v);
+        return Value::Complex(re, im);
+    }
+    match b {
+        BasicId::String => string_convert(tt, &v, from),
+        BasicId::Bool => Value::Bool(v.as_bool().unwrap_or(false)),
+        _ => v,
+    }
+}
+
+pub(crate) fn slice_value(
+    base: &Value,
+    lo: Option<Value>,
+    hi: Option<Value>,
+    max: Option<Value>,
+    _typ: TypeId,
+) -> Result<Value, RtError> {
+    let as_usize = |v: &Option<Value>, dflt: usize| -> i128 {
+        v.as_ref().and_then(Value::as_int).unwrap_or(dflt as i128)
+    };
+    match peel_value(base) {
+        Value::Str(s) => {
+            let n = s.len();
+            let l = as_usize(&lo, 0);
+            let h = as_usize(&hi, n);
+            if l < 0 || h < l || h as usize > n {
+                return Err(RtError::SliceBounds {
+                    what: "string",
+                    val: h,
+                    max: n as i128,
+                });
+            }
+            let out = &s.as_bytes()[l as usize..h as usize];
+            Ok(Value::Str(String::from_utf8_lossy(out).into_owned().into()))
+        }
+        Value::Array(cells) => {
+            let n = cells.len();
+            let l = as_usize(&lo, 0);
+            let h = as_usize(&hi, n);
+            let c = as_usize(&max, n);
+            if l < 0 || h < l || c < h || c as usize > n {
+                return Err(RtError::SliceBounds {
+                    what: "array",
+                    val: h,
+                    max: n as i128,
+                });
+            }
+            Ok(Value::Slice(SliceVal {
+                arr: cells,
+                off: l as usize,
+                len: (h - l) as usize,
+                cap: (c - l) as usize,
+            }))
+        }
+        Value::Slice(sv) => {
+            let l = as_usize(&lo, 0);
+            let h = as_usize(&hi, sv.len);
+            let c = as_usize(&max, sv.cap);
+            if l < 0 || h < l || c < h || c as usize > sv.cap {
+                return Err(RtError::SliceBounds {
+                    what: "slice",
+                    val: h,
+                    max: sv.cap as i128,
+                });
+            }
+            Ok(Value::Slice(SliceVal {
+                arr: sv.arr,
+                off: sv.off + l as usize,
+                len: (h - l) as usize,
+                cap: (c - l) as usize,
+            }))
+        }
+        Value::Nil(NilKind::Slice) => {
+            let l = as_usize(&lo, 0);
+            let h = as_usize(&hi, 0);
+            if l != 0 || h != 0 {
+                return Err(RtError::SliceBounds {
+                    what: "slice",
+                    val: h,
+                    max: 0,
+                });
+            }
+            Ok(Value::Nil(NilKind::Slice))
+        }
+        _ => Err(RtError::SliceBounds {
+            what: "slice",
+            val: 0,
+            max: 0,
+        }),
+    }
+}
+
+pub(crate) fn apply_unary(op: UnOp, v: Value, typ: TypeId, tt: &TypeTable) -> Value {
     let b = ops::basic_of(tt, typ);
     match op {
         UnOp::Pos => v,

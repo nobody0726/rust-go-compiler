@@ -111,3 +111,19 @@
 Go 规范说比较产生 untyped boolean）。短路支的常量若用缓存的 `bool`，
 汇合块两条边就是两种类型 ⇒ `V3` 拒 **5 个语料文件**（`float_lit.go` / `simassign.go` /
 `ken/array.go` / `ken/divmod.go` / `ken/string.go`）。修法：`const_bool(b, t)` 由调用者给类型。
+
+## Task 33：纯值求值（3 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut33.py`（端到端测试在 `rgoc-driver/tests/ssa_run.rs`）。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M27` 比较恒 `false` | `ops::compare` → `false` | `t_ssa_33_一元运算` | ✅ 红 |
+| `M28` 转换的源类型传错 | `convert(tt, v, typ, typ)` | `t_ssa_33_转换与浮点` | ✅ 红 |
+| `M29` `println` 分隔符错 | 空格 → 逗号 | `t_ssa_33_短路的值` | ✅ 红 |
+
+### 顺手把三处 M5 代码抽成可复用
+
+`apply_unary` / `const_value` / `nil_of` / `convert` / `slice_value` 提到 `pub(crate)`，
+其中 `convert` 与 `slice_value` 原本是 `Interp` 的方法（只用到 `self.tt`）——
+改成自由函数后两套求值器共用**同一份**语义（`D-M6-7` 的要求）。
