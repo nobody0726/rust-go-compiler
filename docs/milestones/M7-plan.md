@@ -117,16 +117,21 @@
 - Test: `rgoc/crates/rgoc-arm64/tests/emit_deterministic.rs`
 
 **Interfaces:**
-- Produces: `Asm { text: String, data: String }`、`Asm::label(&str)`、`Asm::ins(&str)`、`Asm::rodata_bytes(&[u8]) -> String`（返回标签）；所有集合遍历走 `BTreeMap`/`Vec`，**不用 `HashMap`**
+- Produces: `Asm { text, rodata, data }`、`global/label/ins/directive/comment`、`fresh_label() -> u32`、
+  `rodata_bytes(&[u8]) -> String`、`rodata_f64(u64) -> String`、`data_bytes(&[u8]) -> String`、`render() -> String`
 - Consumes: 无
 
-- [ ] 实现 `Asm`：`.text` / `.global` / `.rodata` 三段，标签名只由「函数名 + 值号」决定（不含地址/序号随机源）
-- [ ] `rodata_bytes` 按调用顺序生成 `.Lstr<N>`，N 单调递增（同一输入两次调用必须得到同一批标签）
-- [ ] 测试 `T-NAT-48` 的骨架版：同一输入两次 `render()` 逐字节相同
-- [ ] 反向守卫：临时把内部 `HashMap` 换成迭代源 ⇒ 该测试必须红（跑一次确认后还原）
-- [ ] Commit：`feat(arm64): 确定性文本汇编 emitter（Task 3）`
+- [x] 实现 `Asm`：三段（`.text` / `.rodata` / `.data`），`render` 按**固定顺序**拼接
+      ⇒ 「先写代码后写常量」与反过来写得到同一份产物
+- [x] 标签按**调用顺序**递增（`.Lstr<N>` / `.Lf64_<N>` / `fresh_label()`），**不按内容去重**
+- [x] `rodata_f64` 收**位模式**（`.quad 0x…`）而不是 `.double`：后者要过汇编器的十进制解析，
+      `-0.0`/`NaN`/次正规数都不是「写出来就一样」
+- [x] 空串也写一个 0 字节（Go 允许 `len==0` 时取地址，标签后面不能直接跟下一个标签）
+- [x] 测试 7 条：两次渲染相同 / 标签按序递增 / **相同内容不去重**（这条是「不许按内容做标签名」
+      的可执行版本）/ 空串占位 / 段序无关 / 产物无地址与时间 / 两段共用计数器
+- [x] Commit：`feat(arm64): 确定性文本汇编 emitter（Task 3）`
 
-**Verify:** `… cargo test -p rgoc-arm64 --test emit_deterministic`（≥2 条）
+**Verify:** `… cargo test -p rgoc-arm64 --test emit_deterministic`（7 条全绿）；`… cargo clippy -p rgoc-arm64 --all-targets -- -D warnings`（0）
 
 ---
 
