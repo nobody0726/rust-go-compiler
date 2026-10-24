@@ -45,7 +45,7 @@
 | 6 | 「先常量折叠/死代码/复制传播，再证明必要的 CSE」 | §3.6：三个 pass + **块内纯值 CSE**（`D-M6-8`） |
 | 7 | 「SSA 求值器是诊断设施，共用定义好的值与 runtime 操作，不发展第三套完整 runtime」 | §3.8：`ssa_exec` 在 `rgoc-interp` 内，**值模型只有一个 crate**（`D-M6-7`） |
 | 8 | 「定义 safepoint live set、指针/派生指针处理和 lowering→frame map 协议」 | §3.7：值级活跃性 + **`SSA-LIVE v1`** 版本化协议（`D-M6-10`，M6e 只到协议级） |
-| 9 | 「完整 M5 功能可以分批降级，暂不支持闭包/异常等必须显式报告」 | §5 白名单 7 条，每条一个码 + 一个 fixture |
+| 9 | 「完整 M5 功能可以分批降级，暂不支持闭包/异常等必须显式报告」 | §5 白名单 9 条（`R-31-1`），每条一个码 + 一个 fixture（3 条够不着的用守卫测试，`R-31-2`） |
 | 10 | 「不要求优化 ≥8」 | 门禁 `SSA-5` 只要求**语义保持**，不设 pass 数量下限 |
 
 ### 1.3 明确不做（M6 边界）
@@ -410,19 +410,29 @@ rgoc run --via=hir  ==  rgoc run --via=ssa  ==  go run（合并流逐字节 + �
 
 ---
 
-## 5. 不支持面（白名单，7 条）
+## 5. 不支持面（白名单，9 条）
+
+> **修订 `R-31-1`（2026-10-24）**：执行到 Task 31 时发现验收面比开工时估的两条都窄 ——
+> ① `range` over **string** 要按 rune 解码，指令集里没有对应操作，原先只在计划里写了
+> 「显式拒绝」却没有码；② **函数值**（`func(){}` / 具名函数当值 / 方法值）在 IR 里
+> 没有「把函数变成值」的指令，原先压根没进白名单，实测会落进 `todo!()`（panic）。
+> 两条都补成正式码，白名单 7 → 9。另有三条在本前端**够不着**（见 `R-31-2`）。
 
 | ID | 拒绝什么 | 判据（构建期） | 码 | 正向证据 |
 |---|---|---|---|---|
 | `U-M6-01` | 闭包（捕获跨帧写） | `!func.captured.is_empty()`（`F2`） | `SSA-UNSUPPORTED-CLOSURE` | `T-EX-26` 的 counter；语料 `closure*.go` |
 | `U-M6-02` | `defer` / `recover` | `Stmt::Defer` / `BuiltinKind::Recover` 出现 | `SSA-UNSUPPORTED-DEFER` | `T-EX-34..37` |
-| `U-M6-03` | 接口动态派发 / type switch | `Callee::Iface` / `Stmt::TypeSwitch` | `SSA-UNSUPPORTED-IFACE-DYN` | `T-EX-29/30/31` |
-| `U-M6-04` | `map` 读写 | `Type::Map` 上的 `Load/Store`/内建 | `SSA-UNSUPPORTED-MAP` | `T-EX-14` |
-| `U-M6-05` | `chan` / `go` / `select` | `Type::Chan` / `Stmt` 内 `go`/`select` | `SSA-UNSUPPORTED-CHAN` | `U-M5-01` |
-| `U-M6-06` | `range` over func | HIR 层已拒（`U-M5-06`） | `SSA-UNSUPPORTED-RANGE-FUNC` | `range4.go` |
-| `U-M6-07` | 泛型实例化后的形态 | 与 `G-M5-03` 同根（检查器没放进来） | `SSA-UNSUPPORTED-GENERIC` | `T-EX-32/33` |
+| `U-M6-03` | 接口动态派发 / type switch / 类型断言 | `Callee::Iface` / `Stmt::TypeSwitch` / `ExprKind::TypeAssert` | `SSA-UNSUPPORTED-IFACE-DYN` | `T-EX-29/30/31` |
+| `U-M6-04` | `map` 读写 | 任意 `Type::Map` 出现在表达式里 / `range` over map | `SSA-UNSUPPORTED-MAP` | `T-EX-14` |
+| `U-M6-05` | `chan` / `go` / `select` | 任意 `Type::Chan` / `make(chan)` / `close` / `<-ch` | `SSA-UNSUPPORTED-CHAN` | `U-M5-01`（本前端在 HIR 就先拒） |
+| `U-M6-06` | `range` over func | HIR 层已拒（`U-M5-06`） | `SSA-UNSUPPORTED-RANGE-FUNC` | 守卫测试（见 `R-31-2`） |
+| `U-M6-07` | 泛型实例化后的形态 | 与 `G-M5-03` 同根（检查器没放进来） | `SSA-UNSUPPORTED-GENERIC` | 守卫测试（见 `R-31-2`） |
+| `U-M6-08` | **函数值**（函数字面量当值 / 具名函数当值 / 方法值） | `ExprKind::FuncLit` / `ExprKind::Bound` | `SSA-UNSUPPORTED-FUNC-VALUE` | `T-SSA-33` 的 `funcvalue` fixture |
+| `U-M6-09` | **`range` over string** | `RangeKind::Str` | `SSA-UNSUPPORTED-RANGE-STR` | `T-SSA-33` 的 `range-str` fixture |
 
 **纪律**：白名单项**不得**记为 pass；每条都有「一个 fixture + 一个码 + 一个退出码」三件套。
+`U-M6-05/06/07` 的码在本前端**没有入口**（上游先拒），它们的「正向证据」是一对
+**守卫测试**：断言该码**不出现**、且拒绝来自上游 —— 上游一旦放行，守卫即红。
 
 ---
 
@@ -430,14 +440,14 @@ rgoc run --via=hir  ==  rgoc run --via=ssa  ==  go run（合并流逐字节 + �
 
 | 类 | 出口 | 形态 |
 |---|---|---|
-| 用户面（不支持 / 构建预算） | `stderr` + 退出码 1 | `rgoc-ssa/src/diag.rs` 的 `SsaCode`（7 个 `SSA-UNSUPPORTED-*`），**crate-local**，沿 `rgoc-hir::RejectKind` 的先例；`DiagCode` 保持 103 不动（`D-M6-14`） |
+| 用户面（不支持 / 构建预算） | `stderr` + 退出码 1 | `rgoc-ssa/src/diag.rs` 的 `SsaCode`（9 个 `SSA-UNSUPPORTED-*`，`R-31-1`），**crate-local**，沿 `rgoc-hir::RejectKind` 的先例；`DiagCode` 保持 103 不动（`D-M6-14`） |
 | 开发者面（verifier 报错） | `Err(VerifyError)` | 不进 `DiagCode`：`{ invariant: "V1".."V9", block: BlockId, idx: usize, detail }` |
 | 内部不可达 | `todo!()` + 注释指向门禁 | 不许用 `None` 冒充未实现 |
 
 > **为什么 SSA 的码不进 `DiagCode`**（这条是写计划时核对出来的）：
 > `DiagCode` 的每个码都必须被 `rgoc-check/tests/category.rs` 投影到 **`C8` 冻结的 26 类**之一，
 > 而其中 `other` 的值域被 `T-CK-16` 钉死为「恰好 3 个实现限制码」（`ExceedsFileLimit` /
-> `SynNestingTooDeep` / `TypNestingTooDeep`）。把 7 个 SSA 拒绝码硬塞进去，只有两条路：
+> `SynNestingTooDeep` / `TypNestingTooDeep`）。把 9 个 SSA 拒绝码硬塞进去，只有两条路：
 > 让 `other` 的值域漂（破 `T-CK-16` 与 `C8`），或给它们编一个假类别（用类别答错）。
 > **两条都不行。** 所以走 `rgoc-hir::RejectKind` 的同一条路：crate 自己一个 `SsaCode`，
 > 码文本进 `SSA-*` 命名空间，`DiagCode` 保持 103。
@@ -504,3 +514,5 @@ rgoc run --via=hir  ==  rgoc run --via=ssa  ==  go run（合并流逐字节 + �
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-23 | **初稿确认**：`D-M6-1..16`、`F1..F14`、`SSA-1..9`、白名单 7 条、风险 5 条 | 与用户逐段确认（§1 架构 / §2 判据装置 / §3 边界与分解）；`C4` §2 的五项需求登记 |
+| 2026-10-24 | `R-31-1`：白名单 **7 → 9**（函数值 / `range` over string 各补一个码） | 执行到 Task 31 实测：函数值原先落 `todo!()`（panic），`range` over string 计划里说拒却没有码。拒绝必须**有码** |
+| 2026-10-24 | `R-31-2`：`U-M6-05/06/07` 的正向证据改为守卫测试 | 三条码在本前端够不着（HIR/检查器先拒），硬造 fixture 等于假证据 |

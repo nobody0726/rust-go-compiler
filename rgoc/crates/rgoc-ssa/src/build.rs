@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use rgoc_hir::{Func, FuncId, GlobalId, Program};
 use rgoc_types::{TypeId, TypeTable};
 
-use crate::diag::Reject;
+use crate::diag::{Reject, SsaCode};
 use crate::ir::{Block, BlockId, CalleeRef, Effect, Instr, Module, Sig, SsaFunc, Term, ValueId};
 
 /// 空白标识符 `_` 的槽（HIR 约定：`_` 用 `SlotId(u32::MAX)` 占位）。
@@ -73,6 +73,225 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
     }
 }
 
+// ── 拒绝面（Task 31）────────────────────────────────────────────────
+
+/// 这个函数里有没有 M6 面之外的构造？有就给出**第一个**命中。
+///
+/// # 为什么「先扫一遍」而不是「走到哪拒到哪」
+///
+/// `expr` / `stmt` 返回 `ValueId` / `()`，不是 `Result`。为了传一条拒绝就把
+/// 3.5k 行构建代码全染上 `?`，代价远大于收益；而拒绝判据**只依赖 HIR 的
+/// 形状与静态类型**、与建图状态无关，天然是一个独立小 pass（沿 `scan_addressed`）。
+///
+/// # 为什么只报第一个
+///
+/// 被拒的函数**整个**不进 `Module::funcs`，列十条也没人多看一眼。
+/// 挑一条具体的（`defer` / `map[K]V` 的读）才能让人立刻定位。
+fn unsupported(tt: &TypeTable, f: &Func) -> Option<(SsaCode, String)> {
+    if !f.captured.is_empty() {
+        return Some((
+            SsaCode::Closure,
+            format!(
+                "被提升的闭包捕获了 {} 个外层变量（帧槽与外层 Cell 别名，值唯一定义不成立）",
+                f.captured.len()
+            ),
+        ));
+    }
+    unsup_block(tt, &f.body)
+}
+
+/// `map` / `chan` 类型 ⇒ 对应的码。接口**不在这里**：接口值当数据传是支持的，
+/// 只有「按动态类型派发/分支」不支持（那由调用点与 `TypeSwitch` 判）。
+fn face_kind(tt: &TypeTable, t: TypeId) -> Option<SsaCode> {
+    if t.index() >= tt.len() {
+        return None;
+    }
+    match tt.type_of(rgoc_types::underlying(tt, t)) {
+        rgoc_types::typ::Type::Map { .. } => Some(SsaCode::Map),
+        rgoc_types::typ::Type::Chan { .. } => Some(SsaCode::Chan),
+        _ => None,
+    }
+}
+
+fn unsup_block(tt: &TypeTable, b: &HirBlock) -> Option<(SsaCode, String)> {
+    b.stmts.iter().find_map(|s| unsup_stmt(tt, s))
+}
+
+fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
+    match s {
+        Stmt::Defer { .. } => Some((
+            SsaCode::Defer,
+            "defer（延迟调用链是运行期结构，不是 SSA 值）".to_string(),
+        )),
+        Stmt::TypeSwitch { .. } => Some((
+            SsaCode::IfaceDyn,
+            "type switch（按运行期动态类型分支）".to_string(),
+        )),
+        Stmt::Range { x, body, kind, .. } => match kind {
+            RangeKind::Map => Some((SsaCode::Map, "range over map".to_string())),
+            RangeKind::Str => Some((
+                SsaCode::RangeStr,
+                "range over string（要按 rune 解码，指令集里没有对应操作）".to_string(),
+            )),
+            RangeKind::Array | RangeKind::Slice | RangeKind::Int => {
+                unsup_expr(tt, x).or_else(|| unsup_block(tt, body))
+            }
+        },
+        Stmt::Assign { lhs, rhs, .. } => lhs
+            .iter()
+            .find_map(|p| unsup_place(tt, p))
+            .or_else(|| rhs.iter().find_map(|e| unsup_expr(tt, e))),
+        Stmt::ShortDecl { rhs, .. } => rhs.iter().find_map(|e| unsup_expr(tt, e)),
+        Stmt::Expr(e) => unsup_expr(tt, e),
+        Stmt::Return(es) => es.iter().find_map(|e| unsup_expr(tt, e)),
+        Stmt::If {
+            init,
+            cond,
+            then,
+            els,
+        } => init
+            .as_deref()
+            .and_then(|i| unsup_stmt(tt, i))
+            .or_else(|| unsup_expr(tt, cond))
+            .or_else(|| unsup_block(tt, then))
+            .or_else(|| els.as_deref().and_then(|e| unsup_stmt(tt, e))),
+        Stmt::For {
+            init,
+            cond,
+            post,
+            body,
+            ..
+        } => init
+            .as_deref()
+            .and_then(|i| unsup_stmt(tt, i))
+            .or_else(|| cond.as_ref().and_then(|c| unsup_expr(tt, c)))
+            .or_else(|| post.as_deref().and_then(|p| unsup_stmt(tt, p)))
+            .or_else(|| unsup_block(tt, body)),
+        Stmt::Switch {
+            init, tag, cases, ..
+        } => init
+            .as_deref()
+            .and_then(|i| unsup_stmt(tt, i))
+            .or_else(|| tag.as_ref().and_then(|t| unsup_expr(tt, t)))
+            .or_else(|| {
+                cases.iter().find_map(|c| {
+                    c.exprs
+                        .iter()
+                        .find_map(|e| unsup_expr(tt, e))
+                        .or_else(|| unsup_block(tt, &c.body))
+                })
+            }),
+        Stmt::Labeled { stmt, .. } => unsup_stmt(tt, stmt),
+        Stmt::Block(b) => unsup_block(tt, b),
+        Stmt::Branch { .. } | Stmt::Empty => None,
+    }
+}
+
+fn unsup_place(tt: &TypeTable, p: &Place) -> Option<(SsaCode, String)> {
+    match p {
+        Place::Slot(_) | Place::Global(_) => None,
+        Place::Field { base, .. } => unsup_place(tt, base),
+        Place::Index { base, index } => unsup_expr(tt, base).or_else(|| unsup_expr(tt, index)),
+        Place::Deref(e) => unsup_expr(tt, e),
+    }
+}
+
+fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
+    // 类型优先：`map` / `chan` 的**任何**出现（读、写、`len`、当实参）都不在面。
+    // 先按类型判就不必给每个节点各写一支（`m[k]` / `delete(m,k)` / `range m` …）。
+    if let Some(code) = face_kind(tt, e.typ) {
+        let what = if code == SsaCode::Map { "map" } else { "chan" };
+        return Some((
+            code,
+            format!("{what} 类型出现在表达式里（键相等 / 并发语义属宿主面）"),
+        ));
+    }
+    match &e.kind {
+        ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => None,
+        ExprKind::Field { base, .. } => unsup_expr(tt, base),
+        ExprKind::Index { base, index, .. } => {
+            unsup_expr(tt, base).or_else(|| unsup_expr(tt, index))
+        }
+        ExprKind::Slice {
+            base, lo, hi, max, ..
+        } => unsup_expr(tt, base)
+            .or_else(|| lo.as_deref().and_then(|x| unsup_expr(tt, x)))
+            .or_else(|| hi.as_deref().and_then(|x| unsup_expr(tt, x)))
+            .or_else(|| max.as_deref().and_then(|x| unsup_expr(tt, x))),
+        ExprKind::Deref(x) | ExprKind::AddrOf(x) => unsup_expr(tt, x),
+        ExprKind::Addr(p) => unsup_place(tt, p),
+        ExprKind::Unary { op, x } => {
+            if *op == rgoc_hir::UnOp::Recv {
+                return Some((SsaCode::Chan, "`<-ch` 接收操作".to_string()));
+            }
+            unsup_expr(tt, x)
+        }
+        ExprKind::Binary { x, y, .. } => unsup_expr(tt, x).or_else(|| unsup_expr(tt, y)),
+        ExprKind::Convert { to, x } => {
+            if let Some(code) = face_kind(tt, *to) {
+                return Some((code, "转换到 map/chan 类型".to_string()));
+            }
+            unsup_expr(tt, x)
+        }
+        ExprKind::Call { callee, args, .. } => match callee {
+            Callee::Iface { .. } => Some((
+                SsaCode::IfaceDyn,
+                "接口方法调用（目标函数运行期才定）".to_string(),
+            )),
+            Callee::Method { recv, .. } => {
+                unsup_expr(tt, recv).or_else(|| args.iter().find_map(|a| unsup_expr(tt, a)))
+            }
+            Callee::Func(_) => args.iter().find_map(|a| unsup_expr(tt, a)),
+            // **被调方本身也是表达式**：`func(){...}()` 的被调方就是函数字面量。
+            // 只扫实参表会漏掉它 —— 实测 `closure1.go` / `ddd.go` 因此进了
+            // `expr(FuncLit)` 的 `todo!()`（panic 而不是拒绝）。
+            Callee::Value(v) => {
+                unsup_expr(tt, v).or_else(|| args.iter().find_map(|a| unsup_expr(tt, a)))
+            }
+
+            Callee::Builtin(k) => match k {
+                BuiltinKind::Recover => Some((
+                    SsaCode::Defer,
+                    "recover（与 defer 同属延迟调用面）".to_string(),
+                )),
+                BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
+                _ => args.iter().find_map(|a| unsup_expr(tt, a)),
+            },
+        },
+        ExprKind::Composite(c) => c.items.iter().find_map(|it| match it {
+            CompositeItem::Value(x) | CompositeItem::Field(_, x) | CompositeItem::Index(_, x) => {
+                unsup_expr(tt, x)
+            }
+            CompositeItem::Key(k, _) => Some((
+                SsaCode::Map,
+                format!("map 字面量的键 {k:?}（键相等是宿主语义）"),
+            )),
+        }),
+        // 函数值：`FuncLit` 既覆盖 `func(){}`，也覆盖**具名函数当值用**（`f := g`），
+        // 两者在 HIR 里同一个节点（`lower_name` 落成 `FuncLit(fid)`）。
+        // IR 里没有「把函数变成值」的指令 ⇒ 整个函数值面拒掉。
+        ExprKind::FuncLit(_) => Some((
+            SsaCode::FuncValue,
+            "函数字面量 / 函数名当值用（IR 里没有函数引用值）".to_string(),
+        )),
+        ExprKind::Bound { .. } => Some((SsaCode::FuncValue, "方法值（`x.M` 不调用）".to_string())),
+        ExprKind::TypeAssert { .. } => {
+            Some((SsaCode::IfaceDyn, "类型断言（运行期类型判定）".to_string()))
+        }
+        ExprKind::Make { kind, args } => match kind {
+            MakeKind::Map => Some((SsaCode::Map, "make(map)".to_string())),
+            MakeKind::Chan => Some((SsaCode::Chan, "make(chan)".to_string())),
+            MakeKind::Slice => args.iter().find_map(|a| unsup_expr(tt, a)),
+        },
+        ExprKind::New(t) => face_kind(tt, *t).map(|code| (code, "`new` 的元素类型".to_string())),
+        ExprKind::Builtin { kind, args, .. } => match kind {
+            BuiltinKind::Recover => Some((SsaCode::Defer, "recover".to_string())),
+            BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
+            _ => args.iter().find_map(|a| unsup_expr(tt, a)),
+        },
+    }
+}
+
 /// 建一个函数。
 ///
 /// 三步：① 扫出**需要根**的槽（取址 ∪ 部分写）；② 算**确定赋值**（读到必已写过），
@@ -84,6 +303,20 @@ fn build_func(
     effs: &[crate::effect::Summary],
     tt: &mut TypeTable,
 ) -> Result<SsaFunc, Reject> {
+    // ① 拒绝面先扫（`Task 31`）：**有码的拒绝**先于任何建图工作。
+    //
+    // 为什么是「先扫一遍」而不是「走到哪拒到哪」：`expr` / `stmt` 返回的是
+    // `ValueId` / `()`，不是 `Result` —— 让它们全体改签名只为传一条拒绝，
+    // 会把 3.5k 行构建代码都染上 `?`。而拒绝判据**只看 HIR 的形状与静态类型**，
+    // 与建图状态无关，天然是一个独立的小 pass（沿 `scan_addressed` 的先例）。
+    if let Some((code, detail)) = unsupported(tt, f) {
+        return Err(Reject {
+            func: id,
+            code,
+            detail,
+        });
+    }
+
     let unsafe_slots = unsafe_slots_of(f);
     // 需要根的槽 = 取址 ∪ 部分写 ∪ **读前可能未赋值**
     let mut rooted: BTreeSet<SlotId> = scan_rooted(tt, &f.body);
@@ -184,7 +417,7 @@ fn build_func(
 use std::collections::BTreeSet;
 
 use rgoc_hir::{
-    Block as HirBlock, BranchKind, BuiltinKind, Callee, Case, CompositeItem, Expr, ExprKind,
+    BinOp, Block as HirBlock, BranchKind, BuiltinKind, Callee, Case, CompositeItem, Expr, ExprKind,
     MakeKind, Place, RangeKind, SlotId, Stmt,
 };
 
@@ -1056,12 +1289,7 @@ impl Fb<'_> {
 
     fn elem_type(&self, root: RootId) -> TypeId {
         match self.roots.get(root.index()) {
-            Some(Root::Slot(s)) => self
-                .f
-                .slot_types
-                .get(s.index())
-                .copied()
-                .unwrap_or_else(|| TypeId::from_index(0)),
+            Some(Root::Slot(s)) => self.slot_typ(*s),
             Some(Root::Global(g)) => self
                 .globals
                 .get(g.index())
@@ -1187,12 +1415,7 @@ impl Fb<'_> {
                 s.0
             )
         });
-        let t = self
-            .f
-            .slot_types
-            .get(s.index())
-            .copied()
-            .unwrap_or_else(|| TypeId::from_index(0));
+        let t = self.slot_typ(s);
         self.load_root(root, t)
     }
 
@@ -1211,6 +1434,11 @@ impl Fb<'_> {
         if crate::typing::same_type(self.tt, self.values[v.index()], typ) {
             return v;
         }
+        // **别往 `invalid` 上转**：那是「类型算不出来」的占位，不是一种目标类型。
+        // 往它插 `Convert` 只会把「上游没给类型」伪装成「转换过了」。
+        if self.is_invalid(typ) || self.is_invalid(self.values[v.index()]) {
+            return v;
+        }
         let dst = self.new_value(typ);
         self.emit(Instr::Convert { dst, x: v, typ });
         // 指针之间的转换**不动地址**（只改「指向什么类型」的看法）⇒ 根跟着走。
@@ -1220,6 +1448,10 @@ impl Fb<'_> {
             self.ptr_root.insert(dst, root);
         }
         dst
+    }
+
+    fn is_invalid(&self, t: TypeId) -> bool {
+        t.index() >= self.tt.len() || matches!(self.tt.type_of(t), rgoc_types::typ::Type::Invalid)
     }
 
     fn slot_typ(&self, s: SlotId) -> TypeId {
@@ -1291,6 +1523,21 @@ impl Fb<'_> {
         }
         self.roots.push(Root::Heap);
         RootId((self.roots.len() - 1) as u32)
+    }
+
+    /// 造一个**构建器私有**的根（`&T{...}` 的临时存储，`Task 31`）。
+    ///
+    /// 与 `fresh_slot` 的区别：私有槽是**值**（直接提升、不是根），
+    /// 而这里要的是**存储**（`&T{}` 的结果是个指针，指向某块真存储）。
+    /// 槽号同样从 `u32::MAX-1` 往下发，不进 `slot_types`，类型记在 `extra_slots`。
+    fn temp_root(&mut self, t: TypeId) -> RootId {
+        let s = SlotId(self.next_tmp);
+        self.next_tmp -= 1;
+        self.extra_slots.insert(s, t);
+        let r = RootId(self.roots.len() as u32);
+        self.roots.push(Root::Slot(s));
+        self.slot_root.insert(s, r);
+        r
     }
 
     /// 一个 place 的地址值。
@@ -1683,19 +1930,51 @@ impl Fb<'_> {
             Callee::Value(v) => {
                 let fv = self.expr(v);
                 let avs = self.eval_args(args, spread);
-                // 间接调用：签名运行期才定 ⇒ 只当「一个结果」（`V5` 跳过这类）；
-                // 副作用也未知 ⇒ 保守「什么都能写 + 可能回调」
+                // 间接调用的签名**静态可读**：被调方是个函数值，它的静态类型
+                // 就是签名（`func(int, byte) (byte, int)`）。不读它就只能猜
+                // 「一个结果」—— 实测 `method5.go` 的 `b, x := f(1000, 99)`
+                // 因此 panic（右侧 1 个值、左侧 2 个目标）。
+                let rtypes = self.func_result_types(v.typ).unwrap_or_else(|| vec![e.typ]);
+                // 副作用未知 ⇒ 保守「什么都能写 + 可能回调」
                 let eff = Effect {
                     writes: Vec::new(),
                     writes_all: true,
                     may_panic: true,
                     may_call_back: true,
                 };
-                self.emit_call(CalleeRef::Indirect(fv), avs, &[e.typ], eff)
+                self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, eff)
             }
             Callee::Iface { .. } => {
                 todo!("M6/Task 31：接口动态派发要报 `SSA-UNSUPPORTED-IFACE-DYN`")
             }
+        }
+    }
+
+    /// 函数类型的**结果类型表**（`func(...) (A, B)` ⇒ `[A, B]`）。
+    ///
+    /// 间接调用要用它定 `Call.dsts` 的个数与类型：被调方的值是运行期的，
+    /// 但它的**静态类型**（签名）就在眼前，没有理由去猜。
+    fn func_result_types(&self, t: TypeId) -> Option<Vec<TypeId>> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        let Some(rgoc_types::typ::Type::Signature(sid)) =
+            Some(self.tt.type_of(rgoc_types::underlying(self.tt, t)))
+        else {
+            return None;
+        };
+        let results = self.tt.signature_def(*sid).results;
+        match self.tt.type_of(results) {
+            rgoc_types::typ::Type::Tuple(tid) => Some(
+                self.tt
+                    .tuple_def(*tid)
+                    .vars
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .collect(),
+            ),
+            // 单结果签名可能直接是结果类型而不是一元组
+            _ => Some(vec![results]),
         }
     }
 
@@ -1807,9 +2086,36 @@ impl Fb<'_> {
                 let root = RootId(g.0);
                 self.load_root(root, e.typ)
             }
+            // 运算前把操作数对齐（`R-31-3`）：HIR 的操作数可能是**未定型常量**
+            // （`a + 1` 里的 `1` 是 untyped int），而 `V3` 要求同型 —— 隐式转换
+            // 在 lowering 里没有落成节点，只能在**使用点**物化（与 `coerce_to`
+            // 在写入点做的事同源，`R-22-2`）。
             ExprKind::Binary { op, x, y } => {
-                let lhs = self.expr(x);
-                let rhs = self.expr(y);
+                let mut lhs = self.expr(x);
+                let mut rhs = self.expr(y);
+                match op {
+                    // 移位：只有左操作数要跟结果同型（计数可以是别的整数型）
+                    BinOp::Shl | BinOp::Shr => {
+                        lhs = self.coerce_to(e.typ, lhs);
+                    }
+                    // 比较与逻辑：结果是 `bool`，两侧只要**互相**同型
+                    BinOp::Eq
+                    | BinOp::Ne
+                    | BinOp::Lt
+                    | BinOp::Le
+                    | BinOp::Gt
+                    | BinOp::Ge
+                    | BinOp::LAnd
+                    | BinOp::LOr => {
+                        let lt = self.values[lhs.index()];
+                        rhs = self.coerce_to(lt, rhs);
+                    }
+                    // 算术 / 位运算：两侧都跟结果同型
+                    _ => {
+                        lhs = self.coerce_to(e.typ, lhs);
+                        rhs = self.coerce_to(e.typ, rhs);
+                    }
+                }
                 let dst = self.new_value(e.typ);
                 self.emit(Instr::Bin {
                     dst,
@@ -1822,6 +2128,7 @@ impl Fb<'_> {
             }
             ExprKind::Unary { op, x } => {
                 let xv = self.expr(x);
+                let xv = self.coerce_to(e.typ, xv);
                 let dst = self.new_value(e.typ);
                 self.emit(Instr::Un {
                     dst,
@@ -1943,8 +2250,60 @@ impl Fb<'_> {
                     n => todo!("{n} 结果的内建出现在单值位置"),
                 }
             }
+            // `make([]T, len[, cap])`：`len` / `cap` 的求值顺序 == 源码顺序。
+            // `make(map)` / `make(chan)` 到不了这里（拒绝面先拦）。
+            ExprKind::Make { args, .. } => {
+                let len = args.first().map(|a| self.expr(a));
+                let cap = args.get(1).map(|a| self.expr(a));
+                let dst = self.new_value(e.typ);
+                self.emit(Instr::Make {
+                    dst,
+                    typ: e.typ,
+                    len,
+                    cap,
+                });
+                dst
+            }
+            // `new(T)`：`len` / `cap` 都为 `None` 且 `typ` 是指针（`Instr::Make` 的约定）
+            ExprKind::New(_) => {
+                let dst = self.new_value(e.typ);
+                self.emit(Instr::Make {
+                    dst,
+                    typ: e.typ,
+                    len: None,
+                    cap: None,
+                });
+                dst
+            }
+            // `a[lo:hi:max]`：结果是新 slice 头，元素存储仍在底层数组（堆根）
+            ExprKind::Slice {
+                base, lo, hi, max, ..
+            } => {
+                let b = self.expr(base);
+                let lo = lo.as_deref().map(|x| self.expr(x));
+                let hi = hi.as_deref().map(|x| self.expr(x));
+                let mx = max.as_deref().map(|x| self.expr(x));
+                let dst = self.new_value(e.typ);
+                self.emit(Instr::Slice {
+                    dst,
+                    base: b,
+                    lo,
+                    hi,
+                    max: mx,
+                });
+                dst
+            }
+            // `&T{...}`：复合字面量是规范里唯一「不是位置却可寻址」的表达式
+            // ⇒ 分配一块临时存储、把值存进去、返回它的地址。
+            ExprKind::AddrOf(x) => {
+                let v = self.expr(x);
+                let root = self.temp_root(x.typ);
+                let addr = self.addr_of(root);
+                self.store_root(root, addr, v);
+                addr
+            }
             other => todo!(
-                "M6/Task 27–29：表达式 `{}` 的构建还没实现",
+                "M6/Task 27–31：表达式 `{}` 的构建还没实现",
                 expr_kind_name(other)
             ),
         }
@@ -2457,10 +2816,14 @@ impl Fb<'_> {
         kind: RangeKind,
         label: Option<&str>,
     ) {
+        // `Str` / `Map` 到不了这里：`unsupported()` 在**建图前**就把它们拒了
+        // （`SSA-UNSUPPORTED-RANGE-STR` / `-MAP`）。留 `unreachable!` 不用 `todo!`：
+        // 「预扫描漏了」是实现 bug，不是「还没实现」。
         match kind {
             RangeKind::Array | RangeKind::Slice | RangeKind::Int => {}
-            RangeKind::Str => todo!("M6/Task 31：`range` over string 要报显式拒绝码"),
-            RangeKind::Map => todo!("M6/Task 31：`range` over map 要报 `SSA-UNSUPPORTED-MAP`"),
+            RangeKind::Str | RangeKind::Map => {
+                unreachable!("range over str/map 应由 unsupported() 在建图前拒掉")
+            }
         }
         let xs = self.expr(x);
         let int_ty = self.int_ty();
@@ -2470,9 +2833,13 @@ impl Fb<'_> {
             Some(Place::Slot(s)) if *s != BLANK_SLOT => *s,
             _ => self.fresh_slot(int_ty),
         };
+        // 下标槽的类型**可能就是具名类型**：`for i := range MyInt(4)` 的 `i` 是
+        // `MyInt`（`range3.go` 实测）。拿 `int` 去比它就成了一条
+        // `lt MyInt int`，`V3` 拒。
+        let key_ty = self.slot_typ(key_slot);
 
         // ── 初始化 idx = 0（在 preheader 里）
-        let zero = self.const_int(0, int_ty);
+        let zero = self.const_int(0, key_ty);
         self.write_slot(key_slot, zero);
 
         let base = (self.val.clone(), self.mem.clone());
@@ -2524,9 +2891,13 @@ impl Fb<'_> {
 
         // cond: idx < len(xs)（`range n` 时上界直接是 n）
         let up = if matches!(kind, RangeKind::Int) {
-            xs
+            // `range 4` 的上界是**未定型常量**（`untyped int`），而下标槽是 `int`。
+            // 不对齐的话这里就是一条 `lt int untyped-int`，`V3` 当场拒
+            // （实测 `range3.go` / `turing.go`）。
+            self.coerce_to(key_ty, xs)
         } else {
-            self.emit_len(xs)
+            let n = self.emit_len(xs);
+            self.coerce_to(key_ty, n)
         };
         let idx_v = self.read_slot(key_slot);
         let bt = self.bool_ty();
@@ -2615,14 +2986,15 @@ impl Fb<'_> {
                 self.val = args_state.0;
                 self.mem = args_state.1;
                 let cur_idx = self.read_slot(key_slot);
-                let one = self.const_int(1, int_ty);
-                let inc = self.new_value(int_ty);
+                // 自增也要同型（`key_ty` 可能是具名类型）
+                let one = self.const_int(1, key_ty);
+                let inc = self.new_value(key_ty);
                 self.emit(Instr::Bin {
                     dst: inc,
                     op: rgoc_hir::BinOp::Add,
                     lhs: cur_idx,
                     rhs: one,
-                    typ: int_ty,
+                    typ: key_ty,
                 });
                 self.write_slot(key_slot, inc);
                 let args = self.args_for(l, &layout, &self.val.clone(), &self.mem.clone());
@@ -3268,6 +3640,44 @@ impl Fb<'_> {
         }
     }
 
+    /// 一个 place 的**值**类型（不是地址类型）。
+    ///
+    /// # 为什么不能用「地址值的类型」
+    ///
+    /// 地址值的静态类型是 `*T`（`AddrOf` 的约定），而 `Load{typ}` 要的是 **T**。
+    /// 初版 `read_place` 直接拿 `values[addr]` 当 `Load.typ`，于是 `a[pc] += 1`
+    /// 读出来的是 `*[30000]uint8` —— `V3` 在随后的 `bin add` 上当场拒
+    /// （实测 `turing.go`）。类型只能从 **place 的结构 + HIR 的类型** 推。
+    fn place_value_type(&self, p: &Place) -> TypeId {
+        match p {
+            Place::Slot(s) => self.slot_typ(*s),
+            Place::Global(g) => self
+                .globals
+                .get(g.index())
+                .map_or_else(|| TypeId::from_index(0), |x| x.typ),
+            Place::Field { base, index } => self
+                .struct_field_ty(self.place_value_type(base), *index)
+                .unwrap_or_else(|| TypeId::from_index(0)),
+            Place::Index { base, .. } => self
+                .elem_ty_of(base.typ)
+                .unwrap_or_else(|| TypeId::from_index(0)),
+            Place::Deref(e) => e.typ,
+        }
+    }
+
+    /// 结构体第 `index` 个字段的类型（含具名/别名，走 underlying）。
+    fn struct_field_ty(&self, t: TypeId, index: usize) -> Option<TypeId> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        match self.tt.type_of(rgoc_types::underlying(self.tt, t)) {
+            rgoc_types::typ::Type::Struct(sid) => {
+                self.tt.struct_def(*sid).fields.get(index).map(|f| f.typ)
+            }
+            _ => None,
+        }
+    }
+
     fn read_place(&mut self, p: &Place) -> ValueId {
         match p {
             Place::Slot(s) => self.read_slot(*s),
@@ -3277,7 +3687,7 @@ impl Fb<'_> {
                 let (addr, hint) = self.place_addr_root(other);
                 let root = hint.unwrap_or_else(|| self.heap_root());
                 let mem = self.mem_of(root);
-                let t = self.values[addr.index()];
+                let t = self.place_value_type(other);
                 let dst = self.new_value(t);
                 self.emit(Instr::Load {
                     dst,

@@ -19,7 +19,7 @@
 
 use rgoc_hir::FuncId;
 
-/// SSA 构建期的拒绝码（**7 条**，与 `M6-tests.md` §5 的白名单一一对应）。
+/// SSA 构建期的拒绝码（**9 条**：§5 冻结的 7 条 + `R-31-1` 补的 2 条）。
 ///
 /// 变体按**字典序**声明（沿 `DiagCode` 的纪律：顺序进断言，不许重排）。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -30,26 +30,32 @@ pub enum SsaCode {
     Closure,
     /// `defer` / `recover`。
     Defer,
+    /// 函数值（`func(){}` / 方法值 / 间接调用）—— `R-31-1`。
+    FuncValue,
     /// 泛型实例化后的形态。
     Generic,
-    /// 接口**动态**派发 / type switch。
+    /// 接口**动态**派发 / type switch / 类型断言。
     IfaceDyn,
     /// `map` 的读写（键相等是宿主语义）。
     Map,
     /// `range` over func。
     RangeFunc,
+    /// `range` over string（要按 rune 解码，指令集里没有）—— `R-31-1`。
+    RangeStr,
 }
 
 impl SsaCode {
     /// 全部码（顺序 == 声明顺序 == 字典序）。
-    pub const ALL: [SsaCode; 7] = [
+    pub const ALL: [SsaCode; 9] = [
         SsaCode::Chan,
         SsaCode::Closure,
         SsaCode::Defer,
+        SsaCode::FuncValue,
         SsaCode::Generic,
         SsaCode::IfaceDyn,
         SsaCode::Map,
         SsaCode::RangeFunc,
+        SsaCode::RangeStr,
     ];
 
     /// 稳定码文本（进 `SSA-*` 命名空间；改动等于契约变更）。
@@ -59,10 +65,12 @@ impl SsaCode {
             SsaCode::Chan => "SSA-UNSUPPORTED-CHAN",
             SsaCode::Closure => "SSA-UNSUPPORTED-CLOSURE",
             SsaCode::Defer => "SSA-UNSUPPORTED-DEFER",
+            SsaCode::FuncValue => "SSA-UNSUPPORTED-FUNC-VALUE",
             SsaCode::Generic => "SSA-UNSUPPORTED-GENERIC",
             SsaCode::IfaceDyn => "SSA-UNSUPPORTED-IFACE-DYN",
             SsaCode::Map => "SSA-UNSUPPORTED-MAP",
             SsaCode::RangeFunc => "SSA-UNSUPPORTED-RANGE-FUNC",
+            SsaCode::RangeStr => "SSA-UNSUPPORTED-RANGE-STR",
         }
     }
 }
@@ -100,8 +108,8 @@ mod tests {
     fn 码总数与字典序自洽() {
         assert_eq!(
             SsaCode::ALL.len(),
-            7,
-            "白名单是 7 条，改数量要同步 M6-tests §5"
+            9,
+            "§5 的 7 条 + R-31-1 补的 2 条；改数量要同步 M6-tests §5"
         );
         let mut sorted = SsaCode::ALL;
         sorted.sort_unstable();

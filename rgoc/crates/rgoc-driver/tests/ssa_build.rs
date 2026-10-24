@@ -2060,3 +2060,118 @@ fn t_ssa_25_指针底座的字段读() {
         rgoc_ssa::dump::dump_func(f, &tt)
     );
 }
+
+// ── Task 31：语料实测抓到的四个构建错（每条都先见到真错再修）──────────
+
+#[test]
+fn t_ssa_25_复合赋值读数组元素要按值类型建_load() {
+    // `a[0] += 1`：`read_place` 初版拿**地址值的类型**（`*[3]int`）当 `Load.typ`，
+    // 随后的 `bin add` 就成了 `*[3]int + int`。实测 `turing.go` 的
+    // `a[pc] += 1` 被 `V3` 拒。
+    let (program, mut tt) = program_of(
+        "compound-index",
+        "package main\n\nfunc f() int {\n\ta := [3]int{}\n\ta[1] += 2\n\treturn a[1]\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    // 那条喂给 `bin add` 的 Load，类型必须是 `int`，不是指针
+    let bad = instrs(f).into_iter().find_map(|i| match i {
+        Instr::Bin {
+            op: rgoc_hir::BinOp::Add,
+            lhs,
+            ..
+        } => match def_instr(f, *lhs) {
+            Some(Instr::Load { typ, .. }) => {
+                let is_ptr = matches!(tt.type_of(*typ), rgoc_types::typ::Type::Pointer(_));
+                is_ptr.then_some(*typ)
+            }
+            _ => None,
+        },
+        _ => None,
+    });
+    assert!(
+        bad.is_none(),
+        "复合赋值的 Load 读了指针类型 {:?}：{}",
+        bad,
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}
+
+#[test]
+fn t_ssa_15_未定型常量参与运算要就地转成目标类型() {
+    // `a + 1`：`1` 是 `untyped int`，`a` 是 `int`。不物化转换就是
+    // `bin add int untyped-int`（`V3` 拒）。
+    let (program, mut tt) = program_of(
+        "untyped-operand",
+        "package main\n\nfunc f(a int) int {\n\tif a < 3 {\n\t\treturn a + 1\n\t}\n\treturn a * 2\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier（操作数要同型）：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+}
+
+#[test]
+fn t_ssa_17_range_具名下标的类型跟槽走() {
+    // `for i := range MyInt(4)`：`i` 是 `MyInt`，上界 `MyInt(4)` 也是 `MyInt`。
+    // 初版拿 `int` 去比（`lt MyInt int`）⇒ `V3` 拒（实测 `range3.go`）。
+    let (program, mut tt) = program_of(
+        "range-named",
+        "package main\n\ntype MyInt int\n\nfunc f() MyInt {\n\ts := MyInt(0)\n\tfor i := range MyInt(4) {\n\t\ts += i\n\t}\n\treturn s\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    let f = func_named(&out, "f");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+}
+
+#[test]
+fn t_ssa_22_间接调用的结果个数取自函数类型() {
+    // `b, x := f(1000, 99)`，`f` 是**形参**（函数值）：签名在它的静态类型里，
+    // 不读它就只能给一个 `dst`，于是「右侧 1 个值、左侧 2 个目标」panic
+    // （实测 `method5.go`）。
+    let (program, mut tt) = program_of(
+        "indirect-call",
+        "package main\n\nfunc call(f func(int, byte) (byte, int)) (byte, int) {\n\treturn f(1000, 99)\n}\n\nfunc main() {}\n",
+    );
+    let out = build(&program, &mut tt);
+    // 函数值本身在 M6 面外（`FuncLit`），但这里是**形参**，两面都不拒。
+    let f = func_named(&out, "call");
+    if let Err(e) = verify(f, &tt) {
+        panic!(
+            "必须过 verifier：{e}\n{}",
+            rgoc_ssa::dump::dump_func(f, &tt)
+        );
+    }
+    let n = instrs(f)
+        .into_iter()
+        .find_map(|i| match i {
+            Instr::Call {
+                dsts,
+                callee: rgoc_ssa::ir::CalleeRef::Indirect(_),
+                ..
+            } => Some(dsts.len()),
+            _ => None,
+        })
+        .expect("没有间接调用");
+    assert_eq!(
+        n,
+        2,
+        "签名两个结果 ⇒ 两个 dsts：{}",
+        rgoc_ssa::dump::dump_func(f, &tt)
+    );
+}

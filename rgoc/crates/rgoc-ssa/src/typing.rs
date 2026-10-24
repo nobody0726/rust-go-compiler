@@ -100,7 +100,11 @@ fn basic(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
     if t.index() >= tt.len() {
         return None;
     }
-    match tt.type_of(t) {
+    // 走 **underlying**：`type MyFloat float64; var f MyFloat = 0.0` 的常量
+    // 静态类型是具名类型（`Type::Named`），不比 underlying 就会被判成
+    // 「Float(0.0) 不可能有类型 MyFloat」—— 实测 `ken/cplx0.go` / `float_lit.go`
+    // 一片这种假拒绝。
+    match tt.type_of(rgoc_types::underlying(tt, t)) {
         Type::Basic(b) => Some(*b),
         _ => None,
     }
@@ -159,12 +163,17 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
                 // 不为 SSA 加第 5 个变体 —— 所以「0 = 零值」这条约定必须写在这里。
                 ConstVal::Int(n) if *n == 0 => true,
                 ConstVal::Int(_) => is_integer(tt, t),
-                ConstVal::Float(_) => {
-                    matches!(basic(tt, t), Some(BasicId::Float32 | BasicId::Float64))
-                }
-                ConstVal::Complex(..) => {
-                    matches!(basic(tt, t), Some(BasicId::Complex64 | BasicId::Complex128))
-                }
+                // 未类型化的浮点/复数是**合法**的静态类型：`0.0` 在上下文定型前
+                // 就是 `untyped float`（与 `Int` 走 `is_integer` 认 untyped 同理）。
+                // 不认它会把 `float_lit.go` / `ken/cplx*.go` 判成「常量类型不符」。
+                ConstVal::Float(_) => matches!(
+                    basic(tt, t),
+                    Some(BasicId::Float32 | BasicId::Float64 | BasicId::UntypedFloat)
+                ),
+                ConstVal::Complex(..) => matches!(
+                    basic(tt, t),
+                    Some(BasicId::Complex64 | BasicId::Complex128 | BasicId::UntypedComplex)
+                ),
                 ConstVal::Str(_) => is_string(tt, t),
                 ConstVal::Bool(_) => is_bool(tt, t),
             };

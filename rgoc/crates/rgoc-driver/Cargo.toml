@@ -18,8 +18,8 @@ rgoc-interp = { path = "../rgoc-interp" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
 rgoc-parse = { path = "../rgoc-parse" }
+rgoc-ssa = { path = "../rgoc-ssa" }
 rgoc-types = { path = "../rgoc-types" }
 serde_json = "1"
 
 [dev-dependencies]
-rgoc-ssa = { path = "../rgoc-ssa" }

@@ -12,7 +12,7 @@
 | 语义基准 | **HIR 解释器**（M5 已验收）+ 官方 `go run`，两者都必须与 SSA 求值一致 |
 | 冻结日 | 2026-10-23（判据面）；**语料切片待 Task 3 实测后追加冻结**（`R-6-1` 同款做法） |
 | 门禁 | §7，`SSA-1..9` |
-| 白名单 | §5，**7 条**，开工前冻结；跳过项一律**不得**记为 pass |
+| 白名单 | §5，**9 条**（7 + `R-31-1` 补的 2 条），开工前冻结；跳过项一律**不得**记为 pass |
 | 变异 | §3.5，**8 条**，每条必须实证变红并复原 |
 
 ---
@@ -214,17 +214,23 @@ M = 拒绝的个数         （每行带 §5 的码）
 
 ---
 
-## 5. 白名单（`unsupported`，开工前冻结，7 条）
+## 5. 白名单（`unsupported`，开工前冻结；`R-31-1` 后 9 条）
 
 | ID | 项 | 为何不做 | 正向证据 | 计划阶段 |
 |---|---|---|---|---|
 | `U-M6-01` | 闭包（捕获跨帧写） | `Func.captured` 非空 ⇒ 帧槽与外层 `Cell` 别名，SSA 的「值唯一定义」不成立 | `T-SSA-33` 的闭包 fixture（`SSA-UNSUPPORTED-CLOSURE`）；语料 `closure*.go` 在 `M` 里 | M8（goroutine/闭包帧） |
 | `U-M6-02` | `defer` / `recover` | 延迟调用的链是**运行期**结构，不是 SSA 值 | `T-SSA-33`（`SSA-UNSUPPORTED-DEFER`）；`T-EX-34..37` 的 fixture | M8 |
-| `U-M6-03` | 接口动态派发 / type switch | 目标函数在运行期才定，SSA 的 `CalleeRef` 只能间接调用（不做） | `T-SSA-33`（`SSA-UNSUPPORTED-IFACE-DYN`） | M8 |
+| `U-M6-03` | 接口动态派发 / type switch / 类型断言 | 目标函数在运行期才定，SSA 的 `CalleeRef` 只能间接调用（不做） | `T-SSA-33`（`SSA-UNSUPPORTED-IFACE-DYN`） | M8 |
 | `U-M6-04` | `map` 读写 | 键相等是宿主语义（`C9` 的 `go_eq`），memory 根无法覆盖 | `T-SSA-33`（`SSA-UNSUPPORTED-MAP`） | M9（对象模型） |
-| `U-M6-05` | `chan` / `go` / `select` | 并发语义整体不做（M8） | `T-SSA-33`（`SSA-UNSUPPORTED-CHAN`） | M8 |
-| `U-M6-06` | `range` over func | HIR 层已拒（`U-M5-06`），SSA 见不到 | `T-SSA-33`（`SSA-UNSUPPORTED-RANGE-FUNC`） | M8d |
-| `U-M6-07` | 泛型实例化后的形态 | 检查器没放进来（`G-M5-03`），M6 无输入 | `T-SSA-33`（`SSA-UNSUPPORTED-GENERIC`） | 检查器面 |
+| `U-M6-05` | `chan` / `go` / `select` | 并发语义整体不做（M8） | **守卫测试**：`HIR-UNSUPPORTED-CHAN` 先拒，`SSA-UNSUPPORTED-CHAN` 不出现 | M8 |
+| `U-M6-06` | `range` over func | HIR 层已拒（`U-M5-06`），SSA 见不到 | **守卫测试**：拒绝来自 HIR，`-RANGE-FUNC` 不出现 | M8d |
+| `U-M6-07` | 泛型实例化后的形态 | 检查器没放进来（`G-M5-03`），M6 无输入 | **守卫测试**：检查器先拒，`-GENERIC` 不出现 | 检查器面 |
+| `U-M6-08` | 函数值（函数字面量当值 / 具名函数当值 / 方法值） | IR 里没有「把函数变成值」的指令 | `T-SSA-33` 的 `funcvalue` fixture（`SSA-UNSUPPORTED-FUNC-VALUE`） | M8（闭包帧） |
+| `U-M6-09` | `range` over string | 要按 rune 解码，指令集里没有对应操作 | `T-SSA-33` 的 `range-str` fixture（`SSA-UNSUPPORTED-RANGE-STR`） | M7（字符串 rune 面） |
+
+> **`U-M6-05/06/07` 在本前端「够不着」**（`R-31-2`）：上游先拒，SSA 层拿不到输入。
+> 它们的码保留（契约稳定），正向证据改为**守卫测试**：断言该码**不出现**、拒绝来自上游。
+> 上游一旦放行，守卫即红 —— 那时才回来实现 SSA 侧的码。
 
 > **`U-M6-01..03` 是 M6 支持面最大的三块**：闭包/defer/接口动态派发恰好是「顺序语义」里最常用的三样。
 > 因此 `N` 可能较小 —— 届时**如实报告**并把「哪些可提前做」列入 `open_gaps`（`D-M6-12` 的失效条件）。
@@ -253,7 +259,7 @@ M = 拒绝的个数         （每行带 §5 的码）
 | `SSA-4` | 三方差分 | `N` 上 `HIR = SSA = go run` | `T-SSA-31/32/34..37` |
 | `SSA-5` | pass 语义保持 | 每 pass 开关两路一致 + 每 pass 后 verifier 绿 | `T-SSA-60..64` + `T-SSA-51` |
 | `SSA-6` | memory 模型 | 同根保序 / 异根不串 / 堆根全序 / 全局跨函数 | `T-SSA-07/25/36/49` |
-| `SSA-7` | 不支持面 | 7 条各一 fixture + 码 + 退出码 1 | `T-SSA-33/38` |
+| `SSA-7` | 不支持面 | 9 条各一码：7 条有直接 fixture（码 + 退出码 1），3 条够不着的改成守卫测试（`R-31-2`） | `T-SSA-33/38` |
 | `SSA-8` | 活跃性与协议 | 值级活跃正确（含回边）+ 协议自描述 + 消费方桩 | `T-SSA-55..59` |
 | `SSA-9` | 回归与收口 | 四条 cargo + 五条自检 + M5 零回归 + 文档 | `T-SSA-42..45` |
 
@@ -290,5 +296,7 @@ M = 拒绝的个数         （每行带 §5 的码）
 | `R-17-1` | 2026-10-23 | `Reject` 没有 `pos` 字段，改为 `{ func, code, detail }` | HIR 的 `Expr`/`Stmt` **不带位置**（位置只在 lowering 期的 AST 上有）⇒ `pos` 会永远 `None`；留一个永远空的字段等于骗读的人 |
 | `R-18-1` | 2026-10-23 | `scan_addressed(&TypeTable, &Block)` 比计划多一个类型表参数 | `&arr[i]`（数组）元素在数组槽的存储里 ⇒ 数组槽成根；`&s[i]`（slice）元素在底层数组（堆根）⇒ 不建槽根。两条结论相反，只能按**类型**分叉 |
 | `R-16-1` | 2026-10-23 | `dump` 的 `load`/`store` 行**带 mem 令牌**；可选操作数缺省写 `_`；`Effect` 不进 dump | 骨架期 `C10` 漏了 mem 字段，而 mem 是 `V6` 的比对面（不写它 dump 里看不见 mem 链）。见 `C10` §5 同号行 |
+| `R-31-1` | 2026-10-24 | 白名单 **7 → 9**：新增 `U-M6-08`（函数值，`SSA-UNSUPPORTED-FUNC-VALUE`）与 `U-M6-09`（`range` over string，`SSA-UNSUPPORTED-RANGE-STR`） | 实测发现两条都没有码：① `f := func(){}` / `f := g`（具名函数当值）在 IR 里无法表示（没有「函数引用」值），原先落 `todo!()` = **panic**；② `range` over string 在计划里写了「显式拒绝」却没有码。纪律：拒绝必须**有码**（§4.6），panic 不算拒绝 |
+| `R-31-2` | 2026-10-24 | `U-M6-05/06/07` 的正向证据改为**守卫测试**（断言码**不出现**，拒绝来自上游），而不是「一个直接 fixture」 | 实测：`make(chan int)` 在 lowering 就拒（`HIR-UNSUPPORTED-CHAN`）；`range` over func 无 `RangeKind` 变体（`U-M5-06`）；泛型被检查器挡住（`G-M5-03`）。三条码在**本前端够不着** —— 硬造 fixture 只能靠改前端，那是假证据 |
 
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m6.rs` 会对账 `test_ids` 集合。

@@ -554,7 +554,10 @@
 
 ---
 
-### Task 31: 构建期拒绝面（7 个码进 `DiagCode`）
+### Task 31: 构建期拒绝面（crate-local `SsaCode`，9 个码）
+
+> **执行期修订 `R-31-1`/`R-31-2`**：白名单 7 → 9（函数值 / `range` over string 原先没码）；
+> `U-M6-05/06/07` 在本前端够不着 ⇒ 证据改成守卫测试。判据面同步见 `M6-tests.md` §5。
 
 **Files:**
 - Create: `rgoc/crates/rgoc-ssa/src/diag.rs`（`SsaCode` 7 变体 + `ALL` + `code() -> &'static str`，**沿 `rgoc-hir::RejectKind` 的形状**）
@@ -565,17 +568,37 @@
 - Produces: `SsaCode`（`Closure` / `Defer` / `IfaceDyn` / `Map` / `Chan` / `RangeFunc` / `Generic`）+ `Reject { func, code: SsaCode, pos }`；driver 渲染成 stderr 一行
 - **不动** `rgoc-lex::DiagCode`（`D-M6-14`：`C8` 的 26 类冻结、`other` 值域被 `T-CK-16` 钉死）
 
-- [ ] `diag.rs`：七个变体按字典序 + `ALL` + `code()`（文本 `SSA-UNSUPPORTED-CLOSURE` / `-DEFER` / `-IFACE-DYN` / `-MAP` / `-CHAN` / `-RANGE-FUNC` / `-GENERIC`）
-- [ ] 七个拒绝分支：闭包（`!captured.is_empty()`）/ `Stmt::Defer` / `BuiltinKind::Recover` / `Callee::Iface` + `Stmt::TypeSwitch` / `map` 读写 / `chan`·`go`·`select` / `range` over func 与泛型
-- [ ] `T-SSA-33` 的 `S` 腿：每种一个最小 fixture，断言码 + 退出码 1
-- [ ] 反向守卫：把任一拒绝分支改成静默通过 ⇒ 测试必红（防「拒了但没人知道」）
+- [x] `diag.rs`：九个变体按字典序 + `ALL` + `code()`（`-CHAN` / `-CLOSURE` / `-DEFER` / `-FUNC-VALUE` / `-GENERIC` / `-IFACE-DYN` / `-MAP` / `-RANGE-FUNC` / `-RANGE-STR`）
+- [x] 拒绝分支（一个**预扫描** pass，`unsupported()`）：闭包（`!captured.is_empty()`）/ `Stmt::Defer` / `BuiltinKind::Recover` / `Callee::Iface` + `Stmt::TypeSwitch` + `TypeAssert` / `map`（按类型，任意出现）/ `chan`（按类型 + `close` + `<-ch`）/ `FuncLit` + `Bound` / `RangeKind::Str`；`range` over func 与泛型由上游先拒（守卫测试）
+- [x] `T-SSA-33` 的 `S` 腿：每种一个最小 fixture，断言码 + 退出码 1（6 条直接 fixture + 3 条守卫）
+- [x] 反向守卫：把任一拒绝分支改成静默通过 ⇒ 测试必红（防「拒了但没人知道」；3 条变异全红）
 - [ ] Commit：`feat(ssa): 不支持面 7 码与拒绝分支（Task 31）`
 
-**Verify:** `… cargo test -p rgoc-driver --test ssa_reject`（7 条）；`… cargo test -p rgoc-check --test category`（`DiagCode` 仍是 103，**必须没动**）
+**Verify:** `… cargo test -p rgoc-driver --test ssa_reject`（11 条）；`… cargo test -p rgoc-check --test category`（`DiagCode` 仍是 103，**必须没动**）
 
 ---
 
 ## Phase 3：求值器与三方差分（Task 32–39）
+
+### Task 32b: 合成包初始化函数（**执行期插入**，`R-32-1`）
+
+> Task 31 跑语料时发现：`Program::init_order`（`var g = f()` 的右侧）**只有解释器跑**，
+> 而 `build()` 从头到尾没读它 ⇒ SSA 模块里的全局永远是零值。三方差分（`T-SSA-32`）
+> 必然抓到，所以必须在 Phase 3 开头补上。
+
+**Files:** Modify: `rgoc/crates/rgoc-ssa/src/build.rs`、`src/ir.rs`（`Module::init`）
+
+- [ ] `build()` 把 `init_order` 的每组 `(globals, rhs)` 建成一个**合成 `SsaFunc`**
+      （`name = "init"`，写全局根，`Term::Return`），按声明序排；`inits`（各文件 `init()`）
+      接在后面，`main` 之前执行
+- [ ] `Module::init: Option<usize>`（`funcs` 下标）；`dump` 如实列出
+- [ ] 判据：`var g = 7; func main(){ println(g) }` 的 dump 里 init 函数写 `r_g`，
+      且 `main` 的 `Load` 用 init 产出的 mem（`T-SSA-36` 的同类）
+- [ ] Commit：`feat(ssa): 包级初始化合成函数（Task 32b）`
+
+**Verify:** `… cargo test -p rgoc-driver --test ssa_build init`
+
+---
 
 ### Task 32: `ssa_exec` 骨架（显式帧 + 按块执行）
 

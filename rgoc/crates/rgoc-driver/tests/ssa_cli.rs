@@ -78,21 +78,24 @@ fn t_ssa_38_骨架_文件不可读时走_err() {
 }
 
 #[test]
-fn t_ssa_38_骨架_未接入时响亮拒绝而不是吐空_dump() {
+fn t_ssa_31_接上管线之后_dump_有内容且通道分开() {
+    // Task 31 把 `ssa` 从骨架接到真管线：dump 走 stdout、错误走 stderr、退出码 0。
     let file = corpus_file();
-    let out = ssa_cmd::run_ssa(&ssa(&[file.to_str().unwrap()], true, false)).unwrap();
-    assert_eq!(
-        out.exit, 2,
-        "IR 未接入 ⇒ 内部未完成（2），不是静态拒绝（1）"
-    );
+    let out = ssa_cmd::run_ssa(&ssa(&[file.to_str().unwrap()], true, true)).unwrap();
+    assert_eq!(out.exit, 0, "helloworld 该建图成功并过 verify：{out:?}");
     assert!(
-        out.stdout.is_empty(),
-        "stdout 必须为空：空 dump 会让人以为跑通了，实际：{:?}",
+        out.stdout.contains("# stage: ssa"),
+        "dump 必须在 stdout 且带版本头，实际：{:?}",
         out.stdout
     );
     assert!(
-        out.stderr.contains("尚未接入"),
-        "stderr 必须说明「尚未接入」，实际：{:?}",
+        out.stdout.contains("# func main"),
+        "dump 里要有 main，实际：{:?}",
+        out.stdout
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "没有错误时 stderr 必须为空，实际：{:?}",
         out.stderr
     );
 }
