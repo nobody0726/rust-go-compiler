@@ -12,4 +12,5 @@ workspace = true
 [dependencies]
 rgoc-const = { path = "../rgoc-const" }
 rgoc-hir = { path = "../rgoc-hir" }
+rgoc-ssa = { path = "../rgoc-ssa" }
 rgoc-types = { path = "../rgoc-types" }

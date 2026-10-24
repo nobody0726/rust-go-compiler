@@ -82,3 +82,13 @@
 | `M16` 不写初始化式 | `build_init` 里 `vs` 恒空 | `t_ssa_36_包级初始化式建出_init_函数` | ✅ 红 |
 | `M17` 不扫初始化式 | `unsupported_init` 恒 `None` | `t_ssa_36_初始化式里的不支持面要带码拒绝` | ✅ 红 |
 | `M18` 不调用文件的 `init` | 循环里 `continue` | `t_ssa_36_文件的_init_被合成_init_调用` | ✅ 红 |
+
+## Task 32：`ssa_exec` 骨架（3 条，全红）
+
+脚本 `.superpowers/sdd/M6-plan/mut32.py`。
+
+| 变异 | 改动 | 期望红在 | 实测 |
+|---|---|---|---|
+| `M19` 不查步数上限 | `steps >= max_steps` → `if false` | `t_ssa_32_步数上限要能停住` | ✅ 红 |
+| `M20` 缺 `main` 假装成功 | `Err(Halt::NoMain)` → `Ok(())` | `t_ssa_32_没有_main_要报错而不是假装成功` | ✅ 红 |
+| `M21` `Return` 当不可达 | `Term::Return` → `Halt::Unreachable` | `t_ssa_32_空函数立即返回` | ✅ 红 |

@@ -9,7 +9,9 @@
 pub mod interp;
 pub mod ops;
 pub mod print;
+pub mod ssa_exec;
 pub mod value;
 
 pub use interp::{Interp, Options, Outcome, run};
+pub use ssa_exec::run_ssa;
 pub use value::{Cell, Value, cell};
