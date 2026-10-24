@@ -298,5 +298,7 @@ M = 拒绝的个数         （每行带 §5 的码）
 | `R-16-1` | 2026-10-23 | `dump` 的 `load`/`store` 行**带 mem 令牌**；可选操作数缺省写 `_`；`Effect` 不进 dump | 骨架期 `C10` 漏了 mem 字段，而 mem 是 `V6` 的比对面（不写它 dump 里看不见 mem 链）。见 `C10` §5 同号行 |
 | `R-31-1` | 2026-10-24 | 白名单 **7 → 9**：新增 `U-M6-08`（函数值，`SSA-UNSUPPORTED-FUNC-VALUE`）与 `U-M6-09`（`range` over string，`SSA-UNSUPPORTED-RANGE-STR`） | 实测发现两条都没有码：① `f := func(){}` / `f := g`（具名函数当值）在 IR 里无法表示（没有「函数引用」值），原先落 `todo!()` = **panic**；② `range` over string 在计划里写了「显式拒绝」却没有码。纪律：拒绝必须**有码**（§4.6），panic 不算拒绝 |
 | `R-31-2` | 2026-10-24 | `U-M6-05/06/07` 的正向证据改为**守卫测试**（断言码**不出现**，拒绝来自上游），而不是「一个直接 fixture」 | 实测：`make(chan int)` 在 lowering 就拒（`HIR-UNSUPPORTED-CHAN`）；`range` over func 无 `RangeKind` 变体（`U-M5-06`）；泛型被检查器挡住（`G-M5-03`）。三条码在**本前端够不着** —— 硬造 fixture 只能靠改前端，那是假证据 |
+| `R-33-1` | 2026-10-24 | Task 33 只做**不碰内存**的值计算（`Const/Copy/Bin/Un/Convert/Composite/Make/Slice` + `print`/`println`）；`Field/Index/AddrOf` 并入 Task 35。`ops` 的实际接口是 `bin_arith` / `compare`（**没有**计划稿写的 `apply_binary`/`apply_unary`） | ① 地址类指令要 `Cell`，与 `Load/Store` 是同一套运行期设施，拆开做只会写两遍；② 没有 `print`/`println` 就没有**观察通道**，Task 33 的判据无从落地；③ 计划稿的接口名是设计期猜的，实际 `ops` 只导出了 `bin_arith`/`compare`/`normalize` |
+| `R-33-2` | 2026-10-24 | **`&&` / `||` 在 SSA 里没有短路**（`G-M6-08`）：`build.rs` 把 `Binary{LAnd}` 建成一条 `Bin`，两侧都求值 | M5 的解释器有 `Task::Short` 做短路；SSA 侧漏了。结果值仍然正确、副作用（调用/panic）多执行一次 ⇒ **静默错**，只有三方差分能抓。插入 **Task 33b** 修 |
 
 **修订格式**：`| R-x-y | 日期 | 改了什么 | 为什么（证据） |`。改判据**不许**静默改 —— `manifest_m6.rs` 会对账 `test_ids` 集合。

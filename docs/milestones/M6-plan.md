@@ -619,12 +619,35 @@
 
 ---
 
+### Task 33b: `&&` / `||` 的短路进 IR（**执行期插入**，`R-33-1` / `G-M6-08`）
+
+> Task 33 开工前核对 `ops` 的接口时发现：**`&&` / `||` 在 SSA 里没有短路**。
+> `build.rs` 把 `Binary{LAnd}` 建成一条 `Bin` 指令，两个操作数都求值 ——
+> 而 M5 的解释器有 `Task::Short` 专门做短路。副作用（调用、panic）会被多执行一次，
+> 结果值却仍然正确 ⇒ **静默错**，三方差分才抓得到。
+
+**Files:** Modify: `rgoc/crates/rgoc-ssa/src/build.rs`、`src/build.rs` 的 `join_into`
+
+- [ ] `expr(Binary{LAnd|LOr})` 建成三块：`lhs` → `if` → `rhs` / 短路出口 → 汇合（块参数 bool）
+- [ ] 汇合处 `val` / `mem` 两条路径都要合（沿 `stmt_if` 的 `join_into`）
+- [ ] 判据：`f() && g()` 里 `g` 在 `f()` 为假时**不被调用**（手搓 IR 数调用次数）
+- [ ] Commit：`feat(ssa): &&/|| 短路（Task 33b）`
+
+**Verify:** `… cargo test -p rgoc-driver --test ssa_build short`
+
+---
+
 ### Task 33: 纯值与运算（复用 `ops`）
 
 **Files:**
-- Modify: `ssa_exec.rs`
+- Modify: `ssa_exec.rs`；可能 `ops.rs`（把 `Interp::convert` 的纯函数部分抽出来）
 
-- [ ] `Const/Copy/Bin/Un/Convert/Composite/Field/Index/Slice/Make/AddrOf` 全实现；算术走 `ops::apply_binary` / `apply_unary`（**不重写**）
+- [x] ~~`Const/Copy/Bin/Un/Convert/Composite/Field/Index/Slice/Make/AddrOf` 全实现~~
+      **执行期修订 `R-33-1`**：`Field/Index/AddrOf` 依赖访存，并入 **Task 35**；
+      Task 33 只做**不碰内存**的值计算：`Const/Copy/Bin/Un/Convert/Composite/Make/Slice`
+      + `print`/`println`（没有输出通道，Task 33 就没有判据）
+- [ ] 算术走 `ops::bin_arith` / `ops::compare`（计划稿写的 `apply_binary`/`apply_unary`
+      在 `ops` 里**不存在** —— 见 `R-33-1`）
 - [ ] 测试：`1+2*3`、`int8(127)+1` 回绕、`string` 拼接各一
 - [ ] Commit：`feat(interp): 纯值求值（Task 33）`
 
