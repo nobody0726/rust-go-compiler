@@ -57,8 +57,9 @@
 | M6 | [`milestones/M6-report.md`](./milestones/M6-report.md) | **交付 B** —— SSA 契约（正式）：覆盖矩阵 / 三方差分实测 / passes 与 `SSA-LIVE v1` / 偏离登记 / 缺口清单 / 接手指南 | ✅ **已产出**（2026-10-24） |
 | M7 | [`milestones/M7-design.md`](./milestones/M7-design.md) | **怎么建 M7** —— 决策 D-M7-1~16（值全落栈槽 / runtime 用 freestanding C / 自定 rgoc-AAPCS64 / 并行拷贝 / arena / 实测切片 / 完整 `%g`）、事实基线 F1–F18、门禁 NAT-1..9 | ✅ **已确认**（2026-10-24；`Q1..Q3` 已签字） |
 | M7 | [`milestones/M7-tests.md`](./milestones/M7-tests.md) | **怎么验 M7** —— 64 个 `T-NAT-*`（甲11/乙19/丙9/丁7/戊10/反8）、**有输出/空输出分两栏**（36/39 语料是空输出）、`C9` §4.4 六点、白名单 4 条、修订 10 条 | ✅ **判据面已冻结 + `N'`/`M'` 已实测冻结**（`N'`=39 / `M'`=7） |
-| M7 | [`milestones/M7-plan.md`](./milestones/M7-plan.md) | **怎么干 M7** —— **Task 1–65**（装置 → 帧与 ABI → 指令选择 → runtime → startup 与链接 → 集成切片 → 收口） | 🟡 **Task 1–59 已执行**（2026-10-25；60–65 收口未做） |
-| M7 | [`milestones/M7-manifest.json`](./milestones/M7-manifest.json) | **机器可读事实** —— gate `NAT-1..9`（**4 pass / 5 partial**）、`N'`=39 / `M'`=7、白名单 4 条、`open_gaps` 6 条 + `closed_gaps` 1 条、`measured`；由 `manifest_m7.rs` 对账（9 种合成反例） | ✅ **已填实**（2026-10-25，Task 59；`phase_summary.done = false`） |
+| M7 | [`milestones/M7-plan.md`](./milestones/M7-plan.md) | **怎么干 M7** —— **Task 1–65**（装置 → 帧与 ABI → 指令选择 → runtime → startup 与链接 → 集成切片 → 收口） | ✅ **Task 1–65 全部执行**（2026-10-25） |
+| M7 | [`milestones/M7-manifest.json`](./milestones/M7-manifest.json) | **机器可读事实** —— gate `NAT-1..9`（**9/9 pass**）、`N'`=39 / `M'`=7、白名单 4 条、`open_gaps` 1 条（上游）+ `closed_gaps` 6 条、`measured`；由 `manifest_m7.rs` 对账（9 种合成反例） | ✅ **已填实**（2026-10-25；`phase_summary.done = true`） |
+| M7 | [`milestones/M7-report.md`](./milestones/M7-report.md) | **交付报告** —— 十九条真错的分类（语料抓不到 / 静默错 / 装置说谎）、九条门禁证据、13 条契约级修订、缺口与三条分别声明、接手指南 | ✅ **已收口**（2026-10-25） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 

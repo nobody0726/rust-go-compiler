@@ -183,3 +183,86 @@ fn 不可分类的类型返回_none() {
     let untyped_nil = t.add_basic(BasicId::UntypedNil);
     assert_eq!(slot_of(&t, untyped_nil), None, "nil 必须由上下文给类型");
 }
+
+// ── 调用点落位表（`place_args`，`G-M7-01` / NAC-2 的 ABI 面） ──────────────
+//
+// 这张表是**契约**（`C5` §6.1 的 AAPCS64 C.14 子集），不是实现细节：
+// 它一旦写错，一切仍然「自洽地跑起来」（调用方与被调方用同一张表），
+// 只有与外部 C 函数或真实硬件约定对齐时才会炸。所以必须**直接断表**。
+
+use rgoc_arm64::abi::{ArgLoc, place_args};
+
+#[test]
+fn place_args_八个整数全进寄存器() {
+    let mut t = TypeTable::new();
+    let i = t.add_basic(BasicId::Int);
+    let want = vec![i; 8];
+    let (locs, sp) = place_args(&t, &want);
+    for (k, l) in locs.iter().enumerate() {
+        assert_eq!(
+            *l,
+            ArgLoc::X {
+                reg: u32::try_from(k).unwrap(),
+                n: 1
+            },
+            "第 {k} 个应在 x{k}"
+        );
+    }
+    assert_eq!(sp, 0, "8 个整数不该上栈");
+}
+
+#[test]
+fn place_args_第九第十个整数走栈且偏移递增() {
+    let mut t = TypeTable::new();
+    let i = t.add_basic(BasicId::Int);
+    let want = vec![i; 10];
+    let (locs, sp) = place_args(&t, &want);
+    assert_eq!(locs[7], ArgLoc::X { reg: 7, n: 1 });
+    assert_eq!(locs[8], ArgLoc::Stack { off: 0 }, "第 9 个在栈顶");
+    assert_eq!(locs[9], ArgLoc::Stack { off: 8 }, "第 10 个 +8");
+    assert_eq!(sp, 16);
+}
+
+#[test]
+fn place_args_浮点不占整数寄存器() {
+    // 4 个 int + 4 个 float64 + 2 个 int：整数用的是 x0..x5（浮点不占 x），
+    // 所以**没有**栈实参。两套计数被写成一套时，这里一定错位。
+    let mut t = TypeTable::new();
+    let i = t.add_basic(BasicId::Int);
+    let f = t.add_basic(BasicId::Float64);
+    let mut want = vec![i, f, i, f, i, f, i, f, i, i];
+    let (locs, sp) = place_args(&t, &want);
+    assert_eq!(locs[0], ArgLoc::X { reg: 0, n: 1 });
+    assert_eq!(locs[1], ArgLoc::V { reg: 0, n: 1 });
+    assert_eq!(locs[8], ArgLoc::X { reg: 4, n: 1 }, "第 9 个实参仍进 x4");
+    assert_eq!(locs[9], ArgLoc::X { reg: 5, n: 1 });
+    assert_eq!(sp, 0, "浮点没有挤占整数寄存器");
+    // 反过来再确认一次：把最后一个换成 float 也只是多用 v。
+    want[9] = f;
+    let (locs2, sp2) = place_args(&t, &want);
+    assert_eq!(locs2[9], ArgLoc::V { reg: 4, n: 1 });
+    assert_eq!(sp2, 0);
+}
+
+#[test]
+fn place_args_字符串占两个字_第五个整串上栈() {
+    let mut t = TypeTable::new();
+    let s = t.add_basic(BasicId::String);
+    let want = vec![s; 5];
+    let (locs, sp) = place_args(&t, &want);
+    assert_eq!(locs[0], ArgLoc::X { reg: 0, n: 2 });
+    assert_eq!(locs[3], ArgLoc::X { reg: 6, n: 2 }, "第 4 个用满 x6/x7");
+    assert_eq!(locs[4], ArgLoc::Stack { off: 0 }, "第 5 个整串上栈");
+    assert_eq!(sp, 16, "一个字 8 字节，string 两个字");
+}
+
+#[test]
+fn place_args_复数占两个_v() {
+    let mut t = TypeTable::new();
+    let c64_ = t.add_basic(BasicId::Complex64);
+    let c128 = t.add_basic(BasicId::Complex128);
+    let (locs, sp) = place_args(&t, &[c64_, c128]);
+    assert_eq!(locs[0], ArgLoc::V { reg: 0, n: 2 }, "complex64 两个 s");
+    assert_eq!(locs[1], ArgLoc::V { reg: 2, n: 2 }, "complex128 两个 d");
+    assert_eq!(sp, 0);
+}

@@ -228,7 +228,7 @@ fn expect_red(what: &str, mutate: impl FnOnce(&mut Value), needle: &str) {
 }
 
 #[test]
-fn 合成反例八种都必须红() {
+fn 合成反例九种都必须红() {
     expect_red(
         "门禁数不对",
         |m| {
@@ -290,12 +290,26 @@ fn 合成反例八种都必须红() {
         "不在 CgCode::ALL",
     );
 
+    // `done` 与「九条门禁全 pass」必须**同真同假**。
+    //
+    // ⚠️ 反例要跟着真 manifest 的形状走：真 manifest 现在是 9/9 pass，
+    // 所以「把 done 设成 true」是**恒真**的改坏（本来就是 true，改完与原来一样）。
+    // 真正的矛盾是「门禁全过却自称没做完」—— 那才是这条断言要抓的。
     expect_red(
-        "done 但门禁没全过",
+        "门禁全 pass 却自称 done=false",
         |m| {
-            m["phase_summary"]["done"] = Value::Bool(true);
+            let all_pass = m["gate"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|g| g["status"].as_str() == Some("pass"));
+            assert!(
+                all_pass,
+                "这条反例的前提是「真 manifest 九条全 pass」；门禁不全 pass 时要换反例"
+            );
+            m["phase_summary"]["done"] = Value::Bool(false);
         },
-        "phase_summary.done=true",
+        "phase_summary.done=false",
     );
 
     expect_red(

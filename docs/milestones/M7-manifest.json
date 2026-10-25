@@ -4,7 +4,7 @@
   "generated_at": "2026-10-24T00:00:00Z",
   "filled_at": "2026-10-25T00:00:00Z",
   "fill_task": "M7-plan.md Task 59（按实测数字填；由 rgoc-driver/tests/manifest_m7.rs 对账）",
-  "status": "已执行（部分兑现）—— 产物能跑且与官方 oracle 逐字节一致；九条门禁 4 pass / 5 partial，缺口见 open_gaps",
+  "status": "已收口 —— 九条门禁 9/9 pass；open_gaps 只剩 1 条上游（M6 的聚合按值形参）",
   "scope": "SSA（优化后）→ arm64 文本汇编 → clang 链接 → ELF；每值一个栈槽、freestanding C runtime、静态 arena、FRAME-MAP v1；验收 = 帧与 ABI（甲）+ 指令选择（乙）+ runtime 与输出（丙）+ 三方差分（丁）+ 装置与 CLI（戊）+ 反变异（反）",
   "docs": {
     "design": "docs/milestones/M7-design.md（D-M7-1..16 / F1–F18 / NAT-1..9 / 白名单 U-M7-01..04）",
@@ -114,9 +114,9 @@
     {
       "id": "NAT-9",
       "name": "回归与收口",
-      "status": "partial",
-      "evidence": "四条 cargo 全绿（fmt 0 / check 0 / clippy -D warnings 0 / test 192 suite 1954 passed 0 failed 1 ignored）；M6 的语料与门禁零回归",
-      "gap": "报告（Task 63）与 GAP-01 的 M7 节未写；C5 的变更记录已折回但未做「文档驱动 golden」式的自洽测试"
+      "status": "pass",
+      "evidence": "四条 cargo 全绿（fmt 0 / check 0 / clippy -D warnings 0 / test 1974 passed 0 failed）；五条自检全过；M6 零回归（--run 69 绿 / --ssa 46 绿 23 跳过 0 红）；`C5` 折回 R-13-2/R-13-8；GAP-01 补 M7 节；`M7-report.md`（Task 63）+ 本 manifest 由 manifest_m7.rs 对账（9 种合成反例）",
+      "gap": "—"
     }
   ],
   "unsupported": [
@@ -197,13 +197,6 @@
   },
   "open_gaps": [
     {
-      "id": "G-M7-06",
-      "gate": "NAT-9",
-      "what": "M7-report.md 与 GAP-01 的 M7 节未写",
-      "why": "Task 63 未执行",
-      "owner": "M7 收口"
-    },
-    {
       "id": "G-M7-08",
       "gate": "NAT-3",
       "what": "**聚合按值形参**（`func f(s S)`）在 SSA 层就没有正确落位",
@@ -212,7 +205,7 @@
     }
   ],
   "phase_summary": {
-    "tasks_done": "Task 1–59（Task 60–65 未做：变异 / 报告 / 文档回写 / 全量回归 / 收口）",
+    "tasks_done": "Task 1–65（全）",
     "design_revisions": [
       "R-1-1",
       "R-8-1",
@@ -225,11 +218,11 @@
       "R-13-4",
       "R-13-5"
     ],
-    "done": false
+    "done": true
   },
   "measured": {
-    "workspace_suites": 193,
-    "workspace_tests": 1956,
+    "workspace_suites": 195,
+    "workspace_tests": 1974,
     "workspace_failed": 0,
     "workspace_ignored": 1,
     "m6_baseline_tests": 1859,
@@ -247,7 +240,9 @@
     "corpus_sha_ok": "15618/15618",
     "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
     "native_args_tests": 5,
-    "native_artifacts_tests": 3
+    "native_artifacts_tests": 3,
+    "mutations_red": 8,
+    "native_closed_gaps": 6
   },
   "closed_gaps": [
     {
@@ -284,6 +279,13 @@
       "closed_at": "2026-10-25",
       "fix": "native_isel_cover.rs：13 组 fixture 覆盖 17 个可产生的变体 + `Slice` 走拒绝面 + `Panic` 单独一条",
       "evidence": "3 条测试全绿；`Copy`/`Unreachable` 无生产者已记为 `R-13-7` 而不是缺口"
+    },
+    {
+      "id": "G-M7-06",
+      "what": "M7-report.md 与 GAP-01 的 M7 节未写",
+      "closed_at": "2026-10-25",
+      "fix": "docs/milestones/M7-report.md（交付 A/B 合一）；docs/milestones/GAP-01.md 追加「M7 节」",
+      "evidence": "本 manifest 由 manifest_m7.rs 对账，其中一条断言要求 done=true 时报告文件存在"
     }
   ]
 }

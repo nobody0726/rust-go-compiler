@@ -20,7 +20,7 @@
 | 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0–M3 四个里程碑全部完成、M4/M5 已执行（部分兑现）**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`** 十条正式 crate（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1608 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M5` 五份 manifest 均已填实。
+**一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6 已收口、M7 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`** 十条正式 crate（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1608 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M7` 七份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **11 条**正式 crate（加 `rgoc-arm64`），workspace **1974 条测试全绿**。
 
 **M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
 
@@ -158,7 +158,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚未开始的 crate**：M7 的 native 代码生成（`rgoc-arm64` 待建）、M9 的 runtime 与对象模型。
+**尚未开始的 crate**：M8 的泛型、M9 的 runtime 与对象模型、M10 的 GC。
+（`rgoc-arm64` 已建：M7 的 native 代码生成，见 §0 的一句话状态与 `docs/milestones/M7-report.md`。）
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
 
 ---
