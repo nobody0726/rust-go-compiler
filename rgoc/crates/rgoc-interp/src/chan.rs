@@ -199,6 +199,16 @@ impl ChanObj {
         self.recvq.push_back(w);
     }
 
+    /// 撤销同一个 `token` 的全部登记（`C11` §4.3 的取消其他候选等待者）。
+    ///
+    /// **幂等**：找不到也算成功。`select` 被唤醒后要把它在**所有**通道上的
+    /// 登记都删掉 —— 但其中获胜的那个已经被对端取走并出队了，再删一次必须
+    /// 无害，否则唤醒路径上任何一次重入都会炸。
+    pub fn revoke(&mut self, token: u64) {
+        self.sendq.retain(|w| w.borrow().token != token);
+        self.recvq.retain(|w| w.borrow().token != token);
+    }
+
     /// 收一个（`C11` §3.2 recv 的 ①→④）。
     pub fn try_recv(&mut self) -> RecvOutcome {
         // ① 缓冲非空：先给值，再让一个阻塞发送方补位（保持 buf 满）。

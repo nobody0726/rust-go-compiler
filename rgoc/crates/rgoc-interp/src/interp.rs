@@ -48,7 +48,8 @@ use rgoc_const::BasicId;
 use rgoc_hir::lower::DISCARD_SLOT;
 use rgoc_hir::{
     BinOp, Block, BranchKind, BuiltinKind, Callee, Case, Composite, CompositeItem, Expr, ExprKind,
-    FuncId, GlobalId, MakeKind, MethodRef, Place, Program, RangeKind, SlotId, Stmt, TypeCase, UnOp,
+    FuncId, GlobalId, MakeKind, MethodRef, Place, Program, RangeKind, SelectClause, SelectKind,
+    SlotId, Stmt, TypeCase, UnOp,
 };
 use rgoc_types::{Type, TypeId, TypeTable, identical, implements, unalias, underlying};
 
@@ -85,6 +86,9 @@ impl Default for Options {
         }
     }
 }
+
+/// 每个 goroutine 当前 `select` 在各通道上的登记（`(通道, token)`）。
+type SelectRegs = std::collections::BTreeMap<usize, Vec<(Rc<RefCell<ChanObj>>, u64)>>;
 
 /// 一次运行的结果。
 #[derive(Clone, Debug, Default)]
@@ -190,6 +194,19 @@ enum Task<'a> {
         nargs: usize,
         extra: usize,
         dots: bool,
+    },
+    /// 把一个**已算出**的值压上值栈（`select` 的绑定用：值不是 `Expr`）。
+    PushValue(Value),
+    /// 进一个块（`select` 的复杂左值绑完之后进子句体）。
+    EnterBody(&'a Block),
+    /// `select { ... }`（M8/Task 29）。
+    Select {
+        clauses: &'a [SelectClause],
+        /// 已求值的 `(通道, 发送右值)`，与 `clauses` 同长同序。
+        /// 整体 `None` ⇒ 第一次跑，要从值栈上取。
+        vals: Option<Vec<(Option<Value>, Option<Value>)>>,
+        /// 已登记的等待者（阻塞时用；`(子句下标, waiter)`）。
+        waiters: Vec<(usize, crate::chan::WaiterHandle)>,
     },
     /// 内建调用。
     Builtin {
@@ -558,6 +575,21 @@ pub struct Shared<'a> {
     runq: std::collections::VecDeque<usize>,
     /// 下一个 goroutine 编号（只增不减，便于日志与断言）。
     next_g: u64,
+    /// 每个 goroutine 当前 `select` 在各通道上的登记（`(通道, token)`）。
+    ///
+    /// 为什么放 `Shared` 而不是放 `G`：对端完成其中一个 case 时要撤销其余
+    /// 登记，而**那时这个 G 已经被 `drive` 从 `gs` 里 `take` 走了**
+    /// （`one_step` 需要同时借用 `G` 与 `Shared`）。放 `G` 里就撤不到。
+    ///
+    /// 语义照官方 `sudog.dequeue` 的 `selectDone` CAS：输掉的那个 waiter
+    /// 直接跳过，不交给对端 —— 否则发送方的下一笔发送会落到作废的 waiter 上，
+    /// 值就丢了（`T-CON-31` 的 fixture 抓到过）。
+    select_regs: SelectRegs,
+    /// 下一个 `select` 登记用的 token（只增不减）。
+    ///
+    /// 同一个 `select` 的所有登记共用一个值，撤销时按它把各通道队列里的
+    /// 自己删掉（`C11` §4.3）。全局递增 ⇒ 两个并存的 select 不会互删。
+    next_token: u64,
     /// `select` 的伪随机源（`D-M8-3`）。归 `Shared`：它是全程序一份的状态，
     /// 跟着某个 G 走会让「同 seed 同结果」在换 goroutine 时失效。
     ///
@@ -671,6 +703,8 @@ impl<'a> Shared<'a> {
             gs: Vec::new(),
             runq: std::collections::VecDeque::new(),
             next_g: 0,
+            next_token: 1,
+            select_regs: std::collections::BTreeMap::new(),
         }
     }
 
@@ -758,6 +792,18 @@ impl<'a> Shared<'a> {
             g.blocked = false;
         }
         self.runq.push_back(gid);
+    }
+
+    /// 把一个 G 的 `select` 登记全部撤掉（对端完成其中一个 case 时调用）。
+    ///
+    /// 必须在 `wake` **之前**：撤销之后对端的下一笔发送才会落到「真的没有人
+    /// 在等」从而阻塞，而不是落到一个已经作废的 waiter 上把值吞掉。
+    fn revoke_select_regs(&mut self, gid: usize) {
+        if let Some(regs) = self.select_regs.get_mut(&gid) {
+            for (obj, token) in regs.drain(..) {
+                obj.borrow_mut().revoke(token);
+            }
+        }
     }
 
     /// 从就绪队列取一个 goroutine（FIFO，`C11` §2.1 规则 3）。
@@ -1018,6 +1064,16 @@ impl<'a> G<'a> {
                 extra,
                 dots,
             } => return self.do_go(sh, target, nargs, extra, dots),
+            Task::PushValue(v) => self.values.push(v),
+            Task::EnterBody(b) => {
+                let fi = self.frames.len() - 1;
+                self.push_seq(sh, fi, b);
+            }
+            Task::Select {
+                clauses,
+                vals,
+                waiters,
+            } => return self.task_select(sh, clauses, vals, waiters),
             Task::Builtin {
                 kind,
                 args,
@@ -1708,7 +1764,26 @@ impl<'a> G<'a> {
                 self.eval.push(Task::Eval(value));
                 self.eval.push(Task::Eval(chan));
             }
-            Stmt::Select { .. } => todo!("M8/Task 30：select 的解释执行"),
+            // `select { ... }`（M8/Task 29）：先求值（每个 case 的通道表达式
+            // 与 send 的右值，**按源码顺序**），再试探，最后才阻塞。
+            // 选中 `default` 时其他 case 的通道表达式**也已经求过值**
+            // （规范明确）—— 所以求值必须整批做完，不能「用到才求」。
+            Stmt::Select { clauses } => {
+                self.eval.push(Task::Select {
+                    clauses,
+                    vals: None,
+                    waiters: Vec::new(),
+                });
+                // 逆序压 ⇒ 正序求值；同一子句内 chan 先于右值。
+                for c in clauses.iter().rev() {
+                    if let Some(v) = &c.send_value {
+                        self.eval.push(Task::Eval(v));
+                    }
+                    if let Some(ch) = &c.chan {
+                        self.eval.push(Task::Eval(ch));
+                    }
+                }
+            }
             Stmt::Empty => {}
             Stmt::Assign { lhs, op, rhs } => {
                 let vbase = self.values.len();
@@ -3241,6 +3316,7 @@ impl<'a> G<'a> {
                 }
                 self.waiters.clear();
                 if let Some(g) = woke {
+                    sh.revoke_select_regs(g);
                     sh.wake(g);
                 }
                 true
@@ -3334,6 +3410,7 @@ impl<'a> G<'a> {
                 self.values.pop();
                 self.waiters.clear();
                 if let Some(g) = woke {
+                    sh.revoke_select_regs(g);
                     sh.wake(g);
                 }
                 true
@@ -3354,6 +3431,268 @@ impl<'a> G<'a> {
                 });
                 false
             }
+        }
+    }
+
+    /// `select` 的三阶段（`C11` §4.1）：求值 → 试探 → 阻塞。
+    ///
+    /// 求值阶段已经在 [`Self::exec_stmt`] 里按源码顺序压好了 `Task::Eval`，
+    /// 所以这里拿到的 `vals` 是**已求值**的通道与右值（与 `clauses` 同长同序 ——
+    /// 这个顺序就是 `T-CON-28` 的判据基础）。
+    ///
+    /// # 为什么试探必须「找到一个就收手」
+    ///
+    /// `try_recv` / `try_send` 有副作用（会真的取走值 / 交付）。官方
+    /// `selectgo` 的做法是**按顺序试探、第一个成功就跳到提交标签**；
+    /// 先把所有就绪的都试一遍再挑，会把它没选中的那些也一起提交掉。
+    fn task_select(
+        &mut self,
+        sh: &mut Shared<'a>,
+        clauses: &'a [SelectClause],
+        vals: Option<Vec<(Option<Value>, Option<Value>)>>,
+        waiters: Vec<(usize, crate::chan::WaiterHandle)>,
+    ) -> bool {
+        let vals: Vec<(Option<Value>, Option<Value>)> = match vals {
+            Some(v) => v,
+            None => {
+                let nvals: usize = clauses
+                    .iter()
+                    .map(|c| c.chan.is_some() as usize + c.send_value.is_some() as usize)
+                    .sum();
+                let take = self.values.len().saturating_sub(nvals);
+                let mut it = self.values.split_off(take).into_iter();
+                clauses
+                    .iter()
+                    .map(|c| {
+                        let chan = if c.chan.is_some() { it.next() } else { None };
+                        let send = if c.send_value.is_some() {
+                            it.next()
+                        } else {
+                            None
+                        };
+                        (chan, send)
+                    })
+                    .collect()
+            }
+        };
+
+        // ① 已经登记过：`done` 是唯一判据（`C11` §3.1），不数重试次数。
+        if !waiters.is_empty() {
+            for (i, w) in &waiters {
+                if w.borrow().done {
+                    let i = *i;
+                    let got = w.borrow_mut().slot.take().map(|v| (v, true));
+                    self.select_revoke(sh);
+                    return self.select_commit(sh, clauses, i, got);
+                }
+            }
+            // 没有被完成 ⇒ 只可能是 `close` 唤醒的（`close` 不置 `done`）。
+            // 下面重新试探；我的登记还在队列里，所以提交前要先撤销。
+        }
+
+        // ② 试探：源码顺序；`seed != 0` 时按 rng 打乱（`D-M8-3`）。
+        let mut order: Vec<usize> = (0..clauses.len())
+            .filter(|&i| clauses[i].kind != SelectKind::Default && vals[i].0.is_some())
+            .collect();
+        if order.len() > 1 && !sh.rng.is_source_order() {
+            for k in (1..order.len()).rev() {
+                let j = sh.rng.below(k + 1);
+                order.swap(j, k);
+            }
+        }
+        for i in order {
+            let Some(ch) = vals[i].0.as_ref() else {
+                continue;
+            };
+            if ch.is_nil() {
+                continue; // nil 通道永不就绪（`C11` §3.4）
+            }
+            let Some(obj) = chan_of(ch) else {
+                continue;
+            };
+            // 先取 outcome 再 match：`match obj.borrow_mut()..` 会让 `RefMut`
+            // 活到整个 match 结束，下面的 `obj.borrow()` 就炸（already borrowed）。
+            let got = match clauses[i].kind {
+                SelectKind::Recv => {
+                    let outcome = obj.borrow_mut().try_recv();
+                    match outcome {
+                        RecvOutcome::Got { value, woke } => {
+                            if let Some(g) = woke {
+                                sh.revoke_select_regs(g);
+                                sh.wake(g);
+                            }
+                            Some((value, true))
+                        }
+                        RecvOutcome::GotZeroClosed => {
+                            // 零值按**元素类型**造（`C11` §3.2 recv ③）。
+                            let elem = obj.borrow().elem();
+                            Some((zero_of(sh.tt, elem), false))
+                        }
+                        RecvOutcome::Blocked => continue,
+                    }
+                }
+                SelectKind::Send => {
+                    let v = vals[i].1.as_ref().unwrap_or(&Value::Nil(NilKind::Ptr));
+                    let outcome = obj.borrow_mut().try_send(v);
+                    match outcome {
+                        SendOutcome::Done { woke } => {
+                            if let Some(g) = woke {
+                                sh.revoke_select_regs(g);
+                                sh.wake(g);
+                            }
+                            None
+                        }
+                        SendOutcome::Closed => {
+                            self.fail(sh, RtError::Message("send on closed channel".to_string()));
+                            return true;
+                        }
+                        SendOutcome::Blocked => continue,
+                    }
+                }
+                SelectKind::Default => continue,
+            };
+            self.select_revoke(sh);
+            return self.select_commit(sh, clauses, i, got);
+        }
+
+        // ③ 没有就绪的：有 `default` 就走它（此时所有通道表达式**已经**求过值）。
+        if let Some(d) = clauses.iter().position(|c| c.kind == SelectKind::Default) {
+            self.select_revoke(sh);
+            return self.select_commit(sh, clauses, d, None);
+        }
+
+        // ④ 阻塞：给每个非 nil 的 case 登记一个 waiter，**共用一个 token**
+        // （撤销时按它把各通道队列里的自己删掉，`C11` §4.3）。
+        let token = sh.next_token;
+        sh.next_token += 1;
+        let mut fresh: Vec<(usize, crate::chan::WaiterHandle)> = Vec::new();
+        for (i, c) in clauses.iter().enumerate() {
+            if c.kind == SelectKind::Default {
+                continue;
+            }
+            let Some(ch) = vals[i].0.as_ref() else {
+                continue;
+            };
+            if ch.is_nil() {
+                continue; // nil ⇒ 不登记（没有队列可登记）
+            }
+            let Some(obj) = chan_of(ch) else {
+                continue;
+            };
+            let w = Rc::new(RefCell::new(crate::chan::Waiter {
+                g: self.id,
+                token,
+                slot: None,
+                done: false,
+            }));
+            if c.kind == SelectKind::Send {
+                w.borrow_mut().slot = vals[i].1.clone();
+            }
+            let mut cobj = obj.borrow_mut();
+            if c.kind == SelectKind::Send {
+                cobj.park_send(Rc::clone(&w));
+            } else {
+                cobj.park_recv(Rc::clone(&w));
+            }
+            drop(cobj);
+            fresh.push((i, w));
+            sh.select_regs
+                .entry(self.id)
+                .or_default()
+                .push((obj, token));
+        }
+        self.waiters = fresh.iter().map(|(_, w)| Rc::clone(w)).collect();
+        self.eval.push(Task::Select {
+            clauses,
+            vals: Some(vals),
+            waiters: fresh,
+        });
+        false
+    }
+
+    /// 把这个 `select` 在所有通道上的登记撤掉（幂等，`C11` §4.3）。
+    fn select_revoke(&mut self, sh: &mut Shared<'a>) {
+        // 只走 `select_regs`：**不能**用 `waiters[0].token` 去 revoke ——
+        // 普通 waiter 的 token 也是 0，会把它们一起删掉（`T-CON-31` 踩过：
+        // 一个阻塞的普通发送方被误删 ⇒ 死锁）。
+        sh.revoke_select_regs(self.id);
+        self.waiters.clear();
+    }
+
+    /// 提交选中的子句：绑接收目标 + 进子句体。
+    ///
+    /// `got` = `Some((值, ok))` ⇒ recv 子句；`None` ⇒ send / default 子句。
+    fn select_commit(
+        &mut self,
+        sh: &mut Shared<'a>,
+        clauses: &'a [SelectClause],
+        i: usize,
+        got: Option<(Value, bool)>,
+    ) -> bool {
+        self.waiters.clear();
+        let Some(c) = clauses.get(i) else {
+            return true;
+        };
+        if let Some((v, ok)) = got {
+            let mut outs = vec![v];
+            if c.recv_targets.len() == 2 {
+                outs.push(Value::Bool(ok));
+            }
+            self.select_bind(sh, &c.recv_targets, outs, &c.body);
+        } else {
+            let fi = self.frames.len() - 1;
+            self.push_seq(sh, fi, &c.body);
+        }
+        true
+    }
+
+    /// 绑接收目标（`Place` 是**引用**进来的，不能带走）。
+    ///
+    /// 快路：全是槽/全局 ⇒ 直接写。慢路（`a[i] = <-c` 这类）借
+    /// `Pending::Assign { op: None }` 写完再进子句体。
+    fn select_bind(
+        &mut self,
+        sh: &mut Shared<'a>,
+        targets: &'a [Place],
+        outs: Vec<Value>,
+        body: &'a Block,
+    ) {
+        let fi = self.frames.len() - 1;
+        let simple = targets
+            .iter()
+            .all(|p| matches!(p, Place::Slot(_) | Place::Global(_)));
+        if simple {
+            for (p, v) in targets.iter().zip(outs) {
+                match p {
+                    Place::Slot(s) => {
+                        if let Some(c) = self.frames[fi].slots.get_mut(s.index()) {
+                            *c = cell(v);
+                        }
+                    }
+                    Place::Global(g) => {
+                        if let Some(c) = sh.globals.get_mut(g.0 as usize) {
+                            *c = cell(v);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            self.push_seq(sh, fi, body);
+            return;
+        }
+        let vbase = self.values.len();
+        let tbase = self.targets.len();
+        self.pending = Some(Pending::Assign {
+            op: None,
+            vbase,
+            tbase,
+        });
+        self.eval.push(Task::EnterBody(body));
+        for p in targets.iter().rev() {
+            self.eval.push(Task::ResolvePlace(p));
+        }
+        for v in outs.into_iter().rev() {
+            self.eval.push(Task::PushValue(v));
         }
     }
 

@@ -1550,6 +1550,12 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 continue;
             }
             let comm = c.comm.as_ref().expect("已判非 default");
+            // 子句的作用域必须在**通信语句之前**就压上：`case v := <-a:` 的
+            // `v` 声明在这个子句里（官方 `selectStmt` 对每个 comm clause
+            // `check.scope` 包一层）。反过来做会得到「no new variables on
+            // left side of :=」—— 因为 `v` 落到了外层作用域，而外层已经有
+            // 一个同名变量。
+            self.env.push();
             if !valid_comm(comm) {
                 self.report(
                     simple_pos(comm).unwrap_or(c.pos),
@@ -1559,7 +1565,6 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             } else {
                 self.simple(file, comm);
             }
-            self.env.push();
             self.stmts(file, &c.body);
             self.env.pop();
         }
