@@ -1,8 +1,8 @@
 # M6 的 SSA 拒绝清单（`ssa-rejected.txt`）—— 与 `run-selected.txt`（69 行）互补。
 #
 # 格式：<相对路径>	<码>	<原因>
-# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,RANGE-STR}
-# （下线的三条：RANGE-FUNC / MAP / IFACE-DYN —— 见 `rgoc-ssa/src/diag.rs` 的模块文档）
+# 码：SSA-UNSUPPORTED-{CHAN,DEFER,FUNC-VALUE,GENERIC,RANGE-STR}
+# （下线的四条：RANGE-FUNC / MAP / IFACE-DYN / CLOSURE —— 见 `rgoc-ssa/src/diag.rs` 的模块文档）
 #
 # 纪律（M6-tests.md §4.2 / §5）：
 #  * `能建图 N + 拒绝 M == 69`（两向断言，见 `rgoc-driver/tests/ssa_slice.rs`）
@@ -27,9 +27,10 @@
 # ⚠️ Phase 4b 到 **63**：剩下 6 条 = FUNC-VALUE 1（`method5`，方法值 —— Task 41）
 # + DEFER 5（Phase 5）。
 #
-# ⚠️ **`ddd.go` 在 N 里但语义还没对**（`G-M9-05`：`sumD 16 0` + `panic: fail`，
-# native 段错误）。它不再被拒（闭包已支持），但输出与官方不一致 —— 所以
-# `ssa_corpus_run` 现在是**红的**，这是**真阳性**，不许靠把它塞回拒绝面来「变绿」。
+# `ddd.go` 曾在 N 里但语义错（`G-M9-05`：`sumD 16 0` + `panic: fail`）—— 已修
+# （`R-9-17`：间接调用/接口调用的**变参打包** + nil 指针接收者）。现在 63 个
+# 全与官方 `.out` 逐字节一致。**记这条是因为它差点被「塞回拒绝面」处理掉**：
+# 把一个语义 bug 记成「不支持」会让分母变好看，而 bug 还在。
 #
 # 这份清单的**唯一权威**是 `rgoc-driver/tests/ssa_slice.rs` 的逐文件重跑：
 # 清单与实测差一行就红。改代码让某个文件能建图之后，必须回来改这里。

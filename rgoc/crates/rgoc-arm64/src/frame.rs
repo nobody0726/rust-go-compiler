@@ -328,7 +328,7 @@ pub fn layout_with(
     Ok(Frame {
         values,
         addr_slots,
-        ctx_off: ctx_off,
+        ctx_off,
         heap,
         outgoing,
         tmp_base,

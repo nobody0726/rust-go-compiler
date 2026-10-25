@@ -185,6 +185,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | Phase 3（iface） | **56** | 0 | +6（`method3` / `interbasic` / `interfun` / `embed` / `rob1` / `method5`→否）。`alias1`（type switch）/`method`（recover）/`method5`（方法值）卡在别的阶段（`R-9-12`） |
 | Phase 3b（type switch） | **57** | 0 | +1（`alias1`）。`method`（recover）/`method5`（方法值）仍卡在 Phase 5 / Phase 4（`R-9-14`） |
 | Phase 4a（无捕获函数值） | **60** | 0 | +3（`func6` / `ken/litfun` / `ken/ptrfun`）。`closure1/2`、`ddd`、`method5`、`nilptr2` 要**捕获**或**方法值**，归 Task 38/41（`R-9-15`） |
+| Phase 4b（闭包） | **63** | 0 | +3（`closure1` / `closure2` / `ddd`）。`method5`（方法值，Task 41）与 5 个 defer 文件归 Phase 5（`R-9-16`/`R-9-17`） |
 | Phase 4（funcval） | **67** | 0 | +7 |
 | Phase 5（defer/panic） | **69** | 0 | +3（`closure4` / `defernil` / `print`） |
 | Phase 6（根协议） | 69 | 0 | 不涨 |
@@ -300,6 +301,9 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-13` | 2026-10-25 | **接口派发沿嵌入链按「地址」下降**（不是按值）：`ssa_exec` 的 `CalleeRef::Iface` 起点取 `data`（`Ptr` 就用、值就落格子），每一跳 `via_ptr` 取那个指针字段的**值**、否则取字段的**地址**，末尾按被调方法的第 0 个形参类型决定「传地址还是把值读出来」 | 方法体的 `p.a` 是 `Instr::Field`，而 `Field` 的底座**必须是地址**。按值下降时 `field_of` deref 成 `Value::Struct` ⇒ `i.test2()`（动态类型 `*S`、方法声明在 `*Sub`、中间隔着内嵌的 `Sub` 值字段）把结构体值当接收者传进去 —— `panic: 地址不是指针`（`ken/embed.go`，`G-M9-04`）。native 侧不塌是因为 `recv_steps` 发的是 `add`（取地址）不是 `load`（取值）；两份实现必须**同口径** |
 | `R-9-14` | 2026-10-25 | **`switch x.(type)` 实现**（`M9/Task 34`）+ **拒绝面第三次收缩 56/13 → 57/12** + **`SSA-UNSUPPORTED-IFACE-DYN` 整条下线**（`SsaCode::ALL` 8 → 7 条；M6 manifest 记 `retired_codes`；`ssa_reject::t_ssa_33_接口动态派发` 反转成「四种形态都能建图 + 该码不出现」） | 下降成「断言链 + 体块」：具体类型用 `Instr::TypeAssert` 的 `ok`（比 desc 指针，所以 `byte`/`uint8`、`rune`/`int32` 天然相等，具名类型天然不等）、接口类型同一个指令（`rt_itab` 返 0）、`case nil` 与零值接口比。**体里的绑定变量重新断言一次**：体块建在判定链之前（`break` 要能指到汇合点），断言是纯的，重算比引入块参数简单。⚠️ 码下线不是「放宽判据」：它**再没有生产者**，留着就是死分支（纪律：不留永远不产出的码） |
 | `R-9-15` | 2026-10-25 | **函数值（无捕获）落地**：`Instr::FuncAddr` + `CalleeRef::Indirect` + **ctx ABI**（`SsaFunc::ctx_abi`：整数实参从 `x1` 起，`x0` 留给隐式 ctx）+ **静态 funcval**（`__fv_<fid>: .quad fn`）。拒绝面 57/12 → **60/9** | ① **funcval 必须是 `{fn, caps...}` 的首字为 `fn`**：直接把函数符号当 funcval 用，间接调用的 `ldr x16,[x0]` 读到的是函数的第一条指令（实测 `Bus error`）⇒ 给每个「被当作值用过」的函数发一个 8 字节静态 funcval；② **ctx ABI 只给「被当作值用过的函数 + 闭包」**（不是全体）：调用点知道静态目标，所以直接调用照样能用旧约定 —— 改全体 ABI 会动 57 个已绿文件的风险面；③ ⚠️ **捕获必须按引用**（与设计稿 `Task 39` 的「按值内联」不同）：`closure2.go` 整份文件就是在钉「改要改到外面去」，所以 funcval 里只能放**指向变量存储的指针**，被捕获的变量因此必须活在堆上。这条要在 Task 38 落地时对齐 |
+| `R-9-16` | 2026-10-25 | **闭包（捕获按引用）落地**：`Instr::{MakeClosure, CapturePtr}`；funcval = `{fn, caps:[*u8]}`，捕获的是**变量地址**；被捕获变量因「有根」自动逃逸到 arena。`SSA-UNSUPPORTED-CLOSURE` **整条下线**（`SsaCode::ALL` 7 → 6）。拒绝面 60/9 → **63/6** | ① **设计稿的「按值内联」是错的**：`closure2.go` 整份文件钉的是「改要改到外面去」⇒ 只能存地址（`R-9-15` 已记，此处落地）；② build 侧 `slot_ptr`（捕获槽 → 地址值）要路由**四处**（`read_slot`/`write_slot`/`place_addr_root`/`expr_addr_root`），少一处就是静默读写到本帧的废槽；③ 父帧侧要靠 `scan_rooted` 的 `lits`（体里出现的 `FuncLit` 目标）把「子函数捕获的槽」补进根表 —— 否则 `MakeClosure` 取不到地址（`place_addr_root` panic）；④ 后端 `Frame::ctx_off` 必须在 `bind_params` **之前**落 `x0`（聚合形参分支会打掉 `x0`）；⑤ 四个执行期真 bug 都不在闭包本身：`ValueId` 必须按指令顺序分配、`MakeClosure` 的捕获是**操作数不是定义**、`Def`/`scan_expr` 都漏了**被调方**（`f()` 里 `f` 是一次读）、`range` 的**复合下标目标**要每轮重新求值 |
+| `R-9-17` | 2026-10-25 | **间接调用与接口调用都要做变参打包**：`Callee::Value` 从函数值的**静态签名**（`TySig`）取「变参 + slice 类型」后走 `pack_variadic`；`Callee::Iface` 从接口方法表取同一组信息。另外 **nil 指针接收者**：接口派发沿嵌入链落到 `nil` 指针时传 `Value::Nil(Ptr)`（Go 允许在 nil 指针上调用方法），中间跳落 nil 仍然 `NilDeref` | `pack_variadic` 原来只在 `Callee::{Func,Method}` 与 `Callee::Iface`（传 `vty: None` ⇒ 直接返回）里出现过，`Callee::Value` **完全没有** ⇒ `f(4,5,7)`（`f` 是 `func(...int) int`）把 3 个 int 塞给一个 `[]int` 形参，`range args` 当场 nil 解引用（`ddd.go` 的 `sumD 16 0` + native 段错误）。⚠️ 变参那一位**不能**按 `[]T` 逐位对齐 —— 实参给的是**元素**（照 `[]T` 对齐会把第一个元素 `Convert` 成 slice）。⚠️ `ddd.go` 一度是 `G-M9-05`：它**在 N 里但语义错**，四条逐字节判据各有一条真阳性红 —— **不许**把它塞回拒绝面「变绿」（那是把 bug 伪装成「不支持」） |
+
 
 
 
@@ -312,7 +316,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 |---|---|
 | M5 的值语义 | **`D` 腿的基准**：69 个语料上解释器与官方逐字节一致，所以 native 与解释器比 = 与官方比 |
 | M5 的 `C9` | 四条运行期 panic 文本沿用 `C9` §4.5；M9 只**追加** `out of memory` 一条 |
-| M6 的 SSA | **零回归**：`--via=ssa` 60 绿 9 跳过 **0 红**（分母 46/23 → 50/19 → 56/13 → 57/12 → 60/9，见 `R-9-8`/`R-9-12`/`R-9-14`/`R-9-15`；`G-M9-04` 已收口）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图，其中 `MAP` 与 `IFACE-DYN` 两条**整条下线** |
+| M6 的 SSA | **零回归**：`--via=ssa` 63 绿 6 跳过 **0 红**（分母 46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6，见 `R-9-8`/`R-9-12`/`R-9-14`/`R-9-15`/`R-9-16`；`G-M9-04`/`G-M9-05` 都已收口）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图，其中 `MAP` 与 `IFACE-DYN` 两条**整条下线** |
 | M7 的 native | **零回归**：39 个文件逐个仍绿（`T-CORP-03`）；`.framemap` 产物不变，**新加** `.stackmap` |
 | M8 的并发 | **零回归**：`run-chan.sh` 7 ok 12 skip 0 bad 不变；`M9d` 只交契约，不改解释器 |
 | M8 的 `C11` | `M9d` 的 `hchan` **参照不同构**（单线程 vs 多核）—— 写进 `C11` §8 的抬头 |

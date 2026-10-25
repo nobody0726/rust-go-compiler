@@ -127,13 +127,15 @@ mod tests {
 
     #[test]
     fn 拒绝渲染成一行且带函数号() {
+        // 用的码只是**载体**（渲染格式与具体码无关）。这里挑 `Defer` ——
+        // `CLOSURE` 已在 `R-9-16` 下线（`SsaCode::ALL` 里没有它了）。
         let r = Reject {
             func: FuncId(3),
             code: SsaCode::Defer,
-            detail: "捕获 2 个变量".to_string(),
+            detail: "延迟调用链".to_string(),
         };
         let line = r.render();
-        assert_eq!(line, "SSA-UNSUPPORTED-CLOSURE: func#3 — 捕获 2 个变量");
+        assert_eq!(line, "SSA-UNSUPPORTED-DEFER: func#3 — 延迟调用链");
         assert!(!line.contains('\n'), "stderr 一行（T-SSA-33 的判据）");
     }
 }

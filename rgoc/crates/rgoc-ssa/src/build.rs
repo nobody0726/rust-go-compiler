@@ -650,7 +650,10 @@ fn build_func(
     for fid in &lits {
         for c in &program.funcs[fid.index()].captured {
             if std::env::var_os("RGOC_DBG").is_some() {
-                eprintln!("[dbg] {} lit func#{} captures outer s{}", f.name, fid.0, c.outer_slot.0);
+                eprintln!(
+                    "[dbg] {} lit func#{} captures outer s{}",
+                    f.name, fid.0, c.outer_slot.0
+                );
             }
             rooted.insert(c.outer_slot);
         }
@@ -1132,6 +1135,23 @@ fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
         tt.type_of(rgoc_types::underlying(tt, t)),
         rgoc_types::typ::Type::Struct(_) | rgoc_types::typ::Type::Array { .. }
     )
+}
+
+/// 一个**函数类型**（不是 `FuncId`）的签名视图。
+///
+/// 间接调用（`Callee::Value`）没有静态被调方，只能读函数值的静态类型；
+/// 接口方法调用（`Callee::Iface`）的签名也来自接口的方法表。两处要的东西
+/// 是同一组（形参表 / 结果表 / 是否变参 / 变参那一位的 slice 类型），
+/// 所以合成一个类型 —— 四个 `Vec`/`Option` 的元组在 clippy 眼里太复杂。
+struct TySig {
+    /// 形参类型（**含**变参那一位的 `[]T`）。
+    params: Vec<TypeId>,
+    /// 结果类型。
+    results: Vec<TypeId>,
+    /// 末参带 `...`。
+    variadic: bool,
+    /// 变参那一位的 slice 类型（`[]T`）；非变参时是 `None`。
+    slice: Option<TypeId>,
 }
 
 /// 是不是接口类型（剥具名 / 别名）。
@@ -2702,17 +2722,47 @@ impl Fb<'_> {
             Callee::Value(v) => {
                 let fv = self.expr(v);
                 let mut avs = self.eval_args(args, spread);
-                // 实参按**函数值的静态签名**对齐（`untyped nil` / 无类型常量要物化）。
-                if let Some(ps) = self.func_param_types(v.typ) {
-                    for (a, want) in avs.iter_mut().zip(ps) {
-                        *a = self.coerce_to(want, *a);
-                    }
-                }
                 // 间接调用的签名**静态可读**：被调方是个函数值，它的静态类型
                 // 就是签名（`func(int, byte) (byte, int)`）。不读它就只能猜
                 // 「一个结果」—— 实测 `method5.go` 的 `b, x := f(1000, 99)`
                 // 因此 panic（右侧 1 个值、左侧 2 个目标）。
-                let rtypes = self.func_result_types(v.typ).unwrap_or_else(|| vec![e.typ]);
+                let fs = self.func_sig_of_ty(v.typ).unwrap_or_else(|| TySig {
+                    params: Vec::new(),
+                    results: vec![e.typ],
+                    variadic: false,
+                    slice: None,
+                });
+                let (ps, rtypes, variadic, slice_ty) =
+                    (fs.params, fs.results, fs.variadic, fs.slice);
+                // 实参逐位对齐（`untyped nil` / 无类型常量要物化）。
+                //
+                // ⚠️ 变参那一位**不能**按 `[]T` 对齐 —— 实参给的是**元素**，
+                // 打包在下一步（`pack_variadic`）。照 `[]T` 对齐会把第一个
+                // 元素 `Convert` 成 slice（实测 `ddd.go` 的 `sumD` 返回 0）。
+                let fixed = if variadic {
+                    ps.len().saturating_sub(1)
+                } else {
+                    ps.len()
+                };
+                let elem = slice_ty.and_then(|st| elem_ty(self.tt, st));
+                for (i, a) in avs.iter_mut().enumerate() {
+                    let want = if i < fixed {
+                        ps.get(i).copied()
+                    } else if variadic {
+                        elem
+                    } else {
+                        None
+                    };
+                    if let Some(w) = want {
+                        *a = self.coerce_to(w, *a);
+                    }
+                }
+                let sig = Sig {
+                    params: ps.len(),
+                    results: rtypes.len(),
+                    variadic,
+                };
+                let avs = self.pack_variadic(avs, &sig, slice_ty, dots);
                 // 副作用未知 ⇒ 保守「什么都能写 + 可能回调」
                 let eff = Effect {
                     writes: Vec::new(),
@@ -2737,9 +2787,33 @@ impl Fb<'_> {
                         dump_ty(self.tt, recv.typ)
                     )
                 });
-                let (rtypes, sig) = self.iface_sig(recv.typ, name);
-                let avs = self.eval_args(args, spread);
-                let avs = self.pack_variadic(avs, &sig, None, dots);
+                let (rtypes, sig, slice_ty) = self.iface_sig(recv.typ, name);
+                let mut avs = self.eval_args(args, spread);
+                // 逐位对齐（`untyped nil` 要物化；变参尾部按**元素**对齐）。
+                //
+                // ⚠️ 变参必须打包：`Sum(...int)` 的形参表末项是 `[]int`，不打包
+                // 就会把 4 个 int 依次塞给 `[data, []int]` —— 被调方拿到的 `args`
+                // 是个整数，`range args` 当场 nil 解引用（实测 `ddd.go`）。
+                let fixed = if sig.variadic {
+                    sig.params.saturating_sub(1)
+                } else {
+                    sig.params
+                };
+                let elem = slice_ty.and_then(|st| elem_ty(self.tt, st));
+                let ps = self.iface_param_types(recv.typ, name);
+                for (i, a) in avs.iter_mut().enumerate() {
+                    let want = if i < fixed {
+                        ps.get(i).copied()
+                    } else if sig.variadic {
+                        elem
+                    } else {
+                        None
+                    };
+                    if let Some(w) = want {
+                        *a = self.coerce_to(w, *a);
+                    }
+                }
+                let avs = self.pack_variadic(avs, &sig, slice_ty, dots);
                 // 被调方运行期才定 ⇒ 副作用按最保守算（可能写、可能 panic、可能打印）
                 let eff = Effect {
                     writes: Vec::new(),
@@ -2765,7 +2839,31 @@ impl Fb<'_> {
     /// 接口方法 `name` 的 `(结果类型表, 签名摘要)`。
     ///
     /// 静态可读：接口的方法签名就写在 `InterfaceDef` 里，没有理由去猜。
-    fn iface_sig(&self, iface: TypeId, name: &str) -> (Vec<TypeId>, Sig) {
+    /// 接口方法 `name` 的形参类型表（不含接收者）。
+    fn iface_param_types(&self, iface: TypeId, name: &str) -> Vec<TypeId> {
+        use rgoc_types::typ::Type;
+        let mut cur = iface;
+        for _ in 0..64 {
+            match self.tt.type_of(cur) {
+                Type::Named(id) => cur = self.tt.named_underlying(*id),
+                Type::Alias(id) => cur = self.tt.alias_rhs(*id),
+                Type::Interface(iid) => {
+                    let def = self.tt.interface_def(*iid);
+                    let Some((_, sig)) = def.methods.iter().find(|(n, _)| n == name) else {
+                        return Vec::new();
+                    };
+                    let Some(Type::Signature(sid)) = Some(self.tt.type_of(*sig)) else {
+                        return Vec::new();
+                    };
+                    return self.tuple_types(self.tt.signature_def(*sid).params);
+                }
+                _ => break,
+            }
+        }
+        Vec::new()
+    }
+
+    fn iface_sig(&self, iface: TypeId, name: &str) -> (Vec<TypeId>, Sig, Option<TypeId>) {
         use rgoc_types::typ::Type;
         let mut cur = iface;
         for _ in 0..64 {
@@ -2782,6 +2880,7 @@ impl Fb<'_> {
                                 results: 0,
                                 variadic: false,
                             },
+                            None,
                         );
                     };
                     let Some(Type::Signature(sid)) = Some(self.tt.type_of(*sig)) else {
@@ -2792,11 +2891,19 @@ impl Fb<'_> {
                                 results: 0,
                                 variadic: false,
                             },
+                            None,
                         );
                     };
                     let sd = self.tt.signature_def(*sid);
                     let params = self.tuple_types(sd.params);
                     let results = self.tuple_types(sd.results);
+                    // 变参那一位的 **slice 类型**：`Sum(...int)` 的 params 末项就是
+                    // `[]int`。调用点要拿它打包（`pack_variadic`）。
+                    let slice_ty = if sd.variadic {
+                        params.last().copied()
+                    } else {
+                        None
+                    };
                     return (
                         results.clone(),
                         Sig {
@@ -2804,6 +2911,7 @@ impl Fb<'_> {
                             results: results.len(),
                             variadic: sd.variadic,
                         },
+                        slice_ty,
                     );
                 }
                 _ => break,
@@ -2816,6 +2924,7 @@ impl Fb<'_> {
                 results: 0,
                 variadic: false,
             },
+            None,
         )
     }
 
@@ -2865,6 +2974,39 @@ impl Fb<'_> {
             ),
             _ => Some(vec![params]),
         }
+    }
+
+    /// 函数**类型**的完整签名：`(形参表, 结果表, 是否变参, 变参那一位的 slice 类型)`。
+    ///
+    /// # 为什么 `func_param_types` 不够
+    ///
+    /// 间接调用（`Callee::Value`）没有静态被调方，只能读函数值的**静态类型**。
+    /// 而变参函数的形参表里，最后一个就是 `[]T` —— 如果照它逐位对齐实参，
+    /// `f(4, 5, 7)` 的 `4` 会被 `Convert` 成 `[]int`（实测 `ddd.go`：
+    /// `sumD` 返回 0，native 段错误）。变参必须按**元素类型**对齐，再打包。
+    fn func_sig_of_ty(&self, t: TypeId) -> Option<TySig> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        let rgoc_types::typ::Type::Signature(sid) =
+            self.tt.type_of(rgoc_types::underlying(self.tt, t))
+        else {
+            return None;
+        };
+        let sd = self.tt.signature_def(*sid);
+        let params = self.func_param_types(t)?;
+        let results = self.func_result_types(t)?;
+        let slice = if sd.variadic {
+            params.last().copied()
+        } else {
+            None
+        };
+        Some(TySig {
+            params,
+            results,
+            variadic: sd.variadic,
+            slice,
+        })
     }
 
     fn func_result_types(&self, t: TypeId) -> Option<Vec<TypeId>> {

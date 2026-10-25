@@ -956,6 +956,25 @@ Expected: `false true\n`（**接口非 nil**，因为 tab 非空）
 
 # Phase 4 · funcval（60 → **67**）
 
+> **执行期修订（2026-10-25，`R-9-15`/`R-9-16`）** —— 这一节的计划有两处**被实测推翻**：
+>
+> 1. **funcval 是 `{fn, caps: [*u8]}`，不是 `{fn, <捕获值内联>}`**。计划写的是
+>    「`size = 8 + Σ align8(size_of(capture))` + 捕获的 ptrmask」（Task 39），
+>    但 Go 的闭包捕获的是**变量**不是值 —— `closure2.go` 整份文件钉的就是
+>    「改要改到外面去」。按值内联会让 `f()` 里的 `x++` 改到副本上。
+>    ⇒ 只存**指向变量存储的指针**（`8 + 8n`），被捕获变量因「有根」自动逃逸到
+>    arena。**Task 39（funcval 的 desc）因此不需要**：funcval 里全是字，没有
+>    需要 GC 扫描的子对象，也没有 `TypeDesc` 消费者。
+> 2. **ctx ABI 只给「被当作值用过的函数 + 闭包」，不是全体**（Task 40 写「仅当被调方
+>    是闭包」方向对，但要扩到「取过地址的具名函数」）。判据在 `build()` 的收尾扫描
+>    （`FuncAddr`/`MakeClosure` 的 target ∪ 有捕获的函数）—— 模块级事实，使用点
+>    可能在被调方之后才建。
+>
+> 另外 **`SSA-UNSUPPORTED-FUNC-VALUE` 没有下线**（Task 43 计划删它）：方法值
+> （`method5.go`，Task 41）仍然走它。下线的是 `CLOSURE`。
+>
+> 语料实到 **63**（不是 67）：`method5`（方法值）与 5 个 defer 文件留到 Phase 5。
+
 ### Task 37: `Instr::FuncAddr`
 
 **Files:**

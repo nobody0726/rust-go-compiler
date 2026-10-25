@@ -511,9 +511,10 @@ impl Exec<'_> {
                     .ok_or_else(|| {
                         Halt::Runtime("capture 出现在没有闭包的帧里（构建 bug）".to_string())
                     })?;
-                let cell = cl.captured.get(*index as usize).cloned().ok_or_else(|| {
-                    Halt::Runtime(format!("捕获下标 {index} 越界（构建 bug）"))
-                })?;
+                let cell =
+                    cl.captured.get(*index as usize).cloned().ok_or_else(|| {
+                        Halt::Runtime(format!("捕获下标 {index} 越界（构建 bug）"))
+                    })?;
                 self.write(*dst, Value::Ptr(cell));
                 Ok(None)
             }
@@ -816,29 +817,53 @@ impl Exec<'_> {
                     // 值动态类型：`data` 是值本身 ⇒ 落一个格子拿地址
                     other => cell(other),
                 };
-                for h in &hops {
+                // 沿链下降时会不会落到一个 **nil 指针**接收者上（`R-9-17`）。
+                //
+                // # 为什么不能一遇到 nil 就 panic
+                //
+                // Go 允许在 nil 指针上调用方法（`((*T)(nil)).Sum(...)` 是合法的，
+                // 只要方法体不解引用）。`ddd.go` 的 `var u U` 里 `u.T == nil`，
+                // 而 `Sum` 声明在 `*T` 上 —— 提升之后接收者正好是那个 nil 指针。
+                //
+                // 但**中间**那一跳落到 nil 就是真解引用（要读它的字段），
+                // 那时 `as_ptr` 的 `NilDeref` 是对的。
+                let mut nil_recv = false;
+                for (i, h) in hops.iter().enumerate() {
                     let f = field_cell(&addr, h.index)?;
-                    addr = if h.via_ptr {
+                    if h.via_ptr {
                         let p = f.borrow().clone();
-                        self.as_ptr(&p)?
+                        if matches!(p, Value::Nil(_)) {
+                            if i + 1 == hops.len() {
+                                nil_recv = true;
+                                break;
+                            }
+                            return Err(Halt::Runtime(RtError::NilDeref.message()));
+                        }
+                        addr = self.as_ptr(&p)?;
                     } else {
-                        f
-                    };
+                        addr = f;
+                    }
                 }
                 let idx = index_of(self.m, fid)
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的方法 func#{}", fid.0)))?;
                 // 接收者要值还是地址：指针与「超过一个字」的聚合要地址（本后端的
                 // 聚合按指针传参，`C5` §6.1），其余标量要值。
-                let rv = match self.m.funcs[idx].params.first() {
-                    Some(p0) => {
-                        let rt = self.m.funcs[idx].value_types[p0.index()];
-                        if recv_wants_addr(self.tt, rt) {
-                            Value::Ptr(addr)
-                        } else {
-                            addr.borrow().clone()
+                let rv = if nil_recv {
+                    // nil 指针接收者：与 `((*T)(nil)).M()` 同一个表示（`Value::Nil`），
+                    // 这样方法体里真的解引用时仍然报同一句 `nil pointer dereference`。
+                    Value::Nil(NilKind::Ptr)
+                } else {
+                    match self.m.funcs[idx].params.first() {
+                        Some(p0) => {
+                            let rt = self.m.funcs[idx].value_types[p0.index()];
+                            if recv_wants_addr(self.tt, rt) {
+                                Value::Ptr(addr)
+                            } else {
+                                addr.borrow().clone()
+                            }
                         }
+                        None => Value::Ptr(addr),
                     }
-                    None => Value::Ptr(addr),
                 };
                 let mut all = Vec::with_capacity(avals.len() + 1);
                 all.push(rv);
