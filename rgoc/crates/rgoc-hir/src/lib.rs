@@ -38,5 +38,5 @@ pub use lower::lower;
 pub use types::{
     BinOp, Block, BranchKind, BuiltinKind, Callee, Capture, Case, Composite, CompositeItem, Expr,
     ExprKind, Func, FuncId, Global, GlobalId, InitGroup, MakeKind, MethodRef, Place, Program,
-    RangeKind, SlotId, Stmt, TypeCase, UnOp,
+    RangeKind, SelectClause, SelectKind, SlotId, Stmt, TypeCase, UnOp,
 };

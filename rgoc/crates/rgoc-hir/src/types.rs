@@ -290,8 +290,66 @@ pub enum Stmt {
         /// 被登记的调用。
         call: Expr,
     },
+    /// `go f(args)`（M8，`D-M8-10`）。
+    ///
+    /// **求值顺序**（`STM-14`，写进 `C3`）：`call` 里的被调者与**全部实参**在
+    /// **当前** goroutine 求值完，才创建新 goroutine。所以 `go f(g())` 的 `g()`
+    /// 在旧 goroutine 跑 —— 这条不是实现细节，是判据（`T-CON-02`）。
+    Go {
+        /// 被发起的调用（形状同 [`Stmt::Expr`] 里的调用表达式）。
+        call: Expr,
+    },
+    /// `ch <- v`（M8，`D-M8-10`）。
+    ///
+    /// 求值顺序：`chan` 先、`value` 后（Go 规范：操作数从左到右）。
+    Send {
+        /// 通道表达式。
+        chan: Expr,
+        /// 要发送的值。
+        value: Expr,
+    },
+    /// `select { ... }`（M8，`D-M8-10`）。
+    Select {
+        /// 子句，**按源码顺序**（多就绪时的默认选择依赖这个顺序，`D-M8-3`）。
+        clauses: Vec<SelectClause>,
+    },
     /// 空语句。
     Empty,
+}
+
+/// `select` 的一个子句（M8，`D-M8-10`）。
+#[derive(Clone, Debug)]
+pub struct SelectClause {
+    /// 子句种类。
+    pub kind: SelectKind,
+    /// 通道表达式（`Recv`/`Send` 必有；`Default` 必无）。
+    pub chan: Option<Expr>,
+    /// 接收目标，长度决定形态：
+    ///
+    /// | 长度 | 源码形态 |
+    /// |---|---|
+    /// | 0 | `case <-c:`（丢弃） |
+    /// | 1 | `case v := <-c:` |
+    /// | 2 | `case v, ok := <-c:` |
+    ///
+    /// 用 `Vec` 而不是 `Option<Place>`：`R2` 实测——两个目标那个形态装不下，
+    /// 而 `T-CON-34` 就是判它。
+    pub recv_targets: Vec<Place>,
+    /// 发送的右值（仅 `Send` 有）。
+    pub send_value: Option<Expr>,
+    /// 子句体。
+    pub body: Block,
+}
+
+/// `select` 子句的种类。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SelectKind {
+    /// `case ch <- v:`
+    Send,
+    /// `case v[, ok] := <-ch:`
+    Recv,
+    /// `default:`
+    Default,
 }
 
 /// `range` 的形态（静态定死，运行时不再看类型）。
@@ -307,6 +365,10 @@ pub enum RangeKind {
     Map,
     /// 整数（Go 1.22 `range n`）。
     Int,
+    /// 通道（M8）：反复接收直到 `ok == false`。
+    Chan,
+    /// 迭代器函数（Go 1.23，M8 的**窄面**，`D-M8-11`）。
+    Func,
 }
 
 /// `switch` 的一个子句。
@@ -507,6 +569,13 @@ pub enum ExprKind {
         /// 解释器只能猜，而猜错不会报错、只会静默算错 —— 正是 `D-M5-2`
         /// 想禁止的那类失败。
         variadic: bool,
+    },
+    /// 接收 `<-ch`（M8，`D-M8-10`）。
+    Recv {
+        /// 通道表达式。
+        ch: Box<Expr>,
+        /// 双值形态（`v, ok := <-c`）。关闭后 `ok == false`（`T-CON-34`）。
+        comma_ok: bool,
     },
     /// 有类型的 `nil`。
     Nil,

@@ -22,7 +22,7 @@ use std::fmt::Write as _;
 
 use crate::types::{
     BinOp, Block, BranchKind, BuiltinKind, Callee, CompositeItem, Expr, ExprKind, FuncId, MakeKind,
-    MethodRef, Place, Program, RangeKind, Stmt, UnOp,
+    MethodRef, Place, Program, RangeKind, SelectKind, Stmt, UnOp,
 };
 
 /// dump 一个程序。
@@ -285,6 +285,42 @@ fn dump_stmt(w: &mut String, depth: usize, s: &Stmt) {
             line(w, depth, "Defer", "");
             dump_expr(w, depth + 1, call);
         }
+        Stmt::Go { call } => {
+            line(w, depth, "Go", "");
+            dump_expr(w, depth + 1, call);
+        }
+        Stmt::Send { chan, value } => {
+            line(w, depth, "Send", "");
+            dump_expr(w, depth + 1, chan);
+            dump_expr(w, depth + 1, value);
+        }
+        Stmt::Select { clauses } => {
+            line(w, depth, "Select", format!("clauses={}", clauses.len()));
+            for (i, c) in clauses.iter().enumerate() {
+                let kind = match c.kind {
+                    SelectKind::Send => "send",
+                    SelectKind::Recv => "recv",
+                    SelectKind::Default => "default",
+                };
+                line(
+                    w,
+                    depth + 1,
+                    "Clause",
+                    format!(
+                        "#{i} {kind} targets={} send={}",
+                        c.recv_targets.len(),
+                        c.send_value.is_some()
+                    ),
+                );
+                if let Some(ch) = &c.chan {
+                    dump_expr(w, depth + 2, ch);
+                }
+                if let Some(v) = &c.send_value {
+                    dump_expr(w, depth + 2, v);
+                }
+                dump_block(w, depth + 2, &c.body);
+            }
+        }
         Stmt::Empty => line(w, depth, "Empty", ""),
     }
 }
@@ -509,6 +545,10 @@ fn dump_expr(w: &mut String, depth: usize, e: &Expr) {
                 dump_expr(w, depth + 1, a);
             }
         }
+        ExprKind::Recv { ch, comma_ok } => {
+            line(w, depth, "Expr", format!("recv comma_ok={comma_ok}"));
+            dump_expr(w, depth + 1, ch);
+        }
         ExprKind::Nil => line(w, depth, "Expr", "nil"),
     }
 }
@@ -562,5 +602,7 @@ pub fn range_text(k: RangeKind) -> &'static str {
         RangeKind::Str => "string",
         RangeKind::Map => "map",
         RangeKind::Int => "int",
+        RangeKind::Chan => "chan",
+        RangeKind::Func => "func",
     }
 }

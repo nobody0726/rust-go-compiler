@@ -1541,6 +1541,12 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 let t = self.default_type(t);
                 vec![t, t]
             }
+            // `for v := range c`：**只产出一个值**（通道没有下标）。
+            // 这一步在 Task 13 落地（那条 Task 同时要判 `chan<- T` 上 range 是非法）。
+            RangeKind::Chan => todo!("M8/Task 13：chan 的 range 只产出元素，不产出下标"),
+            // 迭代器函数的产出类型由**签名**定（`seq` 一个、`seq2` 两个），
+            // 不能在这里靠 `t` 推。归 Task 45。
+            RangeKind::Func => todo!("M8/Task 45：迭代器的产出类型由签名决定"),
         }
     }
 

@@ -204,6 +204,11 @@ fn scan_block(cx: &Ctx, b: &HirBlock, s: &mut Summary, calls: &mut Vec<FuncId>) 
 
 fn scan_stmt(cx: &Ctx, st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match st {
+        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
+            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+        }
         Stmt::Assign { lhs, rhs, .. } => {
             for e in rhs {
                 scan_expr(cx, e, s, calls);
@@ -314,6 +319,10 @@ fn scan_stmt(cx: &Ctx, st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
 
 fn scan_expr(cx: &Ctx, e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match &e.kind {
+        ExprKind::Recv { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+        }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         ExprKind::Field { base, .. } => scan_expr(cx, base, s, calls),
         ExprKind::Index { base, index, .. } => {

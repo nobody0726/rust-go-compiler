@@ -64,6 +64,10 @@ const STMT_TOKENS: &[(&str, &str)] = &[
     ("Labeled", "Labeled"),
     ("Block", "Block"),
     ("Defer", "Defer"),
+    // M8（`D-M8-10`）：这三个在 Task 7–13 才被 lowering 产出，先用 `M8_PENDING` 登记。
+    ("Go", "Go"),
+    ("Send", "Send"),
+    ("Select", "Select"),
     ("Empty", "Empty"),
 ];
 
@@ -92,6 +96,7 @@ const EXPR_TOKENS: &[(&str, &str)] = &[
     ("New", "new"),
     ("Builtin", "builtin"),
     ("Nil", "nil"),
+    ("Recv", "recv"),
 ];
 
 /// `Place` 的 5 个变体 → dump 第三列的首 token。
@@ -110,6 +115,8 @@ const RANGE_TOKENS: &[(&str, &str)] = &[
     ("Str", "Str"),
     ("Map", "Map"),
     ("Int", "Int"),
+    ("Chan", "Chan"),
+    ("Func", "Func"),
 ];
 
 // ───────────────────── fixture ─────────────────────
@@ -293,6 +300,35 @@ fn enum_variants(src: &str, name: &str) -> BTreeSet<String> {
     out
 }
 
+/// **还没被 lowering 产出**的变体（M8 执行期的临时登记）。
+///
+/// # 为什么要有这张表
+///
+/// `T-EX-01` 要求「每个变体都有 fixture 产出」。M8 的六个节点是**分两步**落地的：
+/// Task 2 只加类型（让 `match` 的穷尽性先把所有消费方逼出来），Task 7–48 才让
+/// lowering 真的产出它们。中间这段窗口里，「有类型但没人产出」是**预期的**。
+///
+/// # 为什么它不会腐化成「永久豁免」
+///
+/// 三字段是 `(enum 名, 变体名, dump token)`。测试末尾有一条反向断言：
+/// **登记项必须还没被点亮**。某个 Task 一旦把它点亮，这条就红，逼你把登记摘掉。
+/// 没有这条，登记表三周后就是一份写着「不用管这些」的墓碑。
+const M8_PENDING: &[(&str, &str, &str)] = &[
+    ("Stmt", "Go", "Go"),          // Task 11 点亮
+    ("Stmt", "Send", "Send"),      // Task 9 点亮
+    ("Stmt", "Select", "Select"),  // Task 12 点亮
+    ("ExprKind", "Recv", "recv"),  // Task 10 点亮
+    ("RangeKind", "Chan", "Chan"), // Task 13 点亮
+    ("RangeKind", "Func", "Func"), // Task 45 点亮
+];
+
+/// 某个 token 是否登记在 [`M8_PENDING`] 里。
+fn m8_pending(enum_name: &str, token: &str) -> bool {
+    M8_PENDING
+        .iter()
+        .any(|(e, _, t)| *e == enum_name && *t == token)
+}
+
 // ───────────────────── T-EX-01 ─────────────────────
 
 /// `T-EX-01`：HIR 的每个变体都至少被一个 fixture 产出。
@@ -301,7 +337,7 @@ fn enum_variants(src: &str, name: &str) -> BTreeSet<String> {
 ///
 /// 1. **表 == 代码**：映射表的键集必须等于 `types.rs` 里解析出的变体集；
 /// 2. **fixture 点亮每个变体**：表里每个 token 都要出现在 dump 里；
-/// 3. **数量写死**：45 个（14 + 21 + 5 + 5）—— 数字变化说明 `types.rs` 动了，
+/// 3. **数量写死**：51 个（17 + 22 + 5 + 7）—— 数字变化说明 `types.rs` 动了，
 ///    那时应当同时看到第 1 步报出「只在代码 / 只在表」的差额。
 #[test]
 fn t_ex_01_every_hir_node_is_reachable() {
@@ -329,8 +365,8 @@ fn t_ex_01_every_hir_node_is_reachable() {
     }
     assert_eq!(
         STMT_TOKENS.len() + EXPR_TOKENS.len() + PLACE_TOKENS.len() + RANGE_TOKENS.len(),
-        45,
-        "四张表合计应为 45 个变体（Stmt 14 + ExprKind 21 + Place 5 + RangeKind 5）"
+        51,
+        "四张表合计应为 51 个变体（Stmt 17 + ExprKind 22 + Place 5 + RangeKind 7）"
     );
 
     // ② 与 ③：fixture 点亮每个 token
@@ -382,22 +418,22 @@ fn t_ex_01_every_hir_node_is_reachable() {
 
     let mut missing: Vec<String> = Vec::new();
     for (variant, token) in STMT_TOKENS {
-        if !stmt_seen.contains(*token) {
+        if !stmt_seen.contains(*token) && !m8_pending("Stmt", token) {
             missing.push(format!("Stmt::{variant}（dump token `{token}`）"));
         }
     }
     for (variant, token) in EXPR_TOKENS {
-        if !expr_seen.contains(*token) {
+        if !expr_seen.contains(*token) && !m8_pending("ExprKind", token) {
             missing.push(format!("ExprKind::{variant}（dump token `{token}`）"));
         }
     }
     for (variant, token) in PLACE_TOKENS {
-        if !place_seen.contains(*token) {
+        if !place_seen.contains(*token) && !m8_pending("Place", token) {
             missing.push(format!("Place::{variant}（dump token `{token}`）"));
         }
     }
     for (variant, token) in RANGE_TOKENS {
-        if !range_seen.contains(*token) {
+        if !range_seen.contains(*token) && !m8_pending("RangeKind", token) {
             missing.push(format!("RangeKind::{variant}（dump token `kind={token}`）"));
         }
     }
@@ -406,6 +442,26 @@ fn t_ex_01_every_hir_node_is_reachable() {
         "有 {} 个 HIR 变体没有任何 fixture 产出它们（补 NODE_FIXTURE，别改判据）：\n{}",
         missing.len(),
         missing.join("\n")
+    );
+
+    // ③ 登记项必须**还没**被点亮 —— 点亮了就说明该摘登记了，
+    //    否则 `M8_PENDING` 会悄悄变成「永久豁免」。
+    let mut stale: Vec<String> = Vec::new();
+    for (enum_name, variant, token) in M8_PENDING {
+        let lit = match *enum_name {
+            "Stmt" => stmt_seen.contains(*token),
+            "ExprKind" => expr_seen.contains(*token),
+            "Place" => place_seen.contains(*token),
+            "RangeKind" => range_seen.contains(*token),
+            other => panic!("M8_PENDING 里的枚举名不认识：{other}"),
+        };
+        if lit {
+            stale.push(format!("{enum_name}::{variant}"));
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "这些变体已经被 fixture 点亮了，请从 M8_PENDING 摘掉：{stale:?}"
     );
 }
 

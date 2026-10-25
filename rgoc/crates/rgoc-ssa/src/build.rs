@@ -218,11 +218,22 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
             SsaCode::Defer,
             "defer（延迟调用链是运行期结构，不是 SSA 值）".to_string(),
         )),
+        // M8 把这三条从 HIR 的拒绝面放进了**解释器**；SSA 侧仍拒（`SSA-UNSUPPORTED-CHAN`）。
+        // 这不是「忘了实现」，是 M6 的 IR 没有「等待」这个概念（`C4` 的 memory 模型里
+        // 没有阻塞点）—— 归 M11。
+        Stmt::Go { .. } => Some((SsaCode::Chan, "go 语句（并发语义只在解释器面）".to_string())),
+        Stmt::Send { .. } => Some((SsaCode::Chan, "`ch <- v` 发送".to_string())),
+        Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
         Stmt::TypeSwitch { .. } => Some((
             SsaCode::IfaceDyn,
             "type switch（按运行期动态类型分支）".to_string(),
         )),
         Stmt::Range { x, body, kind, .. } => match kind {
+            RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
+            RangeKind::Func => Some((
+                SsaCode::RangeFunc,
+                "range over func（迭代器协议要调 func 值）".to_string(),
+            )),
             RangeKind::Map => Some((SsaCode::Map, "range over map".to_string())),
             RangeKind::Str => Some((
                 SsaCode::RangeStr,
@@ -303,6 +314,11 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
     }
     match &e.kind {
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => None,
+        // `<-ch`：M6 既不建图也不执行（`SSA-UNSUPPORTED-CHAN`），出现即错。
+        // 通道表达式本身也要扫（里面可能有别的拒绝面）。
+        ExprKind::Recv { ch, .. } => {
+            unsup_expr(tt, ch).or(Some((SsaCode::Chan, "`<-ch` 接收操作".to_string())))
+        }
         ExprKind::Field { base, .. } => unsup_expr(tt, base),
         ExprKind::Index { base, index, .. } => {
             unsup_expr(tt, base).or_else(|| unsup_expr(tt, index))
@@ -516,6 +532,11 @@ fn stmt_has_goto(s: &Stmt) -> bool {
     match s {
         Stmt::Branch { kind, .. } => matches!(kind, BranchKind::Goto),
         Stmt::Assign { .. } | Stmt::ShortDecl { .. } | Stmt::Expr(_) | Stmt::Return(_) => false,
+        // `go` / `ch <- v` 的载荷是表达式，装不下语句 ⇒ 没有 goto。
+        // `select` 的子句体是块 ⇒ 必须往下走（虽然 chan 程序在预扫描就被拒了，
+        // 但这条函数是**纯分析**，不该依赖「反正会被拒」）。
+        Stmt::Go { .. } | Stmt::Send { .. } => false,
+        Stmt::Select { clauses } => clauses.iter().any(|c| has_goto(&c.body)),
         Stmt::If { then, els, .. } => has_goto(then) || els.as_deref().is_some_and(stmt_has_goto),
         Stmt::For { body, .. } => has_goto(body),
         Stmt::Range { body, .. } => has_goto(body),
@@ -614,6 +635,11 @@ fn scan_block(tt: &TypeTable, b: &HirBlock, sc: &mut Scanned) {
 
 fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
     match s {
+        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
+            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+        }
         Stmt::Assign { lhs, rhs, .. } => {
             for p in lhs {
                 // 赋值目标**不是**取址：`a = 1` 不产生任何根。
@@ -726,6 +752,10 @@ fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
 
 fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
     match &e.kind {
+        ExprKind::Recv { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+        }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         ExprKind::Field { base, .. } => scan_expr(tt, base, sc),
         ExprKind::Index { base, index, .. } => {
@@ -1023,6 +1053,11 @@ fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
     }
     fn stmt(s: &Stmt, out: &mut BTreeSet<String>) {
         match s {
+            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+                // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
+                unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+            }
             Stmt::Branch {
                 kind: BranchKind::Goto,
                 label: Some(l),
@@ -1100,6 +1135,11 @@ impl Def<'_> {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
+            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+                // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
+                unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+            }
             Stmt::Assign { lhs, op, rhs } => {
                 for e in rhs {
                     self.expr(e);
@@ -1278,6 +1318,10 @@ impl Def<'_> {
 
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
+            ExprKind::Recv { .. } => {
+                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+                unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+            }
             ExprKind::Const(_) | ExprKind::Nil | ExprKind::Global(_) => {}
             ExprKind::Slot(s) => self.read(*s),
             ExprKind::Field { base, .. } => self.expr(base),
@@ -3103,6 +3147,9 @@ impl Fb<'_> {
             RangeKind::Str | RangeKind::Map => {
                 unreachable!("range over str/map 应由 unsupported() 在建图前拒掉")
             }
+            RangeKind::Chan | RangeKind::Func => {
+                unreachable!("range over chan/func 应由 unsupported() 在建图前拒掉")
+            }
         }
         let xs = self.expr(x);
         let int_ty = self.int_ty();
@@ -4199,6 +4246,7 @@ impl Fb<'_> {
 /// 表达式节点名（`todo!` 消息里用；**不带通配的 `match`**）。
 fn expr_kind_name(k: &ExprKind) -> &'static str {
     match k {
+        ExprKind::Recv { .. } => "recv",
         ExprKind::Const(_) => "const",
         ExprKind::Slot(_) => "slot",
         ExprKind::Global(_) => "global",
@@ -4225,6 +4273,9 @@ fn expr_kind_name(k: &ExprKind) -> &'static str {
 
 fn stmt_kind_name(s: &Stmt) -> &'static str {
     match s {
+        Stmt::Go { .. } => "go",
+        Stmt::Send { .. } => "send",
+        Stmt::Select { .. } => "select",
         Stmt::Assign { .. } => "assign",
         Stmt::ShortDecl { .. } => "shortdecl",
         Stmt::Expr(_) => "expr",
@@ -4293,6 +4344,11 @@ fn eff_block(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, b: &HirBlock, e: &mu
 
 fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut LoopEffects) {
     match s {
+        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
+            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+        }
         Stmt::Assign { lhs, rhs, .. } => {
             for x in rhs {
                 eff_expr(tt, sr, x, e);
@@ -4401,6 +4457,10 @@ fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut Loo
 
 fn eff_expr(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, x: &Expr, e: &mut LoopEffects) {
     match &x.kind {
+        ExprKind::Recv { .. } => {
+            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
+            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+        }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         ExprKind::Field { base, .. } => eff_expr(tt, sr, base, e),
         ExprKind::Index { base, index, .. } => {

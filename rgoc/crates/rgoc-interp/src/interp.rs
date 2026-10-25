@@ -754,6 +754,7 @@ impl<'a> Interp<'a> {
 
     fn eval_expr(&mut self, e: &'a Expr) {
         match &e.kind {
+            ExprKind::Recv { .. } => todo!("M8/Task 17：`<-ch` 的解释执行"),
             ExprKind::Const(c) => {
                 let v = const_value(c, e.typ, self.tt);
                 self.values.push(v);
@@ -1287,6 +1288,9 @@ impl<'a> Interp<'a> {
 
     fn exec_stmt(&mut self, s: &'a Stmt) {
         match s {
+            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+                todo!("M8/Task 15：go/send/select 的解释执行")
+            }
             Stmt::Empty => {}
             Stmt::Assign { lhs, op, rhs } => {
                 let vbase = self.values.len();
