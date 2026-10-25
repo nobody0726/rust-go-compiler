@@ -116,10 +116,15 @@ Waiter { g, token, slot, done }
 
 | 序 | 条件 | 动作 |
 |---|---|---|
-| ① | `recvq` 非空 | 直接把值放进队首接收方的 `slot`，置 `done`，唤醒它 |
-| ② | `cap > 0` 且 `buf` 未满 | 入 `buf`，完成 |
-| ③ | `closed` | `panic: send on closed channel` |
+| ① | `closed` | `panic: send on closed channel` |
+| ② | `recvq` 非空 | 直接把值放进队首接收方的 `slot`，置 `done`，唤醒它 |
+| ③ | `cap > 0` 且 `buf` 未满 | 入 `buf`，完成 |
 | ④ | 其余 | 登记 `Waiter`（`slot = Some(值)`）到 `sendq`，阻塞 |
+
+> ⚠️ **`closed` 必须排在「buf 未满」之前**。官方 `chansend` 加锁后的第一件事就是
+> `if c.closed != 0 { panic }`（`runtime/chan.go:224`）。若把它排在 `buf` 之后，
+> `close(c); c <- v`（`cap > 0` 且缓冲未满）会**静默把值塞进缓冲** ——
+> 不 panic、不报错，只是那笔发送消失了。
 
 **close**
 

@@ -6,6 +6,7 @@
 //! 以便 M8 的 goroutine 直接保存/恢复。
 #![deny(missing_docs)]
 
+pub mod chan;
 pub mod interp;
 pub mod ops;
 pub mod print;

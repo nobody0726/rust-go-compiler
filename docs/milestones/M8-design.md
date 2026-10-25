@@ -312,9 +312,9 @@ pub struct Waiter {
 | | ② `sendq` 非空 | **直接接收**发送方的 `slot`，标记 `done`，唤醒它 |
 | | ③ `closed` | 返回**零值** + `ok = false` |
 | | ④ 其余 | 登记 waiter 到 `recvq`，阻塞 |
-| **send** | ① `recvq` 非空 | **直接**把值放进接收方的 `slot`，标记 `done`，唤醒它 |
-| | ② `cap > 0` 且 `buf` 未满 | 入 `buf`，完成 |
-| | ③ `closed` | `panic: send on closed channel` |
+| **send** | ① `closed` | `panic: send on closed channel`（**必须排第一**：官方 `chansend` 加锁后第一件事就是它，`runtime/chan.go:224`；排在「buf 未满」之后会让 `close(c); c <- v` 静默把值塞进缓冲） |
+| | ② `recvq` 非空 | **直接**把值放进接收方的 `slot`，标记 `done`，唤醒它 |
+| | ③ `cap > 0` 且 `buf` 未满 | 入 `buf`，完成 |
 | | ④ 其余 | 登记 waiter（`slot = Some(v)`）到 `sendq`，阻塞 |
 | **close** | `closed` 已为真 | `panic: close of closed channel`（在**调用 close 的那个 G** 里） |
 | | 其余 | `closed = true`；唤醒 `recvq` **全部**（它们重试时按 ①→③ 先排空 `buf`，排空后才拿零值 + `ok=false`）；唤醒 `sendq` **全部**（它们重试时看到 `closed` ⇒ 在**自己**的 G 里 `panic: send on closed channel`） |
