@@ -263,6 +263,188 @@ fn has_float_at(tt: &TypeTable, t: TypeId, depth: u32) -> bool {
     }
 }
 
+// ───────────────────────── 类型 hash ─────────────────────────
+
+/// FNV-1a 32 位的初始值。
+const FNV_OFFSET: u32 = 2_166_136_261;
+/// FNV-1a 32 位的乘子。
+const FNV_PRIME: u32 = 16_777_619;
+
+/// 往 hash 里喂一个字节（FNV-1a）。
+fn mix(h: &mut u32, byte: u8) {
+    *h ^= u32::from(byte);
+    *h = h.wrapping_mul(FNV_PRIME);
+}
+
+/// 往 hash 里喂一个 `u32`（小端 —— 与宿主字节序无关，保证跨机稳定）。
+fn mix_u32(h: &mut u32, v: u32) {
+    for b in v.to_le_bytes() {
+        mix(h, b);
+    }
+}
+
+/// 往 hash 里喂一段字节。
+fn mix_bytes(h: &mut u32, s: &[u8]) {
+    mix_u32(h, u32::try_from(s.len()).unwrap_or(u32::MAX));
+    for b in s {
+        mix(h, *b);
+    }
+}
+
+/// 类型 hash（接口 `==` 与 map 键都用它）。
+///
+/// # 三条硬规矩
+///
+/// 1. **不许用 `TypeId` 的下标**。同一个类型在两个 `TypeTable` 里下标不同
+///    （`T-META-05` 的 `跨_type_table` 那条就是它的牙）。下标是**容器内**的
+///    身份，不是类型的身份。
+/// 2. **别名透明、具名不透明**：`type Q = []int` 与 `[]int` 同 hash；
+///    `type MyInt int` 与 `int` 不同 hash（前者是新类型，规范如此）。
+/// 3. **结构敏感**：字段名、字段序、参数名都进 hash ——
+///    `struct{a,b int}` 与 `struct{b,a int}` 是不同的类型。
+///
+/// 不承诺的东西：hash 值本身（会随编码方式变）、抗碰撞（32 位，够 M9 用；
+/// map 的键相等最终走 `rt_equal`，hash 只用来选桶）。
+#[must_use]
+pub fn type_hash(tt: &TypeTable, t: TypeId) -> u32 {
+    let mut h = FNV_OFFSET;
+    hash_into(tt, t, &mut h, 0);
+    h
+}
+
+fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
+    // 深度守卫：合法的 Go 类型不可能嵌套 64 层（检查器先拒环），
+    // 但 `type_hash` 是 `pub` 的 —— 手搓的环不该让它栈溢出。
+    if depth > 64 {
+        mix(h, 0xFF);
+        return;
+    }
+    match tt.type_of(t) {
+        Type::Basic(b) => {
+            mix(h, b'B');
+            // 用**文本**而不是判别值：`BasicId` 的变体序不进契约，而 `as_str`
+            // 是 `C7` 冻结的（dump 里就写这个）。
+            mix_bytes(h, b.as_str().as_bytes());
+        }
+        // 别名透明：直接把右边喂进去，**不加 tag**。
+        Type::Alias(id) => hash_into(tt, tt.alias_rhs(*id), h, depth + 1),
+        // 具名不透明：名字进 hash，本体也进（两个同名的不同类型不会撞）。
+        Type::Named(id) => {
+            mix(h, b'N');
+            mix_bytes(h, tt.named_def(*id).name.as_bytes());
+            hash_into(tt, tt.named_underlying(*id), h, depth + 1);
+        }
+        Type::Pointer(e) => {
+            mix(h, b'P');
+            hash_into(tt, *e, h, depth + 1);
+        }
+        Type::Slice(e) => {
+            mix(h, b'S');
+            hash_into(tt, *e, h, depth + 1);
+        }
+        Type::Array { len, elem } => {
+            mix(h, b'A');
+            match array_len_u32(tt, *len) {
+                Some(n) => mix_u32(h, n),
+                None => mix(h, b'?'),
+            }
+            hash_into(tt, *elem, h, depth + 1);
+        }
+        Type::Map { key, elem } => {
+            mix(h, b'M');
+            hash_into(tt, *key, h, depth + 1);
+            hash_into(tt, *elem, h, depth + 1);
+        }
+        Type::Chan { dir, elem } => {
+            mix(h, b'C');
+            mix(h, *dir as u8);
+            hash_into(tt, *elem, h, depth + 1);
+        }
+        Type::Struct(id) => {
+            mix(h, b'T');
+            let def = tt.struct_def(*id);
+            mix_u32(h, u32::try_from(def.fields.len()).unwrap_or(u32::MAX));
+            for f in &def.fields {
+                match &f.name {
+                    Some(n) => mix_bytes(h, n.as_bytes()),
+                    None => mix(h, b'-'),
+                }
+                mix(h, u8::from(f.embedded));
+                hash_into(tt, f.typ, h, depth + 1);
+            }
+        }
+        Type::Signature(id) => {
+            mix(h, b'F');
+            let def = tt.signature_def(*id);
+            match def.recv {
+                Some(r) => {
+                    mix(h, b'R');
+                    hash_into(tt, r, h, depth + 1);
+                }
+                None => mix(h, b'r'),
+            }
+            mix(h, u8::from(def.variadic));
+            hash_into(tt, def.params, h, depth + 1);
+            hash_into(tt, def.results, h, depth + 1);
+        }
+        Type::Tuple(id) => {
+            mix(h, b'U');
+            let def = tt.tuple_def(*id);
+            mix_u32(h, u32::try_from(def.vars.len()).unwrap_or(u32::MAX));
+            for (name, ty) in &def.vars {
+                match name {
+                    Some(n) => mix_bytes(h, n.as_bytes()),
+                    None => mix(h, b'-'),
+                }
+                hash_into(tt, *ty, h, depth + 1);
+            }
+        }
+        Type::Interface(id) => {
+            mix(h, b'I');
+            let def = tt.interface_def(*id);
+            // 方法表按名字升序存（`C7` §4），所以这里直接按存储序喂 —— 稳定。
+            mix_u32(h, u32::try_from(def.methods.len()).unwrap_or(u32::MAX));
+            for (name, sig) in &def.methods {
+                mix_bytes(h, name.as_bytes());
+                hash_into(tt, *sig, h, depth + 1);
+            }
+            // 类型集进 hash：`interface{}` 与 `comparable` 的表示差别只在这里。
+            hash_tset(tt, &def.tset, h, depth);
+        }
+        Type::TypeParam(_) | Type::Union(_) | Type::Invalid => {
+            // 没有运行期表示的类型：喂一个稳定但独特的值，别让它们撞上正常类型。
+            mix(h, b'X');
+            mix_u32(h, u32::try_from(t.index()).unwrap_or(u32::MAX));
+        }
+    }
+}
+
+fn hash_tset(tt: &TypeTable, ts: &rgoc_types::IfaceTSet, h: &mut u32, depth: u32) {
+    use rgoc_types::IfaceTSet as S;
+    match ts {
+        S::All => mix(h, b'a'),
+        S::Comparable => mix(h, b'c'),
+        S::Empty => mix(h, b'e'),
+        S::Terms(terms) => {
+            mix(h, b't');
+            mix_u32(h, u32::try_from(terms.len()).unwrap_or(u32::MAX));
+            for (tilde, ty) in terms {
+                mix(h, u8::from(*tilde));
+                hash_into(tt, *ty, h, depth + 1);
+            }
+        }
+    }
+}
+
+/// 数组长度（与 `layout::array_len_of` 同口径，但这里只要一个 `u32`）。
+fn array_len_u32(tt: &TypeTable, len: Option<rgoc_const::consts::ConstId>) -> Option<u32> {
+    use rgoc_const::value::Const;
+    match tt.consts().get(len?) {
+        Const::Int(bi) => u32::try_from(bi.to_i64()?).ok(),
+        _ => None,
+    }
+}
+
 /// 从 `TypeId` 造 `TypeDesc`。
 ///
 /// # 返回 `None`
@@ -522,5 +704,116 @@ mod tests {
         let s_int = tt.add_slice(int_);
         let d = super::DescBuilder::new(&tt, s_int).unwrap().build();
         assert!(!d.is_comparable(), "slice 不可比较");
+    }
+
+    // ───────────────── Task 4：类型 hash ─────────────────
+
+    use super::type_hash;
+
+    /// `T-META-05`：hash 稳定且能区分。
+    ///
+    /// 三条独立的性质，各自能单独失败：
+    /// ① 同一类型两次同值（纯函数）；② 相邻类型不撞车（区分度）；
+    /// ③ 结构敏感（字段序进 hash）。
+    #[test]
+    fn 类型_hash_稳定且区分() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let i64_ = tt.add_basic(BasicId::Int64);
+        let s_int = tt.add_slice(int_);
+        let s_i64 = tt.add_slice(i64_);
+
+        assert_eq!(type_hash(&tt, int_), type_hash(&tt, int_), "同类型两次同值");
+
+        let four = [
+            type_hash(&tt, int_),
+            type_hash(&tt, i64_),
+            type_hash(&tt, s_int),
+            type_hash(&tt, s_i64),
+        ];
+        let uniq: std::collections::BTreeSet<u32> = four.iter().copied().collect();
+        assert_eq!(uniq.len(), 4, "四者互不相同：{four:?}");
+
+        // 字段序进 hash
+        let ab = tt.add_struct(vec![f("a", int_), f("b", int_)]);
+        let ba = tt.add_struct(vec![f("b", int_), f("a", int_)]);
+        assert_ne!(
+            type_hash(&tt, tt.struct_type(ab)),
+            type_hash(&tt, tt.struct_type(ba)),
+            "字段序进 hash"
+        );
+
+        // 字段名进 hash（`struct{a int}` 与 `struct{b int}` 是不同的类型）
+        let bx = tt.add_struct(vec![f("x", int_)]);
+        let by = tt.add_struct(vec![f("y", int_)]);
+        assert_ne!(
+            type_hash(&tt, tt.struct_type(bx)),
+            type_hash(&tt, tt.struct_type(by)),
+            "字段名进 hash"
+        );
+    }
+
+    /// **这条是「不许用 `TypeId` 下标」的牙**。
+    ///
+    /// 同一个类型在两个独立的 `TypeTable` 里下标必然不同（一个是 1，另一个
+    /// 可能是 7）。用下标算 hash 的实现会在这里红 —— 而症状在生产里是
+    /// 「同一个接口的两个实现被判定成不同类型」，或者 map 键莫名找不到。
+    #[test]
+    fn 跨_type_table_的同一类型_hash_相同() {
+        let mk = |n_pad: usize| {
+            let mut tt = TypeTable::new();
+            for _ in 0..n_pad {
+                let _ = tt.add_basic(BasicId::Bool);
+            }
+            let int_ = tt.add_basic(BasicId::Int);
+            let s = tt.add_slice(int_);
+            let sid = tt.add_struct(vec![f("p", s), f("n", int_)]);
+            let ty = tt.struct_type(sid);
+            (tt, ty)
+        };
+        let (t1, a) = mk(0);
+        let (t2, b) = mk(5);
+        assert_eq!(type_hash(&t1, a), type_hash(&t2, b), "hash 不能依赖下标");
+    }
+
+    /// 别名透明、具名不透明 —— 两者是**相反**的方向，容易写反。
+    ///
+    /// `type Q = []int` 与 `[]int` 是**同一个**类型（规范：别名不是新类型）；
+    /// `type MyInt int` 与 `int` 是**不同**的类型（可赋值但不可互换）。
+    #[test]
+    fn 别名透明而具名不透明() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let s_int = tt.add_slice(int_);
+
+        let alias = tt.add_alias("Q");
+        tt.set_alias_rhs(alias, s_int);
+        assert_eq!(
+            type_hash(&tt, tt.alias_type(alias)),
+            type_hash(&tt, s_int),
+            "type Q = []int 与 []int 是同一个类型"
+        );
+
+        let named = tt.add_named("MyInt");
+        tt.set_named_underlying(named, int_);
+        assert_ne!(
+            type_hash(&tt, tt.named_type(named)),
+            type_hash(&tt, int_),
+            "type MyInt int 与 int 是不同的类型"
+        );
+
+        // 两个**同名本体、不同名字**的具名类型也必须不同 ——
+        // 这条才是「名字进 hash」的牙：只靠 tag 与本体，`type A int` 与
+        // `type B int` 会撞成同一个 hash（而它们是两个可区分的类型，
+        // 接口断言 `x.(A)` 与 `x.(B)` 的结果不同）。
+        let na = tt.add_named("A");
+        tt.set_named_underlying(na, int_);
+        let nb = tt.add_named("B");
+        tt.set_named_underlying(nb, int_);
+        assert_ne!(
+            type_hash(&tt, tt.named_type(na)),
+            type_hash(&tt, tt.named_type(nb)),
+            "type A int 与 type B int 的 hash 必须不同"
+        );
     }
 }
