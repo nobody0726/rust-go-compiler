@@ -429,8 +429,9 @@ enum RangeIter {
         pos: usize,
     },
     Map {
-        entries: Vec<(Value, Value)>,
+        keys: Vec<Value>,
         idx: usize,
+        map: Rc<RefCell<MapObj>>,
     },
     Int {
         i: i128,
@@ -4358,14 +4359,20 @@ fn range_next(iter: &mut Option<RangeIter>) -> Option<(Value, Value)> {
             *pos = start + w;
             Some((Value::Int(start as i128), Value::Int(i128::from(r))))
         }
-        RangeIter::Map { entries, idx } => {
-            let i = *idx;
-            if i >= entries.len() {
-                return None;
+        // `D-M8-12`：**快照 key 列表**，取的时候再看它还在不在 map 里。
+        // 只快照 `(k, v)` 对是不够的：迭代中 `delete(m, k)` 之后 Go **不再**
+        // 产出 `k`（`T-CON-49`），而快照对会照样吐出来。值仍然现读 ——
+        // Go 也是从桶里现读的。
+        RangeIter::Map { keys, idx, map } => {
+            while *idx < keys.len() {
+                let k = keys[*idx].clone();
+                *idx += 1;
+                if let Some(v) = map.borrow().get(&k) {
+                    let v = v.clone();
+                    return Some((k, v));
+                }
             }
-            *idx += 1;
-            let (k, v) = &entries[i];
-            Some((k.deep_copy(), v.deep_copy()))
+            None
         }
         RangeIter::Int { i, n } => {
             if *i >= *n {
@@ -4392,8 +4399,12 @@ fn build_iter(v: &Value, kind: RangeKind) -> RangeIter {
         },
         (RangeKind::Str, Value::Str(s)) => RangeIter::Str { s, pos: 0 },
         (RangeKind::Map, Value::Map(m)) => {
-            let entries = m.borrow().entries.clone();
-            RangeIter::Map { entries, idx: 0 }
+            let keys = m.borrow().entries.iter().map(|(k, _)| k.clone()).collect();
+            RangeIter::Map {
+                keys,
+                idx: 0,
+                map: m,
+            }
         }
         (RangeKind::Int, Value::Int(n)) => RangeIter::Int { i: 0, n },
         // `range` over chan：只把通道句柄存下来，取值由 `Act::RangeRecv`
