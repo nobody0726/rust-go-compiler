@@ -101,6 +101,11 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // ⑤ `_start`：init → main → exit(0)。
     asm.global("_start");
     asm.label("_start");
+    // ① 把进程入口的 sp 交给 runtime（M9/Task 7）：它指向 argc，
+    //    后面是 argv 与 envp —— freestanding 下读环境变量的唯一入口。
+    //    **必须**在 init / main 之前（它们可能一上来就分配）。
+    asm.ins("mov x0, sp");
+    asm.ins("bl rt_init");
     // `Module::init` 是**在 `funcs` 里的下标**（不是 `FuncId`）；`main` 是 `FuncId`。
     if let Some(f) = m.init.and_then(|idx| m.funcs.get(idx)) {
         asm.ins(&format!("bl fn{}", f.src.0));

@@ -105,20 +105,30 @@ fn u_m7_03_方法值够不着_守卫() {
 }
 
 #[test]
-fn u_m7_04_arena_耗尽打一行并退出2() {
-    // 每次 `new([1024]int)` 吃 8 KiB；arena 是 8 MiB ⇒ 2000 次必然耗尽。
+fn u_m7_04_堆耗尽打一行并退出2() {
+    // # 这条判据在 M9/Task 7 换过面（`R-9-3`）
+    //
+    // M7 时 arena 是**静态 8 MiB**，所以「2000 次 `new([1024]int)` 必然耗尽」
+    // 就能撞出 `panic: out of arena`。M9 起堆是**可增长**的（mmap chunk 链），
+    // 同一个程序会正常跑完 —— 判据的前提没了。
+    //
+    // 但它要钉的**意图**没变：内存耗尽时打一行到 stderr、退出 2、不继续执行。
+    // 现在这件事由 `RGOC_HEAP_MAX` 触发（上限是唯一能「确定耗尽」的手段），
+    // 文本也换成 `C9` §6 的那一行。
+    //
     // 循环里写全局，防止被折叠掉。
     let src = "package main\n\nvar sink *[1024]int\n\nfunc main() {\n\tfor i := 0; i < 2000; i = i + 1 {\n\t\tp := new([1024]int)\n\t\tp[0] = i\n\t\tsink = p\n\t}\n\tprintln(\"should not reach\")\n}\n";
     let (exit, stderr, exe) = build("arena_probe", src);
     assert_eq!(exit, 0, "构建应成功，stderr={stderr}");
     let run = std::process::Command::new(&exe)
+        .env("RGOC_HEAP_MAX", "1048576")
         .output()
         .expect("应能启动产物");
-    assert_eq!(run.status.code(), Some(2), "arena 耗尽 ⇒ 退出码 2");
+    assert_eq!(run.status.code(), Some(2), "堆耗尽 ⇒ 退出码 2");
     let err = String::from_utf8_lossy(&run.stderr);
     assert!(
-        err.contains("panic: out of arena"),
-        "必须打一行到 stderr，实际：{err:?}"
+        err.contains("runtime error: out of memory (heap limit 1048576 bytes)"),
+        "必须打一行到 stderr（带上限数值），实际：{err:?}"
     );
     let out = String::from_utf8_lossy(&run.stdout);
     assert!(

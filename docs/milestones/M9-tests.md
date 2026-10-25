@@ -284,6 +284,8 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | 修订 | 日期 | 内容 | 触发 |
 |---|---|---|---|
 | `R-9-1` | 2026-10-25 | Phase 0 的 Task 5/6/7 换序：**desc 发射 → `rt_alloc` → chunk 增长**（原顺序是 `rt_alloc` → chunk → desc）。内容一字未改，只换编号位 | 原计划 Task 5 的判据是「`new(int)` × 100 跑通 + 对齐探针」。但 `new(T)` 要到 desc 发射之后才能接 `rt_alloc` —— 按原顺序写，`new` 仍在调 `rt_arena_alloc`，**测试照样过**（假绿）。新判据补了第二条：「产物里必须出现 `bl rt_alloc`」，这条不依赖 desc 是否已发射，但仍需 desc 存在才能真跑，所以顺序必须换 |
+| `R-9-2` | 2026-10-25 | `rt_alloc` 的签名保持 `(desc, need_zero)` 两个参数（没有改成「从 desc 的 flags 读」） | 两条信息同源（都来自 `rgoc_meta::needs_zero`），但**走编译期参数**能让它出现在 `.s` 里 ⇒ `need_zero` 的判定有可观测判据（`mem_alloc::含指针的类型要清零`）。若改成运行期读 flags，`needs_zero` 算错就完全不可观测（M9 的 arena 拿到的都是零页） |
+| `R-9-3` | 2026-10-25 | M7 的 `u_m7_04_arena_耗尽打一行并退出2` 换面成 `u_m7_04_堆耗尽打一行并退出2`：触发手段从「2000 次 `new` 撑爆静态 8 MiB」改成「`RGOC_HEAP_MAX=1048576`」，文本从 `panic: out of arena` 换成 `runtime error: out of memory (heap limit N bytes)` | M9/Task 7 把静态 arena 换成可增长的 mmap chunk 链 ⇒ 原 fixture 正常跑完，判据前提消失。**意图**（耗尽 ⇒ 一行 stderr + 退出 2 + 不继续执行）不变 |
 
 ---
 

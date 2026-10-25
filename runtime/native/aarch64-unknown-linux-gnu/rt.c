@@ -28,6 +28,11 @@ typedef unsigned char u8;
 
 #define SYS_write 64
 #define SYS_exit_group 94
+#define SYS_mmap 222
+
+/* mmap 的两个常量（`asm-generic/mman-common.h` 的值，不是猜的）。 */
+#define PROT_READ_WRITE 3
+#define MAP_PRIVATE_ANON 0x22 /* MAP_PRIVATE(2) | MAP_ANONYMOUS(0x20) */
 
 #define FD_STDOUT 1
 #define FD_STDERR 2
@@ -39,6 +44,22 @@ static i64 sys3(i64 n, i64 a, i64 b, i64 c) {
     register i64 x1 __asm__("x1") = b;
     register i64 x2 __asm__("x2") = c;
     __asm__ volatile("svc #0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2) : "memory");
+    return x0;
+}
+
+/* 六个参数的系统调用（`mmap` 要 6 个）。 */
+static i64 sys6(i64 n, i64 a, i64 b, i64 c, i64 d, i64 e, i64 f) {
+    register i64 x8 __asm__("x8") = n;
+    register i64 x0 __asm__("x0") = a;
+    register i64 x1 __asm__("x1") = b;
+    register i64 x2 __asm__("x2") = c;
+    register i64 x3 __asm__("x3") = d;
+    register i64 x4 __asm__("x4") = e;
+    register i64 x5 __asm__("x5") = f;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5)
+                     : "memory");
     return x0;
 }
 
@@ -93,16 +114,148 @@ i64 rt_memcmp(const void *a, const void *b, u64 n) {
     return 0;
 }
 
-/* ── 分配：静态 arena + bump（`C5` §7.2 / `D-M7-7`）── */
+/* ── 分配：chunk 链表 + bump（`C5` §7.2 / `D-M7-7`；M9/Task 7 改成可增长）── */
 
-/* 8 MiB：M7 只 bump 不回收，而「每个字符串拼接 / `string(i)` 一次分配」意味着
- * 循环里会持续吃内存。1 MiB 在 `turing.go` 这种几千次迭代的程序上会假性耗尽
- * （`panic: out of arena` 是**诚实的失败**，但它掩盖了真正的错）。
- * 这是 `.bss`，不进文件体积。 */
-#define ARENA_SIZE (8UL * 1024UL * 1024UL)
+/* # 为什么从「一块 8 MiB 的 .bss」改成「mmap 的 chunk 链表」
+ *
+ * M7 的静态 arena 有两个问题：
+ * ① 上限写死 8 MiB —— 复合类型（slice/map/闭包）一上来用量翻倍，
+ *    `panic: out of arena` 会变成常态；
+ * ② 它**不在** `RGOC_HEAP_MAX` 的口径里，于是「堆上限」这个概念有两半。
+ *
+ * M9 起只有一个堆：mmap 出来的 chunk 串成链，bump 分配。
+ *
+ * # 为什么每个 chunk 16 MiB 起
+ *
+ * 一次 mmap 一个 4 KiB 页会让「大量小对象」变成大量系统调用。16 MiB 是
+ * 折中：`turing.go` 这种几千次分配的程序只 mmap 一次，而空程序也只 mmap
+ * 一次（惰性：第一次分配才 mmap）。
+ */
+#define CHUNK_MIN (16UL * 1024UL * 1024UL)
+#define HEAP_LIMIT_DEFAULT (256UL * 1024UL * 1024UL)
 
-static u8 arena[ARENA_SIZE];
-static u64 arena_used;
+typedef struct Chunk {
+    struct Chunk *next;
+    u64 size; /* data 容量（不含本头） */
+    u64 used; /* bump 到哪了 */
+} Chunk;
+
+static Chunk *heap;
+static u64 heap_committed; /* 已 mmap 的字节（含头），上限按它算 */
+static u64 heap_limit = HEAP_LIMIT_DEFAULT;
+
+/* 打印 `runtime error: out of memory (heap limit N bytes)` 并退出 2。
+ *
+ * 文本与 `C9` §6 一致（**不带** `panic: ` 前缀 —— 它不是 recoverable 的
+ * panic，而是 fatal，与 `fatal error: all goroutines are asleep` 同类）。 */
+static void rt_fatal_oom(u64 limit) {
+    const char *a = "runtime error: out of memory (heap limit ";
+    u64 n = 0;
+    while (a[n] != 0) {
+        n++;
+    }
+    write_all(FD_STDERR, a, n);
+    char buf[20];
+    u64 v = limit, len = 0;
+    if (v == 0) {
+        buf[len++] = '0';
+    }
+    char tmp[20];
+    u64 t = 0;
+    while (v > 0) {
+        tmp[t++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (t > 0) {
+        buf[len++] = tmp[--t];
+    }
+    write_all(FD_STDERR, buf, len);
+    const char *b = " bytes)\n";
+    n = 0;
+    while (b[n] != 0) {
+        n++;
+    }
+    write_all(FD_STDERR, b, n);
+    rt_exit(2);
+}
+
+/* 已提交的字节（上限按它算）与上限本身（`RT-MEM-08` 的 ◐：只报数字）。 */
+u64 rt_heap_used(void) { return heap_committed; }
+u64 rt_heap_limit(void) { return heap_limit; }
+
+/* 读环境变量 `RGOC_HEAP_MAX`（十进制字节）。
+ *
+ * # 为什么要 `_start` 把 `sp` 交进来
+ *
+ * freestanding 没有 `getenv`，也没有 libc 帮忙保存 `envp`。而 Linux 的进程
+ * 入口栈布局是固定的：`sp → argc`，`argv = sp+8`，`envp = argv + argc + 1`。
+ * 所以 `_start` 一开始就把 `sp` 传进来，这里扫一遍。
+ *
+ * 读不到就用缺省（256 MiB）。**不**因为「读不到」而报错 —— 那会让
+ * 「直接跑产物」变成一件需要额外配置的事。 */
+static int starts_with(const char *s, const char *p) {
+    u64 i = 0;
+    while (p[i] != 0) {
+        if (s[i] != p[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
+static u64 parse_u64(const char *s) {
+    u64 v = 0;
+    int any = 0;
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (u64)(*s - '0');
+        s++;
+        any = 1;
+    }
+    return any ? v : 0;
+}
+
+void rt_init(u64 sp) {
+    u64 argc = *(u64 *)sp;
+    char **argv = (char **)(sp + 8);
+    char **envp = argv + argc + 1;
+    for (u64 i = 0; envp[i] != 0; i++) {
+        const char *e = envp[i];
+        if (starts_with(e, "RGOC_HEAP_MAX=")) {
+            u64 v = parse_u64(e + 14); /* strlen("RGOC_HEAP_MAX=") == 14 */
+            /* 小于一页的上限没有意义（连一个 chunk 都放不下），当作没设。 */
+            if (v >= 4096) {
+                heap_limit = v;
+            }
+        }
+    }
+}
+
+/* mmap 一个新 chunk 挂到链头。`need` 是「至少要能装下的 data 字节」。 */
+void rt_grow(u64 need) {
+    u64 cap = CHUNK_MIN;
+    if (need > cap) {
+        cap = need;
+    }
+    /* 向上取整到 4 KiB（mmap 会自己取整，但 `heap_committed` 要对得上）。 */
+    cap = (cap + 4095UL) & ~4095UL;
+    u64 total = cap + sizeof(Chunk);
+    if (heap_committed + total > heap_limit) {
+        rt_fatal_oom(heap_limit);
+    }
+    i64 r = sys6(SYS_mmap, 0, (i64)total, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    if (r < 0) {
+        /* mmap 失败（ENOMEM 等）：按上限超限处理 —— 对调用方是同一件事：
+         * 「要不到内存」。文本带上限，因为那是用户能调的那个数。 */
+        rt_fatal_oom(heap_limit);
+    }
+    Chunk *c = (Chunk *)r;
+    c->next = heap;
+    c->size = cap;
+    c->used = 0;
+    heap = c;
+    heap_committed += total;
+}
 
 /* 零大小对象的固定地址（`zerosize.go` 要求 `new([0]int)` 两次相等）。
  *
@@ -118,21 +271,23 @@ void *rt_arena_alloc(u64 size, u64 align) {
     if (align == 0) {
         align = 8;
     }
-    u64 p = (arena_used + align - 1) & ~(align - 1);
-    if (p + size > ARENA_SIZE) {
-        /* 没有实现「panic 文案」的依赖循环问题：直接写死一行。 */
-        const char *m = "panic: out of arena\n";
-        u64 n = 0;
-        while (m[n] != 0) {
-            n++;
+    for (;;) {
+        Chunk *c = heap;
+        if (c != 0) {
+            u64 p = (c->used + align - 1) & ~(align - 1);
+            if (p + size <= c->size) {
+                c->used = p + size;
+                void *r = (void *)((u8 *)(c + 1) + p);
+                /* 保留 M7 的语义：**这块内存一定是零**。
+                 * mmap 给的就是零页，所以这条 memset 目前是冗余的 ——
+                 * 但它是「arena 的内存是零」这条契约的**唯一**执行点，
+                 * 而 M10 一旦开始复用对象，冗余就消失了。 */
+                rt_memset(r, 0, size);
+                return r;
+            }
         }
-        write_all(FD_STDERR, m, n);
-        rt_exit(2);
+        rt_grow(size + align);
     }
-    void *r = (void *)(arena + p);
-    arena_used = p + size;
-    rt_memset(r, 0, size);
-    return r;
 }
 
 /* ── 类型元数据与统一分配入口（M9/Task 6）── */
