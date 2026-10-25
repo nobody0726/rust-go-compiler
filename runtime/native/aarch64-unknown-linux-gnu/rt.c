@@ -23,6 +23,7 @@
 typedef unsigned long u64;
 typedef long i64;
 typedef unsigned int u32;
+typedef unsigned short u16;
 typedef unsigned char u8;
 
 #define SYS_write 64
@@ -132,6 +133,78 @@ void *rt_arena_alloc(u64 size, u64 align) {
     arena_used = p + size;
     rt_memset(r, 0, size);
     return r;
+}
+
+/* ── 类型元数据与统一分配入口（M9/Task 6）── */
+
+/* `TypeDesc` 的**内存**布局（`C5` §10 冻结的 40 字节）。
+ *
+ * 这里重抄一份而不是包含一个头文件：runtime 是 freestanding 的，没有任何构建
+ * 系统的头文件搜索；而 `_Static_assert` 把「两份定义是否一致」变成**编译期**
+ * 判据 —— Rust 侧 `T-META-01` 逐字段 `offset_of`，C 侧这里逐字段 `offsetof`。
+ *
+ * `flags` 的三位（与 `rgoc_meta::desc::flags` 同值）：
+ *   bit0 COMPARABLE / bit1 HAS_POINTERS / bit2 NEEDS_ZERO
+ */
+typedef struct {
+    u32 size;
+    u32 ptrdata;
+    u32 hash;
+    u8 kind;
+    u8 flags;
+    u16 pad;
+    const u8 *gcdata;
+    const void *elem;
+    const void *methods;
+} TypeDesc;
+
+_Static_assert(sizeof(TypeDesc) == 40, "TypeDesc 必须是 40 字节（C5 §10）");
+_Static_assert(__builtin_offsetof(TypeDesc, gcdata) == 16, "gcdata 在 +16");
+_Static_assert(__builtin_offsetof(TypeDesc, elem) == 24, "elem 在 +24");
+_Static_assert(__builtin_offsetof(TypeDesc, methods) == 32, "methods 在 +32");
+
+#define DESC_FLAG_NEEDS_ZERO 4
+
+/* 对齐不达标时的计数（探针；正常永远是 0）。
+ *
+ * 为什么要一个计数器而不只是断言：断言只在**发生的那一刻**能报，而这条
+ * 探针让「历史上有过几次」变成可读的状态。M9 的分配器保证 8 字节对齐，
+ * 所以它是 0 —— 而它是 0 这件事本身，是 `T-MEM-05` 的判据。 */
+static u64 rt_align_bad;
+
+u64 rt_probe_align(void) { return rt_align_bad; }
+
+/* 统一分配入口：`[+0 desc][+8 data...]`（`M9-design.md` §3.2）。
+ *
+ * `need_zero` 由**编译期**按 `needs_zero(类型)` 传入（含指针或含浮点 ⇒ 1）。
+ * 现在它看起来多余（arena 拿到的都是新页，本来就是零），但 M10 的 GC 一旦
+ * 开始复用对象，它就变成「不清零就会把上一条命的指针交给 GC」的唯一防线。
+ * 所以现在**不**省掉这个参数 —— 省掉之后加回来要改所有调用点。
+ */
+void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
+    u64 size = desc->size;
+    if (size == 0) {
+        /* 零大小对象：所有实例共享 `rt_zerobase`（`zerosize.go` 要求
+         * `&x == new([0]int)`）。它没有可写的 data，也不写 desc ——
+         * 那块内存是**所有**零大小类型共用的，写谁的 desc 都是错的。 */
+        return rt_zerobase;
+    }
+    u8 *p = (u8 *)rt_arena_alloc(size + 8, 8);
+    if (((u64)p & 7UL) != 0) {
+        rt_align_bad++;
+        const char *m = "panic: misaligned allocation\n";
+        u64 n = 0;
+        while (m[n] != 0) {
+            n++;
+        }
+        write_all(FD_STDERR, m, n);
+        rt_exit(2);
+    }
+    *(const TypeDesc **)p = desc;
+    if (need_zero != 0) {
+        rt_memset(p + 8, 0, size);
+    }
+    return p;
 }
 
 /* ── 字符串（`C9` §4.3：`string` = `(ptr, len)`，比较按字节）── */

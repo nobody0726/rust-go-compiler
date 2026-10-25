@@ -47,3 +47,33 @@ fn t_nat_43_空程序退出码为零() {
     assert_eq!(out.stderr, "");
     assert_eq!(out.exit, 0);
 }
+
+/// `println` 打 `bool` 必须是 `true`/`false`，**不是** `1`/`0`。
+///
+/// # 这条是写 `mem_alloc` 时顺手发现的既有 bug（M9/Task 6）
+///
+/// `1 == 1` 的类型是 **`untyped bool`**，而 isel 的打印分派只认
+/// `BasicId::Bool`（不带 `untyped`）⇒ 落到 `rt_print_i64` ⇒ 打 `1 0`。
+/// 官方与解释器都是 `true false`。
+///
+/// # 为什么 M7 的语料没抓到
+///
+/// `t_nat_42_43`（native vs 解释器，46 个语料逐字节）全绿 —— 但那 46 个文件里
+/// **没有一条** `println` 一个布尔值。这就是「语料全绿」与「语义对」之间的差。
+#[test]
+fn t_m9_06_布尔值的打印是_true_false() {
+    let out = native_harness::build_and_run(
+        "printbool",
+        r#"
+package main
+
+func main() {
+	println(1 == 1, 1 == 2)
+	print(true, false)
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(out.stdout, "true false\ntruefalse");
+    assert_eq!(out.exit, 0);
+}

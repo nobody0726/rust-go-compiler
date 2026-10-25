@@ -1274,10 +1274,21 @@ fn new_alloc(cx: &Ctx<'_>, dst: ValueId, ptr_ty: TypeId, asm: &mut Asm) {
             _ => break,
         }
     }
-    let (size, align) = layout(cx.tt, elem).map_or((8, 8), |l| (l.size, l.align));
-    load_imm(asm, "x0", i64::from(size));
-    load_imm(asm, "x1", i64::from(align));
-    asm.ins("bl rt_arena_alloc");
+    let _ = layout(cx.tt, elem);
+    // M9/Task 6 起走 `rt_alloc(desc, need_zero)`：分配器按 desc 记账（大小、
+    // 有没有指针），M10 的扫描器靠对象头里的 desc 找到 gcdata。
+    //
+    // `need_zero` 由**编译期**算（`rgoc_meta::needs_zero`），不是运行期读
+    // desc 的 flags —— 两份信息同源，但走编译期能让它出现在 `.s` 里，
+    // 于是「判定对不对」有可观测的判据（`mem_alloc::含指针的类型要清零`）。
+    let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, elem));
+    load_addr(asm, "x0", &desc);
+    load_imm(
+        asm,
+        "x1",
+        i64::from(rgoc_meta::desc::needs_zero(cx.tt, elem)),
+    );
+    asm.ins("bl rt_alloc");
     st_x(asm, "x0", d.off);
 }
 
@@ -1732,7 +1743,7 @@ fn print_value(cx: &Ctx<'_>, v: ValueId, asm: &mut Asm) {
                 ld_x(asm, "x0", s.off);
                 ld_x(asm, "x1", s.off + 8);
                 asm.ins("bl rt_print_str");
-            } else if basic_of(cx.tt, t) == Some(BasicId::Bool) {
+            } else if basic_of(cx.tt, t).is_some_and(rgoc_const::basic::BasicId::is_bool) {
                 ld_x(asm, "x0", s.off);
                 asm.ins("bl rt_print_bool");
             } else if cx.is_unsigned(t) {
