@@ -419,64 +419,100 @@ struct Frame<'a> {
 
 // ───────────────────────── 机器 ─────────────────────────
 
-/// 顺序解释器。
-pub struct Interp<'a> {
+/// **共享状态**：所有 goroutine 看到同一份（`D-M8-1`）。
+///
+/// 与 [`G`] 的分界线只有一条：**「换一个 goroutine 之后它还该在吗」**。
+/// `globals` / `out` / `steps` / `halted` / `methods` 都在，因为它们跨 goroutine；
+/// `frames` / `eval` / `values` / `targets` / `pending` 不在，因为它们属于「正在跑的那一个」。
+pub struct Shared<'a> {
     prog: &'a Program,
     tt: &'a TypeTable,
     globals: Vec<Cell>,
+    out: String,
+    steps: u64,
+    opts: Options,
+    halted: Option<Halt>,
+    methods: std::collections::BTreeMap<(String, String), FuncId>,
+    /// 全部 goroutine。`None` = 已退出（槽位保留，编号不回收）。
+    gs: Vec<Option<G<'a>>>,
+}
+
+/// **一个 goroutine 的执行状态**（`D-M8-1`）。
+///
+/// 这五个 `Vec` 就是「保存/恢复一个 goroutine」的全部内容 —— M5 的 `D-M5-1`
+/// 把执行位置做成了数据，M8 才有资格谈「挂起」。加字段时问一句：
+/// 换一个 goroutine 之后它该不该跟着走？该 ⇒ 放这里；不该 ⇒ 放 [`Shared`]。
+struct G<'a> {
     frames: Vec<Frame<'a>>,
+    /// 正在展开的 panic 值（`None` = 没在展开）。
+    ///
+    /// 归 `G` 不归 `Shared`：panic 是**一个 goroutine 的**展开状态。
+    /// 未捕获时由 `one_step` 升格成 `Halt::Panic`（那才是全程序的），
+    /// 但展开途中它必须跟着这个 goroutine 走。
+    panic_val: Option<Value>,
     eval: Vec<Task<'a>>,
     values: Vec<Value>,
     targets: Vec<Target>,
     pending: Option<Pending<'a>>,
-    out: String,
-    steps: u64,
-    opts: Options,
-    panic_val: Option<Value>,
-    halted: Option<Halt>,
     phase: TopPhase,
-    methods: std::collections::BTreeMap<(String, String), FuncId>,
 }
 
 /// 手写 `Debug`：机器状态是四万个值，逐字段展开只会把日志淹掉。
-impl std::fmt::Debug for Interp<'_> {
+impl std::fmt::Debug for Shared<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Interp")
+        f.debug_struct("Shared")
+            .field("goroutines", &self.gs.len())
+            .field("live", &self.gs.iter().filter(|g| g.is_some()).count())
+            .field("steps", &self.steps)
+            .field("out_len", &self.out.len())
+            .field("halted", &self.halted.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for G<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("G")
             .field("frames", &self.frames.len())
             .field("eval", &self.eval.len())
             .field("values", &self.values.len())
-            .field("steps", &self.steps)
-            .field("panicking", &self.panic_val.is_some())
+            .field("pending", &self.pending.is_some())
             .finish()
     }
 }
 
 /// 跑一个程序。
+///
+/// 签名与 M5 **完全一致** —— `rgoc-driver` 一行都不用改（`M8-plan.md` Task 3）。
 #[must_use]
 pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
-    let mut it = Interp {
+    let mut sh = Shared {
         prog,
         tt,
         globals: Vec::new(),
+        out: String::new(),
+        steps: 0,
+        opts,
+        halted: None,
+        methods: std::collections::BTreeMap::new(),
+        gs: Vec::new(),
+    };
+    sh.setup();
+    // main goroutine：`TopPhase::Globals(0)` 起 —— 全局初始化是**它的**第一阶段。
+    sh.gs.push(Some(G {
         frames: Vec::new(),
+        panic_val: None,
         eval: Vec::new(),
         values: Vec::new(),
         targets: Vec::new(),
         pending: None,
-        out: String::new(),
-        steps: 0,
-        opts,
-        panic_val: None,
-        halted: None,
         phase: TopPhase::Globals(0),
-        methods: std::collections::BTreeMap::new(),
-    };
-    it.setup();
-    it.drive();
-    it.finish()
+    }));
+    sh.drive();
+    sh.finish()
 }
 
-impl<'a> Interp<'a> {
+impl<'a> Shared<'a> {
     // ───────────── 准备 ─────────────
 
     fn setup(&mut self) {
@@ -493,84 +529,14 @@ impl<'a> Interp<'a> {
 
     // ───────────── 主循环 ─────────────
 
+    /// 推进整个程序直到结束（`D-M8-2`：当前 goroutine 一直跑，阻塞/退出才换人）。
+    ///
+    /// Task 3 时 `gs` 里只有 main 一个 —— 循环体就是 [`G::one_step`]，
+    /// 语义与 M5 的单循环**逐条对应**（判据：全量测试零改动全绿）。
     fn drive(&mut self) {
-        loop {
-            self.steps += 1;
-            if self.steps > self.opts.max_steps {
-                self.halted = Some(Halt::Budget("step budget exceeded"));
-                return;
-            }
-            if self.halted.is_some() {
-                return;
-            }
-            if self.eval.len() > self.opts.max_eval {
-                self.halted = Some(Halt::Budget("eval stack depth exceeded"));
-                return;
-            }
-            if let Some(f) = self.frames.last()
-                && f.exiting
-            {
-                self.teardown();
-                continue;
-            }
-            if !self.eval.is_empty() {
-                self.step_eval();
-                continue;
-            }
-            if self.pending.is_some() {
-                self.resume();
-                continue;
-            }
-            if !self.frames.is_empty() {
-                self.next_stmt();
-                continue;
-            }
-            if !self.next_top() {
-                return;
-            }
-        }
-    }
-
-    /// 帧栈空时推进一个顶层动作。返回 `false` ⇒ 程序结束。
-    fn next_top(&mut self) -> bool {
-        match self.phase {
-            TopPhase::Globals(gi) => {
-                if let Some(g) = self.prog.init_order.get(gi) {
-                    self.phase = TopPhase::Globals(gi + 1);
-                    let vbase = self.values.len();
-                    self.pending = Some(Pending::Globals {
-                        ids: &g.globals,
-                        vbase,
-                    });
-                    for e in g.rhs.iter().rev() {
-                        self.eval.push(Task::Eval(e));
-                    }
-                } else {
-                    self.phase = TopPhase::Inits(0);
-                }
-                true
-            }
-            TopPhase::Inits(i) => {
-                if let Some(&fid) = self.prog.inits.get(i) {
-                    self.phase = TopPhase::Inits(i + 1);
-                    self.call_func(fid, None, Vec::new(), Vec::new(), false, false, false);
-                } else {
-                    self.phase = TopPhase::Main;
-                }
-                true
-            }
-            TopPhase::Main => {
-                self.phase = TopPhase::Done;
-                match self.prog.main {
-                    Some(m) => {
-                        self.call_func(m, None, Vec::new(), Vec::new(), false, false, false);
-                        true
-                    }
-                    None => false,
-                }
-            }
-            TopPhase::Done => false,
-        }
+        let mut g = self.gs[0].take().expect("main goroutine 必须存在");
+        while g.one_step(self) {}
+        self.gs[0] = Some(g);
     }
 
     fn finish(self) -> Outcome {
@@ -592,24 +558,107 @@ impl<'a> Interp<'a> {
             steps: self.steps,
         }
     }
+}
+
+impl<'a> G<'a> {
+    /// 推进**一步**。返回 `false` ⇒ 程序结束（预算超限 / 顶层动作跑完）。
+    ///
+    /// 逐行对应 M5 的 `drive()` 循环体：原来的每个 `continue` 变成 `return true`，
+    /// 每个 `return` 变成 `return false`。**顺序不能改** —— 先判退出帧、再求值、
+    /// 再 `resume`、再语句、最后顶层动作。
+    fn one_step(&mut self, sh: &mut Shared<'a>) -> bool {
+        sh.steps += 1;
+        if sh.steps > sh.opts.max_steps {
+            sh.halted = Some(Halt::Budget("step budget exceeded"));
+            return false;
+        }
+        if sh.halted.is_some() {
+            return false;
+        }
+        if self.eval.len() > sh.opts.max_eval {
+            sh.halted = Some(Halt::Budget("eval stack depth exceeded"));
+            return false;
+        }
+        if let Some(f) = self.frames.last()
+            && f.exiting
+        {
+            self.teardown(sh);
+            return true;
+        }
+        if !self.eval.is_empty() {
+            self.step_eval(sh);
+            return true;
+        }
+        if self.pending.is_some() {
+            self.resume(sh);
+            return true;
+        }
+        if !self.frames.is_empty() {
+            self.next_stmt(sh);
+            return true;
+        }
+        self.next_top(sh)
+    }
+
+    /// 帧栈空时推进一个顶层动作。返回 `false` ⇒ 程序结束。
+    fn next_top(&mut self, sh: &mut Shared<'a>) -> bool {
+        match self.phase {
+            TopPhase::Globals(gi) => {
+                if let Some(g) = sh.prog.init_order.get(gi) {
+                    self.phase = TopPhase::Globals(gi + 1);
+                    let vbase = self.values.len();
+                    self.pending = Some(Pending::Globals {
+                        ids: &g.globals,
+                        vbase,
+                    });
+                    for e in g.rhs.iter().rev() {
+                        self.eval.push(Task::Eval(e));
+                    }
+                } else {
+                    self.phase = TopPhase::Inits(0);
+                }
+                true
+            }
+            TopPhase::Inits(i) => {
+                if let Some(&fid) = sh.prog.inits.get(i) {
+                    self.phase = TopPhase::Inits(i + 1);
+                    self.call_func(sh, fid, None, Vec::new(), Vec::new(), false, false, false);
+                } else {
+                    self.phase = TopPhase::Main;
+                }
+                true
+            }
+            TopPhase::Main => {
+                self.phase = TopPhase::Done;
+                match sh.prog.main {
+                    Some(m) => {
+                        self.call_func(sh, m, None, Vec::new(), Vec::new(), false, false, false);
+                        true
+                    }
+                    None => false,
+                }
+            }
+            TopPhase::Done => false,
+        }
+    }
 
     // ───────────── 求值 ─────────────
 
-    fn step_eval(&mut self) {
+    fn step_eval(&mut self, sh: &mut Shared<'a>) {
         let Some(task) = self.eval.pop() else { return };
         match task {
-            Task::Eval(e) => self.eval_expr(e),
+            Task::Eval(e) => self.eval_expr(sh, e),
             Task::Unary { op, typ } => {
-                let v = self.pop();
-                self.values.push(apply_unary(op, v, typ, self.tt));
+                let v = self.pop(sh);
+                self.values.push(apply_unary(op, v, typ, sh.tt));
             }
             Task::Binary { op, typ } => {
-                let y = self.pop();
-                let x = self.pop();
-                self.apply_binary(op, x, y, typ);
+                let y = self.pop(sh);
+                let x = self.pop(sh);
+                self.apply_binary(sh, op, x, y, typ);
             }
             Task::Short { is_and, y } => {
-                let x = self.pop();
+                let x = self.pop(sh);
                 let b = x.as_bool().unwrap_or(false);
                 // 短路条件是「左侧已经决定了结果」：
                 //   `&&` 左侧 false ⇒ 结果 false（不必求右侧）
@@ -624,126 +673,126 @@ impl<'a> Interp<'a> {
                 }
             }
             Task::Index { typ, comma_ok } => {
-                let idx = self.pop();
-                let base = self.pop();
+                let idx = self.pop(sh);
+                let base = self.pop(sh);
                 let r = if comma_ok {
-                    self.index_comma_ok(&base, &idx, typ)
+                    self.index_comma_ok(sh, &base, &idx, typ)
                 } else {
-                    self.index_value(&base, &idx, typ).map(|v| {
+                    self.index_value(sh, &base, &idx, typ).map(|v| {
                         self.values.push(v);
                     })
                 };
                 if let Err(e) = r {
-                    self.fail(e);
+                    self.fail(sh, e);
                 }
             }
             Task::Slice { typ, lo, hi, max } => {
-                let mx = if max { Some(self.pop()) } else { None };
-                let h = if hi { Some(self.pop()) } else { None };
-                let l = if lo { Some(self.pop()) } else { None };
-                let base = self.pop();
+                let mx = if max { Some(self.pop(sh)) } else { None };
+                let h = if hi { Some(self.pop(sh)) } else { None };
+                let l = if lo { Some(self.pop(sh)) } else { None };
+                let base = self.pop(sh);
                 match slice_value(&base, l, h, mx, typ) {
                     Ok(v) => self.values.push(v),
-                    Err(e) => self.fail(e),
+                    Err(e) => self.fail(sh, e),
                 }
             }
             Task::Field { index } => {
-                let base = self.pop();
+                let base = self.pop(sh);
                 match field_of(&base, index) {
                     Some(v) => self.values.push(v),
-                    None => self.fail(RtError::NilDeref),
+                    None => self.fail(sh, RtError::NilDeref),
                 }
             }
             Task::Deref => {
-                let p = self.pop();
+                let p = self.pop(sh);
                 match p {
                     Value::Ptr(c) => {
                         let v = c.borrow().deep_copy();
                         self.values.push(v);
                     }
-                    Value::Nil(_) => self.fail(RtError::NilDeref),
+                    Value::Nil(_) => self.fail(sh, RtError::NilDeref),
                     other => self.values.push(other),
                 }
             }
             Task::AddrOf => {
                 // `&T{...}`：新分配一个 `Cell` 装住刚求出的值。
                 // 不能复用临时值本身 —— 那个值可能立刻被别处改掉。
-                let v = self.pop();
+                let v = self.pop(sh);
                 self.values.push(Value::Ptr(cell(v)));
             }
             Task::Convert { to, from } => {
-                let v = self.pop();
-                let out = convert(self.tt, v, to, from);
+                let v = self.pop(sh);
+                let out = convert(sh.tt, v, to, from);
                 self.values.push(out);
             }
             Task::Assert {
                 to,
                 iface,
                 comma_ok,
-            } => self.type_assert(to, iface, comma_ok),
-            Task::Make { kind, typ } => self.make(kind, typ),
+            } => self.type_assert(sh, to, iface, comma_ok),
+            Task::Make { kind, typ } => self.make(sh, kind, typ),
             Task::Builtin {
                 kind,
                 args,
                 variadic,
-            } => self.do_builtin(kind, args, variadic),
+            } => self.do_builtin(sh, kind, args, variadic),
             Task::Invoke {
                 target,
                 nargs,
                 extra,
                 dots,
-            } => self.do_invoke(target, nargs, extra, dots),
-            Task::Build(comp) => self.build_composite(comp),
-            Task::Bind { method, recv_typ } => self.bind_method(method, recv_typ),
+            } => self.do_invoke(sh, target, nargs, extra, dots),
+            Task::Build(comp) => self.build_composite(sh, comp),
+            Task::Bind { method, recv_typ } => self.bind_method(sh, method, recv_typ),
 
-            Task::ResolvePlace(p) => self.resolve_place(p),
+            Task::ResolvePlace(p) => self.resolve_place(sh, p),
             Task::ResolveField { index } => {
-                let t = self.pop_target();
+                let t = self.pop_target(sh);
                 match t {
                     Target::Cell(c) => match field_cell(&c, index) {
                         Some(fc) => self.targets.push(Target::Cell(fc)),
-                        None => self.fail(RtError::NilDeref),
+                        None => self.fail(sh, RtError::NilDeref),
                     },
                     other => self.targets.push(other),
                 }
             }
             Task::ResolveDeref => {
-                let v = self.pop();
+                let v = self.pop(sh);
                 match v {
                     Value::Ptr(c) => self.targets.push(Target::Cell(c)),
-                    Value::Nil(_) => self.fail(RtError::NilDeref),
+                    Value::Nil(_) => self.fail(sh, RtError::NilDeref),
                     _ => self.targets.push(Target::Discard),
                 }
             }
             Task::ResolveIndex => {
-                let idx = self.pop();
-                let base = self.pop();
+                let idx = self.pop(sh);
+                let base = self.pop(sh);
                 match resolve_index(base, idx) {
                     Ok(t) => self.targets.push(t),
-                    Err(e) => self.fail(e),
+                    Err(e) => self.fail(sh, e),
                 }
             }
-            Task::EvalRef(e) => self.eval_ref(e),
+            Task::EvalRef(e) => self.eval_ref(sh, e),
             Task::RefField { index } => {
-                let v = self.pop();
+                let v = self.pop(sh);
                 match v {
                     Value::Ptr(c) => match field_cell(&c, index) {
                         Some(fc) => self.values.push(Value::Ptr(fc)),
-                        None => self.fail(RtError::NilDeref),
+                        None => self.fail(sh, RtError::NilDeref),
                     },
                     other => self.values.push(other),
                 }
             }
             Task::RefIndex => {
-                let idx = self.pop();
-                let base = self.pop();
+                let idx = self.pop(sh);
+                let base = self.pop(sh);
                 match ref_index(base, idx) {
                     Ok(c) => self.values.push(Value::Ptr(c)),
-                    Err(e) => self.fail(e),
+                    Err(e) => self.fail(sh, e),
                 }
             }
             Task::ToPtr => {
-                let t = self.pop_target();
+                let t = self.pop_target(sh);
                 match t {
                     Target::Cell(c) => self.values.push(Value::Ptr(c)),
                     _ => self.values.push(Value::Nil(NilKind::Ptr)),
@@ -752,14 +801,14 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn eval_expr(&mut self, e: &'a Expr) {
+    fn eval_expr(&mut self, sh: &mut Shared<'a>, e: &'a Expr) {
         match &e.kind {
             ExprKind::Recv { .. } => todo!("M8/Task 17：`<-ch` 的解释执行"),
             ExprKind::Const(c) => {
-                let v = const_value(c, e.typ, self.tt);
+                let v = const_value(c, e.typ, sh.tt);
                 self.values.push(v);
             }
-            ExprKind::Nil => self.values.push(nil_of(self.tt, e.typ)),
+            ExprKind::Nil => self.values.push(nil_of(sh.tt, e.typ)),
             ExprKind::Slot(s) => {
                 let fi = self.frames.len() - 1;
                 let v = match self.frames[fi].slots.get(s.index()) {
@@ -769,7 +818,7 @@ impl<'a> Interp<'a> {
                 self.values.push(v);
             }
             ExprKind::Global(g) => {
-                let v = match self.globals.get(g.index()) {
+                let v = match sh.globals.get(g.index()) {
                     Some(c) => c.borrow().deep_copy(),
                     None => Value::Nil(NilKind::Ptr),
                 };
@@ -871,7 +920,7 @@ impl<'a> Interp<'a> {
                     extra,
                     dots: *variadic,
                 });
-                self.push_call_parts(callee, args);
+                self.push_call_parts(sh, callee, args);
             }
             ExprKind::Convert { to, x } => {
                 self.eval.push(Task::Convert {
@@ -896,7 +945,7 @@ impl<'a> Interp<'a> {
                 }
             }
             ExprKind::FuncLit(fid) => {
-                let captured = self.capture_cells(*fid);
+                let captured = self.capture_cells(sh, *fid);
                 self.values.push(Value::Func(Rc::new(Closure {
                     func: *fid,
                     captured,
@@ -928,7 +977,7 @@ impl<'a> Interp<'a> {
                 }
             }
             ExprKind::New(pointee) => {
-                let v = cell(zero_of(self.tt, *pointee));
+                let v = cell(zero_of(sh.tt, *pointee));
                 self.values.push(Value::Ptr(v));
             }
             ExprKind::Builtin {
@@ -949,7 +998,7 @@ impl<'a> Interp<'a> {
     }
 
     /// 压入「被调方侧 + 实参」的求值任务（逆序压 ⇒ 正序求值）。
-    fn push_call_parts(&mut self, callee: &'a Callee, args: &'a [Expr]) {
+    fn push_call_parts(&mut self, _sh: &mut Shared<'a>, callee: &'a Callee, args: &'a [Expr]) {
         for a in args.iter().rev() {
             self.eval.push(Task::Eval(a));
         }
@@ -963,7 +1012,7 @@ impl<'a> Interp<'a> {
     }
 
     /// 把表达式**尽量**求成引用：可寻址 ⇒ `Ptr(Cell)`；否则退化成求值。
-    fn eval_ref(&mut self, e: &'a Expr) {
+    fn eval_ref(&mut self, sh: &mut Shared<'a>, e: &'a Expr) {
         match &e.kind {
             ExprKind::Slot(s) => {
                 let fi = self.frames.len() - 1;
@@ -972,7 +1021,7 @@ impl<'a> Interp<'a> {
                     None => self.values.push(Value::Nil(NilKind::Ptr)),
                 }
             }
-            ExprKind::Global(g) => match self.globals.get(g.index()) {
+            ExprKind::Global(g) => match sh.globals.get(g.index()) {
                 Some(c) => self.values.push(Value::Ptr(c.clone())),
                 None => self.values.push(Value::Nil(NilKind::Ptr)),
             },
@@ -990,7 +1039,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn resolve_place(&mut self, p: &'a Place) {
+    fn resolve_place(&mut self, sh: &mut Shared<'a>, p: &'a Place) {
         match p {
             Place::Slot(s) => {
                 if *s == DISCARD_SLOT {
@@ -1003,7 +1052,7 @@ impl<'a> Interp<'a> {
                     None => self.targets.push(Target::Discard),
                 }
             }
-            Place::Global(g) => match self.globals.get(g.index()) {
+            Place::Global(g) => match sh.globals.get(g.index()) {
                 Some(c) => self.targets.push(Target::Cell(c.clone())),
                 None => self.targets.push(Target::Discard),
             },
@@ -1025,10 +1074,10 @@ impl<'a> Interp<'a> {
 
     // ───────────── 语句推进 ─────────────
 
-    fn next_stmt(&mut self) {
+    fn next_stmt(&mut self, sh: &mut Shared<'a>) {
         let fi = self.frames.len() - 1;
         if self.frames[fi].bodies.is_empty() {
-            self.do_return(Vec::new());
+            self.do_return(sh, Vec::new());
             return;
         }
         let bi = self.frames[fi].bodies.len() - 1;
@@ -1041,16 +1090,16 @@ impl<'a> Interp<'a> {
             Body::TypeSwitch(_) => 5,
         };
         match kind {
-            0 => self.step_seq(fi),
-            1 => self.step_if(fi),
-            2 => self.step_for(fi),
-            3 => self.step_range(fi),
-            4 => self.step_switch(fi),
-            _ => self.step_type_switch(fi),
+            0 => self.step_seq(sh, fi),
+            1 => self.step_if(sh, fi),
+            2 => self.step_for(sh, fi),
+            3 => self.step_range(sh, fi),
+            4 => self.step_switch(sh, fi),
+            _ => self.step_type_switch(sh, fi),
         }
     }
 
-    fn step_seq(&mut self, fi: usize) {
+    fn step_seq(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let st = {
             let bi = self.frames[fi].bodies.len() - 1;
             let Body::Seq { stmts, idx, .. } = &mut self.frames[fi].bodies[bi] else {
@@ -1066,14 +1115,14 @@ impl<'a> Interp<'a> {
             }
         };
         match st {
-            Some(s) => self.exec_stmt(s),
+            Some(s) => self.exec_stmt(sh, s),
             None => {
                 self.frames[fi].bodies.pop();
             }
         }
     }
 
-    fn step_if(&mut self, fi: usize) {
+    fn step_if(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let act = {
             let Body::If(s) = &mut self.frames[fi].bodies[bi] else {
@@ -1099,10 +1148,10 @@ impl<'a> Interp<'a> {
                 }
             }
         };
-        self.apply(fi, act);
+        self.apply(sh, fi, act);
     }
 
-    fn step_for(&mut self, fi: usize) {
+    fn step_for(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let (act, refresh) = {
             let Body::For(s) = &mut self.frames[fi].bodies[bi] else {
@@ -1148,10 +1197,10 @@ impl<'a> Interp<'a> {
                 self.frames[fi].slots[slot.index()] = cell(v);
             }
         }
-        self.apply(fi, act);
+        self.apply(sh, fi, act);
     }
 
-    fn step_range(&mut self, fi: usize) {
+    fn step_range(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let act = {
             let Body::Range(s) = &mut self.frames[fi].bodies[bi] else {
@@ -1175,10 +1224,10 @@ impl<'a> Interp<'a> {
                 },
             }
         };
-        self.apply(fi, act);
+        self.apply(sh, fi, act);
     }
 
-    fn step_switch(&mut self, fi: usize) {
+    fn step_switch(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let act = {
             let Body::Switch(s) = &mut self.frames[fi].bodies[bi] else {
@@ -1217,10 +1266,10 @@ impl<'a> Interp<'a> {
                 }
             }
         };
-        self.apply(fi, act);
+        self.apply(sh, fi, act);
     }
 
-    fn step_type_switch(&mut self, fi: usize) {
+    fn step_type_switch(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let act = {
             let Body::TypeSwitch(s) = &mut self.frames[fi].bodies[bi] else {
@@ -1242,17 +1291,17 @@ impl<'a> Interp<'a> {
                 }
             }
         };
-        self.apply(fi, act);
+        self.apply(sh, fi, act);
     }
 
-    fn apply(&mut self, fi: usize, act: Option<Act<'a>>) {
+    fn apply(&mut self, sh: &mut Shared<'a>, fi: usize, act: Option<Act<'a>>) {
         match act {
             None => {}
             Some(Act::Pop) => {
                 self.frames[fi].bodies.pop();
             }
-            Some(Act::Exec(s)) => self.exec_stmt(s),
-            Some(Act::Enter(b)) => self.push_seq(fi, b),
+            Some(Act::Exec(s)) => self.exec_stmt(sh, s),
+            Some(Act::Enter(b)) => self.push_seq(sh, fi, b),
             Some(Act::IfCond { cond, then, els }) => {
                 self.pending = Some(Pending::IfCond { then, els });
                 self.eval.push(Task::Eval(cond));
@@ -1265,12 +1314,12 @@ impl<'a> Interp<'a> {
                 self.pending = Some(Pending::RangeInit);
                 self.eval.push(Task::Eval(x));
             }
-            Some(Act::RangeBind) => self.start_range_bind(fi),
+            Some(Act::RangeBind) => self.start_range_bind(sh, fi),
             Some(Act::SwitchTag(t)) => {
                 self.pending = Some(Pending::SwitchTag);
                 self.eval.push(Task::Eval(t));
             }
-            Some(Act::SwitchScan) => self.switch_scan(fi),
+            Some(Act::SwitchScan) => self.switch_scan(sh, fi),
             Some(Act::TypeSwitchX(x)) => {
                 self.pending = Some(Pending::TypeSwitchX);
                 self.eval.push(Task::Eval(x));
@@ -1278,7 +1327,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn push_seq(&mut self, fi: usize, b: &'a Block) {
+    fn push_seq(&mut self, _sh: &mut Shared<'a>, fi: usize, b: &'a Block) {
         self.frames[fi].bodies.push(Body::Seq {
             stmts: &b.stmts,
             idx: 0,
@@ -1286,7 +1335,7 @@ impl<'a> Interp<'a> {
         });
     }
 
-    fn exec_stmt(&mut self, s: &'a Stmt) {
+    fn exec_stmt(&mut self, sh: &mut Shared<'a>, s: &'a Stmt) {
         match s {
             Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
                 todo!("M8/Task 15：go/send/select 的解释执行")
@@ -1321,13 +1370,16 @@ impl<'a> Interp<'a> {
                 cond,
                 then,
                 els,
-            } => self.push_body(Body::If(IfState {
-                init: init.as_deref(),
-                cond,
-                then,
-                els: els.as_deref(),
-                phase: PH_INIT,
-            })),
+            } => self.push_body(
+                sh,
+                Body::If(IfState {
+                    init: init.as_deref(),
+                    cond,
+                    then,
+                    els: els.as_deref(),
+                    phase: PH_INIT,
+                }),
+            ),
             Stmt::For {
                 init,
                 cond,
@@ -1335,15 +1387,18 @@ impl<'a> Interp<'a> {
                 body,
                 label,
                 loopvars,
-            } => self.push_body(Body::For(ForState {
-                init: init.as_deref(),
-                cond: cond.as_ref(),
-                post: post.as_deref(),
-                body,
-                label: label.as_deref(),
-                loopvars,
-                phase: PH_INIT,
-            })),
+            } => self.push_body(
+                sh,
+                Body::For(ForState {
+                    init: init.as_deref(),
+                    cond: cond.as_ref(),
+                    post: post.as_deref(),
+                    body,
+                    label: label.as_deref(),
+                    loopvars,
+                    phase: PH_INIT,
+                }),
+            ),
             Stmt::Range {
                 key,
                 value,
@@ -1352,47 +1407,56 @@ impl<'a> Interp<'a> {
                 kind,
                 define,
                 label,
-            } => self.push_body(Body::Range(Box::new(RangeState {
-                key: key.as_ref(),
-                value: value.as_ref(),
-                x,
-                body,
-                kind: *kind,
-                define: *define,
-                label: label.as_deref(),
-                phase: PH_INIT,
-                iter: None,
-                kv: None,
-            }))),
+            } => self.push_body(
+                sh,
+                Body::Range(Box::new(RangeState {
+                    key: key.as_ref(),
+                    value: value.as_ref(),
+                    x,
+                    body,
+                    kind: *kind,
+                    define: *define,
+                    label: label.as_deref(),
+                    phase: PH_INIT,
+                    iter: None,
+                    kv: None,
+                })),
+            ),
             Stmt::Switch {
                 init,
                 tag,
                 cases,
                 label,
-            } => self.push_body(Body::Switch(SwitchState {
-                init: init.as_deref(),
-                tag: tag.as_ref(),
-                cases,
-                label: label.as_deref(),
-                phase: PH_INIT,
-                tag_val: Value::Bool(false),
-                ci: 0,
-                ei: 0,
-                default_ci: cases.iter().position(|c| c.is_default),
-                fallthrough: false,
-            })),
+            } => self.push_body(
+                sh,
+                Body::Switch(SwitchState {
+                    init: init.as_deref(),
+                    tag: tag.as_ref(),
+                    cases,
+                    label: label.as_deref(),
+                    phase: PH_INIT,
+                    tag_val: Value::Bool(false),
+                    ci: 0,
+                    ei: 0,
+                    default_ci: cases.iter().position(|c| c.is_default),
+                    fallthrough: false,
+                }),
+            ),
             Stmt::TypeSwitch {
                 init,
                 x,
                 cases,
                 label,
-            } => self.push_body(Body::TypeSwitch(TypeSwitchState {
-                init: init.as_deref(),
-                x,
-                cases,
-                label: label.as_deref(),
-                phase: PH_INIT,
-            })),
+            } => self.push_body(
+                sh,
+                Body::TypeSwitch(TypeSwitchState {
+                    init: init.as_deref(),
+                    x,
+                    cases,
+                    label: label.as_deref(),
+                    phase: PH_INIT,
+                }),
+            ),
             Stmt::Return(exprs) => {
                 let vbase = self.values.len();
                 self.pending = Some(Pending::Return { vbase });
@@ -1400,20 +1464,26 @@ impl<'a> Interp<'a> {
                     self.eval.push(Task::Eval(e));
                 }
             }
-            Stmt::Branch { kind, label } => self.branch(*kind, label.as_deref()),
+            Stmt::Branch { kind, label } => self.branch(sh, *kind, label.as_deref()),
             Stmt::Labeled { label, stmt } => match &**stmt {
-                Stmt::Block(b) => self.push_body(Body::Seq {
+                Stmt::Block(b) => self.push_body(
+                    sh,
+                    Body::Seq {
+                        stmts: &b.stmts,
+                        idx: 0,
+                        label: Some(label),
+                    },
+                ),
+                other => self.exec_stmt(sh, other),
+            },
+            Stmt::Block(b) => self.push_body(
+                sh,
+                Body::Seq {
                     stmts: &b.stmts,
                     idx: 0,
-                    label: Some(label),
-                }),
-                other => self.exec_stmt(other),
-            },
-            Stmt::Block(b) => self.push_body(Body::Seq {
-                stmts: &b.stmts,
-                idx: 0,
-                label: None,
-            }),
+                    label: None,
+                },
+            ),
             Stmt::Defer { call } => {
                 // `variadic` / `spread` 都不用看：defer 的实参是按
                 // `vbase..` 整段切走的，多值展开天然成立。
@@ -1426,7 +1496,7 @@ impl<'a> Interp<'a> {
                             extra,
                             vbase,
                         });
-                        self.push_call_parts(callee, args);
+                        self.push_call_parts(sh, callee, args);
                     }
                     ExprKind::Builtin { kind, args, .. } => {
                         // `defer println(...)`：内建没有函数帧，登记成
@@ -1438,22 +1508,23 @@ impl<'a> Interp<'a> {
                             self.eval.push(Task::Eval(a));
                         }
                     }
-                    _ => self.fail(RtError::Message(
-                        "runtime error: defer 的目标不是调用".to_string(),
-                    )),
+                    _ => self.fail(
+                        sh,
+                        RtError::Message("runtime error: defer 的目标不是调用".to_string()),
+                    ),
                 }
             }
         }
     }
 
-    fn push_body(&mut self, b: Body<'a>) {
+    fn push_body(&mut self, _sh: &mut Shared<'a>, b: Body<'a>) {
         let fi = self.frames.len() - 1;
         self.frames[fi].bodies.push(b);
     }
 
     // ───────────── 续体 ─────────────
 
-    fn resume(&mut self) {
+    fn resume(&mut self, sh: &mut Shared<'a>) {
         let Some(p) = self.pending.take() else { return };
         let fi = self.frames.len().saturating_sub(1);
         match p {
@@ -1461,18 +1532,21 @@ impl<'a> Interp<'a> {
                 let targets: Vec<Target> = self.targets.split_off(tbase);
                 let vals: Vec<Value> = self.values.split_off(vbase);
                 if targets.len() != vals.len() {
-                    self.fail(RtError::Message(format!(
-                        "runtime error: assignment mismatch: {} variables but {} values",
-                        targets.len(),
-                        vals.len()
-                    )));
+                    self.fail(
+                        sh,
+                        RtError::Message(format!(
+                            "runtime error: assignment mismatch: {} variables but {} values",
+                            targets.len(),
+                            vals.len()
+                        )),
+                    );
                     return;
                 }
                 match op {
                     None => {
                         for (t, v) in targets.into_iter().zip(vals) {
-                            if let Err(e) = self.write_target(t, v) {
-                                self.fail(e);
+                            if let Err(e) = self.write_target(sh, t, v) {
+                                self.fail(sh, e);
                                 return;
                             }
                         }
@@ -1486,17 +1560,17 @@ impl<'a> Interp<'a> {
                         let cur = match read_target(&t) {
                             Ok(c) => c,
                             Err(e) => {
-                                self.fail(e);
+                                self.fail(sh, e);
                                 return;
                             }
                         };
-                        match ops::bin_arith(op, &cur, &v, typ, self.tt) {
+                        match ops::bin_arith(op, &cur, &v, typ, sh.tt) {
                             Ok(nv) => {
-                                if let Err(e) = self.write_target(t, nv) {
-                                    self.fail(e);
+                                if let Err(e) = self.write_target(sh, t, nv) {
+                                    self.fail(sh, e);
                                 }
                             }
-                            Err(e) => self.fail(e),
+                            Err(e) => self.fail(sh, e),
                         }
                     }
                 }
@@ -1516,7 +1590,7 @@ impl<'a> Interp<'a> {
             Pending::ExprStmt { vbase } => self.values.truncate(vbase),
             Pending::Return { vbase } => {
                 let vals = self.values.split_off(vbase);
-                self.do_return(vals);
+                self.do_return(sh, vals);
             }
             Pending::Defer {
                 callee,
@@ -1559,21 +1633,21 @@ impl<'a> Interp<'a> {
             Pending::Globals { ids, vbase } => {
                 let vals: Vec<Value> = self.values.split_off(vbase);
                 for (i, g) in ids.iter().enumerate() {
-                    if let (Some(v), Some(c)) = (vals.get(i), self.globals.get(g.index())) {
+                    if let (Some(v), Some(c)) = (vals.get(i), sh.globals.get(g.index())) {
                         *c.borrow_mut() = v.clone();
                     }
                 }
             }
             Pending::IfCond { then, els } => {
-                let c = self.pop();
+                let c = self.pop(sh);
                 if c.as_bool().unwrap_or(false) {
-                    self.push_seq(fi, then);
+                    self.push_seq(sh, fi, then);
                 } else if let Some(e) = els {
-                    self.exec_stmt(e);
+                    self.exec_stmt(sh, e);
                 }
             }
             Pending::ForCond => {
-                let c = self.pop();
+                let c = self.pop(sh);
                 if c.as_bool().unwrap_or(false) {
                     let bi = self.frames[fi].bodies.len() - 1;
                     let body = match &self.frames[fi].bodies[bi] {
@@ -1581,30 +1655,30 @@ impl<'a> Interp<'a> {
                         _ => None,
                     };
                     if let Some(b) = body {
-                        self.push_seq(fi, b);
+                        self.push_seq(sh, fi, b);
                     }
                 } else {
                     self.frames[fi].bodies.pop();
                 }
             }
             Pending::RangeInit => {
-                let v = self.pop();
+                let v = self.pop(sh);
                 let bi = self.frames[fi].bodies.len() - 1;
                 if let Body::Range(s) = &mut self.frames[fi].bodies[bi] {
                     s.iter = Some(build_iter(&v, s.kind));
                 }
             }
-            Pending::RangeBind => self.finish_range_bind(fi),
+            Pending::RangeBind => self.finish_range_bind(sh, fi),
             Pending::SwitchTag => {
-                let v = self.pop();
+                let v = self.pop(sh);
                 let bi = self.frames[fi].bodies.len() - 1;
                 if let Body::Switch(s) = &mut self.frames[fi].bodies[bi] {
                     s.tag_val = v;
                 }
-                self.switch_scan(fi);
+                self.switch_scan(sh, fi);
             }
             Pending::SwitchCase => {
-                let v = self.pop();
+                let v = self.pop(sh);
                 let bi = self.frames[fi].bodies.len() - 1;
                 let hit = match &mut self.frames[fi].bodies[bi] {
                     Body::Switch(s) => {
@@ -1617,14 +1691,14 @@ impl<'a> Interp<'a> {
                     _ => false,
                 };
                 if hit {
-                    self.switch_enter(fi);
+                    self.switch_enter(sh, fi);
                 } else {
-                    self.switch_scan(fi);
+                    self.switch_scan(sh, fi);
                 }
             }
             Pending::TypeSwitchX => {
-                let v = self.pop();
-                self.type_switch_enter(fi, v);
+                let v = self.pop(sh);
+                self.type_switch_enter(sh, fi, v);
             }
         }
     }
@@ -1635,7 +1709,7 @@ impl<'a> Interp<'a> {
     /// 每次调用**恰好**前进一小步然后返回（`D-M5-1`：不在 Rust 栈上循环求值）。
     /// 这里没有外层 `loop` —— 两个出口都是 `return`，写成循环只会让人以为
     /// 它会转第二圈。
-    fn switch_scan(&mut self, fi: usize) {
+    fn switch_scan(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let next = match &mut self.frames[fi].bodies[bi] {
             Body::Switch(s) => loop {
@@ -1674,7 +1748,7 @@ impl<'a> Interp<'a> {
                     _ => return,
                 };
                 if has_default {
-                    self.switch_enter(fi);
+                    self.switch_enter(sh, fi);
                 } else {
                     self.frames[fi].bodies.pop();
                 }
@@ -1682,7 +1756,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn switch_enter(&mut self, fi: usize) {
+    fn switch_enter(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let body = match &mut self.frames[fi].bodies[bi] {
             Body::Switch(s) => {
@@ -1692,14 +1766,14 @@ impl<'a> Interp<'a> {
             _ => return,
         };
         match body {
-            Some(b) => self.push_seq(fi, b),
+            Some(b) => self.push_seq(sh, fi, b),
             None => {
                 self.frames[fi].bodies.pop();
             }
         }
     }
 
-    fn type_switch_enter(&mut self, fi: usize, v: Value) {
+    fn type_switch_enter(&mut self, sh: &mut Shared<'a>, fi: usize, v: Value) {
         let bi = self.frames[fi].bodies.len() - 1;
         let (dyn_typ, data) = match v {
             Value::Iface { typ, data } => (typ, *data),
@@ -1724,15 +1798,15 @@ impl<'a> Interp<'a> {
                 }
                 let hit = dyn_typ.is_some_and(|dt| {
                     c.types.iter().any(|t| {
-                        if is_iface(self.tt, *t) {
-                            implements(self.tt, dt, *t, false).unwrap_or(false)
+                        if is_iface(sh.tt, *t) {
+                            implements(sh.tt, dt, *t, false).unwrap_or(false)
                         } else {
-                            identical(self.tt, dt, *t).unwrap_or(false)
+                            identical(sh.tt, dt, *t).unwrap_or(false)
                         }
                     })
                 });
                 if hit {
-                    concrete = c.types.len() == 1 && !is_iface(self.tt, c.types[0]);
+                    concrete = c.types.len() == 1 && !is_iface(sh.tt, c.types[0]);
                     pick = Some(i);
                     break;
                 }
@@ -1768,10 +1842,10 @@ impl<'a> Interp<'a> {
                 *c.borrow_mut() = bound;
             }
         }
-        self.push_seq(fi, body);
+        self.push_seq(sh, fi, body);
     }
 
-    fn start_range_bind(&mut self, fi: usize) {
+    fn start_range_bind(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let (key, value, define, kv) = match &mut self.frames[fi].bodies[bi] {
             Body::Range(s) => (s.key, s.value, s.define, s.kv.take()),
@@ -1781,7 +1855,7 @@ impl<'a> Interp<'a> {
         if define {
             bind_define(&mut self.frames[fi].slots, key, k);
             bind_define(&mut self.frames[fi].slots, value, v);
-            self.enter_range_body(fi);
+            self.enter_range_body(sh, fi);
             return;
         }
         // `=` 形态：目标可以是任意左值 ⇒ 走异步解析（先 value 后 key，压栈逆序）
@@ -1798,7 +1872,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn finish_range_bind(&mut self, fi: usize) {
+    fn finish_range_bind(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let kv = match &mut self.frames[fi].bodies[bi] {
             Body::Range(s) => s.kv.take(),
@@ -1808,37 +1882,37 @@ impl<'a> Interp<'a> {
         let targets: Vec<Target> = std::mem::take(&mut self.targets);
         let mut it = targets.into_iter();
         if let Some(t) = it.next()
-            && let Err(e) = self.write_target(t, k)
+            && let Err(e) = self.write_target(sh, t, k)
         {
-            self.fail(e);
+            self.fail(sh, e);
             return;
         }
         if let Some(t) = it.next()
-            && let Err(e) = self.write_target(t, v)
+            && let Err(e) = self.write_target(sh, t, v)
         {
-            self.fail(e);
+            self.fail(sh, e);
             return;
         }
-        self.enter_range_body(fi);
+        self.enter_range_body(sh, fi);
     }
 
-    fn enter_range_body(&mut self, fi: usize) {
+    fn enter_range_body(&mut self, sh: &mut Shared<'a>, fi: usize) {
         let bi = self.frames[fi].bodies.len() - 1;
         let body = match &self.frames[fi].bodies[bi] {
             Body::Range(s) => Some(s.body),
             _ => None,
         };
         if let Some(b) = body {
-            self.push_seq(fi, b);
+            self.push_seq(sh, fi, b);
         }
     }
 
-    fn branch(&mut self, kind: BranchKind, label: Option<&str>) {
+    fn branch(&mut self, sh: &mut Shared<'a>, kind: BranchKind, label: Option<&str>) {
         let fi = self.frames.len() - 1;
         match kind {
             BranchKind::Goto => {
                 let fid = self.frames[fi].fid;
-                let Some(&target) = self
+                let Some(&target) = sh
                     .prog
                     .funcs
                     .get(fid.index())
@@ -1910,7 +1984,7 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn do_return(&mut self, vals: Vec<Value>) {
+    fn do_return(&mut self, _sh: &mut Shared<'a>, vals: Vec<Value>) {
         let fi = self.frames.len() - 1;
         let slots = self.frames[fi].results.clone();
         for (i, slot) in slots.iter().enumerate() {
@@ -1927,6 +2001,7 @@ impl<'a> Interp<'a> {
     #[allow(clippy::too_many_arguments)]
     fn call_func(
         &mut self,
+        sh: &mut Shared<'a>,
         fid: FuncId,
         recv: Option<Value>,
         args: Vec<Value>,
@@ -1935,14 +2010,14 @@ impl<'a> Interp<'a> {
         drop_result: bool,
         dots: bool,
     ) {
-        if self.frames.len() >= self.opts.max_frames {
-            self.halted = Some(Halt::Budget("frame depth exceeded"));
+        if self.frames.len() >= sh.opts.max_frames {
+            sh.halted = Some(Halt::Budget("frame depth exceeded"));
             return;
         }
-        let prog = self.prog;
-        let tt = self.tt;
+        let prog = sh.prog;
+        let tt = sh.tt;
         let Some(func) = prog.funcs.get(fid.index()) else {
-            self.halted = Some(Halt::Budget("frame depth exceeded"));
+            sh.halted = Some(Halt::Budget("frame depth exceeded"));
             return;
         };
 
@@ -2026,15 +2101,15 @@ impl<'a> Interp<'a> {
         self.frames.push(frame);
         let body = &prog.funcs[fid.index()].body;
         let fi = self.frames.len() - 1;
-        self.push_seq(fi, body);
+        self.push_seq(sh, fi, body);
     }
 
-    fn teardown(&mut self) {
+    fn teardown(&mut self, sh: &mut Shared<'a>) {
         let Some(fi) = self.frames.len().checked_sub(1) else {
             return;
         };
         if let Some(d) = self.frames[fi].deferred.pop() {
-            self.run_deferred(d);
+            self.run_deferred(sh, d);
             return;
         }
         let f = self.frames.pop().expect("刚判过非空");
@@ -2044,7 +2119,7 @@ impl<'a> Interp<'a> {
                 caller.unwinding = true;
             } else {
                 let v = self.panic_val.take().unwrap_or(Value::Nil(NilKind::Ptr));
-                self.halted = Some(Halt::Panic(v));
+                sh.halted = Some(Halt::Panic(v));
             }
             return;
         }
@@ -2066,25 +2141,30 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn run_deferred(&mut self, d: Deferred<'a>) {
+    fn run_deferred(&mut self, sh: &mut Shared<'a>, d: Deferred<'a>) {
         match d.callee {
             DeferredCallee::Func(f) => {
-                self.call_func(f, None, d.args, Vec::new(), true, true, false);
+                self.call_func(sh, f, None, d.args, Vec::new(), true, true, false);
             }
             DeferredCallee::Method { func, recv } => {
-                self.call_func(func, Some(recv), d.args, Vec::new(), true, true, false);
+                self.call_func(sh, func, Some(recv), d.args, Vec::new(), true, true, false);
             }
-            DeferredCallee::Iface { recv, name } => match self.resolve_iface_method(&recv, name) {
+            DeferredCallee::Iface { recv, name } => match self.resolve_iface_method(sh, &recv, name)
+            {
                 Some((fid, r)) => {
-                    self.call_func(fid, Some(r), d.args, Vec::new(), true, true, false);
+                    self.call_func(sh, fid, Some(r), d.args, Vec::new(), true, true, false);
                 }
-                None => self.fail(RtError::Message(format!(
-                    "runtime error: invalid memory address or nil pointer dereference ({name})"
-                ))),
+                None => self.fail(
+                    sh,
+                    RtError::Message(format!(
+                        "runtime error: invalid memory address or nil pointer dereference ({name})"
+                    )),
+                ),
             },
             DeferredCallee::Value(v) => match v {
                 Value::Func(cl) => {
                     self.call_func(
+                        sh,
                         cl.func,
                         cl.recv.clone(),
                         d.args,
@@ -2094,24 +2174,32 @@ impl<'a> Interp<'a> {
                         false,
                     );
                 }
-                _ => self.fail(RtError::NilDeref),
+                _ => self.fail(sh, RtError::NilDeref),
             },
             DeferredCallee::Builtin(k) => {
                 // 内建不是函数帧 ⇒ 在**当前帧**里执行。
                 // `recover` 因此看不到 `is_defer`，`defer recover()` 无效（§3.7）。
-                self.invoke_builtin_direct(k, d.args);
+                self.invoke_builtin_direct(sh, k, d.args);
             }
         }
     }
 
     // ───────────── 调用 ─────────────
 
-    fn do_invoke(&mut self, target: InvokeTarget<'a>, nargs: usize, extra: usize, dots: bool) {
+    fn do_invoke(
+        &mut self,
+        sh: &mut Shared<'a>,
+        target: InvokeTarget<'a>,
+        nargs: usize,
+        extra: usize,
+        dots: bool,
+    ) {
         let total = nargs + extra;
         if self.values.len() < total {
-            self.fail(RtError::Message(
-                "runtime error: eval stack underflow".to_string(),
-            ));
+            self.fail(
+                sh,
+                RtError::Message("runtime error: eval stack underflow".to_string()),
+            );
             return;
         }
         let mut vals = self.values.split_off(self.values.len() - total);
@@ -2122,26 +2210,26 @@ impl<'a> Interp<'a> {
         };
         match target {
             InvokeTarget::Func(f) => {
-                self.call_func(f, None, vals, Vec::new(), false, false, dots);
+                self.call_func(sh, f, None, vals, Vec::new(), false, false, dots);
             }
             InvokeTarget::Method(f) => match head {
-                Some(r) => self.call_func(f, Some(r), vals, Vec::new(), false, false, dots),
-                None => self.fail(RtError::NilDeref),
+                Some(r) => self.call_func(sh, f, Some(r), vals, Vec::new(), false, false, dots),
+                None => self.fail(sh, RtError::NilDeref),
             },
             InvokeTarget::Iface(name) => match head {
-                Some(r) => match self.resolve_iface_method(&r, name) {
+                Some(r) => match self.resolve_iface_method(sh, &r, name) {
                     Some((f, recv)) => {
-                        self.call_func(f, Some(recv), vals, Vec::new(), false, false, dots);
+                        self.call_func(sh, f, Some(recv), vals, Vec::new(), false, false, dots);
                     }
-                    None => self.fail(RtError::Message(format!(
+                    None => self.fail(sh, RtError::Message(format!(
                         "runtime error: invalid memory address or nil pointer dereference ({name})"
                     ))),
                 },
-                None => self.fail(RtError::NilDeref),
+                None => self.fail(sh, RtError::NilDeref),
             },
             InvokeTarget::Value => match head {
                 Some(Value::Func(cl)) => {
-                    self.call_func(
+                    self.call_func(sh,
                         cl.func,
                         cl.recv.clone(),
                         vals,
@@ -2151,13 +2239,18 @@ impl<'a> Interp<'a> {
                         dots,
                     );
                 }
-                Some(_) | None => self.fail(RtError::NilDeref),
+                Some(_) | None => self.fail(sh, RtError::NilDeref),
             },
-            InvokeTarget::Builtin(k) => self.invoke_builtin_direct(k, vals),
+            InvokeTarget::Builtin(k) => self.invoke_builtin_direct(sh, k, vals),
         }
     }
 
-    fn resolve_iface_method(&self, recv: &Value, name: &str) -> Option<(FuncId, Value)> {
+    fn resolve_iface_method(
+        &self,
+        sh: &Shared<'a>,
+        recv: &Value,
+        name: &str,
+    ) -> Option<(FuncId, Value)> {
         let (dt, data) = match recv {
             Value::Iface { typ, data } => ((*typ)?, data.as_ref().clone()),
             _ => return None,
@@ -2168,28 +2261,34 @@ impl<'a> Interp<'a> {
         // 声明在嵌入字段的类型上（`method5.go` 的 `T1 ⊃ T2 ⊃ *T3 ⊃ *T4`，
         // `M` 在 `T4` 上）。只查 `(base_name(dt), name)` 会失败，然后被当成
         // 「nil 指针解引用」报出去 —— 一个错误的诊断掩盖了真正的原因。
-        let (fid, recv_val) = self.resolve_method_deep(dt, &data, name)?;
-        let want = self
+        let (fid, recv_val) = self.resolve_method_deep(sh, dt, &data, name)?;
+        let want = sh
             .prog
             .funcs
             .get(fid.index())
             .and_then(|f| f.param_types.first().copied());
-        Some((fid, adjust_recv(self.tt, recv_val, want)))
+        Some((fid, adjust_recv(sh.tt, recv_val, want)))
     }
 
     /// 在 `t`（或它的嵌入字段链）上找方法，并把接收者**沿链取到位**。
-    fn resolve_method_deep(&self, t: TypeId, data: &Value, name: &str) -> Option<(FuncId, Value)> {
-        if let Some(base) = base_name(self.tt, t)
-            && let Some(fid) = self.methods.get(&(base, name.to_string()))
+    fn resolve_method_deep(
+        &self,
+        sh: &Shared<'a>,
+        t: TypeId,
+        data: &Value,
+        name: &str,
+    ) -> Option<(FuncId, Value)> {
+        if let Some(base) = base_name(sh.tt, t)
+            && let Some(fid) = sh.methods.get(&(base, name.to_string()))
         {
             return Some((*fid, data.clone()));
         }
         // 嵌入提升：逐个嵌入字段递归，接收者随之下降一层。
-        let mut cur = unalias(self.tt, t);
-        if let Type::Pointer(e) = self.tt.type_of(cur) {
-            cur = unalias(self.tt, *e);
+        let mut cur = unalias(sh.tt, t);
+        if let Type::Pointer(e) = sh.tt.type_of(cur) {
+            cur = unalias(sh.tt, *e);
         }
-        let fields = struct_fields_of(self.tt, cur)?;
+        let fields = struct_fields_of(sh.tt, cur)?;
         for (i, f) in fields.iter().enumerate() {
             if !f.embedded {
                 continue;
@@ -2197,18 +2296,18 @@ impl<'a> Interp<'a> {
             let Some(sub) = field_of(data, i) else {
                 continue;
             };
-            if let Some(hit) = self.resolve_method_deep(f.typ, &sub, name) {
+            if let Some(hit) = self.resolve_method_deep(sh, f.typ, &sub, name) {
                 return Some(hit);
             }
         }
         None
     }
 
-    fn bind_method(&mut self, method: &'a MethodRef, recv_typ: TypeId) {
-        let recv = self.pop();
+    fn bind_method(&mut self, sh: &mut Shared<'a>, method: &'a MethodRef, recv_typ: TypeId) {
+        let recv = self.pop(sh);
         match method {
             MethodRef::Func(fid) => {
-                let want = self
+                let want = sh
                     .prog
                     .funcs
                     .get(fid.index())
@@ -2216,25 +2315,28 @@ impl<'a> Interp<'a> {
                 self.values.push(Value::Func(Rc::new(Closure {
                     func: *fid,
                     captured: Vec::new(),
-                    recv: Some(adjust_recv(self.tt, recv, want)),
+                    recv: Some(adjust_recv(sh.tt, recv, want)),
                 })));
             }
-            MethodRef::Iface(name) => match self.resolve_iface_method(&recv, name) {
+            MethodRef::Iface(name) => match self.resolve_iface_method(sh, &recv, name) {
                 Some((fid, r)) => self.values.push(Value::Func(Rc::new(Closure {
                     func: fid,
                     captured: Vec::new(),
                     recv: Some(r),
                 }))),
-                None => self.fail(RtError::Message(format!(
-                    "runtime error: method {name} not found on {}",
-                    type_name(self.tt, recv_typ)
-                ))),
+                None => self.fail(
+                    sh,
+                    RtError::Message(format!(
+                        "runtime error: method {name} not found on {}",
+                        type_name(sh.tt, recv_typ)
+                    )),
+                ),
             },
         }
     }
 
-    fn capture_cells(&self, fid: FuncId) -> Vec<Cell> {
-        let Some(func) = self.prog.funcs.get(fid.index()) else {
+    fn capture_cells(&self, sh: &Shared<'a>, fid: FuncId) -> Vec<Cell> {
+        let Some(func) = sh.prog.funcs.get(fid.index()) else {
             return Vec::new();
         };
         let Some(frame) = self.frames.last() else {
@@ -2255,7 +2357,7 @@ impl<'a> Interp<'a> {
     // ───────────── 内建 ─────────────
 
     /// 没有 `Expr` 信息的调用（defer 里的内建）：只能按值猜类型。
-    fn invoke_builtin_direct(&mut self, kind: BuiltinKind, args: Vec<Value>) {
+    fn invoke_builtin_direct(&mut self, sh: &mut Shared<'a>, kind: BuiltinKind, args: Vec<Value>) {
         match kind {
             BuiltinKind::Recover => {
                 let ok = self.frames.last().map(|f| f.is_defer).unwrap_or(false);
@@ -2273,30 +2375,37 @@ impl<'a> Interp<'a> {
                     .into_iter()
                     .next()
                     .unwrap_or(Value::Nil(NilKind::Iface));
-                self.raise(v);
+                self.raise(sh, v);
             }
             BuiltinKind::Print | BuiltinKind::Println => {
                 for (i, v) in args.iter().enumerate() {
                     if kind == BuiltinKind::Println && i > 0 {
-                        self.out.push(' ');
+                        sh.out.push(' ');
                     }
-                    self.out
-                        .push_str(&print::format_operand(v, self.tt, invalid_id()));
+                    sh.out
+                        .push_str(&print::format_operand(v, sh.tt, invalid_id()));
                 }
                 if kind == BuiltinKind::Println {
-                    self.out.push('\n');
+                    sh.out.push('\n');
                 }
             }
             _ => {}
         }
     }
 
-    fn do_builtin(&mut self, kind: BuiltinKind, args: &'a [Expr], variadic: bool) {
+    fn do_builtin(
+        &mut self,
+        sh: &mut Shared<'a>,
+        kind: BuiltinKind,
+        args: &'a [Expr],
+        variadic: bool,
+    ) {
         let n = args.len();
         if self.values.len() < n {
-            self.fail(RtError::Message(
-                "runtime error: eval stack underflow".to_string(),
-            ));
+            self.fail(
+                sh,
+                RtError::Message("runtime error: eval stack underflow".to_string()),
+            );
             return;
         }
         let vals: Vec<Value> = self.values.split_off(self.values.len() - n);
@@ -2305,13 +2414,13 @@ impl<'a> Interp<'a> {
             BuiltinKind::Print | BuiltinKind::Println => {
                 for (i, v) in vals.iter().enumerate() {
                     if kind == BuiltinKind::Println && i > 0 {
-                        self.out.push(' ');
+                        sh.out.push(' ');
                     }
                     let t = args.get(i).map_or(t0, |a| a.typ);
-                    self.out.push_str(&print::format_operand(v, self.tt, t));
+                    sh.out.push_str(&print::format_operand(v, sh.tt, t));
                 }
                 if kind == BuiltinKind::Println {
-                    self.out.push('\n');
+                    sh.out.push('\n');
                 }
             }
             BuiltinKind::Len => {
@@ -2322,14 +2431,14 @@ impl<'a> Interp<'a> {
                 let v = vals.into_iter().next().unwrap_or(Value::Int(0));
                 self.values.push(Value::Int(cap_of(&v) as i128));
             }
-            BuiltinKind::Append => self.builtin_append(vals, t0, variadic),
+            BuiltinKind::Append => self.builtin_append(sh, vals, t0, variadic),
             BuiltinKind::Copy => {
                 let mut it = vals.into_iter();
                 let dst = it.next().unwrap_or(Value::Nil(NilKind::Slice));
                 let src = it.next().unwrap_or(Value::Nil(NilKind::Slice));
                 match copy_into(dst, &src) {
                     Ok(k) => self.values.push(Value::Int(k as i128)),
-                    Err(e) => self.fail(e),
+                    Err(e) => self.fail(sh, e),
                 }
             }
             BuiltinKind::Delete => {
@@ -2387,7 +2496,7 @@ impl<'a> Interp<'a> {
                     .into_iter()
                     .next()
                     .unwrap_or(Value::Nil(NilKind::Iface));
-                self.raise(v);
+                self.raise(sh, v);
             }
             BuiltinKind::Recover => {
                 let ok = self.frames.last().map(|f| f.is_defer).unwrap_or(false);
@@ -2404,13 +2513,20 @@ impl<'a> Interp<'a> {
                 let v = vals.into_iter().next().unwrap_or(Value::Int(0));
                 self.values.push(Value::Ptr(cell(v)));
             }
-            BuiltinKind::Close => self.fail(RtError::Message(
-                "runtime error: close of nil channel".to_string(),
-            )),
+            BuiltinKind::Close => self.fail(
+                sh,
+                RtError::Message("runtime error: close of nil channel".to_string()),
+            ),
         }
     }
 
-    fn builtin_append(&mut self, mut vals: Vec<Value>, slice_typ: TypeId, dots: bool) {
+    fn builtin_append(
+        &mut self,
+        sh: &mut Shared<'a>,
+        mut vals: Vec<Value>,
+        slice_typ: TypeId,
+        dots: bool,
+    ) {
         if vals.is_empty() {
             self.values.push(Value::Nil(NilKind::Slice));
             return;
@@ -2421,22 +2537,22 @@ impl<'a> Interp<'a> {
         } else {
             vals
         };
-        match append_value(self.tt, base, extra, slice_typ) {
+        match append_value(sh.tt, base, extra, slice_typ) {
             Ok(v) => self.values.push(v),
-            Err(e) => self.fail(e),
+            Err(e) => self.fail(sh, e),
         }
     }
 
     // ───────────── 值构造 ─────────────
 
-    fn make(&mut self, kind: MakeKind, typ: TypeId) {
+    fn make(&mut self, sh: &mut Shared<'a>, kind: MakeKind, typ: TypeId) {
         match kind {
             MakeKind::Slice => {
-                let cap = self.pop().as_int().unwrap_or(0).max(0) as usize;
-                let len = self.pop().as_int().unwrap_or(cap as i128).max(0) as usize;
+                let cap = self.pop(sh).as_int().unwrap_or(0).max(0) as usize;
+                let len = self.pop(sh).as_int().unwrap_or(cap as i128).max(0) as usize;
                 let len = len.min(cap);
-                let elem = slice_elem(self.tt, typ);
-                let cells: Vec<Cell> = (0..cap).map(|_| cell(zero_of(self.tt, elem))).collect();
+                let elem = slice_elem(sh.tt, typ);
+                let cells: Vec<Cell> = (0..cap).map(|_| cell(zero_of(sh.tt, elem))).collect();
                 self.values.push(Value::Slice(SliceVal {
                     arr: Rc::new(cells),
                     off: 0,
@@ -2446,18 +2562,19 @@ impl<'a> Interp<'a> {
             }
             MakeKind::Map => {
                 if !self.values.is_empty() {
-                    let _ = self.pop();
+                    let _ = self.pop(sh);
                 }
                 self.values
                     .push(Value::Map(Rc::new(RefCell::new(MapObj::default()))));
             }
-            MakeKind::Chan => self.fail(RtError::Message(
-                "runtime error: make(chan) not supported".to_string(),
-            )),
+            MakeKind::Chan => self.fail(
+                sh,
+                RtError::Message("runtime error: make(chan) not supported".to_string()),
+            ),
         }
     }
 
-    fn build_composite(&mut self, comp: &'a Composite) {
+    fn build_composite(&mut self, sh: &mut Shared<'a>, comp: &'a Composite) {
         // 栈上值的个数**不是** items 的个数：map 的 `Key(k, v)` 一项压两个值
         // （先 k 后 v，与 `eval_expr` 的压栈顺序一致）。按 items 数取会把
         // 前面的值留在栈上，`m := map[string]int{"a":1}` 的 `m` 就变成 `"a"`。
@@ -2470,18 +2587,16 @@ impl<'a> Interp<'a> {
             })
             .sum();
         if self.values.len() < n {
-            self.fail(RtError::Message(
-                "runtime error: eval stack underflow".to_string(),
-            ));
+            self.fail(
+                sh,
+                RtError::Message("runtime error: eval stack underflow".to_string()),
+            );
             return;
         }
         let mut vals = self.values.split_off(self.values.len() - n).into_iter();
-        match composite_shape(self.tt, comp.typ) {
+        match composite_shape(sh.tt, comp.typ) {
             Shape::Struct(fields) => {
-                let cells: Vec<Cell> = fields
-                    .iter()
-                    .map(|f| cell(zero_of(self.tt, f.typ)))
-                    .collect();
+                let cells: Vec<Cell> = fields.iter().map(|f| cell(zero_of(sh.tt, f.typ))).collect();
                 for item in &comp.items {
                     let Some(v) = vals.next() else { break };
                     if let CompositeItem::Field(idx, _) = item
@@ -2506,8 +2621,7 @@ impl<'a> Interp<'a> {
                         .unwrap_or(0)
                         .max(comp.items.len()),
                 };
-                let mut cells: Vec<Cell> =
-                    (0..count).map(|_| cell(zero_of(self.tt, elem))).collect();
+                let mut cells: Vec<Cell> = (0..count).map(|_| cell(zero_of(sh.tt, elem))).collect();
                 let mut next = 0usize;
                 for item in &comp.items {
                     let Some(v) = vals.next() else { break };
@@ -2545,14 +2659,17 @@ impl<'a> Interp<'a> {
                 }
                 self.values.push(Value::Map(obj));
             }
-            Shape::Other => self.fail(RtError::Message(
-                "runtime error: composite literal of unsupported type".to_string(),
-            )),
+            Shape::Other => self.fail(
+                sh,
+                RtError::Message(
+                    "runtime error: composite literal of unsupported type".to_string(),
+                ),
+            ),
         }
     }
 
-    fn type_assert(&mut self, to: TypeId, iface: TypeId, comma_ok: bool) {
-        let v = self.pop();
+    fn type_assert(&mut self, sh: &mut Shared<'a>, to: TypeId, iface: TypeId, comma_ok: bool) {
+        let v = self.pop(sh);
         let (dt, data) = match v {
             Value::Iface { typ, data } => (typ, *data),
             other => {
@@ -2566,10 +2683,10 @@ impl<'a> Interp<'a> {
         let ok = match dt {
             None => false,
             Some(dt) => {
-                if is_iface(self.tt, to) {
-                    implements(self.tt, dt, to, false).unwrap_or(false)
+                if is_iface(sh.tt, to) {
+                    implements(sh.tt, dt, to, false).unwrap_or(false)
                 } else {
-                    identical(self.tt, dt, to).unwrap_or(false)
+                    identical(sh.tt, dt, to).unwrap_or(false)
                 }
             }
         };
@@ -2579,7 +2696,7 @@ impl<'a> Interp<'a> {
             // 接口派发。若在这里直接压 `data`，`i2` 就成了 `*S`，
             // 随后按接口调用取接收者拿到 nil（`ken/interfun.go` /
             // `method5.go` 的 `invalid memory address or nil pointer dereference`）。
-            let out = if is_iface(self.tt, to) {
+            let out = if is_iface(sh.tt, to) {
                 Value::Iface {
                     typ: dt,
                     data: Box::new(data),
@@ -2596,20 +2713,23 @@ impl<'a> Interp<'a> {
             return;
         }
         if comma_ok {
-            self.values.push(zero_of(self.tt, to));
+            self.values.push(zero_of(sh.tt, to));
             self.values.push(Value::Bool(false));
             return;
         }
         let got = match dt {
-            Some(t) => type_name(self.tt, t),
+            Some(t) => type_name(sh.tt, t),
             None => "nil".to_string(),
         };
-        self.fail(RtError::Message(format!(
-            "interface conversion: {} is {}, not {}",
-            type_name(self.tt, iface),
-            got,
-            type_name(self.tt, to)
-        )));
+        self.fail(
+            sh,
+            RtError::Message(format!(
+                "interface conversion: {} is {}, not {}",
+                type_name(sh.tt, iface),
+                got,
+                type_name(sh.tt, to)
+            )),
+        );
     }
 
     /// 逗号-ok 索引：压 `(元素, 键是否存在)` 两个值。
@@ -2617,7 +2737,13 @@ impl<'a> Interp<'a> {
     /// 只有 map 索引是双值的（数组/slice/string 的 `v, ok :=` 在 checker 就
     /// 被拒了），所以这里只处理 map；非 map 底座退化成「值 + `true`」，
     /// 让错误以「越界 panic」而不是「值栈错位」的形式暴露。
-    fn index_comma_ok(&mut self, base: &Value, idx: &Value, typ: TypeId) -> Result<(), RtError> {
+    fn index_comma_ok(
+        &mut self,
+        sh: &mut Shared<'a>,
+        base: &Value,
+        idx: &Value,
+        typ: TypeId,
+    ) -> Result<(), RtError> {
         match peel_value(base) {
             Value::Map(obj) => {
                 let m = obj.borrow();
@@ -2627,19 +2753,19 @@ impl<'a> Interp<'a> {
                         self.values.push(Value::Bool(true));
                     }
                     None => {
-                        self.values.push(zero_of(self.tt, typ));
+                        self.values.push(zero_of(sh.tt, typ));
                         self.values.push(Value::Bool(false));
                     }
                 }
                 Ok(())
             }
             Value::Nil(NilKind::Map) => {
-                self.values.push(zero_of(self.tt, typ));
+                self.values.push(zero_of(sh.tt, typ));
                 self.values.push(Value::Bool(false));
                 Ok(())
             }
             other => {
-                let v = self.index_value(&other, idx, typ)?;
+                let v = self.index_value(sh, &other, idx, typ)?;
                 self.values.push(v);
                 self.values.push(Value::Bool(true));
                 Ok(())
@@ -2647,7 +2773,13 @@ impl<'a> Interp<'a> {
         }
     }
 
-    fn index_value(&mut self, base: &Value, idx: &Value, typ: TypeId) -> Result<Value, RtError> {
+    fn index_value(
+        &mut self,
+        sh: &mut Shared<'a>,
+        base: &Value,
+        idx: &Value,
+        typ: TypeId,
+    ) -> Result<Value, RtError> {
         match peel_value(base) {
             Value::Str(s) => {
                 let i = idx.as_int().unwrap_or(0);
@@ -2671,10 +2803,10 @@ impl<'a> Interp<'a> {
                 let obj = obj.borrow();
                 Ok(match obj.get(idx) {
                     Some(v) => v.deep_copy(),
-                    None => zero_of(self.tt, typ),
+                    None => zero_of(sh.tt, typ),
                 })
             }
-            Value::Nil(NilKind::Map) => Ok(zero_of(self.tt, typ)),
+            Value::Nil(NilKind::Map) => Ok(zero_of(sh.tt, typ)),
             _ => Err(RtError::IndexOutOfRange {
                 index: idx.as_int().unwrap_or(0),
                 len: 0,
@@ -2684,7 +2816,7 @@ impl<'a> Interp<'a> {
 
     // ───────────── 目标读写 ─────────────
 
-    fn write_target(&mut self, t: Target, v: Value) -> Result<(), RtError> {
+    fn write_target(&mut self, _sh: &mut Shared<'a>, t: Target, v: Value) -> Result<(), RtError> {
         match t {
             Target::Cell(c) => {
                 *c.borrow_mut() = v;
@@ -2700,19 +2832,19 @@ impl<'a> Interp<'a> {
 
     // ───────────── 栈工具 ─────────────
 
-    fn pop(&mut self) -> Value {
+    fn pop(&mut self, _sh: &mut Shared<'a>) -> Value {
         self.values.pop().unwrap_or(Value::Nil(NilKind::Ptr))
     }
 
-    fn pop_target(&mut self) -> Target {
+    fn pop_target(&mut self, _sh: &mut Shared<'a>) -> Target {
         self.targets.pop().unwrap_or(Target::Discard)
     }
 
-    fn fail(&mut self, e: RtError) {
-        self.raise(Value::Str(e.message().into()));
+    fn fail(&mut self, sh: &mut Shared<'a>, e: RtError) {
+        self.raise(sh, Value::Str(e.message().into()));
     }
 
-    fn raise(&mut self, v: Value) {
+    fn raise(&mut self, sh: &mut Shared<'a>, v: Value) {
         self.panic_val = Some(v);
         self.eval.clear();
         self.values.clear();
@@ -2725,20 +2857,20 @@ impl<'a> Interp<'a> {
             }
             None => {
                 let v = self.panic_val.take().unwrap_or(Value::Nil(NilKind::Ptr));
-                self.halted = Some(Halt::Panic(v));
+                sh.halted = Some(Halt::Panic(v));
             }
         }
     }
 
-    fn apply_binary(&mut self, op: BinOp, x: Value, y: Value, typ: TypeId) {
+    fn apply_binary(&mut self, sh: &mut Shared<'a>, op: BinOp, x: Value, y: Value, typ: TypeId) {
         match op {
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 let r = ops::compare(op, &x, &y).unwrap_or(false);
                 self.values.push(Value::Bool(r));
             }
-            _ => match ops::bin_arith(op, &x, &y, typ, self.tt) {
+            _ => match ops::bin_arith(op, &x, &y, typ, sh.tt) {
                 Ok(v) => self.values.push(v),
-                Err(e) => self.fail(e),
+                Err(e) => self.fail(sh, e),
             },
         }
     }
