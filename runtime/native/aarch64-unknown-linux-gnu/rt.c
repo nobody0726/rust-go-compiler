@@ -362,6 +362,303 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
     return p;
 }
 
+/* 前向声明：`rt_map_set` 要用它，而它的定义在 panic 那一节（文件后半）。 */
+void rt_panic_nilmap(void);
+
+/* ── 映射（M9/Task 18–23；`D-M9-8` 的开放寻址）── */
+
+/* 槽状态。`TOMB` 与 `EMPTY` 必须分开：`TOMB` **不终止探测** ——
+ * 否则「删过的键」会把后面的键挡在探测链外（查不到）。 */
+#define MAP_EMPTY 0
+#define MAP_LIVE 1
+#define MAP_TOMB 2
+
+/* `MapObj` 的形状（`M9-design.md` §3.7）。单字指针指向它。 */
+typedef struct {
+    u64 count;          /* 活条目数 */
+    u64 cap;            /* 槽数，恒为 2 的幂 */
+    u32 key_size;
+    u32 val_size;
+    const TypeDesc *kdesc;
+    const TypeDesc *vdesc;
+    u8 *slots;          /* cap × stride 字节 */
+} MapObj;
+
+static u64 align8(u64 n) { return (n + 7UL) & ~7UL; }
+
+/* 一个槽的字节数：状态 1 字节（占 8）+ key + val，各自按 8 对齐。 */
+static u64 slot_stride(const MapObj *m) {
+    return 8UL + align8((u64)m->key_size) + align8((u64)m->val_size);
+}
+
+static u8 *slot_at(const MapObj *m, u64 i) { return m->slots + i * slot_stride(m); }
+
+static u8 *slot_key(const MapObj *m, u8 *slot) { return slot + 8; }
+
+static u8 *slot_val(const MapObj *m, u8 *slot) { return slot + 8 + align8((u64)m->key_size); }
+
+/* 类型 hash（FNV-1a 32 位）。
+ *
+ * # 按 kind 分派的三个分支
+ *
+ * * `String`：按**内容**（`ptr` 指向的 `len` 字节）—— 两个内容相同的字符串
+ *   是两个不同的对象，哈希必须相同。
+ * * 其余标量 / 指针 / 单字：按那 8 字节。
+ * * 聚合（Array / Struct）：按 `size` 字节的**原始字节**。
+ *
+ * # ⚠️ 聚合的这条是**有记录的窄化**（`U-M9-11`）
+ *
+ * 规范要求聚合按**字段内容**比较。原始字节对「只含标量的聚合」与内容比较等价，
+ * 但对「含指针的聚合」（如 `struct{ s string }`）比较的是**指针**而不是内容 ——
+ * 两个内容相同的 `struct{ s string }` 会被判成不同的键。
+ *
+ * 修法需要「字段 desc 表」（每个字段的类型 + 偏移），那是 M12 反射元数据的一部分；
+ * M9 的 typedesc 刻意只有 8 个字段（`D-M9-2`），塞不进去。已记 `G-M9-03`。
+ */
+u32 rt_hash(const TypeDesc *d, const void *p) {
+    u32 h = 2166136261u;
+    u64 n = d->size;
+    const u8 *b = (const u8 *)p;
+    if (d->kind == 6 /* Kind::String */) {
+        /* 两个字：ptr + len。按内容哈希。 */
+        const u8 *sp = *(const u8 *const *)p;
+        n = *(const u64 *)((const u8 *)p + 8);
+        b = sp;
+    }
+    for (u64 i = 0; i < n; i++) {
+        h ^= (u32)b[i];
+        h *= 16777619u;
+    }
+    return h;
+}
+
+/* 键相等（与 `rt_hash` 同一套 kind 分派，见上面的窄化说明）。 */
+int rt_equal(const TypeDesc *d, const void *a, const void *b) {
+    if (d->kind == 6 /* Kind::String */) {
+        u64 na = *(const u64 *)((const u8 *)a + 8);
+        u64 nb = *(const u64 *)((const u8 *)b + 8);
+        if (na != nb) {
+            return 0;
+        }
+        const u8 *pa = *(const u8 *const *)a;
+        const u8 *pb = *(const u8 *const *)b;
+        for (u64 i = 0; i < na; i++) {
+            if (pa[i] != pb[i]) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    u64 n = d->size;
+    if (n == 0) {
+        /* 零大小类型（`struct{}`）：所有值都相等 —— 与规范一致。 */
+        return 1;
+    }
+    const u8 *pa = (const u8 *)a;
+    const u8 *pb = (const u8 *)b;
+    for (u64 i = 0; i < n; i++) {
+        if (pa[i] != pb[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 分配 `cap` 个槽并清零。 */
+static void map_alloc_slots(MapObj *m, u64 cap) {
+    m->cap = cap;
+    u64 bytes = cap * slot_stride(m);
+    m->slots = (u8 *)rt_arena_alloc(bytes, 8);
+    rt_memset(m->slots, 0, bytes);
+}
+
+/* `make(map[K]V[, n])` —— `n` 只是容量提示，M9 从 8 个槽起步（靠 rehash 长）。
+ *
+ * # 为什么忽略 `n`
+ *
+ * 它只影响性能，不影响可观测语义（`len` 只数活条目，`cap` 对 map 不可见）。
+ * 按 `n` 预分配反而会让「小 map 大 n」浪费一堆 arena —— 而 M9 没有 GC。
+ */
+/* 真正的构造函数。 */
+static MapObj *map_new(const TypeDesc *kdesc, const TypeDesc *vdesc) {
+    /* 头用 `rt_arena_alloc` 而不是 `rt_alloc`：`MapObj` 不是 Go 值
+     * （程序里看到的只是一个 `*MapObj` 指针），给它写对象头会让 M10 把它当
+     * 一个「kind=Struct 的对象」去扫 —— 而它的字段是宿主结构。 */
+    MapObj *m = (MapObj *)rt_arena_alloc(sizeof(MapObj), 8);
+    m->count = 0;
+    m->key_size = kdesc->size;
+    m->val_size = vdesc->size;
+    m->kdesc = kdesc;
+    m->vdesc = vdesc;
+    map_alloc_slots(m, 8);
+    return m;
+}
+
+/* `make(map[K]V)`。 */
+void *rt_map_make(const TypeDesc *kdesc, const TypeDesc *vdesc) {
+    return map_new(kdesc, vdesc);
+}
+
+u64 rt_map_len(const void *mp) {
+    const MapObj *m = (const MapObj *)mp;
+    return m == 0 ? 0 : m->count;
+}
+
+/* 在 `m` 里找 `k` 的槽。返回槽指针；`*found` 说明是命中还是遇到空槽。
+ *
+ * # 三条不变式
+ *
+ * 1. **`TOMB` 不终止探测**（见文件头的说明）。
+ * 2. 记下**第一个** `TOMB`（`first_tomb`）：插入时优先复用它，否则删得越多
+ *    表越脏、探测链越长。
+ * 3. `cap` 是 2 的幂 ⇒ `& (cap-1)` 代替取模。
+ */
+static u8 *map_probe(MapObj *m, const void *k, int *found, u8 **first_tomb) {
+    u64 mask = m->cap - 1;
+    u64 i = (u64)rt_hash(m->kdesc, k) & mask;
+    u8 *tomb = 0;
+    for (u64 n = 0; n < m->cap; n++) {
+        u8 *slot = slot_at(m, i);
+        u8 st = slot[0];
+        if (st == MAP_LIVE) {
+            if (rt_equal(m->kdesc, slot_key(m, slot), k)) {
+                *found = 1;
+                if (first_tomb != 0) {
+                    *first_tomb = tomb;
+                }
+                return slot;
+            }
+        } else if (st == MAP_EMPTY) {
+            *found = 0;
+            if (first_tomb != 0) {
+                *first_tomb = tomb;
+            }
+            return slot;
+        } else if (tomb == 0) {
+            tomb = slot;
+        }
+        i = (i + 1) & mask;
+    }
+    /* 全表都是 LIVE/TOMB 且没有空槽：插入必然失败 —— 靠 rehash 兜住
+     * （负载因子 0.75 ⇒ 活条目最多 3/4，所以总会有空槽或 TOMB 可复用）。 */
+    *found = 0;
+    if (first_tomb != 0) {
+        *first_tomb = tomb;
+    }
+    return tomb;
+}
+
+/* 扩容：cap 翻倍 + 全量重插（**不做渐进搬迁**，`U-M9-08`）。 */
+static void map_grow(MapObj *m) {
+    u8 *old_slots = m->slots;
+    u64 old_cap = m->cap;
+    u64 old_stride = slot_stride(m);
+    map_alloc_slots(m, old_cap * 2);
+    for (u64 i = 0; i < old_cap; i++) {
+        u8 *slot = old_slots + i * old_stride;
+        if (slot[0] != MAP_LIVE) {
+            continue;
+        }
+        int found = 0;
+        u8 *dst = map_probe(m, slot_key(m, slot), &found, 0);
+        dst[0] = MAP_LIVE;
+        rt_memcpy(slot_key(m, dst), slot_key(m, slot), m->key_size);
+        rt_memcpy(slot_val(m, dst), slot + 8 + align8((u64)m->key_size), m->val_size);
+    }
+}
+
+/* `m[k]`（单值）：写零值到 `out`，返回 1 表示命中。 */
+int rt_map_get(const void *mp, const void *k, void *out, u64 vsize) {
+    MapObj *m = (MapObj *)mp;
+    if (m == 0) {
+        /* nil map 读：写**值的零值**。`vsize` 由 isel 给 ——
+         * 没有 map 头就拿不到 `val_size`（这正是 nil 的含义）。 */
+        rt_memset(out, 0, vsize);
+        return 0;
+    }
+    int found = 0;
+    u8 *slot = map_probe(m, k, &found, 0);
+    if (!found) {
+        rt_memset(out, 0, m->val_size);
+        return 0;
+    }
+    rt_memcpy(out, slot_val(m, slot), m->val_size);
+    return 1;
+}
+
+/* `m[k] = v`。nil map ⇒ panic（规范如此）。 */
+void rt_map_set(void *mp, const void *k, const void *v) {
+    MapObj *m = (MapObj *)mp;
+    if (m == 0) {
+        rt_panic_nilmap();
+        return;
+    }
+    /* 负载因子 0.75：`count*4 >= cap*3` 就长。先长再插 ——
+     * 反过来会在「刚满的表」上探测一整圈。 */
+    if ((m->count + 1) * 4 >= m->cap * 3) {
+        map_grow(m);
+    }
+    int found = 0;
+    u8 *tomb = 0;
+    u8 *slot = map_probe(m, k, &found, &tomb);
+    if (found) {
+        rt_memcpy(slot_val(m, slot), v, m->val_size);
+        return;
+    }
+    if (slot[0] != MAP_LIVE && tomb != 0) {
+        slot = tomb;
+    }
+    slot[0] = MAP_LIVE;
+    rt_memcpy(slot_key(m, slot), k, m->key_size);
+    rt_memcpy(slot_val(m, slot), v, m->val_size);
+    m->count++;
+}
+
+/* `delete(m, k)`：不存在的键是**静默无操作**（规范如此）。 */
+void rt_map_del(void *mp, const void *k) {
+    MapObj *m = (MapObj *)mp;
+    if (m == 0) {
+        return;
+    }
+    int found = 0;
+    u8 *slot = map_probe(m, k, &found, 0);
+    if (!found) {
+        return;
+    }
+    slot[0] = MAP_TOMB;
+    m->count--;
+}
+
+/* `range m` 的一步：从 `idx` 起找下一个 `LIVE` 槽，把键/值写进 `kout`/`vout`，
+ * 返回**下一个起点**（> 0）；返回 0 表示迭代结束。
+ *
+ * # 为什么用「下标 + 返回值」而不是迭代器对象
+ *
+ * 迭代器对象要多一次分配、还要在 SSA 里维护它的生命周期；而「下一站下标」这个
+ * 返回值天然是循环变量。`idx` 从 0 开始、返回 `i+1`，所以 0 可以当「结束」。
+ *
+ * # 迭代中删除
+ *
+ * 按 `state` 判 ⇒ 已删的（`TOMB`）不再产出 —— 规范要求「迭代开始后被删的条目
+ * 不产出」，这条天然满足。**迭代中新增**可能产出也可能不（规范允许两者）。
+ */
+u64 rt_map_iter(const void *mp, u64 idx, void *kout, void *vout) {
+    const MapObj *m = (const MapObj *)mp;
+    if (m == 0) {
+        return 0;
+    }
+    for (u64 i = idx; i < m->cap; i++) {
+        u8 *slot = slot_at(m, i);
+        if (slot[0] != MAP_LIVE) {
+            continue;
+        }
+        rt_memcpy(kout, slot_key(m, slot), m->key_size);
+        rt_memcpy(vout, slot_val(m, slot), m->val_size);
+        return i + 1;
+    }
+    return 0;
+}
+
 /* ── 切片（M9/Task 11；`C9` 的 `{ptr,len,cap}` 三字）── */
 
 /* 与 `isel` 的槽布局**逐字对齐**：字 0 = ptr、字 1 = len、字 2 = cap。
@@ -790,6 +1087,17 @@ void rt_panic_slice_bounds(u64 val, u64 max, u64 kind) {
     }
     write_all(FD_STDERR, buf, len);
     write_all(FD_STDERR, "\n", 1);
+    rt_exit(2);
+}
+
+/* 写 nil map：`panic: assignment to entry in nil map`（文本与解释器一致）。 */
+void rt_panic_nilmap(void) {
+    const char *m = "panic: assignment to entry in nil map\n";
+    u64 n = 0;
+    while (m[n] != 0) {
+        n++;
+    }
+    write_all(FD_STDERR, m, n);
     rt_exit(2);
 }
 

@@ -213,6 +213,9 @@ fn render_callee(c: &CalleeRef) -> String {
         CalleeRef::Func(f) => format!("func#{}", f.0),
         CalleeRef::Method { recv, func } => format!("method({}, func#{})", v(*recv), func.0),
         CalleeRef::Builtin(b) => format!("builtin {}", builtin_name(*b)),
+        // 运行期助手：`call runtime map_get(...)` —— 名字直接给 `rt.c` 的拼写
+        // （不含 `rt_` 前缀，与 `builtin` 的写法同构）。
+        CalleeRef::Runtime(f) => format!("runtime {}", f.as_str()),
         CalleeRef::Indirect(x) => format!("indirect {}", v(*x)),
     }
 }

@@ -232,7 +232,10 @@ pub(crate) fn instr_uses(i: &mut Instr, g: &mut impl FnMut(&mut ValueId)) {
             match callee {
                 crate::ir::CalleeRef::Indirect(v) => g(v),
                 crate::ir::CalleeRef::Method { recv, .. } => g(recv),
-                crate::ir::CalleeRef::Func(_) | crate::ir::CalleeRef::Builtin(_) => {}
+                crate::ir::CalleeRef::Func(_)
+                | crate::ir::CalleeRef::Builtin(_)
+                // 运行期助手没有值操作数（map 的键/值都走 `args`）。
+                | crate::ir::CalleeRef::Runtime(_) => {}
             }
             for x in args {
                 g(x);

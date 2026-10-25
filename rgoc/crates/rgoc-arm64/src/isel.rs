@@ -24,7 +24,7 @@
 
 use rgoc_hir::types::ConstVal;
 use rgoc_hir::{BinOp, BuiltinKind, UnOp};
-use rgoc_ssa::ir::{Block, CalleeRef, Instr, SsaFunc, Term, ValueId};
+use rgoc_ssa::ir::{Block, CalleeRef, Instr, RuntimeFn, SsaFunc, Term, ValueId};
 use rgoc_types::{BasicId, TypeId, TypeTable};
 
 use crate::abi::{ArgLoc, SlotClass, place_args, slot_of};
@@ -409,6 +409,10 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         Instr::Index { dst, base, i } => index(cx, *dst, *base, *i, asm),
         // `new(T)` 也是 `Make`，但它的 `typ` 是**指针**（`build.rs` 的约定）——
         // 那不是切片，走 arena 分配（`D-M7-7`）。只有 `make([]T,…)` 才是 `[]T`。
+        // `make(map[K]V)`（M9/Task 19）：单字指针，指向 runtime 的 `MapObj`。
+        Instr::Make { dst, typ, .. } if map_kv(cx.tt, *typ).is_some() => {
+            map_make(cx, *dst, *typ, asm);
+        }
         Instr::Make {
             dst,
             typ,
@@ -1147,7 +1151,13 @@ fn addr_of(cx: &Ctx<'_>, dst: ValueId, root: &rgoc_ssa::ir::RootId, asm: &mut As
             } else if let Some(s) = cx.fr.addr_slots.get(&slot) {
                 // ⚠️ 不能用 `addr()` 再 `st_x(asm, "x9", …)`：`st_x` 自己会先
                 // `add x9, x29, #off`，把刚算好的地址覆盖掉。所以地址进 `x10`。
-                asm.ins(&format!("add x10, x29, #{}", s.off));
+                // 同上：`add` 的立即数只有 12 位。大偏移走寄存器。
+                if (-4095..=4095).contains(&s.off) {
+                    asm.ins(&format!("add x10, x29, #{}", s.off));
+                } else {
+                    load_imm(asm, "x10", i64::from(s.off));
+                    asm.ins("add x10, x29, x10");
+                }
                 st_x(asm, "x10", d.off);
             }
         }
@@ -1322,6 +1332,118 @@ fn is_pointer_ty(tt: &TypeTable, t: TypeId) -> bool {
         }
     }
     false
+}
+
+/// `map[K]V` 的 `(K, V)`（剥命名/别名）；不是 map ⇒ `None`。
+fn map_kv(tt: &TypeTable, t: TypeId) -> Option<(TypeId, TypeId)> {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Map { key, elem } => return Some((*key, *elem)),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `make(map[K]V)` ⇒ `rt_map_make(kdesc, vdesc)`，单字结果进槽。
+///
+/// 容量提示（`make(map[K]V, 100)`）**不求值**：`build.rs` 已经为它建了值，
+/// 但 M9 忽略它（`rt_map_make` 从 8 个槽起步，靠 rehash 长）。忽略的代价只是
+/// 「大 map 多几次 rehash」，没有可观测语义差异。
+fn map_make(cx: &Ctx<'_>, dst: ValueId, typ: TypeId, asm: &mut Asm) {
+    let d = cx.slot(dst);
+    let (kt, vt) = map_kv(cx.tt, typ).expect("调用方刚判过是 map");
+    let kd = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, kt));
+    let vd = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, vt));
+    load_addr(asm, "x0", &kd);
+    load_addr(asm, "x1", &vd);
+    asm.ins("bl rt_map_make");
+    st_x(asm, "x0", d.off);
+}
+
+/// 运行期助手（`rt_*`）的调用序列（M9/Phase 2）。
+///
+/// # 为什么每个变体单独写
+///
+/// 它们的实参形状不一样：`MapGet` 要三个（值走 sret 风格的出参），`MapIter`
+/// 要四个（两个出参 + 返回下一站），`MapSet` 的值可能超过 8 字节（整块地址）。
+/// 用一张「参数个数表」去泛化只会把这些差异藏进数据里。
+///
+/// # 出参一律传**槽的地址**
+///
+/// 多字值（`[1000]byte` 的 map 值、结构体键）必须在内存里传，不能进寄存器。
+/// 这也让 `MapIter` 不必在 IR 层引入「取地址」指令 —— `isel` 有槽偏移，
+/// 直接 `addr` 就行。
+fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], asm: &mut Asm) {
+    match f {
+        RuntimeFn::MapMake => {
+            let Some(d) = dsts.first() else { return };
+            let t = cx.ty(*d);
+            map_make(cx, *d, t, asm);
+        }
+        RuntimeFn::MapGet => {
+            let (Some(m), Some(k), Some(v)) = (args.first(), args.get(1), dsts.first()) else {
+                return;
+            };
+            let (sm, sk, sv) = (cx.slot(*m), cx.slot(*k), cx.slot(*v));
+            ld_x(asm, "x0", sm.off);
+            addr(asm, sk.off);
+            asm.ins("mov x1, x9");
+            addr(asm, sv.off);
+            asm.ins("mov x2, x9");
+            load_imm(asm, "x3", i64::from(sv.size));
+            asm.ins("bl rt_map_get");
+            // 第二个结果是 comma-ok 的 `bool`（单值位置时没有它）。
+            if let Some(ok) = dsts.get(1) {
+                let so = cx.slot(*ok);
+                st_x(asm, "x0", so.off);
+            }
+        }
+        RuntimeFn::MapSet => {
+            let (Some(m), Some(k), Some(v)) = (args.first(), args.get(1), args.get(2)) else {
+                return;
+            };
+            let (sm, sk, sv) = (cx.slot(*m), cx.slot(*k), cx.slot(*v));
+            ld_x(asm, "x0", sm.off);
+            addr(asm, sk.off);
+            asm.ins("mov x1, x9");
+            addr(asm, sv.off);
+            asm.ins("mov x2, x9");
+            asm.ins("bl rt_map_set");
+        }
+        RuntimeFn::MapDel => {
+            let (Some(m), Some(k)) = (args.first(), args.get(1)) else {
+                return;
+            };
+            let (sm, sk) = (cx.slot(*m), cx.slot(*k));
+            ld_x(asm, "x0", sm.off);
+            addr(asm, sk.off);
+            asm.ins("mov x1, x9");
+            asm.ins("bl rt_map_del");
+        }
+        RuntimeFn::MapIter => {
+            let (Some(m), Some(idx)) = (args.first(), args.get(1)) else {
+                return;
+            };
+            let (Some(kd), Some(vd), Some(nd)) = (dsts.first(), dsts.get(1), dsts.get(2)) else {
+                return;
+            };
+            let (sm, si) = (cx.slot(*m), cx.slot(*idx));
+            let (sk, sv, sn) = (cx.slot(*kd), cx.slot(*vd), cx.slot(*nd));
+            ld_x(asm, "x0", sm.off);
+            ld_x(asm, "x1", si.off);
+            addr(asm, sk.off);
+            asm.ins("mov x2, x9");
+            addr(asm, sv.off);
+            asm.ins("mov x3, x9");
+            asm.ins("bl rt_map_iter");
+            st_x(asm, "x0", sn.off);
+        }
+    }
 }
 
 /// `[]T` 的元素类型（剥命名/别名）；不是切片 ⇒ `None`。
@@ -1636,6 +1758,10 @@ fn call(
 ) -> Result<(), CgCode> {
     match callee {
         CalleeRef::Builtin(b) => builtin(cx, *b, args, dsts, dots, asm),
+        CalleeRef::Runtime(f) => {
+            runtime_call(cx, *f, args, dsts, asm);
+            Ok(())
+        }
         CalleeRef::Func(fid) => {
             pass_args(cx, Some(*fid), args, asm);
             asm.ins(&format!("bl {}", cx.tt_fn_name(*fid)));
@@ -1859,6 +1985,21 @@ fn builtin(
                 let off = if b == BuiltinKind::Cap { 16 } else { 8 };
                 ld_x(asm, "x10", sa.off + off);
                 st_x(asm, "x10", sd.off);
+            } else if map_kv(cx.tt, t).is_some() {
+                // `len(m)`：`MapObj.count` 在 +0（M9/Task 19）。`cap` 对 map 不可见，
+                // 检查器已经拒了 `cap(m)`，走不到那一支。
+                let (sa, sd) = (cx.slot(*a), cx.slot(*d));
+                ld_x(asm, "x10", sa.off);
+                // nil map 的 `len` 是 0（`count` 不存在）。
+                let done = format!(".Lmap_len{}", asm.fresh_label());
+                let zero = format!(".Lmap_zero{}", asm.fresh_label());
+                asm.ins(&format!("cbz x10, {zero}"));
+                asm.ins("ldr x11, [x10]");
+                asm.ins(&format!("b {done}"));
+                asm.label(&zero);
+                asm.ins("mov x11, xzr");
+                asm.label(&done);
+                st_x(asm, "x11", sd.off);
             }
             Ok(())
         }

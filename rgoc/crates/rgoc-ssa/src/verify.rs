@@ -269,7 +269,7 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
             match callee {
                 CalleeRef::Method { recv, .. } => out.push(*recv),
                 CalleeRef::Indirect(v) => out.push(*v),
-                CalleeRef::Func(_) | CalleeRef::Builtin(_) => {}
+                CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
             }
             out.extend(args.iter().copied());
         }
@@ -562,7 +562,7 @@ fn check_v5(f: &SsaFunc) -> Result<(), VerifyError> {
             let fid = match callee {
                 CalleeRef::Func(x) => Some(*x),
                 CalleeRef::Method { func, .. } => Some(*func),
-                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) => None,
+                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
             };
             let Some(fid) = fid else { continue };
             let Some(sig) = f.call_sigs.get(&fid) else {

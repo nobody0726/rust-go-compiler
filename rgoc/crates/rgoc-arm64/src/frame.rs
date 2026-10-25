@@ -124,7 +124,22 @@ impl Frame {
             if self.heap.contains_key(slot) {
                 continue;
             }
-            asm.ins(&format!("add x9, x29, #{}", s.off));
+            // `add` 的立即数只有 12 位：帧 > 4 KiB 时 `#-4232` 汇编不过
+            // （`bigmap.go` 的 `[1000]byte` 槽就是这条）。大偏移走 `x10`。
+            if (-4095..=4095).contains(&s.off) {
+                asm.ins(&format!("add x9, x29, #{}", s.off));
+            } else {
+                asm.ins(&format!("movz x10, #{}", s.off.unsigned_abs() & 0xFFFF));
+                let hi = (s.off.unsigned_abs() >> 16) & 0xFFFF;
+                if hi != 0 {
+                    asm.ins(&format!("movk x10, #{hi}, lsl #16"));
+                }
+                if s.off < 0 {
+                    asm.ins("sub x9, x29, x10");
+                } else {
+                    asm.ins("add x9, x29, x10");
+                }
+            }
             let mut k: u32 = 0;
             while k < s.size {
                 asm.ins(&format!("str xzr, [x9, #{k}]"));
@@ -541,7 +556,8 @@ fn max_outgoing(
                 CalleeRef::Func(id) => Some(*id),
                 CalleeRef::Method { func, .. } => Some(*func),
                 // 内建走 runtime 的固定签名，没有栈实参。
-                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) => None,
+                // 运行期助手没有 SSA 函数体（它们是 `rt.c` 里的 C 函数）。
+                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
             };
             let want = callee_param_tys(&arg_tys, fid, siblings);
             let (_, sp) = crate::abi::place_args(tt, &want);

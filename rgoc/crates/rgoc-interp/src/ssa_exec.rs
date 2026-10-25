@@ -488,6 +488,96 @@ impl Exec<'_> {
             atypes.push(self.m.funcs[fi].value_types[a.index()]);
         }
         match callee {
+            // 运行期助手（M9/Phase 2 的 map）。
+            //
+            // # 为什么解释器也要实现
+            //
+            // `rgoc build` 走同一条 SSA 建图：map 现在**能建成图**了，所以
+            // `--via=ssa` 也一定会看到这些 `Call`。不实现的话，SSA 那侧要么
+            // 拒绝（那就是假的不支持）、要么 panic（更糟）。
+            //
+            // # 语义对齐
+            //
+            // `MapObj` 是 M5 就在用的那个（`Vec<(Value, Value)>` + `go_eq`），
+            // 所以键相等、`struct{}` 全等这些细节与 HIR 通路**同一份实现**。
+            CalleeRef::Runtime(f) => {
+                use rgoc_ssa::ir::RuntimeFn as R;
+                match f {
+                    R::MapMake => {
+                        let d = dsts[0];
+                        let m = Value::Map(std::rc::Rc::new(std::cell::RefCell::new(
+                            crate::value::MapObj {
+                                entries: Vec::new(),
+                            },
+                        )));
+                        self.write(d, m);
+                    }
+                    R::MapGet => {
+                        let vd = dsts[0];
+                        let vt = self.m.funcs[fi].value_types[vd.index()];
+                        let hit = match &avals[0] {
+                            Value::Map(mp) => mp.borrow().get(&avals[1]).cloned(),
+                            _ => None,
+                        };
+                        match &hit {
+                            Some(v) => self.write(vd, v.clone()),
+                            None => {
+                                let z = zero_of(self.tt, vt);
+                                self.write(vd, z);
+                            }
+                        }
+                        if let Some(ok) = dsts.get(1).copied() {
+                            self.write(ok, Value::Bool(hit.is_some()));
+                        }
+                    }
+                    R::MapSet => match &avals[0] {
+                        Value::Map(mp) => {
+                            mp.borrow_mut().set(avals[1].clone(), avals[2].clone());
+                        }
+                        // 规范：写 nil map 是 panic（文本与 native 一致）
+                        _ => {
+                            return Err(Halt::Panic(Value::Str(std::rc::Rc::from(
+                                "assignment to entry in nil map",
+                            ))));
+                        }
+                    },
+                    R::MapDel => {
+                        if let Value::Map(mp) = &avals[0] {
+                            mp.borrow_mut().remove(&avals[1]);
+                        }
+                    }
+                    R::MapIter => {
+                        let (kd, vd, nd) = (dsts[0], dsts[1], dsts[2]);
+                        let idx = match &avals[1] {
+                            Value::Int(i) => usize::try_from(*i).unwrap_or(0),
+                            _ => 0,
+                        };
+                        let pair = match &avals[0] {
+                            Value::Map(mp) => {
+                                let b = mp.borrow();
+                                if idx < b.entries.len() {
+                                    Some(b.entries[idx].clone())
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
+                        };
+                        match pair {
+                            Some((k, v)) => {
+                                self.write(kd, k);
+                                self.write(vd, v);
+                                self.write(
+                                    nd,
+                                    Value::Int(i128::try_from(idx + 1).unwrap_or(i128::MAX)),
+                                );
+                            }
+                            None => self.write(nd, Value::Int(0)),
+                        }
+                    }
+                }
+                Ok(None)
+            }
             // `panic(v)` 正常应由构建期落成 `Term::Panic`；这里兜住「漏网的」
             // （防御：真出现时语义仍与 Go 一致，而不是 panic 到宿主）
             CalleeRef::Builtin(BuiltinKind::Panic) => {

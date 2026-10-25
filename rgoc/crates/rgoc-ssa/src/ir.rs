@@ -249,7 +249,7 @@ impl Instr {
                 match callee {
                     CalleeRef::Indirect(v) => out.push(*v),
                     CalleeRef::Method { recv, .. } => out.push(*recv),
-                    CalleeRef::Func(_) | CalleeRef::Builtin(_) => {}
+                    CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
                 }
                 out.extend(args.iter().copied());
             }
@@ -313,11 +313,78 @@ pub struct Effect {
     pub prints: bool,
 }
 
+/// 运行期助手（`rt_*`）的**唯一清单**（M9）。
+///
+/// 每个变体对应 `runtime/native/<target>/rt.c` 里的一个 C 函数。
+/// [`RuntimeFn::symbol`] 是唯一把变体翻成符号名的地方 —— 加一个变体要同时改那里
+/// 与 `rt.c`，否则链接期 `undefined reference`（比静默错好）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RuntimeFn {
+    /// `rt_map_make(kdesc, vdesc) -> *MapObj`
+    MapMake,
+    /// `rt_map_get(m, k, out) -> bool`（写 `*out`）
+    MapGet,
+    /// `rt_map_set(m, k, v)`
+    MapSet,
+    /// `rt_map_del(m, k)`
+    MapDel,
+    /// `rt_map_iter(m, idx, kout, vout) -> u64`（0 = 结束）
+    MapIter,
+}
+
+impl RuntimeFn {
+    /// 全部（顺序进 `dump` 与守卫测试）。
+    pub const ALL: [RuntimeFn; 5] = [
+        RuntimeFn::MapMake,
+        RuntimeFn::MapGet,
+        RuntimeFn::MapSet,
+        RuntimeFn::MapDel,
+        RuntimeFn::MapIter,
+    ];
+
+    /// `rt.c` 里的符号名（**唯一来源**）。
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            RuntimeFn::MapMake => "rt_map_make",
+            RuntimeFn::MapGet => "rt_map_get",
+            RuntimeFn::MapSet => "rt_map_set",
+            RuntimeFn::MapDel => "rt_map_del",
+            RuntimeFn::MapIter => "rt_map_iter",
+        }
+    }
+
+    /// dump 里的拼写（`C10` 的 `op` 语法）。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RuntimeFn::MapMake => "map_make",
+            RuntimeFn::MapGet => "map_get",
+            RuntimeFn::MapSet => "map_set",
+            RuntimeFn::MapDel => "map_del",
+            RuntimeFn::MapIter => "map_iter",
+        }
+    }
+}
+
 /// 被调方。
 #[derive(Clone, Debug)]
 pub enum CalleeRef {
     /// 直接调用已知函数。
     Func(FuncId),
+    /// 调用运行期的 C 助手（`rt_*`，M9）。
+    ///
+    /// # 为什么不走 `Builtin`
+    ///
+    /// `BuiltinKind` 是**语言内建**（`len` / `append` / `delete` …），由 HIR 决定；
+    /// 而 `RuntimeFn` 是**后端契约**（`rt_map_get` 之类），HIR 里没有这些名字。
+    /// 混在一起会让「HIR 支持哪些内建」与「runtime 提供哪些助手」变成同一张表。
+    ///
+    /// # 为什么不是 `Func(FuncId)`
+    ///
+    /// 那些函数没有 HIR 函数体（它们是 C），没有 `FuncId` 可指。`isel` 直接把
+    /// 变体翻成一个符号名 —— 这也是唯一需要维护的映射。
+    Runtime(RuntimeFn),
     /// 静态方法调用（接收者已按值/指针语义准备好）。
     Method {
         /// 接收者值。
@@ -575,6 +642,7 @@ pub fn kind_of_callee(c: &CalleeRef) -> &'static str {
         CalleeRef::Func(_) => "func",
         CalleeRef::Method { .. } => "method",
         CalleeRef::Builtin(_) => "builtin",
+        CalleeRef::Runtime(_) => "runtime",
         CalleeRef::Indirect(_) => "indirect",
     }
 }

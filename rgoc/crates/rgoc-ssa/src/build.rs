@@ -25,7 +25,8 @@ use rgoc_types::{TypeId, TypeTable};
 
 use crate::diag::{Reject, SsaCode};
 use crate::ir::{
-    Block, BlockId, CalleeRef, Effect, Instr, Module, SYNTHETIC_FUNC, Sig, SsaFunc, Term, ValueId,
+    Block, BlockId, CalleeRef, Effect, Instr, Module, RuntimeFn, SYNTHETIC_FUNC, Sig, SsaFunc,
+    Term, ValueId,
 };
 
 /// 空白标识符 `_` 的槽（HIR 约定：`_` 用 `SlotId(u32::MAX)` 占位）。
@@ -195,6 +196,21 @@ fn unsupported(tt: &TypeTable, f: &Func) -> Option<(SsaCode, String)> {
     unsup_block(tt, &f.body)
 }
 
+/// `map[K]V` 的 `(K, V)` 类型（剥命名/别名）；不是 map ⇒ `None`。
+fn map_kv(tt: &TypeTable, t: TypeId) -> Option<(TypeId, TypeId)> {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Map { key, elem } => return Some((*key, *elem)),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// `map` / `chan` 类型 ⇒ 对应的码。接口**不在这里**：接口值当数据传是支持的，
 /// 只有「按动态类型派发/分支」不支持（那由调用点与 `TypeSwitch` 判）。
 fn face_kind(tt: &TypeTable, t: TypeId) -> Option<SsaCode> {
@@ -202,7 +218,7 @@ fn face_kind(tt: &TypeTable, t: TypeId) -> Option<SsaCode> {
         return None;
     }
     match tt.type_of(rgoc_types::underlying(tt, t)) {
-        rgoc_types::typ::Type::Map { .. } => Some(SsaCode::Map),
+        // map 在 M9/Phase 2 支持了（`Call(Runtime)` 到 `rt_map_*`）⇒ 不再拒。
         rgoc_types::typ::Type::Chan { .. } => Some(SsaCode::Chan),
         _ => None,
     }
@@ -230,7 +246,8 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         )),
         Stmt::Range { x, body, kind, .. } => match kind {
             RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
-            RangeKind::Map => Some((SsaCode::Map, "range over map".to_string())),
+            // range over map 支持了（`rt_map_iter` 的一步一个下标）。
+            RangeKind::Map => unsup_expr(tt, x).or_else(|| unsup_block(tt, body)),
             RangeKind::Str => Some((
                 SsaCode::RangeStr,
                 "range over string（要按 rune 解码，指令集里没有对应操作）".to_string(),
@@ -368,14 +385,12 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
                 _ => args.iter().find_map(|a| unsup_expr(tt, a)),
             },
         },
+        // map 字面量（`map[K]V{k: v}`）支持了（M9/Task 24）：键与值都要扫。
         ExprKind::Composite(c) => c.items.iter().find_map(|it| match it {
-            CompositeItem::Value(x) | CompositeItem::Field(_, x) | CompositeItem::Index(_, x) => {
-                unsup_expr(tt, x)
-            }
-            CompositeItem::Key(k, _) => Some((
-                SsaCode::Map,
-                format!("map 字面量的键 {k:?}（键相等是宿主语义）"),
-            )),
+            CompositeItem::Value(x)
+            | CompositeItem::Field(_, x)
+            | CompositeItem::Index(_, x)
+            | CompositeItem::Key(_, x) => unsup_expr(tt, x),
         }),
         // 函数值：`FuncLit` 既覆盖 `func(){}`，也覆盖**具名函数当值用**（`f := g`），
         // 两者在 HIR 里同一个节点（`lower_name` 落成 `FuncLit(fid)`）。
@@ -389,9 +404,9 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             Some((SsaCode::IfaceDyn, "类型断言（运行期类型判定）".to_string()))
         }
         ExprKind::Make { kind, args } => match kind {
-            MakeKind::Map => Some((SsaCode::Map, "make(map)".to_string())),
             MakeKind::Chan => Some((SsaCode::Chan, "make(chan)".to_string())),
-            MakeKind::Slice => args.iter().find_map(|a| unsup_expr(tt, a)),
+            // `make(map)` 与 `make([]T)` 都支持了：只看实参里有没有不可表达的东西。
+            MakeKind::Map | MakeKind::Slice => args.iter().find_map(|a| unsup_expr(tt, a)),
         },
         ExprKind::New(t) => face_kind(tt, *t).map(|code| (code, "`new` 的元素类型".to_string())),
         ExprKind::Builtin { kind, args, .. } => match kind {
@@ -2025,6 +2040,25 @@ impl Fb<'_> {
     ///
     /// 与 `R-20-1` 一致：`Int(0)` 在任意类型上表示「该类型的零值」。
     fn composite(&mut self, c: &rgoc_hir::Composite) -> ValueId {
+        // `map[K]V{k: v, ...}`（M9/Task 24）：先 `make`，再逐个 `set`。
+        //
+        // # 为什么不是一条 `Composite`
+        //
+        // 数组/结构体的元素就在值里（按偏移写），而 map 的元素在 runtime 的
+        // `MapObj` 里 —— 没有偏移可写。发一条 `Composite` 会让 isel 必须知道
+        // 「这张 map 的槽布局」，而那是 runtime 的实现细节。
+        if map_kv(self.tt, c.typ).is_some() {
+            let dst = self.new_value(c.typ);
+            self.map_call(RuntimeFn::MapMake, Vec::new(), vec![dst]);
+            for it in &c.items {
+                if let CompositeItem::Key(k, v) = it {
+                    let kv = self.expr(k);
+                    let vv = self.expr(v);
+                    self.map_call(RuntimeFn::MapSet, vec![dst, kv, vv], Vec::new());
+                }
+            }
+            return dst;
+        }
         let arity = self.arity_of(c.typ);
         let positional = c
             .items
@@ -2166,6 +2200,25 @@ impl Fb<'_> {
                 args,
                 variadic,
             } => self.emit_builtin(e, *kind, args, *variadic),
+            // `v, ok := m[k]`：一个表达式两个值（M9/Task 20）。
+            //
+            // `comma_ok` 必须由 HIR 的那一位驱动，**不能**按「左边有两个目标」
+            // 推断 —— `v, ok = f()` 的 `f` 是真多值调用，而 `m[k]` 只是在
+            // 这一位为真时才多产一个 `bool`。
+            ExprKind::Index {
+                base,
+                index,
+                comma_ok: true,
+            } if map_kv(self.tt, base.typ).is_some() => {
+                let (_kt, vt) = map_kv(self.tt, base.typ).expect("上面刚判过");
+                let m = self.expr(base);
+                let k = self.expr(index);
+                let vd = self.new_value(vt);
+                let bt = self.bool_ty();
+                let od = self.new_value(bt);
+                self.map_call(RuntimeFn::MapGet, vec![m, k], vec![vd, od]);
+                vec![vd, od]
+            }
             _ => vec![self.expr(e)],
         }
     }
@@ -2179,6 +2232,11 @@ impl Fb<'_> {
         dots: bool,
     ) -> Vec<ValueId> {
         let avs = self.eval_args(args, 0);
+        // `delete(m, k)`（M9/Task 21）：走 runtime，不是内建调用。
+        if matches!(kind, BuiltinKind::Delete) {
+            self.map_call(RuntimeFn::MapDel, avs, Vec::new());
+            return Vec::new();
+        }
         let n = builtin_results(kind);
         let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![e.typ] };
         let eff = crate::effect::to_effect(&crate::effect::builtin_summary(kind));
@@ -2377,6 +2435,35 @@ impl Fb<'_> {
         dsts
     }
 
+    /// 发射一条**运行期助手**调用（`rt_*`，M9）。
+    ///
+    /// # 副作用一律记「写所有根」
+    ///
+    /// map 的存储不在任何一个 SSA 根上（它在 `MapObj` 里，由 runtime 管），
+    /// 所以 `Effect` 的 `writes` 说不出任何具体根。取保守档：`writes_all` ——
+    /// 少了它，`dce`/`copy` 会把「写 map」与「读同一张 map」看成一个纯操作，
+    /// 于是重排或删掉，而症状是**静默算错**。
+    ///
+    /// `may_panic` 记 false：`rt_map_*` 只在 nil map 写上 panic，而那是
+    /// 不可恢复的 fatal（`exit(2)`），不像 `Term::Panic` 需要切块。
+    /// `prints` 记 false：它们不写 stdout。
+    fn map_call(&mut self, f: RuntimeFn, args: Vec<ValueId>, dsts: Vec<ValueId>) {
+        let eff = Effect {
+            writes: Vec::new(),
+            writes_all: true,
+            may_panic: false,
+            may_call_back: false,
+            prints: false,
+        };
+        self.emit(Instr::Call {
+            dsts,
+            callee: CalleeRef::Runtime(f),
+            args,
+            dots: false,
+            effect: eff,
+        });
+    }
+
     fn expr(&mut self, e: &Expr) -> ValueId {
         match &e.kind {
             ExprKind::Const(c) => {
@@ -2539,6 +2626,16 @@ impl Fb<'_> {
             // `p[i]`（`p *[N]T`）在指针背后。三种底座都由 `index_base` 归一，
             // 与 `a[i] = v` 的写路径**同一套**判据。
             ExprKind::Index { base, index, .. } => {
+                // map 读（M9/Task 20）：**没有地址**可言 —— `m[k]` 不是存储位置
+                // （Go 禁止 `&m[k]`，也不许 `m[k].f = x`），所以不能走
+                // `Index`+`Load` 那条「先算地址再读」。改走 `rt_map_get`。
+                if let Some((_kt, vt)) = map_kv(self.tt, base.typ) {
+                    let m = self.expr(base);
+                    let k = self.expr(index);
+                    let dst = self.new_value(vt);
+                    self.map_call(RuntimeFn::MapGet, vec![m, k], vec![dst]);
+                    return dst;
+                }
                 let (base_ptr, hint) = self.index_base(base);
                 let idx = self.expr(index);
                 let root = hint.unwrap_or_else(|| self.heap_root());
@@ -3129,6 +3226,202 @@ impl Fb<'_> {
     /// **`Str` 与 `Map` 不在 M6 面**：字符串要按 rune 解码（当前指令集里没有
     /// 能表达「按 rune 取第 i 个」的操作），map 的键相等是宿主语义
     /// （`SSA-UNSUPPORTED-MAP`）。两者都**显式拒绝**，不静默降级。
+    /// `for k, v := range m`（M9/Task 23）。
+    ///
+    /// # 与数组/切片版的三处不同
+    ///
+    /// 1. **计数器是表下标，不是键**。`k` 与「迭代到第几个槽」是两回事，
+    ///    所以 `idx_slot` 用 `int`，键另存一个值。
+    /// 2. **键/值由 runtime 写出来**：`rt_map_iter(m, idx, &k, &v) -> next`
+    ///    一步填好两个值并返回下一个起点（0 = 结束）。所以判据不是
+    ///    `idx < len` 而是 `next != 0`。
+    /// 3. **不承诺顺序**：`cap` 是 2 的幂 + 开放寻址 ⇒ 顺序由 hash 决定。
+    ///    规范也允许任意顺序，所以判据只能写「和 / 个数」，不能写序列。
+    fn stmt_range_map(
+        &mut self,
+        key: Option<&Place>,
+        value: Option<&Place>,
+        x: &Expr,
+        body: &HirBlock,
+        label: Option<&str>,
+    ) {
+        let Some((kt, vt)) = map_kv(self.tt, x.typ) else {
+            // 预扫描已保证是 map；真走到这儿说明 `map_kv` 与它口径不一致。
+            unreachable!("range over 非 map 进了 stmt_range_map")
+        };
+        let m = self.expr(x);
+        let int_ty = self.int_ty();
+        // 表下标（与键无关）
+        let idx_slot = self.fresh_slot(int_ty);
+        let user_key = match key {
+            Some(Place::Slot(s)) if *s != BLANK_SLOT => Some(*s),
+            _ => None,
+        };
+        let val_slot: Option<SlotId> = match value {
+            Some(Place::Slot(s)) if *s != BLANK_SLOT => Some(*s),
+            _ => None,
+        };
+
+        let zero = self.const_int(0, int_ty);
+        self.write_slot(idx_slot, zero);
+
+        let base = (self.val.clone(), self.mem.clone());
+
+        let mut eff = scan_loop_effects(self.tt, &self.slot_root, body, None);
+        eff.slots.insert(idx_slot);
+        if let Some(k) = user_key {
+            eff.slots.insert(k);
+        }
+        if let Some(s) = val_slot {
+            eff.slots.insert(s);
+        }
+        let carried: Vec<SlotId> = eff
+            .slots
+            .iter()
+            .copied()
+            .filter(|s| self.val.contains_key(s))
+            .collect();
+        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
+        if eff.calls {
+            for i in 0..self.globals.len() {
+                wroots.insert(RootId(i as u32));
+            }
+        }
+        if eff.heap || eff.calls {
+            let h = self.heap_root();
+            wroots.insert(h);
+        }
+        let layout = ParamLayout {
+            slots: carried,
+            roots: wroots.into_iter().collect(),
+        };
+
+        // ── header：next = rt_map_iter(m, idx, &k, &v)
+        let header = self.new_block();
+        let hstate = self.layout_params(header, &layout);
+        let pre_args = self.args_for(self.cur, &layout, &base.0, &base.1);
+        self.set_term(Term::Goto {
+            to: header,
+            args: pre_args,
+        });
+        self.cur = header;
+        self.terminated = false;
+        let hs = Self::state_with(&base, (hstate.0.clone(), hstate.1.clone()));
+        self.val = hs.0.clone();
+        self.mem = hs.1.clone();
+
+        let idx_v = self.read_slot(idx_slot);
+        let kd = self.new_value(kt);
+        let vd = self.new_value(vt);
+        let nd = self.new_value(int_ty);
+        self.map_call(RuntimeFn::MapIter, vec![m, idx_v], vec![kd, vd, nd]);
+        let bt = self.bool_ty();
+        let zero2 = self.const_int(0, int_ty);
+        let cond = self.new_value(bt);
+        self.emit(Instr::Bin {
+            dst: cond,
+            op: rgoc_hir::BinOp::Ne,
+            lhs: nd,
+            rhs: zero2,
+            typ: bt,
+        });
+
+        let body_b = self.new_block();
+        let exit_b = self.new_block();
+        let exit_state = self.layout_params(exit_b, &layout);
+        let pass = layout
+            .slots
+            .iter()
+            .map(|s| hstate.0[s])
+            .chain(layout.roots.iter().map(|r| hstate.1[r]))
+            .collect();
+        self.set_term(Term::If {
+            cond,
+            then_: (body_b, Vec::new()),
+            else_: (exit_b, pass),
+        });
+
+        // ── body
+        let ridx = self.regions.len();
+        self.regions.push(Region::Loop(LoopCtx {
+            label: label.map(ToString::to_string),
+            layout: layout.clone(),
+            break_target: Some(exit_b),
+            break_pending: Vec::new(),
+            continues: Vec::new(),
+        }));
+        let bstate = (self.val.clone(), self.mem.clone());
+        self.cur = body_b;
+        self.terminated = false;
+        self.val = bstate.0;
+        self.mem = bstate.1;
+        if let Some(k) = user_key {
+            let kty = self.slot_typ(k);
+            let kv = self.coerce_to(kty, kd);
+            self.write_slot(k, kv);
+        }
+        if let Some(p) = value {
+            let pt = self.place_value_type(p);
+            let vv = self.coerce_to(pt, vd);
+            self.write_place(p, vv);
+        }
+        self.stmts(&body.stmts);
+        let body_falls = !self.terminated;
+        let Region::Loop(ctx) = self.regions.remove(ridx) else {
+            unreachable!("刚压进去的是 Loop")
+        };
+
+        // ── latch：idx = next
+        let need_latch = body_falls || !ctx.continues.is_empty();
+        let mut latch: Option<BlockId> = None;
+        let cont_target = if need_latch {
+            let l = self.new_block();
+            latch = Some(l);
+            l
+        } else {
+            header
+        };
+        for c in &ctx.continues {
+            let args = self.args_for(c.block, &layout, &c.val, &c.mem);
+            self.blocks[c.block.index()].term = Term::Goto {
+                to: cont_target,
+                args,
+            };
+        }
+        if body_falls {
+            let tail = self.cur;
+            let args_state = (self.val.clone(), self.mem.clone());
+            if let Some(l) = latch {
+                self.blocks[tail.index()].term = Term::Goto {
+                    to: l,
+                    args: Vec::new(),
+                };
+                self.cur = l;
+                self.terminated = false;
+                self.val = args_state.0;
+                self.mem = args_state.1;
+                // 下一轮从 `next` 起
+                self.write_slot(idx_slot, nd);
+                let args = self.args_for(l, &layout, &self.val.clone(), &self.mem.clone());
+                self.set_term(Term::Goto { to: header, args });
+            } else {
+                self.write_slot(idx_slot, nd);
+                let args = self.args_for(tail, &layout, &args_state.0, &args_state.1);
+                self.set_term(Term::Goto {
+                    to: cont_target,
+                    args,
+                });
+            }
+        }
+
+        // ── 出口
+        self.cur = exit_b;
+        self.terminated = false;
+        let es = Self::state_with(&base, exit_state);
+        self.val = es.0;
+        self.mem = es.1;
+    }
+
     fn stmt_range(
         &mut self,
         key: Option<&Place>,
@@ -3138,14 +3431,22 @@ impl Fb<'_> {
         kind: RangeKind,
         label: Option<&str>,
     ) {
-        // `Str` / `Map` 到不了这里：`unsupported()` 在**建图前**就把它们拒了
-        // （`SSA-UNSUPPORTED-RANGE-STR` / `-MAP`）。留 `unreachable!` 不用 `todo!`：
+        // `Str` 到不了这里：`unsupported()` 在**建图前**就把它拒了
+        // （`SSA-UNSUPPORTED-RANGE-STR`）。留 `unreachable!` 不用 `todo!`：
         // 「预扫描漏了」是实现 bug，不是「还没实现」。
+        //
+        // `Map` 是另一套形状（计数器是表下标、键/值是 runtime 写出来的），
+        // 单独走 `stmt_range_map`。
+        if matches!(kind, RangeKind::Map) {
+            self.stmt_range_map(key, value, x, body, label);
+            return;
+        }
         match kind {
             RangeKind::Array | RangeKind::Slice | RangeKind::Int => {}
-            RangeKind::Str | RangeKind::Map => {
-                unreachable!("range over str/map 应由 unsupported() 在建图前拒掉")
+            RangeKind::Str => {
+                unreachable!("range over str 应由 unsupported() 在建图前拒掉")
             }
+            RangeKind::Map => unreachable!("上面已经分派走了"),
             RangeKind::Chan | RangeKind::Func => {
                 unreachable!("range over chan/func 应由 unsupported() 在建图前拒掉")
             }
@@ -4170,6 +4471,15 @@ impl Fb<'_> {
         match p {
             Place::Slot(s) => self.read_slot(*s),
             Place::Global(g) => self.load_root(RootId(g.0), self.elem_type(RootId(g.0))),
+            // `m[k]++` / `m[k] += 1`：读那一格（M9/Task 20）。
+            Place::Index { base, index } if map_kv(self.tt, base.typ).is_some() => {
+                let (_kt, vt) = map_kv(self.tt, base.typ).expect("上面刚判过");
+                let m = self.expr(base);
+                let k = self.expr(index);
+                let dst = self.new_value(vt);
+                self.map_call(RuntimeFn::MapGet, vec![m, k], vec![dst]);
+                dst
+            }
             other => {
                 // 地址与根**一次**求出来（`Deref(f())` 不能求两遍）
                 let (addr, hint) = self.place_addr_root(other);
@@ -4196,6 +4506,15 @@ impl Fb<'_> {
                 let root = RootId(g.0);
                 let addr = self.addr_of(root);
                 self.store_root(root, addr, v);
+            }
+            // `m[k] = v`（M9/Task 21）：走 `rt_map_set`。
+            //
+            // 注意**求值顺序**：`m`、`k`、`v` 都已在语句层求值完（`rhs_values`
+            // 与 `write_place` 的顺序），这里只负责发射调用。
+            Place::Index { base, index } if map_kv(self.tt, base.typ).is_some() => {
+                let m = self.expr(base);
+                let k = self.expr(index);
+                self.map_call(RuntimeFn::MapSet, vec![m, k, v], Vec::new());
             }
             other => {
                 let (addr, hint) = self.place_addr_root(other);
