@@ -1,0 +1,19 @@
+# rgoc-meta —— 类型元数据（M9）：`TypeDesc` / `MethodTable` / ptrmask 的唯一实现。
+#
+# 为什么单立一个 crate 而不是塞进 rgoc-arm64：`TypeDesc` 是**给 M10 的扫描器消费的
+# 协议**，而扫描器不依赖 aarch64（它读的是内存里的表）。放进 rgoc-arm64 等于把
+# 协议绑在指令集上。
+[package]
+name = "rgoc-meta"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "M9：类型元数据（TypeDesc / MethodTable / ptrmask）的唯一实现。"
+
+[lints]
+workspace = true
+
+[dependencies]
+rgoc-const = { path = "../rgoc-const" }
+rgoc-types = { path = "../rgoc-types" }

@@ -36,6 +36,7 @@ members = [
     "crates/rgoc-interp",
     "crates/rgoc-lex",
     "crates/rgoc-load",
+    "crates/rgoc-meta",
     "crates/rgoc-parse",
     "crates/rgoc-spikes",
     "crates/rgoc-ssa",

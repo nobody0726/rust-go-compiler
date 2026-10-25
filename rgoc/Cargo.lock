@@ -172,6 +172,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rgoc-meta"
+version = "0.0.0"
+dependencies = [
+ "rgoc-const",
+ "rgoc-types",
+]
+
+[[package]]
 name = "rgoc-parse"
 version = "0.0.0"
 dependencies = [
