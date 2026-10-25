@@ -1,0 +1,12 @@
+go_source_code/test/chan/doubleselect.go	stdlib	import "flag" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/fifo.go	stdlib	import "os" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/goroutines.go	stdlib	import "os" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/nonblock.go	stdlib	import "runtime" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/perm.go	errorcheck	<-chan int 赋给 chan int ⇒ CHK-INVALID-ASSIGN（该文件本来就是 errorcheck 用例）
+go_source_code/test/chan/powser1.go	stdlib	import "os" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/powser2.go	stdlib	import "os" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/select2.go	stdlib	import "runtime" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/select3.go	stdlib	import "time" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/select5.go	stdlib	import "bufio" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/select7.go	stdlib	import "runtime" ⇒ TYP-UNSUPPORTED-IMPORT-FORM
+go_source_code/test/chan/sieve2.go	stdlib	import "container/heap" ⇒ TYP-UNSUPPORTED-IMPORT-FORM

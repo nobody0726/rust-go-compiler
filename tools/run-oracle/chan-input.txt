@@ -1,0 +1,20 @@
+# M8 并发语料清单（Task 54，R-6-1 同源）：go_source_code/test/chan/*.go 全部 19 个；三栏见 chan-rejected.txt。
+go_source_code/test/chan/doubleselect.go
+go_source_code/test/chan/fifo.go
+go_source_code/test/chan/goroutines.go
+go_source_code/test/chan/nonblock.go
+go_source_code/test/chan/perm.go
+go_source_code/test/chan/powser1.go
+go_source_code/test/chan/powser2.go
+go_source_code/test/chan/select.go
+go_source_code/test/chan/select2.go
+go_source_code/test/chan/select3.go
+go_source_code/test/chan/select4.go
+go_source_code/test/chan/select5.go
+go_source_code/test/chan/select6.go
+go_source_code/test/chan/select7.go
+go_source_code/test/chan/select8.go
+go_source_code/test/chan/sendstmt.go
+go_source_code/test/chan/sieve1.go
+go_source_code/test/chan/sieve2.go
+go_source_code/test/chan/zerosize.go
