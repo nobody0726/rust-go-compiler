@@ -288,6 +288,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-3` | 2026-10-25 | M7 的 `u_m7_04_arena_耗尽打一行并退出2` 换面成 `u_m7_04_堆耗尽打一行并退出2`：触发手段从「2000 次 `new` 撑爆静态 8 MiB」改成「`RGOC_HEAP_MAX=1048576`」，文本从 `panic: out of arena` 换成 `runtime error: out of memory (heap limit N bytes)` | M9/Task 7 把静态 arena 换成可增长的 mmap chunk 链 ⇒ 原 fixture 正常跑完，判据前提消失。**意图**（耗尽 ⇒ 一行 stderr + 退出 2 + 不继续执行）不变 |
 | `R-9-4` | 2026-10-25 | 四条 M7 判据换面：`u_m7_01`（切片报码退出 1）→「切片已放行」；`nat2`（Slice 变体永远到不了）→「切片变体真的被选择」；`CgCode::ALL` 3 → 2；M7 manifest 的码集合改成 `ALL ∪ retired_codes`，拒绝清单改读快照 `native-rejected-m7.txt` | M9/Phase 1 把 `[]T` 真的实现了 ⇒ 原判据的前提（切片被拒）消失。**不能删 M7 的记录**（那是历史事实），也不能让冻结数字变成假错 ⇒ 用 `retired_codes` + 快照两条机制把「历史」与「现状」分开 |
 | `R-9-5` | 2026-10-25 | `rt_alloc` 之外再加一个**不带对象头**的分配入口：切片的底层数组走 `rt_arena_alloc(cap*elemsize, 8)`，`rt_alloc` 只用于「一个 T」 | 底层数组的形状是 `cap × elem` 的元素数组，不是一个 `T` —— 给它写一个 `elem` 的 desc 是错的（`size` 对不上），写「数组类型」的 desc 又要为每个 `[n]T` 生成一块。M10 扫它要靠「元素 desc + 元素个数」（官方用 span 的 `elemtype`），那条契约归 M10（`G-M9-01`） |
+| `R-9-6` | 2026-10-25 | **SSA 的地址值类型标注有缺陷**（M9/Phase 2 发现，未修）：`Instr::Field` / `Instr::Index` 的 dst 类型沿用**底座类型**，于是 `ss.aa`（指向 `S`）仍标成 `*SS`，`.b` 走 `field_offset(SS,1)=24` 而不是 `field_offset(S,1)=8`。修法：dst 改成 `*字段类型` / `*元素类型`（`tt.add_pointer`），代价是含取址的 C10 golden 要重跑 | 最小复现：`type S struct{a,b,c int}; type SS struct{aa,bb,cc S}; var ss = SS{S{1,2,3},S{4,5,6},S{7,8,9}}`，`println(ss.aa.a, ss.aa.b, ss.aa.c)` 期望 `1 2 3`、native 给 `1 4 7`（初始化与读取用**同一个**错偏移 ⇒ 只有首字段碰巧对）。`ken/complit.go` 的「差 2/4」正是它。⚠️ Phase 1 给 `field_offset_of` 加的「剥 Slice/Array」只是同一缺陷的另一个症状，`*SS` 这种情形补不了 |
 
 ---
 
