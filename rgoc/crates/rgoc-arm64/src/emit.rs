@@ -175,6 +175,18 @@ impl Asm {
         }
     }
 
+    /// 在 `.data` 里定义一个**具名**符号，内容由调用方逐行给出。
+    ///
+    /// 与 [`Asm::rodata_named_raw`] 同形，只是段不同。用于 `rt_globals`：
+    /// 它的每一条是 `(desc 指针, 全局地址)` 两个 `.quad`，纯字节发不出来。
+    pub fn data_named_raw(&mut self, label: &str, body: &[String]) {
+        let _ = writeln!(self.data, ".p2align 3");
+        let _ = writeln!(self.data, "{label}:");
+        for line in body {
+            let _ = writeln!(self.data, "  {line}");
+        }
+    }
+
     /// 把 `name` 定义成 `target` 的**别名**（同一个地址，两个符号）。
     ///
     /// 只用于零大小全局：`zerosize.go` 要求「零大小变量与 `new([0]int)` 同址」，

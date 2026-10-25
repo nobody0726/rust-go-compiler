@@ -72,11 +72,13 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
         }
     }
 
-    // ②b 类型元数据（`.rodata`）。
+    // ②a 全局 roots 表（`M9-design.md` §3.11）。
     //
-    // 必须在函数之前：`isel` 处理 `new(T)` / `make` 时要按类型查 desc 符号名，
-    // 而符号名由 `emit_descs` 分配（`__desc_<hash>`）。
+    // **必须在 desc 之后**：表的每一条要引用 `__desc_<hash>`，而那些符号由
+    // `emit_descs` 定义（GNU as 的 `.quad` 允许前向引用，但先定义后引用能
+    // 让「符号名怎么拼」只有一处来源）。
     emit_descs(&mut asm, m, tt);
+    emit_global_roots(&mut asm, m, tt);
 
     // ③ 逐函数。
     //
@@ -231,6 +233,41 @@ pub fn gcdata_bytes(mask: &[bool]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// 发射全局 roots 表：`rt_globals`（`(desc, addr)` 两列）+ `rt_nglobals`。
+///
+/// # 为什么零大小全局不进表
+///
+/// 它们别名到 `rt_zerobase`（没有自己的存储），**没有可扫描的字**。
+/// 进表只会让 M10 每次 STW 都去扫一块 0 字节的东西 —— 而且 `desc.size == 0`
+/// 时「扫几个字」这个问题本身没有答案。
+///
+/// # 为什么符号必须恒存在
+///
+/// M10 的扫描器无条件读 `rt_globals` / `rt_nglobals`。空程序（没有包级变量）
+/// 是最容易被漏的那类 —— 少了符号就是链接期 `undefined reference`，
+/// 而那会发生在**别的**里程碑里，排查起来完全看不到这里。
+fn emit_global_roots(asm: &mut Asm, m: &Module, tt: &TypeTable) {
+    let mut body: Vec<String> = Vec::new();
+    let mut n: u64 = 0;
+    for (i, g) in m.globals.iter().enumerate() {
+        let Some(ty) = m.global_types.get(i).copied() else {
+            continue;
+        };
+        let size = layout(tt, ty).map_or(8, |l| l.size);
+        if size == 0 {
+            continue;
+        }
+        let desc = desc_symbol(type_hash(tt, ty));
+        body.push(format!(".quad {desc}"));
+        body.push(format!(".quad g{}", g.0));
+        n += 1;
+    }
+    asm.global("rt_globals");
+    asm.global("rt_nglobals");
+    asm.data_named_raw("rt_globals", &body);
+    asm.data_named_raw("rt_nglobals", &[format!(".quad {n}")]);
 }
 
 /// 把类型闭包的 desc 全部发射进 `.rodata`。
