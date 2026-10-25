@@ -182,7 +182,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | Phase 0（M9a） | 39 | 7 | 不涨 |
 | Phase 1（slice） | **46** | 0 | 7 个切片文件全绿 |
 | Phase 2（map） | **50** | 0 | +4（`bigmap` / `indirect` / `ken/complit` / `ken/range`）。`print` 没进来：它的**第一条**拒绝是 defer 不是 map，归 Phase 5（`R-9-8`） |
-| Phase 3（iface） | **60** | 0 | +9 |
+| Phase 3（iface） | **56** | 0 | +6（`method3` / `interbasic` / `interfun` / `embed` / `rob1` / `method5`→否）。`alias1`（type switch）/`method`（recover）/`method5`（方法值）卡在别的阶段（`R-9-12`） |
 | Phase 4（funcval） | **67** | 0 | +7 |
 | Phase 5（defer/panic） | **69** | 0 | +3（`closure4` / `defernil` / `print`） |
 | Phase 6（根协议） | 69 | 0 | 不涨 |
@@ -292,6 +292,9 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-7` | 2026-10-25 | `expr_addr_root` 给 map 值取字段加**临时槽**：`m[k].f` 先把 `m[k]` 的值落进一个有根的临时槽，再返回那个槽的地址 | map 的值在 Go 里**没有地址**（`&m[k]` / `m[k].f = x` 都是编译错误，检查器已拒），但 `.f` 读需要一个底座。原实现落到 `Index` 分支，对 map 指针发 `Instr::Index` ⇒ 把 map 指针当数组基址算，`ms[i].a` 打出垃圾后段错误（`ken/complit.go`）。副本只用于读，永远写不回 map |
 | `R-9-8` | 2026-10-25 | **SSA 拒绝面重冻结：46/23 → 50/19**（`ssa-rejected.txt` 23 行 → 19 行；`native-input.txt` 46 → 50）。连带五处判据换数：`ssa_slice` 的 `BUILDABLE/REJECTED`、`ssa_corpus_run` / `ssa_diff` / `opt_equiv` / `live_consumer` 的分母、`native_slice::t_nat_40` 的 N；`ssa_reject::t_ssa_33_map` 从「必须被拒」**反转**成「不再被拒 + `SSA-UNSUPPORTED-MAP` 不许出现」；`ssa_build` / `ssa_cli` 的两条 map fixture 换成仍然被拒的 chan；M6 manifest 的 `corpus_lists` 计数改成 50/19 并要求写 `re_frozen` 留痕；M7 manifest 的 `input.file` 改指快照 `native-input-m7.txt` | map 在 M9/Phase 2 实现了（`rt_map_*` + `CalleeRef::Runtime`），5 条 MAP 拒绝里 4 条消失（`bigmap.go` / `indirect.go` / `ken/complit.go` / `ken/range.go`），第 5 条 `print.go` 的第一条拒绝也从 MAP 变成 DEFER。⚠️ 两条机制性决定：① **manifest 是现状、报告是历史** —— M6 的 `corpus_lists` 必须等于磁盘，但离开 46/23 就要写 `re_frozen`（by/when/why/delta），判据从「写死 46/23」改成「manifest == 磁盘 且 变动必须留痕」；② **M7 的自报数字对着快照算**（`R-9-4` 同款）—— 否则历史清单被后来者改写，冻结数字变成假错 |
 | `R-9-9` | 2026-10-25 | `index_base` 与 `range` 的**数组底座必须落到地址上**：可寻址走 `expr_addr_root`，右值（调用结果 / map 值 / 复合字面量）落临时槽（`spill_addr`）；`range` 数组的上界从「`len(数组值)`」改成**编译期常量**，且地址只求值一次 | `Instr::Index` 的 `base` 是「元素 0 的地址」，运行期 `ld_x x10,[base_slot]` 直接把底座槽第一个字当地址用。原实现对「非指针底座」一律 `self.expr(base)`，于是 rvalue 数组把**数组内容**当地址：`m[1][0]` 段错误（`bigmap.go` / `ken/complit.go`），`for k, v := range a`（全局数组）也段错误（`ken/range.go`）。⚠️ `for k := range a` 不塌只因为 key-only 根本不发 `Index` —— 单测只写 key-only 就会漏掉它。上界不能用 `len(*[n]T)`：`ssa_exec::len_of` 对指针落 `_ => 0`，循环会一次都不进 |
+| `R-9-10` | 2026-10-25 | **itab 的槽序 = 接口方法的字典序**（不是设计稿写的「声明序」）；`rgoc_ssa::ir::iface_methods` 是唯一来源，静态 ITab 填序 / 调用点取槽序 / `rt_itab` 查序三处都走它 | `InterfaceDef.methods` 是检查器**插入序**，`C7` §4 只承诺 dump 按名字升序 —— 插入序没有对外承诺。而槽序**只要三处一致**就正确，所以用字典序把内部细节钉死 |
+| `R-9-11` | 2026-10-25 | **聚合值接收者不需要包装**：`itab.fn[i]` 直接指真实方法（`data` 就是它要的指针）；只有**标量值接收者**和**嵌入提升**要发 `__imeth_*` 尾跳桩 | 本后端的聚合**按指针传参**（`C5` §6.1）⇒ `data`（指向盒子的指针）正好是第 0 个实参；官方 Go 因为按值传参才要生成 `func (u U) M` 的包装。借来的便宜，记下来免得后来者以为漏了 |
+| `R-9-12` | 2026-10-25 | **拒绝面第二次收缩：50/19 → 56/13**（`R-9-8` 之后）。连带：`ssa_slice` 的 `BUILDABLE/REJECTED`、四处分母、`native-input.txt`（56 行）、M6 manifest 的 `re_frozen`；`ssa_reject::t_ssa_33_接口动态派发` **反转**（普通派发不再被拒），改用 `type switch` 作为 `IFACE-DYN` 的入口 | iface 实现后 9 条 IFACE-DYN 拒绝里 8 条消失。**但只到 56 不是计划的 59**：`alias1`（type switch，Task 34 未做）/ `method`（recover，Phase 5）/ `method5`（方法值，Phase 4）三个 iface 语料卡在**别的阶段**的特性上 |
 
 
 ---
@@ -302,7 +305,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 |---|---|
 | M5 的值语义 | **`D` 腿的基准**：69 个语料上解释器与官方逐字节一致，所以 native 与解释器比 = 与官方比 |
 | M5 的 `C9` | 四条运行期 panic 文本沿用 `C9` §4.5；M9 只**追加** `out of memory` 一条 |
-| M6 的 SSA | **零回归**：`--via=ssa` 50 绿 19 跳过 0 红（分母 46/23 → 50/19 见 `R-9-8`）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图 |
+| M6 的 SSA | **零回归**：`--via=ssa` 55 绿 13 跳过 1 红（分母 46/23 → 56/13 见 `R-9-8`/`R-9-12`；红的那个是 `ken/embed.go` 的解释器侧 `G-M9-04`）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图 |
 | M7 的 native | **零回归**：39 个文件逐个仍绿（`T-CORP-03`）；`.framemap` 产物不变，**新加** `.stackmap` |
 | M8 的并发 | **零回归**：`run-chan.sh` 7 ok 12 skip 0 bad 不变；`M9d` 只交契约，不改解释器 |
 | M8 的 `C11` | `M9d` 的 `hchan` **参照不同构**（单线程 vs 多核）—— 写进 `C11` §8 的抬头 |

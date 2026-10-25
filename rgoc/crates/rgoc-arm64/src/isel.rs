@@ -622,6 +622,25 @@ fn bin(
         return;
     }
 
+    // 接口比较（`M9/Task 35`）：比的是**动态值**，不是 `data` 字的位。
+    //
+    // `any("abc")` 两次装箱各有各的盒子 ⇒ 按字节比 `data` 永远不等
+    // （实测 `ken/interbasic.go` 的 `panic("a")`）。
+    if is_iface_ty(cx.tt, cx.ty(lhs)) && is_iface_ty(cx.tt, cx.ty(rhs)) {
+        let eface = iface_arity(cx.tt, cx.ty(lhs)) == 0;
+        ld_x(asm, "x0", l.off);
+        ld_x(asm, "x1", l.off + 8);
+        ld_x(asm, "x2", r.off);
+        ld_x(asm, "x3", r.off + 8);
+        load_imm(asm, "x4", i64::from(eface));
+        asm.ins("bl rt_iface_eq");
+        asm.ins("cmp x0, #0");
+        let cond = if op == BinOp::Ne { "eq" } else { "ne" };
+        asm.ins(&format!("cset x12, {cond}"));
+        st_x(asm, "x12", d.off);
+        return;
+    }
+
     // ⚠️ 比较的**结果**是 `bool`（`Int` 类），所以按 `dst` 分类会把浮点比较
     // 送进整数分支 —— `1.5 < 2` 变成「两个位模式比大小」，静默错。
     // 比较一律按**操作数**分类；算术仍按 `dst`（两者同型）。
@@ -1155,9 +1174,18 @@ fn type_assert(
         rgoc_types::typ::Type::Pointer(_)
     );
     if is_ptr {
-        ld_x(asm, "x9", s.off + 8);
-        st_x(asm, "x9", d.off);
+        // ⚠️ 不能用 `x9` 当数据寄存器：`ld_x`/`st_x` 拿它当**地址**暂存
+        // （`ADDR`），`st_x(x9, ..)` 会把「dst 的地址」写进 dst
+        // （实测 `ken/interfun.go`：`i1.(*S)` 得到的是栈地址）。
+        ld_x(asm, "x10", s.off + 8);
+        st_x(asm, "x10", d.off);
     } else if dsize > 0 {
+        // 先把整个槽清零，再拷 `dsize` 字节。
+        //
+        // ⚠️ 不先清零的话，`x.(bool)`（size 1）只覆盖 1 字节，槽里另外 7 字节
+        // 是上一个值的残留 ⇒ `b != true` 按 8 字节比就**不等**
+        // （实测 `ken/interbasic.go`：打出 `2 true` 却 panic "fail"）。
+        zero_slot(asm, d.off, dsize.div_ceil(8) * 8);
         // x0 = dst 地址，x1 = 源（盒子），x2 = 字节数
         addr(asm, d.off);
         asm.ins("mov x0, x9");

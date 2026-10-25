@@ -33,21 +33,21 @@
       "note": "沿用 M5 的入选清单（已冻结）"
     },
     "buildable": {
-      "count": 50,
+      "count": 56,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；50 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口时是 46，M9/Phase 2 实现 map 后 +4。"
+      "note": "能建图且 verifier 通过的个数 N；56 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4（Phase 2）→ iface +6（Phase 3）。"
     },
     "rejected": {
       "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 19,
+      "count": 13,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；三栏（文件/码/原因）；IFACE-DYN 9 / FUNC-VALUE 7 / DEFER 3；N+M=69 两向断言。M6 收口时是 23（含 MAP 5），map 实现后 MAP 归零。"
+      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 8 / DEFER 4 / IFACE-DYN 1；N+M=69 两向断言。M6 收口时是 23。"
     },
     "re_frozen": {
-      "by": "M9/Phase 2（Task 18–26）：SSA 侧实现 map —— `rt_map_*` + `CalleeRef::Runtime`（D-M9-5）",
+      "by": "M9/Phase 2（map，R-9-8）+ Phase 3（iface，R-9-12）：`rt_map_*` / 方法表 + 静态 ITab",
       "when": "2026-10-25",
-      "why": "map 从「宿主面」变成「已实现」，于是 SSA 拒绝面收缩：5 条 MAP 拒绝里 4 条消失（bigmap.go / indirect.go / ken/complit.go / ken/range.go），第 5 条 print.go 的第一条拒绝也从 MAP 变成 DEFER。分母 46/23 → 50/19。",
-      "delta": "N +4 / M −4；N + M 仍等于 69"
+      "why": "map 与 iface 从「宿主面」变成「已实现」，拒绝面两次收缩：46/23 → 50/19 → 56/13。Phase 3 少掉的 8 条 IFACE-DYN 里，7 条真的能建图了，`alias1` 卡在 type switch（Task 34）。",
+      "delta": "N 46 → 56（+10）/ M 23 → 13（−10）；N + M 仍等于 69"
     }
   },
   "gate": {

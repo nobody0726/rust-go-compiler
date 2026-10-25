@@ -444,6 +444,43 @@ void *rt_itab(const TypeDesc *iface, const TypeDesc *concrete) {
     return tab;
 }
 
+/* 接口相等（`M9/Task 35`）。
+ *
+ * # 为什么不能按字节比那两个字
+ *
+ * `data` 指向**盒子**（非指针动态类型），两个 `any("abc")` 各有各的盒子 ⇒
+ * 按位比永远不等。Go 的语义是「动态类型相同 **且** 动态值相等」，所以要
+ * 先比第 0 个字（`tab` / `type`），再按**动态类型**比 `data`：
+ *
+ * | 动态类型 | `data` 是什么 | 怎么比 |
+ * |---|---|---|
+ * | `*T`（`Kind::Pointer`）| 指针**值**本身 | 比两个字 |
+ * | 其余 | 指向值的盒子 | `memcmp(desc->size)` |
+ *
+ * `eface` 参数：`any` / `interface{}` 的第 0 个字**就是** desc，有方法的接口
+ * 第 0 个字是 itab（`[+8]` 才是 desc）—— 运行期分不出来，只能由调用点告诉。
+ *
+ * 实测：`ken/interbasic.go` 的 `panic("a")`（两个 `any("abc")` 判不等）。 */
+int rt_iface_eq(u64 a0, u64 a1, u64 b0, u64 b1, i64 eface) {
+    if (a0 != b0) {
+        return 0;
+    }
+    if (a0 == 0) {
+        /* 两边都是 nil 接口 */
+        return 1;
+    }
+    const TypeDesc *d = eface ? (const TypeDesc *)a0 : *(const TypeDesc **)(a0 + 8);
+    if (d->kind == 7 /* Kind::Pointer */) {
+        /* 指针动态类型：`data` 是**值本身**，比两个字 */
+        return a1 == b1;
+    }
+    /* 其余：`data` 指向盒子 ⇒ 用**同一套**值相等（`rt_equal`，字符串按内容）。
+     * ⚠️ 这里不能用 `memcmp`：`any("abc")` 的盒子里是 `{ptr,len}`，按字节比
+     * 就是在比**指针** —— 两个内容相同的字面量各有各的 `.rodata` 时判不等
+     * （实测 `ken/interbasic.go` 的 `panic("a")`）。 */
+    return rt_equal(d, (const void *)a1, (const void *)b1);
+}
+
 /* 断言失败（`v := x.(T)` 的单值形态）。
  *
  * ⚠️ 文本与**解释器**不一致：官方与解释器都写

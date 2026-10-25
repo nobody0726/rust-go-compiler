@@ -1,8 +1,6 @@
-# M9 native 的输入清单 = 入选语料 − 当前 SSA 拒绝面（N 侧，50 行）
+# M9 native 的输入清单 = 入选语料 − 当前 SSA 拒绝面（N 侧，56 行）
 #
-# M7 收口时这份是 46 行（N 侧冻结值）。M9/Phase 2 实现了 map，SSA 拒绝面从
-# 23 缩到 19，于是 N 侧从 46 涨到 50 —— 多出来的 4 个是 `bigmap.go` /
-# `indirect.go` / `ken/complit.go` / `ken/range.go`。
+# M7 收口时 46 行，M9/Phase 2（map）→ 50，M9/Phase 3（iface）→ 56。
 #
 # 分母的唯一权威是 `rgoc-driver/tests/native_slice.rs::t_nat_40_冻结的分母对得上`：
 # 它与 `run-selected.txt` − `ssa-rejected.txt` 做集合比对，差一行就红。
@@ -24,6 +22,7 @@ go_source_code/test/indirect.go
 go_source_code/test/initcomma.go
 go_source_code/test/intcvt.go
 go_source_code/test/iota.go
+go_source_code/test/method3.go
 go_source_code/test/newexpr.go
 go_source_code/test/printbig.go
 go_source_code/test/range3.go
@@ -38,11 +37,16 @@ go_source_code/test/ken/cplx0.go
 go_source_code/test/ken/cplx1.go
 go_source_code/test/ken/cplx2.go
 go_source_code/test/ken/divmod.go
+go_source_code/test/ken/embed.go
 go_source_code/test/ken/for.go
+go_source_code/test/ken/interbasic.go
+go_source_code/test/ken/interfun.go
+go_source_code/test/ken/intervar.go
 go_source_code/test/ken/label.go
 go_source_code/test/ken/mfunc.go
 go_source_code/test/ken/ptrvar.go
 go_source_code/test/ken/range.go
+go_source_code/test/ken/rob1.go
 go_source_code/test/ken/robfor.go
 go_source_code/test/ken/robfunc.go
 go_source_code/test/ken/shift.go

@@ -2247,7 +2247,8 @@ impl Fb<'_> {
             ExprKind::Field { base, index } => {
                 let (bv, hint) = self.expr_addr_root(base)?;
                 let bt = self.values[bv.index()];
-                let t = addr_of_ty(self.tt, bt, field_ty(self.tt, bt, *index));
+                let member = field_ty(self.tt, bt, *index);
+                let t = addr_of_ty(self.tt, bt, member);
                 let dst = self.new_value(t);
                 self.emit(Instr::Field {
                     dst,
@@ -2255,6 +2256,31 @@ impl Fb<'_> {
                     index: *index,
                 });
                 self.note_root(dst, hint);
+                // 字段**本身是指针** ⇒ 它的「地址形态」就是那个指针**值**
+                // （与函数开头 `is_pointer` 分支同口径）。
+                //
+                // # 不这么做会怎样
+                //
+                // 提升字段 `o.a`（`o` 内嵌 `*Inner`）的读取链是
+                // `Field(Field(o,1),1)`。中间那步的地址类型是 `**Inner`，
+                // 直接喂给下一条 `Field` 就会按 `**Inner` 算偏移 ——
+                // 实测 `ken/embed.go` 的 `t3 3`（`o.a` 读到 0，写却写对了）。
+                if let Some(m) = member
+                    && self.is_pointer(m)
+                {
+                    let root = hint.unwrap_or_else(|| self.heap_root());
+                    let mem = self.mem_of(root);
+                    let v = self.new_value(m);
+                    self.emit(Instr::Load {
+                        dst: v,
+                        mem,
+                        root,
+                        addr: dst,
+                        typ: m,
+                    });
+                    self.note_root(v, Some(root));
+                    return Some((v, hint));
+                }
                 Some((dst, hint))
             }
             ExprKind::Index { base, index, .. } => {
