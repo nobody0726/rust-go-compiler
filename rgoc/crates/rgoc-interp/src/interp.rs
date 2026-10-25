@@ -159,7 +159,23 @@ enum Task<'a> {
         nargs: usize,
     },
     /// 接收 `<-ch`（M8/Task 15）。
-    Recv { typ: TypeId, comma_ok: bool },
+    Recv {
+        typ: TypeId,
+        comma_ok: bool,
+        /// 已经登记过的等待者（`None` ⇒ 还没试过阻塞）。
+        ///
+        /// 有这一位，「重试」就不需要数次数（`C11` §3.1：`done` 是唯一判据），
+        /// 也不会重复登记同一个接收方。
+        waiter: Option<crate::chan::WaiterHandle>,
+    },
+    /// 发送 `ch <- v`（M8/Task 18）。
+    ///
+    /// 值栈上依次是 `chan`、`value`（`value` 在上）。阻塞时两者**都留在栈上**：
+    /// 任务不弹出、值也不动，醒来重跑同一段代码 —— 这就是 `D-M8-5` 的全部内容。
+    Send {
+        typ: TypeId,
+        waiter: Option<crate::chan::WaiterHandle>,
+    },
     /// 内建调用。
     Builtin {
         kind: BuiltinKind,
@@ -242,8 +258,6 @@ enum Pending<'a> {
     ExprStmt {
         vbase: usize,
     },
-    /// `ch <- v`：栈上是 `chan`（先求值、在下面）与 `value`（后求值、在上面）。
-    Send,
     Return {
         vbase: usize,
     },
@@ -536,6 +550,8 @@ pub struct Shared<'a> {
 /// 把执行位置做成了数据，M8 才有资格谈「挂起」。加字段时问一句：
 /// 换一个 goroutine 之后它该不该跟着走？该 ⇒ 放这里；不该 ⇒ 放 [`Shared`]。
 struct G<'a> {
+    /// 自己的编号（= `Shared.gs` 的下标）。登记 waiter 时要写进 `Waiter.g`。
+    id: usize,
     frames: Vec<Frame<'a>>,
     /// 正在展开的 panic 值（`None` = 没在展开）。
     ///
@@ -548,11 +564,17 @@ struct G<'a> {
     targets: Vec<Target>,
     pending: Option<Pending<'a>>,
     phase: TopPhase,
-    /// 是否阻塞在某个等待上（Task 20 会换成 `Option<Block>` 带等待集合）。
+    /// 是否阻塞在某个等待上。
     ///
-    /// Task 4 里恒为 `false`：还没有任何操作会阻塞。留着它是为了
-    /// `all_blocked()` 有一个**真实**的判据而不是 `false` 常量。
+    /// 与 `waiters` 的关系：`blocked == true` ⇔ `waiters` 非空 **或者**
+    /// 阻塞在一个没有队列可登记的东西上（nil 通道，Task 23）。
     blocked: bool,
+    /// 这个 G 当前登记的等待者（`C11` §3.1）。
+    ///
+    /// 普通 `recv`/`send` 只有一个；`select` 会有一串（Task 30），撤销靠
+    /// `token` 把它们从各通道的队列里删掉。唤醒之后**必须**清空 ——
+    /// 留着的话下一次阻塞会带着上一轮的 waiter 去撤销。
+    waiters: Vec<crate::chan::WaiterHandle>,
 }
 
 /// 手写 `Debug`：机器状态是四万个值，逐字段展开只会把日志淹掉。
@@ -588,6 +610,7 @@ pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
     sh.setup();
     // main goroutine：`TopPhase::Globals(0)` 起 —— 全局初始化是**它的**第一阶段。
     sh.gs.push(Some(G {
+        id: 0,
         frames: Vec::new(),
         panic_val: None,
         eval: Vec::new(),
@@ -596,6 +619,7 @@ pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
         pending: None,
         phase: TopPhase::Globals(0),
         blocked: false,
+        waiters: Vec::new(),
     }));
     // main 是第 0 个 goroutine，也是 runq 的第一个元素。
     sh.runq.push_back(0);
@@ -659,15 +683,30 @@ impl<'a> Shared<'a> {
     fn drive(&mut self) {
         while let Some(id) = self.pick() {
             let mut g = self.gs[id].take().expect("runq 里的 goroutine 必须活着");
-            while g.one_step(self) {}
+            let step = loop {
+                match g.one_step(self) {
+                    Step::Continue => {}
+                    other => break other,
+                }
+            };
             if self.halted.is_some() {
                 // 预算超限 / panic：整个程序停，剩下的 goroutine 直接丢弃（`D-M8-8`）。
                 return;
             }
-            if g.frames.is_empty() && matches!(g.phase, TopPhase::Done) {
-                self.reap(id);
-            } else {
-                self.gs[id] = Some(g);
+            match step {
+                // 阻塞：**不回收、不入队**。它就停在这里，等对端 `wake` 它
+                // （`C11` §2.3：唤醒只入队尾，不保证立刻跑）。
+                Step::Blocked => {
+                    g.blocked = true;
+                    self.gs[id] = Some(g);
+                }
+                _ => {
+                    if g.frames.is_empty() && matches!(g.phase, TopPhase::Done) {
+                        self.reap(id);
+                    } else {
+                        self.gs[id] = Some(g);
+                    }
+                }
             }
         }
 
@@ -685,6 +724,18 @@ impl<'a> Shared<'a> {
     }
 
     // ───────────── 调度（`C11` §2） ─────────────
+
+    /// 把一个 goroutine 放回就绪队列（`C11` §2.3：只入队尾、清 `blocked`）。
+    ///
+    /// 幂等**不**成立，也不该成立：同一个 waiter 被唤醒两次就是「重复唤醒」，
+    /// 那是调度器的错，会表现为同一个 G 在 `runq` 里出现两次。`Task 27` 的
+    /// 不变式会抓它。
+    fn wake(&mut self, gid: usize) {
+        if let Some(Some(g)) = self.gs.get_mut(gid) {
+            g.blocked = false;
+        }
+        self.runq.push_back(gid);
+    }
 
     /// 从就绪队列取一个 goroutine（FIFO，`C11` §2.1 规则 3）。
     fn pick(&mut self) -> Option<usize> {
@@ -730,44 +781,65 @@ impl<'a> Shared<'a> {
     }
 }
 
+/// 一步推进的结局（`D-M8-5`）。
+///
+/// M5 时只有「继续 / 结束」两态；M8 多出 `Blocked` —— 它是**唯一**会让出
+/// CPU 的结局（`C11` §2.1 规则 2：不抢占）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Step {
+    /// 还有事可做，接着跑。
+    Continue,
+    /// 卡住了：任务留在求值栈上，等对端 `wake`。
+    Blocked,
+    /// 这个 goroutine 结束了（或整个程序被 halt）。
+    Exited,
+}
+
 impl<'a> G<'a> {
-    /// 推进**一步**。返回 `false` ⇒ 程序结束（预算超限 / 顶层动作跑完）。
+    /// 推进**一步**。
     ///
-    /// 逐行对应 M5 的 `drive()` 循环体：原来的每个 `continue` 变成 `return true`，
-    /// 每个 `return` 变成 `return false`。**顺序不能改** —— 先判退出帧、再求值、
-    /// 再 `resume`、再语句、最后顶层动作。
-    fn one_step(&mut self, sh: &mut Shared<'a>) -> bool {
+    /// 逐行对应 M5 的 `drive()` 循环体：原来的每个 `continue` 变成
+    /// `Step::Continue`，每个 `return` 变成 `Step::Exited`。**顺序不能改** ——
+    /// 先判退出帧、再求值、再 `resume`、再语句、最后顶层动作。
+    fn one_step(&mut self, sh: &mut Shared<'a>) -> Step {
         sh.steps += 1;
         if sh.steps > sh.opts.max_steps {
             sh.halted = Some(Halt::Budget("step budget exceeded"));
-            return false;
+            return Step::Exited;
         }
         if sh.halted.is_some() {
-            return false;
+            return Step::Exited;
         }
         if self.eval.len() > sh.opts.max_eval {
             sh.halted = Some(Halt::Budget("eval stack depth exceeded"));
-            return false;
+            return Step::Exited;
         }
         if let Some(f) = self.frames.last()
             && f.exiting
         {
             self.teardown(sh);
-            return true;
+            return Step::Continue;
         }
         if !self.eval.is_empty() {
-            self.step_eval(sh);
-            return true;
+            return if self.step_eval(sh) {
+                Step::Continue
+            } else {
+                Step::Blocked
+            };
         }
         if self.pending.is_some() {
             self.resume(sh);
-            return true;
+            return Step::Continue;
         }
         if !self.frames.is_empty() {
             self.next_stmt(sh);
-            return true;
+            return Step::Continue;
         }
-        self.next_top(sh)
+        if self.next_top(sh) {
+            Step::Continue
+        } else {
+            Step::Exited
+        }
     }
 
     /// 帧栈空时推进一个顶层动作。返回 `false` ⇒ 程序结束。
@@ -814,8 +886,12 @@ impl<'a> G<'a> {
 
     // ───────────── 求值 ─────────────
 
-    fn step_eval(&mut self, sh: &mut Shared<'a>) {
-        let Some(task) = self.eval.pop() else { return };
+    /// 推进求值栈顶的一个任务。返回 `false` ⇒ 这个任务**卡住了**
+    /// （任务已经放回栈顶，等对端 `wake` 之后重跑）。
+    fn step_eval(&mut self, sh: &mut Shared<'a>) -> bool {
+        let Some(task) = self.eval.pop() else {
+            return true;
+        };
         match task {
             Task::Eval(e) => self.eval_expr(sh, e),
             Task::Unary { op, typ } => {
@@ -901,7 +977,12 @@ impl<'a> G<'a> {
                 comma_ok,
             } => self.type_assert(sh, to, iface, comma_ok),
             Task::Make { kind, typ, nargs } => self.make(sh, kind, typ, nargs),
-            Task::Recv { typ, comma_ok } => self.do_recv(sh, typ, comma_ok),
+            Task::Recv {
+                typ,
+                comma_ok,
+                waiter,
+            } => return self.task_recv(sh, typ, comma_ok, waiter),
+            Task::Send { typ, waiter } => return self.task_send(sh, typ, waiter),
             Task::Builtin {
                 kind,
                 args,
@@ -970,6 +1051,7 @@ impl<'a> G<'a> {
                 }
             }
         }
+        true
     }
 
     fn eval_expr(&mut self, sh: &mut Shared<'a>, e: &'a Expr) {
@@ -1151,6 +1233,7 @@ impl<'a> G<'a> {
                 self.eval.push(Task::Recv {
                     typ: e.typ,
                     comma_ok: *comma_ok,
+                    waiter: None,
                 });
                 self.eval.push(Task::Eval(ch));
             }
@@ -1525,10 +1608,14 @@ impl<'a> G<'a> {
                 self.pending = Some(Pending::ExprStmt { vbase });
                 self.eval.push(Task::Eval(call));
             }
-            // `ch <- v`（M8/Task 15）：chan 先求值、value 后（与 lowering 的
-            // 求值顺序一致）。阻塞路径是 Task 20。
+            // `ch <- v`（M8/Task 18）：chan 先求值、value 后（与 lowering 的
+            // 求值顺序一致）。**不用 `Pending`** —— 阻塞时任务要留在求值栈上
+            // （`D-M8-5`），而 `Pending` 是「语句已经跑完、只差提交」的状态。
             Stmt::Send { chan, value } => {
-                self.pending = Some(Pending::Send);
+                self.eval.push(Task::Send {
+                    typ: chan.typ,
+                    waiter: None,
+                });
                 self.eval.push(Task::Eval(value));
                 self.eval.push(Task::Eval(chan));
             }
@@ -1781,27 +1868,6 @@ impl<'a> G<'a> {
                 }
             }
             Pending::ExprStmt { vbase } => self.values.truncate(vbase),
-            Pending::Send => {
-                let value = self.pop(sh);
-                let ch = self.pop(sh);
-                let Some(obj) = chan_of(&ch) else {
-                    self.fail(
-                        sh,
-                        RtError::Message("runtime error: send to non-channel".to_string()),
-                    );
-                    return;
-                };
-                let outcome = obj.borrow_mut().try_send(&value);
-                match outcome {
-                    // 单 goroutine 下没有等待的接收方，`woke` 恒为 `None`；
-                    // Task 20 起这里要把它入就绪队列。
-                    SendOutcome::Done { .. } => {}
-                    SendOutcome::Closed => {
-                        todo!("M8/Task 22：panic: send on closed channel")
-                    }
-                    SendOutcome::Blocked => todo!("M8/Task 20：阻塞发送（登记 waiter + Blocked）"),
-                }
-            }
             Pending::Return { vbase } => {
                 let vals = self.values.split_off(vbase);
                 self.do_return(sh, vals);
@@ -2829,29 +2895,211 @@ impl<'a> G<'a> {
         }
     }
 
-    /// 接收 `<-ch`（`C11` §3.2 recv 的 ①→③；④ 是 Task 20）。
-    fn do_recv(&mut self, sh: &mut Shared<'a>, typ: TypeId, comma_ok: bool) {
-        let ch = self.pop(sh);
-        let Some(obj) = chan_of(&ch) else {
+    /// 接收 `<-ch`（`C11` §3.2 recv 的 ①→④）。
+    ///
+    /// 三条纪律（`D-M8-5`）：
+    /// 1. **提交前无副作用**：`Blocked` 时值栈一个值都不许动（通道值也留着，
+    ///    醒来还要用它）；
+    /// 2. **`done` 是唯一判据**：重试先看自己那个 waiter 有没有被对端完成；
+    /// 3. 任务卡住时**放回栈顶**，不能弹掉 —— 弹掉就再也回不来了。
+    fn task_recv(
+        &mut self,
+        sh: &mut Shared<'a>,
+        typ: TypeId,
+        comma_ok: bool,
+        waiter: Option<crate::chan::WaiterHandle>,
+    ) -> bool {
+        // ① 对端已经把值放进我的 `slot`（无缓冲 handoff 的唯一落地方式）。
+        if let Some(w) = &waiter
+            && w.borrow().done
+        {
+            let v = w
+                .borrow_mut()
+                .slot
+                .take()
+                .unwrap_or_else(|| zero_of(sh.tt, typ));
+            self.values.pop(); // 通道值已经用完了
+            self.values.push(v);
+            if comma_ok {
+                self.values.push(Value::Bool(true));
+            }
+            self.waiters.clear();
+            return true;
+        }
+        // ② 常规尝试（值栈顶是通道，**不弹出**直到成功）。
+        let Some(top) = self.values.last().cloned() else {
             self.fail(
                 sh,
                 RtError::Message("runtime error: receive from non-channel".to_string()),
             );
-            return;
+            return true;
         };
-        // `try_recv` 只借用一瞬间：`Outcome` 是值，拿到之后立刻放开通道，
-        // 免得后面 `push` 时还持着 `RefCell` 的借用。
+        let Some(obj) = chan_of(&top) else {
+            // nil 通道：永久阻塞且**不登记**（没有队列可登记，Task 23）。
+            if top.is_nil() {
+                self.eval.push(Task::Recv {
+                    typ,
+                    comma_ok,
+                    waiter,
+                });
+                return false;
+            }
+            self.fail(
+                sh,
+                RtError::Message("runtime error: receive from non-channel".to_string()),
+            );
+            return true;
+        };
         let outcome = obj.borrow_mut().try_recv();
-        let (value, ok) = match outcome {
-            RecvOutcome::Got { value, .. } => (value, true),
-            RecvOutcome::GotZeroClosed => (zero_of(sh.tt, typ), false),
-            // 阻塞是 Task 20 的事（`D-M8-5`：任务不弹出、醒来重试）。
-            RecvOutcome::Blocked => todo!("M8/Task 20：阻塞接收（登记 waiter + Blocked）"),
-        };
-        self.values.push(value);
-        if comma_ok {
-            self.values.push(Value::Bool(ok));
+        match outcome {
+            RecvOutcome::Got { value, woke } => {
+                self.values.pop();
+                self.values.push(value);
+                if comma_ok {
+                    self.values.push(Value::Bool(true));
+                }
+                self.waiters.clear();
+                if let Some(g) = woke {
+                    sh.wake(g);
+                }
+                true
+            }
+            RecvOutcome::GotZeroClosed => {
+                self.values.pop();
+                self.values.push(zero_of(sh.tt, typ));
+                if comma_ok {
+                    self.values.push(Value::Bool(false));
+                }
+                self.waiters.clear();
+                true
+            }
+            RecvOutcome::Blocked => {
+                let waiter = match waiter {
+                    Some(w) => Some(w),
+                    None => {
+                        let w = self.park(sh, &obj, false);
+                        self.waiters.push(Rc::clone(&w));
+                        Some(w)
+                    }
+                };
+                // 放回栈顶：醒来重跑这一支（`done` 或通道状态都会变）。
+                self.eval.push(Task::Recv {
+                    typ,
+                    comma_ok,
+                    waiter,
+                });
+                false
+            }
         }
+    }
+
+    /// 发送 `ch <- v`（`C11` §3.2 send 的 ①→④）。
+    fn task_send(
+        &mut self,
+        sh: &mut Shared<'a>,
+        typ: TypeId,
+        waiter: Option<crate::chan::WaiterHandle>,
+    ) -> bool {
+        // ① 已经登记过：只有两种醒来方式。
+        if let Some(w) = &waiter {
+            if w.borrow().done {
+                // 对端取走了我的值 ⇒ 这次发送完成。
+                self.values.pop();
+                self.values.pop();
+                self.waiters.clear();
+                return true;
+            }
+            // 没被取走 ⇒ 只可能是 `close` 唤醒的（`close` 不置 `done`）。
+            // 判据落在通道自己的 `closed` 上，不靠「醒来几次」。
+            if let Some(obj) = self.values.iter().rev().nth(1).and_then(chan_of) {
+                let closed = obj.borrow().is_closed();
+                if closed {
+                    self.values.pop();
+                    self.values.pop();
+                    self.waiters.clear();
+                    self.fail(sh, RtError::Message("send on closed channel".to_string()));
+                    return true;
+                }
+            }
+            self.eval.push(Task::Send { typ, waiter });
+            return false;
+        }
+        // ② 首次：栈顶是 value，下面是 chan。
+        let value = self
+            .values
+            .last()
+            .cloned()
+            .unwrap_or(Value::Nil(NilKind::Ptr));
+        let Some(obj) = self.values.iter().rev().nth(1).and_then(chan_of) else {
+            // nil 通道：永久阻塞且不登记。
+            let is_nil = self.values.iter().rev().nth(1).is_some_and(Value::is_nil);
+            if is_nil {
+                self.eval.push(Task::Send { typ, waiter });
+                return false;
+            }
+            self.fail(
+                sh,
+                RtError::Message("runtime error: send to non-channel".to_string()),
+            );
+            return true;
+        };
+        match obj.borrow_mut().try_send(&value) {
+            SendOutcome::Done { woke } => {
+                self.values.pop();
+                self.values.pop();
+                self.waiters.clear();
+                if let Some(g) = woke {
+                    sh.wake(g);
+                }
+                true
+            }
+            SendOutcome::Closed => {
+                self.values.pop();
+                self.values.pop();
+                self.waiters.clear();
+                self.fail(sh, RtError::Message("send on closed channel".to_string()));
+                true
+            }
+            SendOutcome::Blocked => {
+                let w = self.park(sh, &obj, true);
+                self.waiters.push(Rc::clone(&w));
+                self.eval.push(Task::Send {
+                    typ,
+                    waiter: Some(w),
+                });
+                false
+            }
+        }
+    }
+
+    /// 造一个 waiter 并登记到通道的对应队列（`C11` §3.2 的 ④）。
+    ///
+    /// 发送方的 waiter 要带值（`slot = Some(v)`）—— 接收方直接从这个 `slot`
+    /// 取，值不经过缓冲。
+    fn park(
+        &mut self,
+        _sh: &mut Shared<'a>,
+        obj: &Rc<RefCell<ChanObj>>,
+        is_send: bool,
+    ) -> crate::chan::WaiterHandle {
+        let slot = if is_send {
+            self.values.last().cloned()
+        } else {
+            None
+        };
+        let w = Rc::new(RefCell::new(crate::chan::Waiter {
+            g: self.id,
+            token: 0,
+            slot,
+            done: false,
+        }));
+        let mut c = obj.borrow_mut();
+        if is_send {
+            c.park_send(Rc::clone(&w));
+        } else {
+            c.park_recv(Rc::clone(&w));
+        }
+        w
     }
 
     fn build_composite(&mut self, sh: &mut Shared<'a>, comp: &'a Composite) {
@@ -4020,6 +4268,7 @@ mod sched_tests {
     /// 一个「跑一步就结束」的假 goroutine（帧空 + `Done`）。
     fn idle(phase: TopPhase) -> G<'static> {
         G {
+            id: 0,
             frames: Vec::new(),
             eval: Vec::new(),
             values: Vec::new(),
@@ -4027,6 +4276,7 @@ mod sched_tests {
             pending: None,
             phase,
             blocked: false,
+            waiters: Vec::new(),
             panic_val: None,
         }
     }
