@@ -11,7 +11,7 @@
 
 use rgoc_types::TypeTable;
 use rgoc_types::layout;
-use rgoc_types::typ::TypeId;
+use rgoc_types::typ::{Type, TypeId};
 
 /// 类型的 kind —— 与 `reflect.Kind` 对齐的**子集**。
 ///
@@ -164,6 +164,105 @@ pub struct MethodEntry {
     pub func: *const u8,
 }
 
+/// 类型 → [`Kind`]。布局给不出来的类型 ⇒ [`Kind::Invalid`]。
+///
+/// # 为什么先看 `layout` 再分派
+///
+/// `[...]T` / `Tuple` / 泛型都**没有**运行期表示；给它们一个「看着像」的 kind
+/// 会让调用方以为能分配。先要布局，就是要它们在这里就出局。
+#[must_use]
+pub fn kind_of(tt: &TypeTable, t: TypeId) -> Kind {
+    kind_at(tt, t, 0)
+}
+
+fn kind_at(tt: &TypeTable, t: TypeId, depth: u32) -> Kind {
+    use rgoc_const::basic::BasicId as B;
+    // 布局是「有没有运行期表示」的唯一判据（与 `DescBuilder::new` 同一口径）。
+    if depth > 64 || layout::layout(tt, t).is_none() {
+        return Kind::Invalid;
+    }
+    match tt.type_of(t) {
+        Type::Basic(b) => match b {
+            B::Bool | B::UntypedBool => Kind::Bool,
+            B::Int | B::Int8 | B::Int16 | B::Int32 | B::Int64 | B::UntypedInt | B::UntypedRune => {
+                Kind::Int
+            }
+            B::Uint | B::Uint8 | B::Uint16 | B::Uint32 | B::Uint64 | B::Uintptr => Kind::Uint,
+            B::Float32 | B::Float64 | B::UntypedFloat => Kind::Float,
+            B::Complex64 | B::Complex128 | B::UntypedComplex => Kind::Complex,
+            B::String | B::UntypedString => Kind::String,
+            B::UnsafePointer => Kind::Pointer,
+            B::UntypedNil => Kind::Invalid,
+        },
+        Type::Named(id) => kind_at(tt, tt.named_underlying(*id), depth + 1),
+        Type::Alias(id) => kind_at(tt, tt.alias_rhs(*id), depth + 1),
+        Type::Pointer(_) => Kind::Pointer,
+        Type::Array { .. } => Kind::Array,
+        Type::Struct(_) => Kind::Struct,
+        Type::Slice(_) => Kind::Slice,
+        Type::Map { .. } => Kind::Map,
+        Type::Chan { .. } => Kind::Chan,
+        Type::Signature(_) => Kind::Func,
+        Type::Interface(_) => Kind::Interface,
+        Type::Tuple(_) | Type::TypeParam(_) | Type::Union(_) | Type::Invalid => Kind::Invalid,
+    }
+}
+
+/// 该类型是否**必须**在分配后清零。
+///
+/// 两条独立的理由，缺一条就会错：
+///
+/// 1. **含指针** —— 全零恰好是 `nil`，但那是运气；真正的理由是「不清零就会
+///    留下上一条命的指针，GC 会追它」。
+/// 2. **含浮点** —— `0.0` 的位模式是**全零**（IEEE 754 的正零），但
+///    `-0.0`、`NaN` 不是；而「零值」按规范是 `+0.0`。所以必须先清成全零
+///    再当 `0.0` 用。`complex64/128` 同理（实部虚部各是浮点）。
+///
+/// 全整数 / 布尔的聚合**不需要**（零值就是全零）。
+#[must_use]
+pub fn needs_zero(tt: &TypeTable, t: TypeId) -> bool {
+    has_pointers(tt, t) || has_float(tt, t)
+}
+
+/// 类型里是否含 Go 指针（= `ptr_mask` 有任一位为真）。
+fn has_pointers(tt: &TypeTable, t: TypeId) -> bool {
+    layout::ptr_mask(tt, t).is_some_and(|m| m.iter().any(|b| *b))
+}
+
+/// 类型里是否（递归地）含浮点。
+fn has_float(tt: &TypeTable, t: TypeId) -> bool {
+    has_float_at(tt, t, 0)
+}
+
+fn has_float_at(tt: &TypeTable, t: TypeId, depth: u32) -> bool {
+    use rgoc_const::basic::BasicId as B;
+    if depth > 64 {
+        return false;
+    }
+    match tt.type_of(t) {
+        Type::Basic(b) => matches!(
+            b,
+            B::Float32
+                | B::Float64
+                | B::Complex64
+                | B::Complex128
+                | B::UntypedFloat
+                | B::UntypedComplex
+        ),
+        Type::Named(id) => has_float_at(tt, tt.named_underlying(*id), depth + 1),
+        Type::Alias(id) => has_float_at(tt, tt.alias_rhs(*id), depth + 1),
+        Type::Array { elem, .. } => has_float_at(tt, *elem, depth + 1),
+        Type::Struct(id) => tt
+            .struct_def(*id)
+            .fields
+            .iter()
+            .any(|f| has_float_at(tt, f.typ, depth + 1)),
+        // 指针 / slice / map / chan / func / iface 里**装的是指针**，不是浮点值
+        // —— 浮点只可能出现在「按值存」的位置。
+        _ => false,
+    }
+}
+
 /// 从 `TypeId` 造 `TypeDesc`。
 ///
 /// # 返回 `None`
@@ -186,11 +285,23 @@ impl<'a> DescBuilder<'a> {
     #[must_use]
     pub fn new(tt: &'a TypeTable, t: TypeId) -> Option<Self> {
         let l = layout::layout(tt, t)?;
+        let mut flags = 0u8;
+        if rgoc_types::comparable(tt, t).unwrap_or(false) {
+            flags |= flags::COMPARABLE;
+        }
+        if has_pointers(tt, t) {
+            flags |= flags::HAS_POINTERS;
+        }
+        if needs_zero(tt, t) {
+            flags |= flags::NEEDS_ZERO;
+        }
         Some(DescBuilder {
             tt,
             t,
             desc: TypeDesc {
                 size: l.size,
+                kind: kind_of(tt, t) as u8,
+                flags,
                 ..TypeDesc::EMPTY
             },
         })
@@ -257,5 +368,159 @@ mod tests {
         uniq.dedup();
         assert_eq!(uniq.len(), vals.len(), "kind 值不许重复");
         assert_eq!(Kind::ALL.len(), 15, "改数量要同步 C5 §10");
+    }
+
+    // ───────────────── Task 3：needs_zero 与 kind ─────────────────
+
+    use super::{kind_of, needs_zero};
+    use rgoc_const::BigInt;
+    use rgoc_const::value::Const;
+    use rgoc_types::table::{Field, TypeTable};
+    use rgoc_types::{BasicId, TypeId};
+
+    fn f(name: &str, typ: TypeId) -> Field {
+        Field {
+            name: Some(name.to_string()),
+            typ,
+            tag: None,
+            embedded: false,
+        }
+    }
+
+    fn array_of(tt: &mut TypeTable, n: i64, elem: TypeId) -> TypeId {
+        let c = tt.consts_mut().add(Const::Int(BigInt::from_i64(n)));
+        tt.add_array(Some(c), elem)
+    }
+
+    /// `T-MEM-04`：需要清零的类型集合。
+    ///
+    /// 判据的**两侧都要有**：只说「含指针要清」会漏浮点（`0.0` 的位模式不是
+    /// 全零，`math.Float64bits(0.0) == 0` 只是巧合），只说「含浮点要清」会漏
+    /// 指针。所以这条测试里两组都在。
+    #[test]
+    fn 需要清零的类型集合() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let f64_ = tt.add_basic(BasicId::Float64);
+        let f32_ = tt.add_basic(BasicId::Float32);
+        let c64 = tt.add_basic(BasicId::Complex64);
+        let string_ = tt.add_basic(BasicId::String);
+        let p_int = tt.add_pointer(int_);
+        let s_int = tt.add_slice(int_);
+        let a2_int = array_of(&mut tt, 2, int_);
+        let a2_f32 = array_of(&mut tt, 2, f32_);
+
+        // 不需要清：纯整数/布尔的标量与聚合
+        assert!(!needs_zero(&tt, int_), "纯整数不需要");
+        let bool_ = tt.add_basic(BasicId::Bool);
+        assert!(!needs_zero(&tt, bool_), "布尔不需要");
+        let pure = tt.add_struct(vec![f("a", int_), f("b", int_)]);
+        let pure_ty = tt.struct_type(pure);
+        assert!(!needs_zero(&tt, pure_ty), "纯整数聚合不需要");
+        assert!(!needs_zero(&tt, a2_int), "[2]int 不需要");
+
+        // 需要清：含指针
+        assert!(needs_zero(&tt, p_int), "指针需要（nil 是全零，但要明确）");
+        assert!(needs_zero(&tt, string_), "string 含指针");
+        assert!(needs_zero(&tt, s_int), "slice 含指针");
+        let with_ptr = tt.add_struct(vec![f("a", int_), f("p", p_int)]);
+        let with_ptr_ty = tt.struct_type(with_ptr);
+        assert!(needs_zero(&tt, with_ptr_ty), "含指针的结构体");
+
+        // 需要清：含浮点（这一组是「只判指针」的实现会漏掉的）
+        assert!(needs_zero(&tt, f64_), "0.0 的位模式不是全零");
+        assert!(needs_zero(&tt, c64), "complex64 含浮点");
+        assert!(needs_zero(&tt, a2_f32), "[2]float32 含浮点");
+        let with_f = tt.add_struct(vec![f("a", int_), f("f", f32_)]);
+        let with_f_ty = tt.struct_type(with_f);
+        assert!(needs_zero(&tt, with_f_ty), "浮点判定必须递归进结构体");
+    }
+
+    /// `T-META-01` 的邻居：`kind` 逐个对上 `Type` 的变体。
+    #[test]
+    fn kind_与类型变体一一对应() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let uint_ = tt.add_basic(BasicId::Uint);
+        let f64_ = tt.add_basic(BasicId::Float64);
+        let string_ = tt.add_basic(BasicId::String);
+        let p_int = tt.add_pointer(int_);
+        let s_int = tt.add_slice(int_);
+        let m = tt.add_map(int_, int_);
+        let c = tt.add_chan(rgoc_types::typ::ChanDir::SendRecv, int_);
+        let params = tt.add_tuple(vec![]);
+        let sig = tt.add_signature(None, params, params, false);
+        let iid = tt.add_interface(vec![], None, rgoc_types::IfaceTSet::All);
+
+        assert_eq!(kind_of(&tt, int_), Kind::Int);
+        assert_eq!(kind_of(&tt, uint_), Kind::Uint);
+        assert_eq!(kind_of(&tt, f64_), Kind::Float);
+        assert_eq!(kind_of(&tt, string_), Kind::String);
+        assert_eq!(kind_of(&tt, p_int), Kind::Pointer);
+        assert_eq!(kind_of(&tt, s_int), Kind::Slice);
+        assert_eq!(kind_of(&tt, m), Kind::Map);
+        assert_eq!(kind_of(&tt, c), Kind::Chan);
+        assert_eq!(kind_of(&tt, tt.signature_type(sig)), Kind::Func);
+        assert_eq!(kind_of(&tt, tt.interface_type(iid)), Kind::Interface);
+        let bool_ = tt.add_basic(BasicId::Bool);
+        assert_eq!(kind_of(&tt, bool_), Kind::Bool);
+
+        // 具名类型看本体（`type MyInt int` ⇒ Int）
+        let n = tt.add_named("MyInt");
+        tt.set_named_underlying(n, int_);
+        assert_eq!(kind_of(&tt, tt.named_type(n)), Kind::Int);
+    }
+
+    /// 布局给不出来的类型 ⇒ `kind_of` 返回 `Invalid`，`DescBuilder::new` 返回 `None`。
+    #[test]
+    fn 无布局的类型不给假_desc() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let an = tt.add_array(None, int_); // [...]int
+        assert_eq!(kind_of(&tt, an), Kind::Invalid);
+        assert!(
+            super::DescBuilder::new(&tt, an).is_none(),
+            "[...]T 不许给假尺寸"
+        );
+    }
+
+    /// `DescBuilder` 把三个 flag 填对（`T-META-03` 的一半）。
+    #[test]
+    fn desc_builder_填_size_kind_flags() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let string_ = tt.add_basic(BasicId::String);
+        let p_int = tt.add_pointer(int_);
+
+        let d = super::DescBuilder::new(&tt, int_)
+            .expect("int 有布局")
+            .build();
+        assert_eq!(d.size, 8);
+        assert_eq!(d.kind, Kind::Int as u8);
+        assert!(d.is_comparable(), "int 可比较");
+        assert!(!d.has_pointers(), "int 无指针");
+        assert!(!d.needs_zero(), "int 不用清零");
+
+        let d = super::DescBuilder::new(&tt, string_)
+            .expect("string 有布局")
+            .build();
+        assert_eq!(d.size, 16);
+        assert_eq!(d.kind, Kind::String as u8);
+        assert!(d.is_comparable(), "string 可比较");
+        assert!(d.has_pointers(), "string 有指针");
+        assert!(d.needs_zero(), "string 要清零");
+
+        let d = super::DescBuilder::new(&tt, p_int)
+            .expect("指针有布局")
+            .build();
+        assert_eq!(d.size, 8);
+        assert_eq!(d.kind, Kind::Pointer as u8);
+        assert!(d.is_comparable(), "指针可比较");
+        assert!(d.has_pointers());
+
+        // 不可比较的两类：slice 与 map（`==` 只在 nil 上有意义，`C8` 已管）
+        let s_int = tt.add_slice(int_);
+        let d = super::DescBuilder::new(&tt, s_int).unwrap().build();
+        assert!(!d.is_comparable(), "slice 不可比较");
     }
 }
