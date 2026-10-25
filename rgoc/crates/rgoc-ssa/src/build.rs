@@ -2034,6 +2034,31 @@ impl Fb<'_> {
     ///
     /// 返回 `None` 表示**不可取址**：调用结果、常量、字面量 —— 它们没有存储。
     fn expr_addr_root(&mut self, e: &Expr) -> Option<(ValueId, Option<RootId>)> {
+        // `m[k].f`（M9/`R-9-7`）：map 的值**没有地址** —— Go 也不允许
+        // `&m[k]`、`m[k].f = x`。但 `.f` 需要一个地址，所以把 `m[k]` 的值
+        // 落进一个**有根的临时槽**，再返回那个槽的地址。
+        //
+        // # 为什么这个副本是安全的
+        //
+        // Go 规定 `m[k].f = x` 是编译错误（检查器已拒），所以这个副本
+        // 永远不会被写回 map —— 它只用于**读**字段。
+        //
+        // # 不这么做的后果
+        //
+        // `expr_addr_root` 原来落到 `Index` 分支，对 map 指针发 `Instr::Index`，
+        // 得到的是「把 map 指针当数组基址」算出来的垃圾地址 ——
+        // `ms[i].a` 打印出 `3`（`ken/complit.go`），随后段错误。
+        if let ExprKind::Index { base, .. } = &e.kind
+            && map_kv(self.tt, base.typ).is_some()
+        {
+            let v = self.expr(e);
+            let vt = e.typ;
+            let r = self.temp_root(vt);
+            let a = self.addr_of(r);
+            self.store_root(r, a, v);
+            let a2 = self.addr_of(r);
+            return Some((a2, Some(r)));
+        }
         // 指针类型的表达式：它**本身的值**就是所指对象的地址。
         //
         // 这一条必须排在最前面：`p.n`（`p *S`）里 `p` 是个指针**值**，
