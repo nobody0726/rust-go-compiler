@@ -4,7 +4,7 @@
   "generated_at": "2026-10-25T00:00:00Z",
   "filled_at": "2026-10-25T00:00:00Z",
   "fill_task": "M8-plan.md Task 61–63（按实测数字填；由 rgoc-driver/tests/manifest_m8.rs 对账）",
-  "status": "已收口 —— 九条门禁 9/9 pass；语料 69/46+23/39+7/7+12 四个数字与 M5/M6/M7 冻结值逐字节一致；open_gaps 只剩收口期的两条记录性缺口（CON-6 的三栏性质、CON-7 的缩减下限）",
+  "status": "已收口 —— 九条门禁 9/9 pass；语料四组数字（69 / 46+23 / 39+7 / 7+12）与 M5/M6/M7 冻结值逐字节一致；open_gaps 只剩 2 条记录性缺口（CON-6 的三栏性质、CON-7 的缩减下限）",
   "scope": "HIR 之上的 M:1 协作式调度：goroutine / 无缓冲与缓冲 channel / close / select 三阶段 / 死锁判定 / --sched=seed:N 可回放；解释器（--via=hir），native 与 SSA 两条通路不在本里程碑面内",
   "docs": {
     "design": "docs/milestones/M8-design.md（D-M8-1..16 / F1..F14 / 门禁 CON-1..9 / 不变式四条）",
@@ -235,7 +235,7 @@
     }
   ],
   "phase_summary": {
-    "tasks_done": "Task 1–63（Task 64–66 是报告后的收尾：见 M8-plan Phase 8）",
+    "tasks_done": "Task 1–66（全）",
     "design_revisions": [],
     "done": true
   },
@@ -272,6 +272,21 @@
     "mutations_script": "scripts/mutation-m8.sh ⇒ 红 4 / 失手 0",
     "hir_reject_codes": 5,
     "ssa_codes": 8,
-    "shrink_result": "13 行两 goroutine 死锁 ⇒ 删 5 条、剩 7 个非空行（两个 goroutine 都被删掉）"
+    "shrink_result": "13 行两 goroutine 死锁 ⇒ 删 5 条、剩 7 个非空行（两个 goroutine 都被删掉）",
+    "final_rerun": {
+      "fmt_check": 0,
+      "check_errors": 0,
+      "clippy_err_warn": 0,
+      "test_rc": 0,
+      "passed": 2110,
+      "failed": 0,
+      "ignored": 1,
+      "m5_corpus": "69 绿 / 0 红",
+      "ssa_three_way": "46 绿 / 23 跳过 / 0 红",
+      "native": "39 ok / 7 skip / 0 bad",
+      "chan": "ok=7 skip=12 bad=0 / 19",
+      "m1_consistency": "全部通过",
+      "manifest_m8": "2 passed / 0 failed"
+    }
   }
 }
