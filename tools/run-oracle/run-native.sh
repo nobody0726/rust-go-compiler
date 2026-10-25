@@ -50,9 +50,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# 缺省清单 = M6 冻结的 69 个入选语料（M9/Task 10）。
+#
+# 原来必须显式给 `native-input.txt`（46 个）。M9 的门禁是「native 覆盖 69」，
+# 所以缺省就该是 69 的那份 —— 否则「跑一遍看看」看到的永远是 46 的分母。
 if [ -z "$LIST" ]; then
-  echo "run-native.sh: 缺少清单文件" >&2
-  exit 2
+  LIST="$ROOT/tools/run-oracle/run-selected.txt"
+  echo "run-native.sh: 未给清单，缺省用 run-selected.txt（69 个入选语料）" >&2
 fi
 if [ ! -x "$DRIVER" ]; then
   echo "run-native.sh: 找不到 $DRIVER（先在容器内 cargo build）" >&2

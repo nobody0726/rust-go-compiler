@@ -153,7 +153,7 @@ freestanding C（`rt.c` 815 → ~2200 行，零 libc，`svc #0`）；AArch64 / `
   字段序 == `C5` §10）；`gcdata` 位图各一个 `.Lgc<N>` 标签
 - Consumes: Task 1–4
 
-- [ ] **Step 1: 写会红的测试**（`T-META-02` 的一半：产物里的 `size` / `kind` / `gcdata` 位图）
+- [x] **Step 1: 写会红的测试**（`T-META-02` 的一半：产物里的 `size` / `kind` / `gcdata` 位图）
 
 ```rust
 #[test]
@@ -165,11 +165,11 @@ fn rodata_里的_desc_size_与_layout_一致() {
 }
 ```
 
-- [ ] **Step 2: 跑它确认红**
-- [ ] **Step 3: 实现**：按「类型闭包」去重（`hash` 作键）后逐个发射；
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现**：按「类型闭包」去重（`hash` 作键）后逐个发射；
   指针字段用 `.quad __desc_<hash>` 或 `0`（无子类型时）
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `feat(arm64): desc 表进 .rodata（Task 5，T-META-02）`
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(arm64): desc 表进 .rodata（Task 5，T-META-02）`
 
 ### Task 6: `rt_alloc` —— 分配、对齐、递增（原 Task 5）
 
@@ -182,7 +182,7 @@ fn rodata_里的_desc_size_与_layout_一致() {
 - Produces: `void *rt_alloc(const TypeDesc *desc, int need_zero)`；`u64 rt_probe_align(void)`
 - Consumes: Task 5
 
-- [ ] **Step 1: 写会红的 fixture + 断言**（`T-MEM-01/02/05`）
+- [x] **Step 1: 写会红的 fixture + 断言**（`T-MEM-01/02/05`）
 
 ```go
 package main
@@ -201,11 +201,11 @@ func main() {
 `rt_arena_alloc`）—— 否则「new 走了新分配器」是假绿；③ `rt_alloc` 内部对
 `(p & 7) != 0` 硬断言（misaligned ⇒ `panic: misaligned allocation` + 退出 2）。
 
-- [ ] **Step 2: 跑它确认红**（`rt_alloc` 未定义 ⇒ 链接期 `undefined reference`）
-- [ ] **Step 3: 实现**：bump + `align_up(8)` + `*p = desc` + `need_zero` 时
+- [x] **Step 2: 跑它确认红**（`rt_alloc` 未定义 ⇒ 链接期 `undefined reference`）
+- [x] **Step 3: 实现**：bump + `align_up(8)` + `*p = desc` + `need_zero` 时
   `rt_memset(p+8, 0, desc->size)`；chunk 不够时调 `rt_grow`（Task 7）
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `feat(rt): rt_alloc（Task 6，T-MEM-01/02/05）`
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(rt): rt_alloc（Task 6，T-MEM-01/02/05）`
 
 ### Task 7: chunk 增长与堆上限（原 Task 6）
 
@@ -218,15 +218,15 @@ func main() {
   环境变量 `RGOC_HEAP_MAX`（字节，缺省 256 MiB）
 - Consumes: Task 6
 
-- [ ] **Step 1: 写会红的测试**（`T-MEM-06/07`）：一个吃 ~8 MiB 的程序
+- [x] **Step 1: 写会红的测试**（`T-MEM-06/07`）：一个吃 ~8 MiB 的程序
   ① 缺省上限下跑通；② `RGOC_HEAP_MAX=1048576` 时退出 **2** + stderr 含
   `runtime error: out of memory (heap limit 1048576 bytes)`
-- [ ] **Step 2: 跑它确认红**
-- [ ] **Step 3: 实现**：`mmap` 新 chunk（16 MiB 起，`max(16MiB, need)`），挂链；
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现**：`mmap` 新 chunk（16 MiB 起，`max(16MiB, need)`），挂链；
   超限走 `rt_fatal_oom(limit)`。**`rt_arena_alloc` 必须改成同一套堆上的薄壳** ——
   否则一个进程里有两个预算，`RGOC_HEAP_MAX` 只管一半
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `feat(rt): chunk 增长与堆上限（Task 7，T-MEM-06/07）`
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(rt): chunk 增长与堆上限（Task 7，T-MEM-06/07）`
 
 ### Task 8: 全局 roots 表
 
@@ -239,13 +239,13 @@ func main() {
   `GlobalRoot { desc: *TypeDesc, addr: *u8 }`（16 B）
 - Consumes: Task 5
 
-- [ ] **Step 1: 写会红的测试**：`var a int; var b string; var c *int` ⇒
+- [x] **Step 1: 写会红的测试**：`var a int; var b string; var c *int` ⇒
   `rt_nglobals == 3`，且第 2 条的 `desc` 是 `string` 的（按 `size==16` 认）
-- [ ] **Step 2: 跑它确认红**
-- [ ] **Step 3: 实现**：包级变量逐个进表；`desc` 取它的静态类型；零大小全局**不进表**
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现**：包级变量逐个进表；`desc` 取它的静态类型；零大小全局**不进表**
   （它没有可扫描的字）
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `feat(arm64): 全局 roots 表（Task 8，T-ROOT-07）`
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(arm64): 全局 roots 表（Task 8，T-ROOT-07）`
 
 ### Task 9: 元数据对撞（69 个语料的类型闭包）
 
@@ -255,23 +255,23 @@ func main() {
 **Interfaces:**
 - Consumes: Task 1–5
 
-- [ ] **Step 1: 写会红的测试**：对 `run-selected.txt` 的每个文件，枚举类型闭包，
+- [x] **Step 1: 写会红的测试**：对 `run-selected.txt` 的每个文件，枚举类型闭包，
   逐类型比 `TypeDesc.size` == `layout().size`、`gcdata` 解出的位图 == `ptr_mask()`。
   失败时**报第一个差异的类型名 + 两侧的值**。
-- [ ] **Step 2: 跑它确认红**（预期会有差异 —— 这正是它存在的理由）
-- [ ] **Step 3: 按差异修**（**不许**改测试去迁就）
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `test(meta): 69 语料的元数据对撞（Task 9，T-META-02/03/06）`
+- [x] **Step 2: 跑它确认红**（预期会有差异 —— 这正是它存在的理由）
+- [x] **Step 3: 按差异修**（**不许**改测试去迁就）
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `test(meta): 69 语料的元数据对撞（Task 9，T-META-02/03/06）`
 
 ### Task 10: `run-native.sh` 切到 69 清单
 
 **Files:**
 - Modify: `tools/run-oracle/run-native.sh`（默认清单改 `run-selected.txt`）
 
-- [ ] **Step 1: 改默认输入**：`--list` 缺省值 `native-input.txt` → `run-selected.txt`
-- [ ] **Step 2: 跑** `bash tools/run-oracle/run-native.sh`
+- [x] **Step 1: 改默认输入**：`--list` 缺省值 `native-input.txt` → `run-selected.txt`
+- [x] **Step 2: 跑** `bash tools/run-oracle/run-native.sh`
   Expected: `ok=39 skip=30 bad=0 / 69`（7 个 slice + 23 个 SSA 拒）
-- [ ] **Step 3: Commit** `test(native): 语料清单切到 69（Task 10）`
+- [x] **Step 3: Commit** `test(native): 语料清单切到 69（Task 10）`
 
 **Verify:** `… bash tools/run-oracle/run-native.sh` ⇒ `ok=39 skip=30 bad=0 / 69`；
 `… cargo test -p rgoc-meta -p rgoc-arm64 -p rgoc-driver` ⇒ 全绿。
