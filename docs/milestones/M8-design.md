@@ -282,7 +282,7 @@ struct Block {
    推进它 → 放回去」（§3.6）；
 4. `finish()` 也挪到 `impl Shared`（它只读共享面）。
 
-**判据**：Phase 0 **结束时** `cargo test --workspace` 必须 **1969 passed / 0 failed**，
+**判据**：Phase 0 **结束时** `cargo test --workspace` 必须 **1974 passed / 0 failed / 1 ignored**，
 且**一个测试都不许改**。改了就说明重构动了语义。
 
 ### 3.3 通道对象（`D-M8-6`）
@@ -635,7 +635,7 @@ M5 遗留的两条（`T-EX-65` defer 时机、`T-EX-66` recover 放宽）在 M8d
 | # | 风险 | 为什么它是真的风险 | 缓解 |
 |---|---|---|---|
 | `R1` | **并发语料的判据弱** | 7 个里 2 个（`select4`/`zerosize`）既无输出也无断言，退出码 0 只证明不崩（`F12`） | 强判据全压自有 fixture：`CON-1..5/8` 每条都要「带真输出或自带断言」；报告里三栏分开写 |
-| `R2` | **拆分 `Interp` 时借用检查炸一片** | 40 个方法要同时拿 `&mut G` 与 `&mut Shared`，而 `self.prog` 这类访问散布在每个方法里 | Phase 0 单独做、单独 commit，判据是「1969 条测试**零改动**全绿」；炸超过 20 处就按 `D-M8-1` 的失效条件处理 |
+| `R2` | **拆分 `Interp` 时借用检查炸一片** | 40 个方法要同时拿 `&mut G` 与 `&mut Shared`，而 `self.prog` 这类访问散布在每个方法里 | Phase 0 单独做、单独 commit，判据是「1974 条测试**零改动**全绿」；炸超过 20 处就按 `D-M8-1` 的失效条件处理 |
 | `R3` | **死锁假阳性/假阴性** | 「等待集合」与「通道队列」两处记账，任何一处漏就是假死锁（把活程序判死）或永不判死（挂到预算） | §3.4 的三条硬约束 + §4.3 的四条不变式 + **对不变式做变异验证** |
 | `R4` | **select 的三个经典坑** | 重复 channel、nil channel、`default` 与阻塞 case 共存时的求值顺序 | `CON-4` 五种形态各一条；「`default` 也要求值其他 case」单独一条 |
 | `R5` | **预算语义变化被忽略** | 步数从「每个程序 1e8」变成「所有 goroutine 合计 1e8」，`divmod.go` 这类超限文件的行为会变 | `CON-9` 要求 69 语料逐字节零回归；超限文件本来就在 `run-excluded.txt` |
@@ -649,7 +649,7 @@ M5 遗留的两条（`T-EX-65` defer 时机、`T-EX-66` recover 放宽）在 M8d
 
 | Phase | Task 区间 | 内容 | 收口判据 |
 |---|---|---|---|
-| **0** | 1–6 | `C11` 契约骨架、`rgoc-hir` 六节点（只加类型，不 lowering）、`Shared`/`G` 纯重构、调度循环空壳、`run` 的 `--sched=seed:N` 参数 | 1969 条测试**零改动**全绿 |
+| **0** | 1–6 | `C11` 契约骨架、`rgoc-hir` 六节点（只加类型，不 lowering）、`Shared`/`G` 纯重构、调度循环空壳、`run` 的 `--sched=seed:N` 参数 | 1974 条测试**零改动**全绿 |
 | **1** | 7–16 | lowering：`go` / send / recv / `make(chan)` / `close` / `len`·`cap` / `range` over chan；**单 goroutine** 语义（没有调度器也能跑通 `go f()` 顺序执行） | `CON-1` 的「无竞争」半边 |
 | **2** | 17–28 | 通道对象（四操作真值表）、`Waiter`、park/ready、M:1 队列、goroutine 创建/退出 | `CON-1/2` |
 | **3** | 29–38 | select 三阶段、token 撤销、nil/重复/default | `CON-4` |
