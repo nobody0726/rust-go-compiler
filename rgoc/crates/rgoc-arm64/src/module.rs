@@ -103,3 +103,33 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
 
     Ok(asm.render())
 }
+
+/// 渲染整个模块的 `FRAME-MAP v1`（`C5` §8）。
+///
+/// # 为什么要单独一份，而不是塞进 `.s` 的注释
+///
+/// `C5` §8 冻结的行前缀是 `#`，而 AArch64 的 GNU as 把 `#` 当**立即数前缀**
+/// （注释是 `//`）。塞进 `.s` 要么改契约，要么让产物汇编不过。
+///
+/// 所以它是**并列的产物**：`<out>.s` 旁边一份 `<out>.framemap`。
+/// 消费者（M10 的栈扫描器）要的是这份表，不是 `.s`。
+///
+/// # Errors
+///
+/// 帧布局失败（某个类型的静态类型没有运行期布局）。
+pub fn frame_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    // 用与 `compile` **同一套** sibling 表：`outgoing` 的大小依赖被调方的形参表
+    // （`R-13-3`），帧图与产物必须算在同一份帧上，否则「表里的偏移」对不上「代码里的偏移」。
+    let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
+        m.funcs.iter().map(|f| (f.src, f)).collect();
+    for f in &m.funcs {
+        let fr = frame::layout_with(f, tt, &siblings).map_err(CompileError::Frame)?;
+        let cfg = rgoc_ssa::cfg::Cfg::build(f);
+        let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
+        out.push_str(&frame::render_frame_map(f, &fr, &lv));
+    }
+    let _ = writeln!(out, "# end");
+    Ok(out)
+}

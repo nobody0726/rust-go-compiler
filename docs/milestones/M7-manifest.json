@@ -58,16 +58,16 @@
     {
       "id": "NAT-1",
       "name": "产物与工具链",
-      "status": "partial",
-      "evidence": "emit_deterministic 7 条（同一输入两次 render 逐字节相同）；native_cli 的 --keep-asm / --emit 形态；ELF 的 file 双条件靠 M0 的 SM-M0-NATIVE-HELLO 与手工实测，**没有**自动化断言",
-      "gap": "同一份 .s 两次链接 ELF 逐字节相同 未做自动化（clang 版本固定但 build-id/时间戳未讨论）"
+      "status": "pass",
+      "evidence": "emit_deterministic 7 条；native_artifacts::t_nat_48 一条断言覆盖**两件事**——同一份源码两次生成的 `.s` 逐字节相同，且两次链接的 ELF 也逐字节相同（不一致时报出首个差异字节）；native_cli 的 --keep-asm / --emit 形态",
+      "gap": "ELF 逐字节相同的结论只在当前镜像（clang 14.0.6）成立；换工具链要重测（这不是缺口，是前提）"
     },
     {
       "id": "NAT-2",
       "name": "指令选择完备",
-      "status": "partial",
-      "evidence": "14 个 Instr + 5 个 Term 全部有实现分支（`instr`/`term` 的 match 无通配，加变体必编译失败）；语料 39 个覆盖了绝大多数路径",
-      "gap": "「每个变体至少一条 fixture」未逐条建（现靠语料 + 探针间接覆盖）；`T-NAT-1x` 的逐变体 fixture 未写"
+      "status": "pass",
+      "evidence": "`instr`/`term` 的 match **无通配**（加变体必编译失败）；native_isel_cover.rs 用 13 组 fixture 覆盖 17 个**可产生**的变体；`Slice` 由拒绝面覆盖（码 + 退出码）；native_args / native_artifacts / native_corpus_run 另补边界",
+      "gap": "`Instr::Copy` 与 `Term::Unreachable` **没有生产者**（`build.rs` 从不构造，`R-13-7`）——不是缺 fixture，是做不出 fixture"
     },
     {
       "id": "NAT-3",
@@ -93,16 +93,16 @@
     {
       "id": "NAT-6",
       "name": "基础对象",
-      "status": "partial",
-      "evidence": "new/arena/zerobase（zerosize.go 在 N' 里）；全局读写、指针写穿、复合字面量、数组/结构体按指针传（func.go / compos.go / newexpr.go 在 N' 里）",
-      "gap": "「聚合拷贝后互不影响」缺一条**直接**断言（现靠语料里 `*p != x` 间接）；arena 只 bump 不回收，长循环会耗尽（U-M7-04 有 fixture）"
+      "status": "pass",
+      "evidence": "new/arena/zerobase（zerosize.go 在 N'）；全局读写、指针写穿、复合字面量（func/compos/newexpr 在 N'）；native_artifacts 两条值语义（结构体 16 B / 数组 24 B 拷贝后互不影响，变异实测变红）",
+      "gap": "arena 只 bump 不回收，长循环会耗尽（U-M7-04 有 fixture 钉住这个行为）"
     },
     {
       "id": "NAT-7",
       "name": "帧布局与 stack map",
-      "status": "partial",
-      "evidence": "frame_layout 11 条（区间不相交 / 零大小 / 帧大小恒 16 倍数 / 临时区）；frame_map 6 条（C5 §8 的行语法）；frame_zero 5 条",
-      "gap": "**没有** objdump 逐偏移对账（`NAT-7` 的原文判据）；safepoint 的活值覆盖只用手搓 IR 验过，未在语料上验"
+      "status": "pass",
+      "evidence": "frame_layout 11 条 + frame_map 6 条 + frame_zero 5 条；`--keep-asm` 现在同时产出 `<out>.s` 与 `<out>.framemap`（`C5` §8 的行语法）；native_frame_map.rs 把帧图的 `off=` 与 **objdump 反汇编**里每个 `x29` 相对偏移双向对账，并把 `frame=` 与 `sub sp, #N + 16` 对上",
+      "gap": "safepoint 的活值覆盖只用手搓 IR 验过（frame_map 的 6 条），未在语料上逐点验 —— 语料级只有「帧图与代码偏移一致」这一层"
     },
     {
       "id": "NAT-8",
@@ -184,7 +184,11 @@
       "rt_panic_div_zero",
       "rt_panic_nil"
     ],
-    "note": "「没有实现的入口故意不定义」——未实现时链接期 undefined reference，不许给「大概对」的版本"
+    "note": "「没有实现的入口故意不定义」——未实现时链接期 undefined reference，不许给「大概对」的版本",
+    "no_producer": [
+      "Instr::Copy（`build.rs` 从不构造；46 个语料的 SSA 里 0 条）",
+      "Term::Unreachable（只有匹配点 build.rs:3804，没有构造点）"
+    ]
   },
   "budget": {
     "arena_bytes": 8388608,
@@ -192,34 +196,6 @@
     "steps": "不适用（native 没有步数预算；M7 的「跑死循环」由 run-native.sh 的 timeout 20 兜住）"
   },
   "open_gaps": [
-    {
-      "id": "G-M7-02",
-      "gate": "NAT-7",
-      "what": "`FRAME-MAP v1` 的偏移**没有**与 objdump 逐条对账",
-      "why": "需要先有「从 .s 解析实际偏移」的小工具；现在只在 frame_layout 里做几何断言（区间不相交）",
-      "owner": "M7 收口前"
-    },
-    {
-      "id": "G-M7-03",
-      "gate": "NAT-2",
-      "what": "14+5 个变体**没有逐条 fixture**",
-      "why": "现在靠 39 个语料 + 11 个手写探针间接覆盖；「每个变体至少一条」是可执行的分母，值得补",
-      "owner": "M7 收口前"
-    },
-    {
-      "id": "G-M7-04",
-      "gate": "NAT-6",
-      "what": "聚合的**值语义拷贝**缺一条直接断言（拷贝后改一个不影响另一个）",
-      "why": "语料只在 newexpr/compos 间接覆盖；`copy()` 的 >8 字节走 rt_memcpy，路径是对的但没有专门判据",
-      "owner": "M7 收口前"
-    },
-    {
-      "id": "G-M7-05",
-      "gate": "NAT-1",
-      "what": "ELF 的逐字节可复现未断言",
-      "why": "`.s` 的可复现已断言（emit_deterministic）；ELF 还受 `-Wl,-s`、build-id、clang 版本影响",
-      "owner": "M9（与工具链锁定一起做）"
-    },
     {
       "id": "G-M7-06",
       "gate": "NAT-9",
@@ -270,7 +246,8 @@
     "cg_codes": 3,
     "corpus_sha_ok": "15618/15618",
     "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
-    "native_args_tests": 5
+    "native_args_tests": 5,
+    "native_artifacts_tests": 3
   },
   "closed_gaps": [
     {
@@ -279,6 +256,34 @@
       "closed_at": "2026-10-25",
       "fix": "abi::place_args 给出每个实参的落位（X/V/Stack），调用方与被调方用**同一张**表；Frame::outgoing 把栈区算进帧大小的最底部；bind_params 从 [x29, #16+off] 读栈实参",
       "evidence": "native_args::t_nat_09_十个整数实参_第九第十走栈 / t_nat_09_第11个起连续走栈且偏移递增 / t_nat_09_字符串实参占两个字_跨越寄存器边界 / t_nat_21_混合类别的寄存器两套独立计数；变异（max_outgoing 恒 0）⇒ twelve_args 必红（实测）"
+    },
+    {
+      "id": "G-M7-04",
+      "what": "聚合值语义（拷贝后互不影响）缺直接断言",
+      "closed_at": "2026-10-25",
+      "fix": "native_artifacts.rs 加两条：结构体 16 B、数组 24 B，`b := a; b[k] = 99` 之后比两边",
+      "evidence": "变异（`store` 的聚合分支只写一个字）⇒ 两条必红（实测）；顺带证实 `Instr::Copy` 在语料里出现 0 次"
+    },
+    {
+      "id": "G-M7-05",
+      "what": "ELF 逐字节可复现未断言",
+      "closed_at": "2026-10-25",
+      "fix": "native_artifacts::t_nat_48 同一条测试里比 `.s` 与 ELF；不一致时报出首个差异字节位置",
+      "evidence": "当前镜像（clang 14.0.6, `-nostartfiles -Wl,-s`）下两次链接的 ELF 逐字节相同"
+    },
+    {
+      "id": "G-M7-02",
+      "what": "FRAME-MAP v1 的偏移没有与 objdump 对账",
+      "closed_at": "2026-10-25",
+      "fix": "`module::frame_maps` + `build --keep-asm` 产出 `<out>.framemap`；`render_frame_map` 行尾补 `sym=fn<id>`（`R-13-8`，否则帧图对不到二进制符号）；native_frame_map.rs 用 objdump 双向对账",
+      "evidence": "native_frame_map 2 条全绿；变异（帧图 off 减 8）⇒ 「负偏移 -24 不在帧图的槽偏移里」必红（实测）"
+    },
+    {
+      "id": "G-M7-03",
+      "what": "14+5 个变体没有逐条 fixture",
+      "closed_at": "2026-10-25",
+      "fix": "native_isel_cover.rs：13 组 fixture 覆盖 17 个可产生的变体 + `Slice` 走拒绝面 + `Panic` 单独一条",
+      "evidence": "3 条测试全绿；`Copy`/`Unreachable` 无生产者已记为 `R-13-7` 而不是缺口"
     }
   ]
 }

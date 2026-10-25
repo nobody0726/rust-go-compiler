@@ -351,12 +351,17 @@ pub fn render_frame_map(f: &SsaFunc, fr: &Frame, lv: &rgoc_ssa::live::Liveness) 
     use std::fmt::Write as _;
     let mut out = String::new();
     out.push_str("# FRAME-MAP v1\n");
+    // 末尾的 `sym=` 是 `R-13-8`：帧图要能对到**二进制里的符号**。
+    // `# func` 那一位是 HIR 名字（给人看），而 `.s` 里的符号是 `fn<FuncId>`
+    // （`isel::fn_sym`）—— 只有名字的话，消费者在反汇编里找不到对应的函数。
+    // 追加在**行尾**而不是插在中间：按字段名解析的消费者不受影响，位置型的断言也不变。
     let _ = writeln!(
         out,
-        "# func {} frame={} slots={}",
+        "# func {} frame={} slots={} sym=fn{}",
         f.name,
         fr.frame_size,
-        fr.values.len()
+        fr.values.len(),
+        f.src.0
     );
     for (v, s) in &fr.values {
         let typ = f

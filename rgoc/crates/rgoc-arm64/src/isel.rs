@@ -65,13 +65,6 @@ impl<'a> Ctx<'a> {
         self.fr.values[&v]
     }
 
-    /// 被调函数的形参类型（`i` 是第几个实参）；查不到 ⇒ `None`。
-    fn param_ty(&self, callee: rgoc_hir::FuncId, i: usize) -> Option<TypeId> {
-        let c = self.siblings.get(&callee)?;
-        let p = c.params.get(i)?;
-        c.value_types.get(p.index()).copied()
-    }
-
     /// 类型是不是 `float32`（决定用 `s` 还是 `d` 寄存器）。
     fn is_f32(&self, t: TypeId) -> bool {
         basic_of(self.tt, t) == Some(BasicId::Float32)
@@ -513,6 +506,17 @@ fn load_addr(asm: &mut Asm, reg: &str, label: &str) {
 }
 
 /// `copy`：8 字节以内一个字，超过就 `memcpy`。
+///
+/// # ⚠️ 这条基本是死代码（2026-10-25 实测）
+///
+/// `Instr::Copy` 在语料 46 个文件的 SSA 里出现 **0 次** —— `build.rs` 从不产生它
+/// （赋值走 `Load`/`Store`，聚合的值复制在那两条里各自 `memcpy`）。
+/// 所以这条只剩 `convert` 的兜底分支（`_ => copy(...)`）可能用到，而那个也到不了：
+/// 指针/整数的转换都落在 `(Int, Int)`，复数有专支，聚合转换在 Go 里非法。
+///
+/// 留着不是因为有用，而是**删它属于改 IR**（`Instr::Copy` 是 `C4` 的变体）。
+/// 但别把「聚合拷贝」的判据挂在这里 —— `native_artifacts.rs` 的两条值语义测试
+/// 走的是 `load`/`store`，把 `store` 的 `memcpy` 改坏才会让它们红（已实测）。
 fn copy(cx: &Ctx<'_>, dst: ValueId, src: ValueId, asm: &mut Asm) {
     let (d, s) = (cx.slot(dst), cx.slot(src));
     if d.size <= 8 {

@@ -184,6 +184,15 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
     }
     std::fs::write(&asm_path, &asm).map_err(|e| format!("写 {} 失败：{e}", asm_path.display()))?;
 
+    // `FRAME-MAP v1` 与 `.s` 并列（`C5` §8）：前缀 `#` 在 AArch64 的 as 里是立即数前缀，
+    // 塞进 `.s` 就汇编不过。只在 `--keep-asm` 时留 —— 它与 `.s` 同属「中间件」。
+    if cmd.keep_asm {
+        let map = rgoc_arm64::module::frame_maps(&module, &tt).map_err(|e| e.to_string())?;
+        let map_path = out.with_extension("framemap");
+        std::fs::write(&map_path, map)
+            .map_err(|e| format!("写 {} 失败：{e}", map_path.display()))?;
+    }
+
     if cmd.emit == Emit::Asm {
         return Ok(BuildOutcome {
             stdout: asm,
