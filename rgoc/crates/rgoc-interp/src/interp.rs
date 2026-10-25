@@ -65,6 +65,10 @@ pub struct Options {
     pub max_frames: usize,
     /// 求值栈深上限（默认 10000）。
     pub max_eval: usize,
+    /// `select` 多就绪时的选择种子（M8/Task 5；`0` = 源码顺序，`D-M8-3`）。
+    ///
+    /// 只喂给 [`Shared::rng`]；调度本身的顺序与它无关（`C11` §1）。
+    pub seed: u64,
 }
 
 impl Default for Options {
@@ -73,6 +77,7 @@ impl Default for Options {
             max_steps: 100_000_000,
             max_frames: 1_000,
             max_eval: 10_000,
+            seed: 0,
         }
     }
 }
@@ -419,6 +424,71 @@ struct Frame<'a> {
 
 // ───────────────────────── 机器 ─────────────────────────
 
+/// `select` 的伪随机源（`D-M8-3`，M8/Task 5）。
+///
+/// # 为什么是 xorshift64 而不是引一个 crate
+///
+/// 只需要「同样的 seed 给同样的序列」+「不同 seed 给不同序列」，两行代码的事。
+/// 引 PRNG crate 会把「可回放」这件事的判据交给第三方版本的实现细节 ——
+/// 而 `CON-7` 要的恰恰是**逐字节**可回放，升级依赖就可能换序列。
+///
+/// # `seed = 0` 是**模式**，不是第 0 号种子
+///
+/// 见 [`Options::seed`]。`0` 时 [`Rng::below`] 恒返回 `0`（= 取源码顺序的
+/// 第一个），并且 [`Rng::next_u64`] 会 `debug_assert` —— 谁在源码顺序模式下
+/// 抽了随机数，那就是实现 bug，不是「碰巧抽到 0」。
+#[derive(Clone, Debug)]
+pub(crate) struct Rng {
+    /// 原始种子（判「是不是源码顺序模式」用）。
+    seed: u64,
+    /// xorshift64 的状态（`seed = 0` 时恒为 0，且永不被推进）。
+    state: u64,
+}
+
+// 消费方是 Task 37 的 `select`；在此之前只有测试读它。
+// 这里不写 `#[allow(dead_code)]` 在 `struct` 上，而是逐个方法标，
+// 好处是「哪天 `select` 接上了、某个方法仍然没人用」会重新报出来。
+#[allow(dead_code, reason = "select 的选择要到 M8/Task 37 才接线")]
+impl Rng {
+    pub(crate) const fn new(seed: u64) -> Self {
+        Self { seed, state: seed }
+    }
+
+    /// 源码顺序模式（`seed = 0`）。
+    pub(crate) const fn is_source_order(&self) -> bool {
+        self.seed == 0
+    }
+
+    /// 下一个 64 位随机数（xorshift64）。
+    ///
+    /// 状态为 0 时 xorshift 会永远停在 0 —— 那不是「随机性差」，是**误用**，
+    /// 所以这里直接 `debug_assert`。
+    pub(crate) fn next_u64(&mut self) -> u64 {
+        debug_assert!(
+            self.state != 0,
+            "seed=0 是源码顺序模式，不该从这里抽随机数（D-M8-3）"
+        );
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    /// `[0, n)` 里挑一个；`n == 0` 是调用方的 bug。
+    ///
+    /// 源码顺序模式恒返回 `0`（不抽随机数，也不推进状态）。
+    pub(crate) fn below(&mut self, n: usize) -> usize {
+        assert!(n > 0, "below(0) 没有定义");
+        if self.is_source_order() || n == 1 {
+            return 0;
+        }
+        // 取模偏差在 n 远小于 2^64 时可忽略；这里只需要「seed 真的起作用」。
+        usize::try_from(self.next_u64() % (n as u64)).expect("取模结果小于 n")
+    }
+}
+
 /// **共享状态**：所有 goroutine 看到同一份（`D-M8-1`）。
 ///
 /// 与 [`G`] 的分界线只有一条：**「换一个 goroutine 之后它还该在吗」**。
@@ -439,6 +509,12 @@ pub struct Shared<'a> {
     runq: std::collections::VecDeque<usize>,
     /// 下一个 goroutine 编号（只增不减，便于日志与断言）。
     next_g: u64,
+    /// `select` 的伪随机源（`D-M8-3`）。归 `Shared`：它是全程序一份的状态，
+    /// 跟着某个 G 走会让「同 seed 同结果」在换 goroutine 时失效。
+    ///
+    /// 现在只被写、还没人读 —— 读它的是 Task 37 的 `select`。
+    #[allow(dead_code, reason = "读取方是 M8/Task 37 的 select")]
+    rng: Rng,
 }
 
 /// **一个 goroutine 的执行状态**（`D-M8-1`）。
@@ -495,19 +571,7 @@ impl std::fmt::Debug for G<'_> {
 /// 签名与 M5 **完全一致** —— `rgoc-driver` 一行都不用改（`M8-plan.md` Task 3）。
 #[must_use]
 pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
-    let mut sh = Shared {
-        prog,
-        tt,
-        globals: Vec::new(),
-        out: String::new(),
-        steps: 0,
-        opts,
-        halted: None,
-        methods: std::collections::BTreeMap::new(),
-        gs: Vec::new(),
-        runq: std::collections::VecDeque::new(),
-        next_g: 0,
-    };
+    let mut sh = Shared::new(prog, tt, opts);
     sh.setup();
     // main goroutine：`TopPhase::Globals(0)` 起 —— 全局初始化是**它的**第一阶段。
     sh.gs.push(Some(G {
@@ -529,6 +593,27 @@ pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
 
 impl<'a> Shared<'a> {
     // ───────────── 准备 ─────────────
+
+    /// 建一台**空机器**（没有 goroutine、没有全局）。
+    ///
+    /// 抽出来是为了让「`Options.seed` 有没有真的进到 `rng`」这件事有一个
+    /// 可判的位置（Task 5 的判据落在这里，不用等到 Task 37 的 `select`）。
+    fn new(prog: &'a Program, tt: &'a TypeTable, opts: Options) -> Self {
+        Self {
+            prog,
+            tt,
+            globals: Vec::new(),
+            out: String::new(),
+            steps: 0,
+            rng: Rng::new(opts.seed),
+            opts,
+            halted: None,
+            methods: std::collections::BTreeMap::new(),
+            gs: Vec::new(),
+            runq: std::collections::VecDeque::new(),
+            next_g: 0,
+        }
+    }
 
     fn setup(&mut self) {
         for g in &self.prog.globals {
@@ -3786,19 +3871,7 @@ mod sched_tests {
     }
 
     fn shared<'a>(prog: &'a Program, tt: &'a TypeTable) -> Shared<'a> {
-        Shared {
-            prog,
-            tt,
-            globals: Vec::new(),
-            out: String::new(),
-            steps: 0,
-            opts: Options::default(),
-            halted: None,
-            methods: std::collections::BTreeMap::new(),
-            gs: Vec::new(),
-            runq: std::collections::VecDeque::new(),
-            next_g: 0,
-        }
+        Shared::new(prog, tt, Options::default())
     }
 
     /// 一个「跑一步就结束」的假 goroutine（帧空 + `Done`）。
@@ -3866,5 +3939,111 @@ mod sched_tests {
 
         sh.gs[0] = Some(idle(TopPhase::Globals(0)));
         assert!(!sh.main_done(), "还在跑全局初始化 ⇒ 没结束");
+    }
+}
+
+// ───────────────────────── 伪随机源（Task 5） ─────────────────────────
+
+#[cfg(test)]
+mod rng_tests {
+    use super::*;
+
+    fn empty_prog() -> (Program, TypeTable) {
+        (
+            Program {
+                funcs: Vec::new(),
+                globals: Vec::new(),
+                init_order: Vec::new(),
+                inits: Vec::new(),
+                main: None,
+            },
+            TypeTable::new(),
+        )
+    }
+
+    #[test]
+    fn seed_0_是源码顺序模式() {
+        let mut r = Rng::new(0);
+        assert!(r.is_source_order());
+        // 不管问几次、问多大的 n，答案都是 0（= 源码顺序的第一个）。
+        for _ in 0..8 {
+            assert_eq!(r.below(5), 0, "源码顺序模式必须恒选第一个");
+        }
+        assert_eq!(r.state, 0, "源码顺序模式不许推进状态");
+    }
+
+    #[test]
+    #[should_panic(expected = "源码顺序")]
+    fn seed_0_抽随机数必须炸() {
+        // `debug_assert` 在测试 profile 下是开的：谁在源码顺序模式下抽随机数，
+        // 那就是实现 bug（不是「碰巧抽到 0」），必须响亮地炸。
+        let _ = Rng::new(0).next_u64();
+    }
+
+    #[test]
+    fn 同_seed_同序列() {
+        let mut a = Rng::new(7);
+        let mut b = Rng::new(7);
+        let seq_a: Vec<u64> = (0..8).map(|_| a.next_u64()).collect();
+        let seq_b: Vec<u64> = (0..8).map(|_| b.next_u64()).collect();
+        assert_eq!(seq_a, seq_b, "同 seed 必须逐位可回放（`CON-7`）");
+        assert!(
+            seq_a.iter().all(|&x| x != 0),
+            "xorshift64 在非零种子上不会产出 0（否则状态会被卡死）"
+        );
+        assert!(
+            seq_a.windows(2).all(|w| w[0] != w[1]),
+            "连续两次不许相同（xorshift64 的周期是 2^64-1）"
+        );
+    }
+
+    #[test]
+    fn 不同_seed_不同序列() {
+        let mut seen = std::collections::BTreeSet::new();
+        for seed in 1..=8u64 {
+            seen.insert(Rng::new(seed).next_u64());
+        }
+        assert_eq!(seen.len(), 8, "8 个 seed 必须给出 8 个不同的首值");
+    }
+
+    #[test]
+    fn below_落在区间内() {
+        for seed in 1..=4u64 {
+            let mut r = Rng::new(seed);
+            for n in 1..=8usize {
+                for _ in 0..16 {
+                    assert!(r.below(n) < n, "below({n}) 必须 < n");
+                }
+            }
+        }
+        // n == 1 不抽随机数（省一次状态推进，也让「只有一个候选」不消耗序列）。
+        let mut r = Rng::new(7);
+        let before = r.state;
+        assert_eq!(r.below(1), 0);
+        assert_eq!(r.state, before, "n=1 不许推进状态");
+    }
+
+    #[test]
+    fn options_seed_进入_rng() {
+        let (prog, tt) = empty_prog();
+        // 默认 ⇒ 源码顺序（语料期望值就是在它上面冻结的）。
+        let sh = Shared::new(&prog, &tt, Options::default());
+        assert!(sh.rng.is_source_order(), "默认 seed=0 ⇒ 源码顺序");
+
+        // 显式 seed ⇒ 与同 seed 的独立 Rng 走同一条序列（证明是**真的**接上了，
+        // 不是「新建了一个默认 Rng」）。
+        let mut sh = Shared::new(
+            &prog,
+            &tt,
+            Options {
+                seed: 7,
+                ..Options::default()
+            },
+        );
+        assert!(!sh.rng.is_source_order());
+        let mut expect = Rng::new(7);
+        for _ in 0..4 {
+            assert_eq!(sh.rng.below(10), expect.below(10));
+        }
     }
 }

@@ -151,6 +151,7 @@ fn t_nat_42_43_语料上的_native_与解释器逐字节一致() {
             lang: None,
             via: Via::Hir,
             opt: rgoc_ssa::opt::Config::all(),
+            sched: rgoc_driver::cli::Sched::default(),
         };
         let hir = match rgoc_driver::run_cmd::run_run(&rcmd) {
             Ok(o) if o.exit == 0 => o.stdout,

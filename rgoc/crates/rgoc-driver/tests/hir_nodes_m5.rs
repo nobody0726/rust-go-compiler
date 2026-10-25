@@ -236,6 +236,7 @@ fn dump_of(path: &Path) -> String {
         lang: None,
         via: rgoc_driver::cli::Via::Hir,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     })
     .unwrap_or_else(|e| panic!("{} 内部错：{e}", path.display()));
     assert_eq!(
@@ -501,6 +502,7 @@ fn t_ex_03_lowering_is_silent_when_check_passes() {
             lang: None,
             via: rgoc_driver::cli::Via::Hir,
             opt: rgoc_ssa::opt::Config::all(),
+            sched: rgoc_driver::cli::Sched::default(),
         })
         .unwrap_or_else(|e| panic!("{rel} 内部错：{e}"));
         if o.exit != 0 {

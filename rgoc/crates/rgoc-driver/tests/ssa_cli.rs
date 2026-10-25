@@ -119,6 +119,7 @@ fn run_via(name: &str, src: &str, via: Via) -> RunOutcome {
         lang: None,
         via,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     })
     .expect("内部错（不该发生）")
 }
@@ -132,6 +133,7 @@ fn t_ssa_39_解析_run_的_via() {
         lang: None,
         via: Via::Hir,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     };
     assert_eq!(
         parse_args(&["run", "a.go"]).unwrap(),

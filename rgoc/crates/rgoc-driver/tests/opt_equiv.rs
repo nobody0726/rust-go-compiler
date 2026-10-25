@@ -44,6 +44,7 @@ fn run_opt(src: &Path, opt: Config) -> (String, u8, String) {
         lang: None,
         via: Via::Ssa,
         opt,
+        sched: rgoc_driver::cli::Sched::default(),
     })
     .expect("内部错（不该发生）");
     (o.stdout.replace("\r\n", "\n"), o.exit, o.stderr)

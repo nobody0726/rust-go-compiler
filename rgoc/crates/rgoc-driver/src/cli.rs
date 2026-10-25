@@ -96,6 +96,69 @@ impl Via {
     }
 }
 
+/// 调度模式（`--sched`，M8/Task 5；`C11` §1、`D-M8-3`）。
+///
+/// # 为什么只有一个变体
+///
+/// M8 的调度是**确定性 FIFO**（`C11` §1）：就绪顺序由源码与阻塞点唯一决定，
+/// seed **只**用来在 `select` 的多个就绪 case 之间挑一个。所以这里没有
+/// 「随机调度」「公平调度」这类变体 —— 它们不存在，写进枚举就等于承诺。
+///
+/// `seed = 0` 是**源码顺序**模式（不是「第 0 号随机种子」）：语料与
+/// `T-CON-28` 的期望值都是在它上面冻结的。这个区别不是文字游戏 ——
+/// 若把 0 当普通种子，`select` 的多就绪结果会变得依赖 PRNG 的常数，
+/// 而「默认跑出来的东西」就再也不能用「源码顺序」来解释。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sched {
+    /// 确定性调度 + `select` 的伪随机源由 `seed` 定（`0` = 源码顺序）。
+    Deterministic {
+        /// `select` 多就绪时的选择种子；`0` = 按源码顺序取第一个。
+        seed: u64,
+    },
+}
+
+impl Default for Sched {
+    /// `seed: 0` —— 手写而不是 `#[derive(Default)]`：带字段的变体拿不到
+    /// `#[default]`，而「默认必须是源码顺序」这条不能靠 `Option` 兜底。
+    fn default() -> Self {
+        Sched::Deterministic { seed: 0 }
+    }
+}
+
+impl Sched {
+    /// 解析 `--sched` 的值。只接受 `seed:<十进制非负整数>`，别的一律 `None`。
+    ///
+    /// 只收**纯数字**：`seed:+7` / `seed:-1` / `seed: 7` / `seed:7x` 全部拒。
+    /// 接受 `+7` 也不会有害，但「什么算合法」多一条规则就多一处要解释的地方，
+    /// 而这里没有任何理由放宽。
+    #[must_use]
+    pub fn parse(s: &str) -> Option<Self> {
+        let v = s.strip_prefix("seed:")?;
+        if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        Some(Sched::Deterministic {
+            seed: v.parse::<u64>().ok()?,
+        })
+    }
+
+    /// 稳定文本（进诊断与测试断言）。
+    #[must_use]
+    pub fn as_str(self) -> String {
+        match self {
+            Sched::Deterministic { seed } => format!("seed:{seed}"),
+        }
+    }
+
+    /// 取出种子（`0` = 源码顺序）。
+    #[must_use]
+    pub const fn seed(self) -> u64 {
+        match self {
+            Sched::Deterministic { seed } => seed,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunCommand {
     /// 组成**同一个包**的文件。
@@ -110,6 +173,12 @@ pub struct RunCommand {
     pub via: Via,
     /// `--opt all|none|fold,dce,…`：SSA passes 的开关（只在 `via=ssa` 时有意义）。
     pub opt: rgoc_ssa::opt::Config,
+    /// `--sched=seed:N`：`select` 多就绪时的选择种子（默认 `seed:0` = 源码顺序）。
+    ///
+    /// 只影响 `via=hir` 那条通路（`go`/`chan`/`select` 只在 HIR 解释器里实现，
+    /// `M8-design.md` §1.2）。`via=ssa` 时它**被忽略**而不是报错：SSA 侧
+    /// 根本没有 goroutine，拒掉只会让「同一份脚本换通路」变得不可能。
+    pub sched: Sched,
 }
 
 /// `ssa` 子命令的参数（M6/Task 2；`M6-design.md` §3.1 / `C10`）。
@@ -345,6 +414,8 @@ pub enum CliError {
     BadVia(String),
     /// `--opt` 的值不认识（只接受 `all` / `none` / `fold,dce,copy,cse`）
     BadOpt(String),
+    /// `--sched` 的值不认识（只接受 `seed:<非负整数>`，M8/Task 5）
+    BadSched(String),
     /// `build` 一个文件参数都没给（M7/Task 2）
     BuildNeedsFile,
     /// `--emit` 的值不认识（只接受 `elf` / `asm`）
@@ -365,7 +436,7 @@ impl fmt::Display for CliError {
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
              rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
-             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] <file>...\n  \
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] [--sched=seed:N] <file>...\n  \
              rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...\n  \
              rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] [--lang go1.N] <file>...";
         match self {
@@ -412,6 +483,10 @@ impl fmt::Display for CliError {
                 f,
                 "--opt 只接受 all / none / fold,dce,copy,cse（收到 {v:?}）。{USAGE}"
             ),
+            Self::BadSched(v) => write!(
+                f,
+                "--sched 只接受 seed:<非负整数>（收到 {v:?}）；M8 只有确定性调度，没有其它模式。{USAGE}"
+            ),
             Self::BuildNeedsFile => write!(f, "build 至少需要一个文件参数。{USAGE}"),
             Self::BadEmit(v) => write!(f, "--emit 只接受 elf / asm（收到 {v:?}）。{USAGE}"),
         }
@@ -452,6 +527,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     let mut lang: Option<String> = None;
     let mut via = Via::Hir;
     let mut opt = rgoc_ssa::opt::Config::all();
+    let mut sched = Sched::Deterministic { seed: 0 };
     let mut i = 0;
     while i < rest.len() {
         // `--via=ssa` 与 `--via ssa` 两种写法都收（`run-collide.sh` 用前者，
@@ -461,6 +537,15 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 return Err(CliError::BadVia(v.to_string()));
             };
             via = v2;
+            i += 1;
+            continue;
+        }
+        // `--sched=seed:N` 与 `--sched seed:N` 同理由。
+        if let Some(v) = rest[i].strip_prefix("--sched=") {
+            let Some(s) = Sched::parse(v) else {
+                return Err(CliError::BadSched(v.to_string()));
+            };
+            sched = s;
             i += 1;
             continue;
         }
@@ -514,6 +599,16 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 opt = c;
                 i += 2;
             }
+            "--sched" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("--sched"));
+                };
+                let Some(s) = Sched::parse(v) else {
+                    return Err(CliError::BadSched((*v).to_string()));
+                };
+                sched = s;
+                i += 2;
+            }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
                 files.push(PathBuf::from(a));
@@ -531,6 +626,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
         lang,
         via,
         opt,
+        sched,
     })
 }
 

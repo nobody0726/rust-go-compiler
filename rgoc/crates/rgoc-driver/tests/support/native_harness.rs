@@ -121,6 +121,7 @@ pub fn hir_output(name: &str, src: &str) -> Result<String, String> {
         lang: None,
         via: rgoc_driver::cli::Via::Hir,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     };
     let out = rgoc_driver::run_cmd::run_run(&cmd)?;
     if out.exit != 0 {

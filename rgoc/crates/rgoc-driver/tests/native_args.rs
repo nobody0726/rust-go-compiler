@@ -83,6 +83,7 @@ fn check(name: &str, src: &str, want: &str) {
         lang: None,
         via: Via::Hir,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     };
     let hir = rgoc_driver::run_cmd::run_run(&r).expect("解释器不该失败");
     assert_eq!(hir.exit, 0, "{name} 解释器失败：{}", hir.stderr);

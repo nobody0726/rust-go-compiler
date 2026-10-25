@@ -166,6 +166,8 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
         max_steps: cmd
             .max_steps
             .unwrap_or(rgoc_interp::Options::default().max_steps),
+        // `--sched=seed:N`（M8/Task 5）：只喂 `select` 的伪随机源，调度顺序不受影响。
+        seed: cmd.sched.seed(),
         ..rgoc_interp::Options::default()
     };
     if cmd.via == Via::Ssa {

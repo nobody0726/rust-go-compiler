@@ -115,7 +115,7 @@
 | `T-CON-26` | default 立即走 | 没有就绪 case 且有 `default` ⇒ 立刻走 `default`（不阻塞、不消耗预算到超限） |
 | `T-CON-27` | 全阻塞后由别人唤醒 | 两个 case 都不可收，第三个 G 稍后往其中一个发 ⇒ 选中它，且**不是** `default`（无 default 的版本） |
 | `T-CON-28` | 多就绪按源码顺序 | 两个都就绪 ⇒ 默认 seed 下**总是**第一个 case。跑 8 次断言 8 次同一个结果（这条同时是 `U-M8-02` 的守卫） |
-| `T-CON-29` | 多 seed 的选择分布 | `--sched=seed=1..8`：两个就绪 case 的选中结果**至少出现两个不同的 case**（不需要均匀，只需要「seed 真的起作用」） |
+| `T-CON-29` | 多 seed 的选择分布 | `--sched=seed:1..8`：两个就绪 case 的选中结果**至少出现两个不同的 case**（不需要均匀，只需要「seed 真的起作用」） |
 | `T-CON-30` | nil case 永不就绪 | `var c chan int` 作为 case ⇒ 即使另一个 case 阻塞，也只在另一个上等；两者全 nil 且无 default ⇒ 死锁 |
 | `T-CON-31` | 重复 channel 的撤销 | `select { case <-c: ...; case v := <-c: ... }`；一次发送后**恰好**一个 case 跑，另一个的登记被撤销（再发一次，另一个才可能跑）。判据必须覆盖「两个 case 的 body 各跑一次」的两轮形态 |
 | `T-CON-32` | 空 select | `select {}` ⇒ 死锁 + 退出码 2（不是挂到预算超限） |

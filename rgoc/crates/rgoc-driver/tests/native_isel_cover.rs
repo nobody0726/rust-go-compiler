@@ -70,6 +70,7 @@ fn run_hir(name: &str, src: &str) -> (String, String, Option<i32>) {
         lang: None,
         via: Via::Hir,
         opt: rgoc_ssa::opt::Config::all(),
+        sched: rgoc_driver::cli::Sched::default(),
     };
     let o = rgoc_driver::run_cmd::run_run(&cmd).expect("解释器不该失败");
     (o.stdout, o.stderr, Some(i32::from(o.exit)))
