@@ -103,6 +103,8 @@ pub struct Outcome {
 enum Halt {
     Panic(Value),
     Budget(&'static str),
+    /// 全员阻塞且 main 未结束（`C11` §4.2）。退出码 2，文本照官方。
+    Deadlock,
 }
 
 /// 顶层推进阶段（全局初始化 → 各 `init()` → `main`）。
@@ -725,15 +727,16 @@ impl<'a> Shared<'a> {
 
         // 队列空了。两种可能：
         //   ① `main` 已返回 ⇒ 程序正常结束（`D-M8-8`：不等其它 goroutine）；
-        //   ② 还有人活着但没人可跑 ⇒ 死锁（Task 39 接上 `Halt::Deadlock`）。
+        //   ② 还有人活着但没人可跑 ⇒ 死锁（`C11` §4.2）。
         //
-        // Task 4 还造不出 ②（没有任何操作会阻塞），所以这里只判 ①；
-        // ② 用 `debug_assert` 钉住「到了那一步该做什么」，别让它悄悄变成空转。
-        debug_assert!(
-            !self.all_blocked() || self.main_done(),
-            "全员阻塞且 main 未结束 ⇒ 死锁；Task 39 在这里接 Halt::Deadlock"
-        );
-        let _ = self.main_done();
+        // ② 的判据是「存在 blocked 的 G」而不是「gs 非空」：已退出的槽位是
+        // `None`，它们不该把死锁判成「还有活人」。
+        // ② 的判据：还有活着的 G、而且**全部**阻塞（`C11` §5.2）。
+        // `gs.iter().any(is_some)` 是必要的第二项：全退出时 `all_blocked`
+        // 会因为空集合而返回 `true`。
+        if !self.main_done() && self.all_blocked() && self.gs.iter().any(Option::is_some) {
+            self.halted = Some(Halt::Deadlock);
+        }
     }
 
     // ───────────── 调度（`C11` §2） ─────────────
@@ -784,6 +787,12 @@ impl<'a> Shared<'a> {
                 (2, None)
             }
             Some(Halt::Budget(m)) => (2, Some(m.to_string())),
+            // 官方是 `fatal error: all goroutines are asleep - deadlock!`
+            // 进 **stderr**，退出码 2（`C11` §4.2）。
+            Some(Halt::Deadlock) => (
+                2,
+                Some("fatal error: all goroutines are asleep - deadlock!".to_string()),
+            ),
         };
         Outcome {
             output: out,
@@ -3949,6 +3958,11 @@ fn build_iter(v: &Value, kind: RangeKind) -> RangeIter {
             RangeIter::Map { entries, idx: 0 }
         }
         (RangeKind::Int, Value::Int(n)) => RangeIter::Int { i: 0, n },
+        // `range` over chan 会**阻塞**，而 `RangeIter::next` 是同步函数 ——
+        // 两者放不进同一个接口（`M8-plan.md` R4）。在 Task 22 的 range 执行
+        // 落地之前，这里必须**响亮地**拒绝，不能落到「迭代 0 次」的兜底：
+        // 那会让 `for v := range c` 静默什么都不做。
+        (RangeKind::Chan, _) => todo!("M8/Task 22：range over chan（会阻塞，不能走 next()）"),
         _ => RangeIter::Int { i: 0, n: 0 },
     }
 }

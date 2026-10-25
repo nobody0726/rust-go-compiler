@@ -152,6 +152,160 @@ func main() {
 }
 
 #[test]
+fn t_con_14_缓冲满时接收会补位() {
+    // 关键帧：`<-c` 从满缓冲取走 1 的同时，把**阻塞发送方**的 3 搬进缓冲
+    // （`C11` §3.2 recv ①）。少了补位，`len` 会掉到 1，且发送方永远醒不来。
+    let s = out(
+        "t_con_14",
+        r#"
+package main
+
+func main() {
+	c := make(chan int, 2)
+	gate := make(chan bool)
+	c <- 1
+	c <- 2
+	go func() {
+		gate <- true
+		println("g1 send")
+		c <- 3
+	}()
+	<-gate
+	v := <-c
+	println(v, len(c), cap(c))
+	println(<-c)
+	println(<-c)
+}
+"#,
+    );
+    assert_eq!(
+        s, "g1 send\n1 2 2\n2\n3\n",
+        "收一个立刻补一个，len 回到 cap"
+    );
+}
+
+#[test]
+fn t_con_15_缓冲是_fifo() {
+    let s = out(
+        "t_con_15",
+        r#"
+package main
+
+func main() {
+	c := make(chan int, 3)
+	for i := 0; i < 3; i++ {
+		c <- i * 10
+	}
+	for i := 0; i < 3; i++ {
+		println(<-c)
+	}
+}
+"#,
+    );
+    assert_eq!(s, "0\n10\n20\n");
+}
+
+// ───────────────────────── Task 23：nil 通道 ─────────────────────────
+
+#[test]
+fn t_con_22_nil_通道接收是死锁不是_panic() {
+    let o = run_src(
+        "t_con_22",
+        r#"
+package main
+
+func main() {
+	var c chan int
+	<-c
+}
+"#,
+    );
+    assert_eq!(o.exit, 2, "死锁退出码是 2（`C11` §4）");
+    assert!(
+        o.stderr.contains("all goroutines are asleep - deadlock!"),
+        "死锁文本要与官方一致，实际：{}",
+        o.stderr
+    );
+    assert!(
+        !o.stdout.contains("panic:"),
+        "nil 通道是**永久阻塞**，不是 panic：{}",
+        o.stdout
+    );
+}
+
+#[test]
+fn t_con_22b_nil_通道发送是死锁() {
+    let o = run_src(
+        "t_con_22b",
+        r#"
+package main
+
+func main() {
+	var c chan int
+	c <- 1
+}
+"#,
+    );
+    assert_eq!(o.exit, 2);
+    assert!(
+        o.stderr.contains("all goroutines are asleep - deadlock!"),
+        "实际：{}",
+        o.stderr
+    );
+}
+
+// ───────────────────────── Task 25/26：深拷贝 ─────────────────────────
+
+#[test]
+fn t_con_13_发送与接收各拷一次() {
+    // 发送后改源：接收方必须看到旧值（发送时的拷贝）。
+    // 接收后改副本：通道里那一份已经取走，改它不该影响任何东西 —— 这条
+    // 由「再发一个、收到的仍是原值」间接判。
+    let s = out(
+        "t_con_13",
+        r#"
+package main
+
+func main() {
+	c := make(chan [3]int, 2)
+	a := [3]int{1, 2, 3}
+	c <- a
+	a[0] = 9
+	got := <-c
+	println(got[0], got[1], got[2])
+	got[1] = 8
+	c <- got
+	back := <-c
+	println(back[0], back[1], back[2])
+}
+"#,
+    );
+    assert_eq!(s, "1 2 3\n1 8 3\n");
+}
+
+#[test]
+fn t_con_24_聚合元素的每个字都要拷() {
+    // M7 踩过「只拷第一个字」：`[3]int` 的 2、3 号元素若共享 `Cell`，
+    // 发送后改源会把通道里的值一起改掉。
+    let s = out(
+        "t_con_24",
+        r#"
+package main
+
+func main() {
+	c := make(chan [3]int, 1)
+	a := [3]int{0, 0, 0}
+	c <- a
+	a[2] = 7
+	got := <-c
+	println(got[0], got[1], got[2])
+}
+"#,
+    );
+    assert_eq!(s, "0 0 0\n", "第 3 个元素也必须独立");
+}
+
+#[test]
 fn t_con_12_发送方阻塞时值不丢() {
     // 先发的那个 G 阻塞在 sendq 上，接收方后到 —— 值必须还在（`Waiter.slot`）。
     let s = out(
@@ -167,4 +321,33 @@ func main() {
 "#,
     );
     assert_eq!(s, "7\n");
+}
+
+// ───────────────────────── Task 28：不抢占（`U-M8-01` 的守卫） ─────────────────────────
+
+#[test]
+fn t_con_07_死循环的_goroutine_不会被切走() {
+    // 若实现里有一丁点「按步数抢占」，main 就有机会拿到 CPU 跑完并退出 0。
+    // 实际必须是：那个 `for {}` 烧完预算 ⇒ 整个程序退出 2。
+    let o = run_src(
+        "t_con_07",
+        r#"
+package main
+
+func main() {
+	done := make(chan bool)
+	go func() {
+		for {
+		}
+	}()
+	<-done
+}
+"#,
+    );
+    assert_eq!(o.exit, 2, "预算超限退出 2（`C9` §6）");
+    assert!(
+        o.stderr.contains("step budget exceeded"),
+        "诊断要说清是预算：{}",
+        o.stderr
+    );
 }
