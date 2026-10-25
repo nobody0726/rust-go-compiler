@@ -66,6 +66,8 @@ pub struct Options {
     pub max_frames: usize,
     /// 求值栈深上限（默认 10000）。
     pub max_eval: usize,
+    /// goroutine 数上限（默认 10 000；`T-CON-06`）。
+    pub max_goroutines: usize,
     /// `select` 多就绪时的选择种子（M8/Task 5；`0` = 源码顺序，`D-M8-3`）。
     ///
     /// 只喂给 [`Shared::rng`]；调度本身的顺序与它无关（`C11` §1）。
@@ -78,6 +80,7 @@ impl Default for Options {
             max_steps: 100_000_000,
             max_frames: 1_000,
             max_eval: 10_000,
+            max_goroutines: 10_000,
             seed: 0,
         }
     }
@@ -175,6 +178,16 @@ enum Task<'a> {
     Send {
         typ: TypeId,
         waiter: Option<crate::chan::WaiterHandle>,
+    },
+    /// `go f(args)`（M8/Task 24）。
+    ///
+    /// 与 [`Task::Invoke`] 的差别只有一处：帧建好之后**不压进当前 G**，
+    /// 而是搬进一个新 goroutine（`R5`：实参已经由当前 G 求值完）。
+    Go {
+        target: InvokeTarget<'a>,
+        nargs: usize,
+        extra: usize,
+        dots: bool,
     },
     /// 内建调用。
     Builtin {
@@ -983,6 +996,12 @@ impl<'a> G<'a> {
                 waiter,
             } => return self.task_recv(sh, typ, comma_ok, waiter),
             Task::Send { typ, waiter } => return self.task_send(sh, typ, waiter),
+            Task::Go {
+                target,
+                nargs,
+                extra,
+                dots,
+            } => return self.do_go(sh, target, nargs, extra, dots),
             Task::Builtin {
                 kind,
                 args,
@@ -1598,15 +1617,42 @@ impl<'a> G<'a> {
 
     fn exec_stmt(&mut self, sh: &mut Shared<'a>, s: &'a Stmt) {
         match s {
-            // `go f(...)`（M8/Task 15）：**同步**执行 —— 先把这次调用真的跑完，
-            // 再继续下一句。M8 的语义要求是「实参在当前 G 求值」，而「新 G」
-            // 要到 Task 24 才有；在那之前同步执行是**唯一**不会撒谎的形态：
-            // 输出顺序与官方不同，但它至少是确定的，且 `T-CON-02` 判的就是
-            // 「`g()` 在旧 G 跑」这一半。
+            // `go f(...)`（M8/Task 24）：`f` 与**全部实参**在当前 G 求值完，
+            // 再把帧搬进新 goroutine（`STM-14` / `T-CON-02`）。
             Stmt::Go { call } => {
-                let vbase = self.values.len();
-                self.pending = Some(Pending::ExprStmt { vbase });
-                self.eval.push(Task::Eval(call));
+                if let ExprKind::Call {
+                    callee,
+                    args,
+                    variadic,
+                    spread,
+                } = &call.kind
+                {
+                    let extra = callee_extra(callee);
+                    let target = match callee {
+                        Callee::Func(f) => InvokeTarget::Func(*f),
+                        Callee::Method { func, .. } => InvokeTarget::Method(*func),
+                        Callee::Iface { name, .. } => InvokeTarget::Iface(name),
+                        Callee::Value(_) => InvokeTarget::Value,
+                        Callee::Builtin(k) => InvokeTarget::Builtin(*k),
+                    };
+                    let nargs = if *spread == 0 {
+                        args.len()
+                    } else {
+                        usize::from(*spread)
+                    };
+                    self.eval.push(Task::Go {
+                        target,
+                        nargs,
+                        extra,
+                        dots: *variadic,
+                    });
+                    self.push_call_parts(sh, callee, args);
+                } else {
+                    self.fail(
+                        sh,
+                        RtError::Message("runtime error: go 的目标不是调用".to_string()),
+                    );
+                }
             }
             // `ch <- v`（M8/Task 18）：chan 先求值、value 后（与 lowering 的
             // 求值顺序一致）。**不用 `Pending`** —— 阻塞时任务要留在求值栈上
@@ -2466,6 +2512,146 @@ impl<'a> G<'a> {
 
     // ───────────── 调用 ─────────────
 
+    /// `go f(args)`：实参已经在**当前** G 求值完（`STM-14`），这里只负责建帧
+    /// 并搬进新 goroutine。
+    ///
+    /// # 为什么要「借 `call_func` 再拆」
+    ///
+    /// 形参绑定（变参展开、接收者占 `params[0]`、`dots` 语义）是 M5 里最细的
+    /// 一段，重写一遍必然与 `call_func` 走偏 —— 那正是「两边一起错、端到端仍绿」
+    /// 的经典形态。所以这里让 `call_func` 照常建帧，建完把**调用者的三栈**
+    /// 还回去（`call_func` 会把它们 `take` 进帧里），帧本身搬给新 G。
+    fn do_go(
+        &mut self,
+        sh: &mut Shared<'a>,
+        target: InvokeTarget<'a>,
+        nargs: usize,
+        extra: usize,
+        dots: bool,
+    ) -> bool {
+        let total = nargs + extra;
+        if self.values.len() < total {
+            self.fail(
+                sh,
+                RtError::Message("runtime error: eval stack underflow".to_string()),
+            );
+            return true;
+        }
+        let mut vals = self.values.split_off(self.values.len() - total);
+        let head = if extra == 1 && !vals.is_empty() {
+            Some(vals.remove(0))
+        } else {
+            None
+        };
+        match target {
+            InvokeTarget::Func(f) => {
+                self.spawn(sh, f, None, vals, Vec::new(), dots);
+                true
+            }
+            InvokeTarget::Method(f) => match head {
+                Some(r) => {
+                    self.spawn(sh, f, Some(r), vals, Vec::new(), dots);
+                    true
+                }
+                None => {
+                    self.fail(sh, RtError::NilDeref);
+                    true
+                }
+            },
+            InvokeTarget::Iface(name) => match head {
+                Some(r) => match self.resolve_iface_method(sh, &r, name) {
+                    Some((f, recv)) => {
+                        self.spawn(sh, f, Some(recv), vals, Vec::new(), dots);
+                        true
+                    }
+                    None => {
+                        self.fail(
+                            sh,
+                            RtError::Message(format!(
+                                "runtime error: invalid memory address or nil pointer dereference ({name})"
+                            )),
+                        );
+                        true
+                    }
+                },
+                None => {
+                    self.fail(sh, RtError::NilDeref);
+                    true
+                }
+            },
+            InvokeTarget::Value => match head {
+                Some(Value::Func(cl)) => {
+                    self.spawn(
+                        sh,
+                        cl.func,
+                        cl.recv.clone(),
+                        vals,
+                        cl.captured.clone(),
+                        dots,
+                    );
+                    true
+                }
+                Some(_) | None => {
+                    self.fail(sh, RtError::NilDeref);
+                    true
+                }
+            },
+            // `go println(1)` 是合法的（内建调用）：内建没有帧可搬，
+            // 直接在**当前** G 执行。
+            InvokeTarget::Builtin(k) => {
+                self.invoke_builtin_direct(sh, k, vals);
+                true
+            }
+        }
+    }
+
+    /// 建一个新 goroutine（帧由已求值的实参建，`R5`）。
+    fn spawn(
+        &mut self,
+        sh: &mut Shared<'a>,
+        fid: FuncId,
+        recv: Option<Value>,
+        args: Vec<Value>,
+        captured: Vec<Cell>,
+        dots: bool,
+    ) -> Option<usize> {
+        let live = sh.gs.iter().filter(|g| g.is_some()).count();
+        if live >= sh.opts.max_goroutines {
+            sh.halted = Some(Halt::Budget("goroutine limit exceeded"));
+            return None;
+        }
+        let before = self.frames.len();
+        self.call_func(sh, fid, recv, args, captured, false, true, dots);
+        if self.frames.len() != before + 1 {
+            // `call_func` 自己失败了（帧深超限）—— 它已经写好 `halted`。
+            return None;
+        }
+        let mut frame = self.frames.pop().expect("刚 push 的帧");
+        // 把调用者的三栈还回去：`call_func` 为了「返回时恢复现场」把它们
+        // `take` 进了帧里，但新 goroutine 不该带着**别人的**续体。
+        self.eval = std::mem::take(&mut frame.saved_eval);
+        self.values = std::mem::take(&mut frame.saved_values);
+        self.targets = std::mem::take(&mut frame.saved_targets);
+        self.pending = frame.saved_pending.take();
+
+        let gid = sh.gs.len();
+        sh.gs.push(Some(G {
+            id: gid,
+            frames: vec![frame],
+            panic_val: None,
+            eval: Vec::new(),
+            values: Vec::new(),
+            targets: Vec::new(),
+            pending: None,
+            phase: TopPhase::Done,
+            blocked: false,
+            waiters: Vec::new(),
+        }));
+        // `go` **不切走**当前 G（`C11` §2.1）：只把新 G 入队尾。
+        sh.runq.push_back(gid);
+        Some(gid)
+    }
+
     fn do_invoke(
         &mut self,
         sh: &mut Shared<'a>,
@@ -3043,7 +3229,11 @@ impl<'a> G<'a> {
             );
             return true;
         };
-        match obj.borrow_mut().try_send(&value) {
+        // 先取 outcome 再 match：`match obj.borrow_mut()...` 会让 `RefMut`
+        // 活到整个 match 结束，`Blocked` 分支里再 `borrow_mut` 就炸
+        // （`already borrowed`）。
+        let outcome = obj.borrow_mut().try_send(&value);
+        match outcome {
             SendOutcome::Done { woke } => {
                 self.values.pop();
                 self.values.pop();

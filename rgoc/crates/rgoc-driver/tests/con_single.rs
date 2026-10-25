@@ -52,22 +52,31 @@ fn out(name: &str, src: &str) -> String {
 // ───────────────────────── go ─────────────────────────
 
 #[test]
-fn t15_go_同步执行() {
-    // 同步语义：`f` 的打印必须出现在下一句之前。
+fn t15_go_开的是新_goroutine() {
+    // Task 24 起 `go` 真的开新 goroutine：`go` 只入队尾、**不切走**（`C11` §2.1），
+    // 所以 main 的打印在前，`f` 的在后。
+    //
+    // 这里让 main 在 `<-done` 上等：不这样的话「main 返回时是否等 goroutine」
+    // 会混进判据（那是 Task 36 的事，本 Task 不该依赖它）。
     let s = out(
-        "t15_go_sync",
+        "t15_go_async",
         r#"
 package main
 
-func f(n int) { println("f", n) }
+func f(n int, done chan bool) {
+	println("f", n)
+	done <- true
+}
 
 func main() {
-	go f(1)
+	done := make(chan bool)
+	go f(1, done)
 	println("main")
+	<-done
 }
 "#,
     );
-    assert_eq!(s, "f 1\nmain\n");
+    assert_eq!(s, "main\nf 1\n");
 }
 
 #[test]
@@ -78,13 +87,15 @@ fn t15_go_函数字面量_捕获外层变量() {
 package main
 
 func main() {
+	done := make(chan bool)
 	x := 7
-	go func() { println(x) }()
+	go func() { println(x); done <- true }()
 	println("after")
+	<-done
 }
 "#,
     );
-    assert_eq!(s, "7\nafter\n");
+    assert_eq!(s, "after\n7\n");
 }
 
 #[test]
@@ -95,18 +106,21 @@ fn t15_go_不留下多余的值() {
         r#"
 package main
 
-func f() {
+func f(done chan bool) {
 	x := 9
 	println(x)
+	done <- true
 }
 
 func main() {
-	go f()
+	done := make(chan bool)
+	go f(done)
 	println("ok")
+	<-done
 }
 "#,
     );
-    assert_eq!(s, "9\nok\n");
+    assert_eq!(s, "ok\n9\n");
 }
 
 // ───────────────────────── chan ─────────────────────────
