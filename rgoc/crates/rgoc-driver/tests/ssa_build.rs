@@ -2388,16 +2388,19 @@ fn t_ssa_36_没有初始化式时不合成_init() {
 
 #[test]
 fn t_ssa_36_初始化式里的不支持面要带码拒绝() {
-    // `var m = map[int]int{}`：init_order 的表达式**不在任何函数体里**，
+    // `var c = make(chan int)`：init_order 的表达式**不在任何函数体里**，
     // 函数体的预扫描扫不到它 ⇒ 必须在 build() 里单独扫。
+    //
+    // M9/Phase 2 把这条判据的 map 版下线了（map 已实现，`D-M9-5`），换成
+    // 仍然被拒的 chan —— 判据的形状没变，仍然是「初始化式里的拒绝要带码」。
     let (program, mut tt) = program_of(
-        "init-map",
-        // `main` **不碰** map：这样唯一该被拒的就是初始化式
-        "package main\n\nvar m = map[int]int{1: 2}\n\nfunc main() {\n\tprintln(1)\n}\n",
+        "init-chan",
+        // `main` **不碰** chan：这样唯一该被拒的就是初始化式
+        "package main\n\nvar c = make(chan int)\n\nfunc main() {\n\tprintln(1)\n}\n",
     );
     let out = build(&program, &mut tt);
     assert_eq!(out.rejected.len(), 1, "一条拒绝：{:?}", out.rejected);
-    assert_eq!(out.rejected[0].code, rgoc_ssa::diag::SsaCode::Map);
+    assert_eq!(out.rejected[0].code, rgoc_ssa::diag::SsaCode::Chan);
     assert!(
         out.rejected[0].detail.contains("初始化"),
         "说明要指出是包级初始化式：{}",

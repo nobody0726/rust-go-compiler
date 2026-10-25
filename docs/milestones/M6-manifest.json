@@ -33,15 +33,21 @@
       "note": "沿用 M5 的入选清单（已冻结）"
     },
     "buildable": {
-      "count": 46,
+      "count": 50,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；46 个全部与官方 .out 逐字节一致（ssa_corpus_run）"
+      "note": "能建图且 verifier 通过的个数 N；50 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口时是 46，M9/Phase 2 实现 map 后 +4。"
     },
     "rejected": {
       "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 23,
+      "count": 19,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；三栏（文件/码/原因）；IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2；N+M=69 两向断言"
+      "note": "拒绝 M；三栏（文件/码/原因）；IFACE-DYN 9 / FUNC-VALUE 7 / DEFER 3；N+M=69 两向断言。M6 收口时是 23（含 MAP 5），map 实现后 MAP 归零。"
+    },
+    "re_frozen": {
+      "by": "M9/Phase 2（Task 18–26）：SSA 侧实现 map —— `rt_map_*` + `CalleeRef::Runtime`（D-M9-5）",
+      "when": "2026-10-25",
+      "why": "map 从「宿主面」变成「已实现」，于是 SSA 拒绝面收缩：5 条 MAP 拒绝里 4 条消失（bigmap.go / indirect.go / ken/complit.go / ken/range.go），第 5 条 print.go 的第一条拒绝也从 MAP 变成 DEFER。分母 46/23 → 50/19。",
+      "delta": "N +4 / M −4；N + M 仍等于 69"
     }
   },
   "gate": {

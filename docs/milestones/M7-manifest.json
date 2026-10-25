@@ -26,9 +26,9 @@
   "corpus_lists": {
     "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
     "input": {
-      "file": "tools/run-oracle/native-input.txt",
+      "file": "tools/run-oracle/native-input-m7.txt",
       "count": 46,
-      "note": "= 入选语料 69 − M6 拒绝面 23（即 M6 的 N 侧）"
+      "note": "= 入选语料 69 − M6 拒绝面 23（即 M6 的 N 侧）。**M9 起读的是快照** `native-input-m7.txt`：活的 `native-input.txt` 已被 M9/Phase 2 改写（50 行 —— map 实现后 SSA 拒绝面从 23 缩到 19）。本清单记的是 M7 收口时的历史事实，判据必须对着快照算才自洽（R-9-4 同款，R-9-8）。"
     },
     "supported": {
       "count": 39,

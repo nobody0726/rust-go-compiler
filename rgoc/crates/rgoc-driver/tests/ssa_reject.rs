@@ -136,10 +136,34 @@ fn t_ssa_33_type_switch() {
 
 #[test]
 fn t_ssa_33_map() {
-    assert_rejected(
+    // M9/Phase 2 之前这里是「map 必须被拒」（`SsaCode::Map`）。map 实现了
+    // （`rt_map_*` + `CalleeRef::Runtime`，`D-M9-5`），所以这条判据**反过来**：
+    // 断言它今天**不再**被拒，并且 `SSA-UNSUPPORTED-MAP` 这个词不再出现。
+    //
+    // 为什么留一条反向判据而不是删掉：删掉之后没人守「map 真的在面内」——
+    // 哪天 `face_kind` 又被谁加回一条 map 分支，这条会红。
+    let p = fixture(
         "map",
         "package main\n\nfunc main() {\n\tm := map[string]int{\"a\": 1}\n\tprintln(m[\"a\"])\n}\n",
-        SsaCode::Map,
+    );
+    let out = run(&p);
+    assert_eq!(
+        out.exit, 0,
+        "map 已在 M9/Phase 2 支持，该退出码 0；stderr = {:?}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("SSA-UNSUPPORTED-MAP"),
+        "`SSA-UNSUPPORTED-MAP` 已无入口，不该再出现：{:?}",
+        out.stderr
+    );
+    // 结构断言：建图结果里**没有** Map 拒绝
+    let (program, mut tt) = front_end(&p);
+    let built = rgoc_ssa::build::build(&program, &mut tt);
+    assert!(
+        !built.rejected.iter().any(|r| r.code == SsaCode::Map),
+        "rejected 里不该有 Map：{:?}",
+        built.rejected
     );
 }
 

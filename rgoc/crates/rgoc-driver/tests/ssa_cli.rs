@@ -190,15 +190,18 @@ fn t_ssa_39_两条通路在正常程序上输出一致() {
 
 #[test]
 fn t_ssa_39_via_ssa_的拒绝面退出码是_1() {
-    // 拒绝是**静态面**的结论（`SSA-UNSUPPORTED-*`），所以退出码 1，不是 2
+    // 拒绝是**静态面**的结论（`SSA-UNSUPPORTED-*`），所以退出码 1，不是 2。
+    //
+    // M9/Phase 2 把 fixture 从 map 换成 chan（map 已实现）：判据的形状没变，
+    // 仍然是「静态拒绝 ⇒ 1、stdout 空、stderr 带稳定码」。
     let o = run_via(
         "via-reject",
-        "package main\n\nfunc main() {\n\tm := map[int]int{}\n\t_ = m\n}\n",
+        "package main\n\nfunc main() {\n\tc := make(chan int)\n\t_ = c\n}\n",
         Via::Ssa,
     );
     assert_eq!(o.exit, 1, "拒绝 ⇒ 退出码 1：{:?}", o.stderr);
     assert!(
-        o.stderr.contains("SSA-UNSUPPORTED-MAP"),
+        o.stderr.contains("SSA-UNSUPPORTED-CHAN"),
         "stderr 要带稳定码：{:?}",
         o.stderr
     );

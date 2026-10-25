@@ -1,0 +1,54 @@
+# M7 native 的输入清单**快照**（46 行）—— M7 收口时（2026-10-24）的 N 侧。
+#
+# 为什么要有这份快照：M9/Phase 2 实现了 map，SSA 拒绝面从 23 缩到 19，于是活的
+# `native-input.txt` 从 46 行变成 50 行。`M7-manifest.json` 记的是 **M7 收口时的
+# 事实**（自报 46 / 支持 39），判据必须对着这份快照算才自洽 —— 与
+# `native-rejected-m7.txt` 同一条理由（`R-9-4`）。
+#
+# 今天的事实看活的 `native-input.txt`（50 行）。
+go_source_code/test/align.go
+go_source_code/test/compos.go
+go_source_code/test/const8.go
+go_source_code/test/decl.go
+go_source_code/test/escape3.go
+go_source_code/test/float_lit.go
+go_source_code/test/for.go
+go_source_code/test/func.go
+go_source_code/test/func7.go
+go_source_code/test/func8.go
+go_source_code/test/gc1.go
+go_source_code/test/helloworld.go
+go_source_code/test/if.go
+go_source_code/test/initcomma.go
+go_source_code/test/intcvt.go
+go_source_code/test/iota.go
+go_source_code/test/newexpr.go
+go_source_code/test/printbig.go
+go_source_code/test/range3.go
+go_source_code/test/simassign.go
+go_source_code/test/turing.go
+go_source_code/test/varinit.go
+go_source_code/test/zerosize.go
+go_source_code/test/ken/array.go
+go_source_code/test/ken/convert.go
+go_source_code/test/ken/cplx0.go
+go_source_code/test/ken/cplx1.go
+go_source_code/test/ken/cplx2.go
+go_source_code/test/ken/divmod.go
+go_source_code/test/ken/for.go
+go_source_code/test/ken/label.go
+go_source_code/test/ken/mfunc.go
+go_source_code/test/ken/ptrvar.go
+go_source_code/test/ken/robfor.go
+go_source_code/test/ken/robfunc.go
+go_source_code/test/ken/shift.go
+go_source_code/test/ken/simparray.go
+go_source_code/test/ken/simpbool.go
+go_source_code/test/ken/simpconv.go
+go_source_code/test/ken/simpfun.go
+go_source_code/test/ken/simpswitch.go
+go_source_code/test/ken/simpvar.go
+go_source_code/test/ken/slicearray.go
+go_source_code/test/ken/sliceslice.go
+go_source_code/test/ken/string.go
+go_source_code/test/ken/strvar.go

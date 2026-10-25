@@ -143,6 +143,28 @@ fn list_lines(rel: &str) -> usize {
         .count()
 }
 
+/// M6 收口时冻结的分母（`R-6-1`）。**只作历史基准**：今天的数以磁盘为准，
+/// 但一旦离开这两个数，manifest 必须写 `re_frozen` 留痕。
+const M6_ORIG_BUILDABLE: u64 = 46;
+const M6_ORIG_REJECTED: u64 = 23;
+
+/// 「入选 − 拒绝」= 今天能建图的个数（磁盘现算，不抄 manifest）。
+fn list_buildable() -> usize {
+    let rej: std::collections::BTreeSet<String> =
+        read(&repo_root().join("tools/run-oracle/ssa-rejected.txt"))
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .filter_map(|l| l.split('\t').next().map(ToString::to_string))
+            .collect();
+    read(&repo_root().join("tools/run-oracle/run-selected.txt"))
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter(|l| !rej.contains(*l))
+        .count()
+}
+
 /// 全部对账。返回第一条错误（带「哪一项」前缀，便于定位）。
 fn check(v: &Value, doc: &str) -> Result<(), String> {
     // ── ① 顶层结构
@@ -196,22 +218,38 @@ fn check(v: &Value, doc: &str) -> Result<(), String> {
     }
     let nb = cl["buildable"]["count"].as_u64();
     let nr = cl["rejected"]["count"].as_u64();
-    if nb != Some(46) {
-        return Err(format!("corpus_lists: buildable 应为 46，实际 {nb:?}"));
+    // 分母的**唯一权威是磁盘**：manifest 写的数与清单实际行数必须同时相等。
+    // 离开 M6 收口时的原值（46/23）不是错误 —— 但必须在 manifest 里留痕
+    // （`re_frozen`：谁、什么时候、为什么、动了哪几个文件），否则「分母悄悄
+    // 变了」这件事没有任何记录。
+    if nb != Some(list_buildable() as u64) {
+        return Err(format!(
+            "corpus_lists: buildable 应等于「入选 − 拒绝」（{}），实际 {nb:?}",
+            list_buildable()
+        ));
     }
-    if nr != Some(23) {
-        return Err(format!("corpus_lists: rejected 应为 23，实际 {nr:?}"));
+    if nr != Some(list_lines("tools/run-oracle/ssa-rejected.txt") as u64) {
+        return Err(format!(
+            "corpus_lists: rejected 应为 {}，实际 {nr:?}",
+            list_lines("tools/run-oracle/ssa-rejected.txt")
+        ));
+    }
+    if nb != Some(M6_ORIG_BUILDABLE) || nr != Some(M6_ORIG_REJECTED) {
+        // 分母动过 ⇒ 必须自报是怎么动的
+        let rf = &cl["re_frozen"];
+        for k in ["by", "when", "why", "delta"] {
+            if !nonempty(rf, k) {
+                return Err(format!(
+                    "corpus_lists: 分母离开了 M6 的原值（{M6_ORIG_BUILDABLE}/{M6_ORIG_REJECTED}），\
+                     必须写 `re_frozen.{k}` 说明这次重冻结"
+                ));
+            }
+        }
     }
     let rej_file = cl["rejected"]["file"].as_str().unwrap_or("");
     if rej_file != "tools/run-oracle/ssa-rejected.txt" {
         return Err(format!(
             "corpus_lists: rejected.file 应为 ssa-rejected.txt，实际 {rej_file:?}"
-        ));
-    }
-    if list_lines(rej_file) != 23 {
-        return Err(format!(
-            "corpus_lists: 拒绝清单实际 {} 行（manifest 说 23）",
-            list_lines(rej_file)
         ));
     }
     if nb.unwrap_or(0) + nr.unwrap_or(0) != 69 {
