@@ -29,6 +29,8 @@ use rgoc_const::{BasicId, Const};
 use rgoc_hir::FuncId;
 use rgoc_types::{Type, TypeId, TypeTable, unalias, underlying};
 
+use crate::chan::ChanObj;
+
 /// 一切可寻址位置的载体。
 pub type Cell = Rc<RefCell<Value>>;
 
@@ -72,6 +74,11 @@ pub enum Value {
     },
     /// 有类型的 `nil`。
     Nil(NilKind),
+    /// 通道（**引用语义**：拷贝的是句柄，不是通道本身）。
+    ///
+    /// 与 `Map` / `Slice` 同一类：`ch2 := ch1` 之后两边指向**同一个**通道，
+    /// 这与 `deep_copy` 的 `other => clone()` 分支天然一致。
+    Chan(Rc<RefCell<ChanObj>>),
 }
 
 /// `nil` 的种类（`print` 与 `==` 要区分「哪种 nil」）。
@@ -232,6 +239,8 @@ pub fn go_eq(a: &Value, b: &Value) -> bool {
             Rc::ptr_eq(x, y) || (is_empty_aggregate(&x.borrow()) && is_empty_aggregate(&y.borrow()))
         }
         (Value::Nil(_), Value::Nil(_)) => true,
+        // 通道相等 = **同一个通道**（`make` 出来的每个对象各不相同）。
+        (Value::Chan(x), Value::Chan(y)) => Rc::ptr_eq(x, y),
         (Value::Iface { typ: tx, data: dx }, Value::Iface { typ: ty, data: dy }) => {
             match (tx, ty) {
                 (None, None) => true,

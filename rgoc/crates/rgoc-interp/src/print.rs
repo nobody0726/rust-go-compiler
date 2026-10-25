@@ -64,6 +64,9 @@ pub fn format_operand(v: &Value, tt: &TypeTable, typ: TypeId) -> String {
         Value::Ptr(_) => PTR_TEXT.to_string(),
         Value::Func(_) => PTR_TEXT.to_string(),
         Value::Map(_) => PTR_TEXT.to_string(),
+        // 通道按指针口径打印（`print(c)` ⇒ `0xc0000180c0` 那种）；`nil` 通道走
+        // 下面的 `Nil(_)` 分支 ⇒ `0x0`。
+        Value::Chan(_) => PTR_TEXT.to_string(),
         Value::Slice(s) => {
             let p = if s.arr.is_empty() { "0x0" } else { PTR_TEXT };
             format!("[{}/{}]{}", s.len, s.cap, p)

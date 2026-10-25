@@ -52,6 +52,7 @@ use rgoc_hir::{
 };
 use rgoc_types::{Type, TypeId, TypeTable, identical, implements, unalias, underlying};
 
+use crate::chan::{ChanObj, CloseOutcome, RecvOutcome, SendOutcome};
 use crate::ops::{self, RtError};
 use crate::print;
 use crate::value::{Cell, Closure, MapObj, NilKind, SliceVal, Value, cell, is_iface, zero_of};
@@ -148,7 +149,17 @@ enum Task<'a> {
         comma_ok: bool,
     },
     /// `make`。
-    Make { kind: MakeKind, typ: TypeId },
+    ///
+    /// `nargs` 是**实参个数**（`make(chan int)` 是 0，`make([]int, 3, 5)` 是 2）。
+    /// 必须显式带着它：靠「栈上还有没有值」去猜会吃掉调用方栈上的值 ——
+    /// `f(make(map[string]int))` 里那个 `f` 的实参就是这么被吃掉过。
+    Make {
+        kind: MakeKind,
+        typ: TypeId,
+        nargs: usize,
+    },
+    /// 接收 `<-ch`（M8/Task 15）。
+    Recv { typ: TypeId, comma_ok: bool },
     /// 内建调用。
     Builtin {
         kind: BuiltinKind,
@@ -231,6 +242,8 @@ enum Pending<'a> {
     ExprStmt {
         vbase: usize,
     },
+    /// `ch <- v`：栈上是 `chan`（先求值、在下面）与 `value`（后求值、在上面）。
+    Send,
     Return {
         vbase: usize,
     },
@@ -887,7 +900,8 @@ impl<'a> G<'a> {
                 iface,
                 comma_ok,
             } => self.type_assert(sh, to, iface, comma_ok),
-            Task::Make { kind, typ } => self.make(sh, kind, typ),
+            Task::Make { kind, typ, nargs } => self.make(sh, kind, typ, nargs),
+            Task::Recv { typ, comma_ok } => self.do_recv(sh, typ, comma_ok),
             Task::Builtin {
                 kind,
                 args,
@@ -960,7 +974,6 @@ impl<'a> G<'a> {
 
     fn eval_expr(&mut self, sh: &mut Shared<'a>, e: &'a Expr) {
         match &e.kind {
-            ExprKind::Recv { .. } => todo!("M8/Task 17：`<-ch` 的解释执行"),
             ExprKind::Const(c) => {
                 let v = const_value(c, e.typ, sh.tt);
                 self.values.push(v);
@@ -1128,10 +1141,18 @@ impl<'a> G<'a> {
                 self.eval.push(Task::Make {
                     kind: *kind,
                     typ: e.typ,
+                    nargs: args.len(),
                 });
                 for a in args.iter().rev() {
                     self.eval.push(Task::Eval(a));
                 }
+            }
+            ExprKind::Recv { ch, comma_ok } => {
+                self.eval.push(Task::Recv {
+                    typ: e.typ,
+                    comma_ok: *comma_ok,
+                });
+                self.eval.push(Task::Eval(ch));
             }
             ExprKind::New(pointee) => {
                 let v = cell(zero_of(sh.tt, *pointee));
@@ -1494,9 +1515,24 @@ impl<'a> G<'a> {
 
     fn exec_stmt(&mut self, sh: &mut Shared<'a>, s: &'a Stmt) {
         match s {
-            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
-                todo!("M8/Task 15：go/send/select 的解释执行")
+            // `go f(...)`（M8/Task 15）：**同步**执行 —— 先把这次调用真的跑完，
+            // 再继续下一句。M8 的语义要求是「实参在当前 G 求值」，而「新 G」
+            // 要到 Task 24 才有；在那之前同步执行是**唯一**不会撒谎的形态：
+            // 输出顺序与官方不同，但它至少是确定的，且 `T-CON-02` 判的就是
+            // 「`g()` 在旧 G 跑」这一半。
+            Stmt::Go { call } => {
+                let vbase = self.values.len();
+                self.pending = Some(Pending::ExprStmt { vbase });
+                self.eval.push(Task::Eval(call));
             }
+            // `ch <- v`（M8/Task 15）：chan 先求值、value 后（与 lowering 的
+            // 求值顺序一致）。阻塞路径是 Task 20。
+            Stmt::Send { chan, value } => {
+                self.pending = Some(Pending::Send);
+                self.eval.push(Task::Eval(value));
+                self.eval.push(Task::Eval(chan));
+            }
+            Stmt::Select { .. } => todo!("M8/Task 30：select 的解释执行"),
             Stmt::Empty => {}
             Stmt::Assign { lhs, op, rhs } => {
                 let vbase = self.values.len();
@@ -1745,6 +1781,27 @@ impl<'a> G<'a> {
                 }
             }
             Pending::ExprStmt { vbase } => self.values.truncate(vbase),
+            Pending::Send => {
+                let value = self.pop(sh);
+                let ch = self.pop(sh);
+                let Some(obj) = chan_of(&ch) else {
+                    self.fail(
+                        sh,
+                        RtError::Message("runtime error: send to non-channel".to_string()),
+                    );
+                    return;
+                };
+                let outcome = obj.borrow_mut().try_send(&value);
+                match outcome {
+                    // 单 goroutine 下没有等待的接收方，`woke` 恒为 `None`；
+                    // Task 20 起这里要把它入就绪队列。
+                    SendOutcome::Done { .. } => {}
+                    SendOutcome::Closed => {
+                        todo!("M8/Task 22：panic: send on closed channel")
+                    }
+                    SendOutcome::Blocked => todo!("M8/Task 20：阻塞发送（登记 waiter + Blocked）"),
+                }
+            }
             Pending::Return { vbase } => {
                 let vals = self.values.split_off(vbase);
                 self.do_return(sh, vals);
@@ -2670,10 +2727,31 @@ impl<'a> G<'a> {
                 let v = vals.into_iter().next().unwrap_or(Value::Int(0));
                 self.values.push(Value::Ptr(cell(v)));
             }
-            BuiltinKind::Close => self.fail(
-                sh,
-                RtError::Message("runtime error: close of nil channel".to_string()),
-            ),
+            // `close(c)`（M8/Task 16，`C11` §3.2 close）。
+            //
+            // 三个 panic 里两个在这里：double close 与 close(nil)。第三个
+            // （closed 上 send）在 `Pending::Send` 的分支里。
+            BuiltinKind::Close => {
+                let v = vals.into_iter().next().unwrap_or(Value::Nil(NilKind::Chan));
+                match v {
+                    Value::Chan(obj) => {
+                        let outcome = obj.borrow_mut().close();
+                        match outcome {
+                            // 被唤醒的 G 由调度器接手（Task 20 起入 `runq`）；
+                            // 单 goroutine 下没有人可唤醒。
+                            CloseOutcome::Woken(_) => {}
+                            CloseOutcome::AlreadyClosed => self
+                                .fail(sh, RtError::Message("close of closed channel".to_string())),
+                        }
+                    }
+                    // 官方是 `plainError("close of nil channel")` —— 不带
+                    // `runtime error:` 前缀（`C9` §4.5 的 panic 文本按官方）。
+                    Value::Nil(NilKind::Chan) => {
+                        self.fail(sh, RtError::Message("close of nil channel".to_string()))
+                    }
+                    _ => self.fail(sh, RtError::Message("close of non-channel".to_string())),
+                }
+            }
         }
     }
 
@@ -2702,11 +2780,23 @@ impl<'a> G<'a> {
 
     // ───────────── 值构造 ─────────────
 
-    fn make(&mut self, sh: &mut Shared<'a>, kind: MakeKind, typ: TypeId) {
+    fn make(&mut self, sh: &mut Shared<'a>, kind: MakeKind, typ: TypeId, nargs: usize) {
         match kind {
             MakeKind::Slice => {
-                let cap = self.pop(sh).as_int().unwrap_or(0).max(0) as usize;
-                let len = self.pop(sh).as_int().unwrap_or(cap as i128).max(0) as usize;
+                // `make([]T, len[, cap])`：**栈顶是最后一个实参**。
+                // `make([]int, 3, 5)` ⇒ 栈 `[3, 5]` ⇒ 先弹出的是 `cap = 5`。
+                let (len, cap) = match nargs {
+                    0 => (0, 0),
+                    1 => {
+                        let n = self.pop(sh).as_int().unwrap_or(0).max(0) as usize;
+                        (n, n)
+                    }
+                    _ => {
+                        let cap = self.pop(sh).as_int().unwrap_or(0).max(0) as usize;
+                        let len = self.pop(sh).as_int().unwrap_or(0).max(0) as usize;
+                        (len, cap)
+                    }
+                };
                 let len = len.min(cap);
                 let elem = slice_elem(sh.tt, typ);
                 let cells: Vec<Cell> = (0..cap).map(|_| cell(zero_of(sh.tt, elem))).collect();
@@ -2718,16 +2808,49 @@ impl<'a> G<'a> {
                 }));
             }
             MakeKind::Map => {
-                if !self.values.is_empty() {
+                // `make(map[K]V[, hint])`：hint 只是个提示，求值完丢掉。
+                if nargs >= 1 {
                     let _ = self.pop(sh);
                 }
                 self.values
                     .push(Value::Map(Rc::new(RefCell::new(MapObj::default()))));
             }
-            MakeKind::Chan => self.fail(
+            MakeKind::Chan => {
+                // `make(chan T[, cap])`：没有第二个实参 ⇒ 无缓冲（`C11` §3.1）。
+                let cap = if nargs >= 1 {
+                    self.pop(sh).as_int().unwrap_or(0).max(0) as usize
+                } else {
+                    0
+                };
+                let elem = chan_elem_ty(sh.tt, typ);
+                let obj = ChanObj::new(elem, cap);
+                self.values.push(Value::Chan(Rc::new(RefCell::new(obj))));
+            }
+        }
+    }
+
+    /// 接收 `<-ch`（`C11` §3.2 recv 的 ①→③；④ 是 Task 20）。
+    fn do_recv(&mut self, sh: &mut Shared<'a>, typ: TypeId, comma_ok: bool) {
+        let ch = self.pop(sh);
+        let Some(obj) = chan_of(&ch) else {
+            self.fail(
                 sh,
-                RtError::Message("runtime error: make(chan) not supported".to_string()),
-            ),
+                RtError::Message("runtime error: receive from non-channel".to_string()),
+            );
+            return;
+        };
+        // `try_recv` 只借用一瞬间：`Outcome` 是值，拿到之后立刻放开通道，
+        // 免得后面 `push` 时还持着 `RefCell` 的借用。
+        let outcome = obj.borrow_mut().try_recv();
+        let (value, ok) = match outcome {
+            RecvOutcome::Got { value, .. } => (value, true),
+            RecvOutcome::GotZeroClosed => (zero_of(sh.tt, typ), false),
+            // 阻塞是 Task 20 的事（`D-M8-5`：任务不弹出、醒来重试）。
+            RecvOutcome::Blocked => todo!("M8/Task 20：阻塞接收（登记 waiter + Blocked）"),
+        };
+        self.values.push(value);
+        if comma_ok {
+            self.values.push(Value::Bool(ok));
         }
     }
 
@@ -3256,6 +3379,8 @@ pub(crate) fn len_of(v: &Value) -> usize {
         Value::Array(c) => c.len(),
         Value::Slice(sv) => sv.len,
         Value::Map(m) => m.borrow().len(),
+        // `len(c)`：缓冲里有多少值（阻塞发送方的值不算，`C11` §3.2）。
+        Value::Chan(c) => c.borrow().len(),
         _ => 0,
     }
 }
@@ -3264,6 +3389,8 @@ pub(crate) fn cap_of(v: &Value) -> usize {
     match peel_value(v) {
         Value::Array(c) => c.len(),
         Value::Slice(sv) => sv.cap,
+        // `cap(c)`：容量；无缓冲 = 0（`C11` §3.2）。
+        Value::Chan(c) => c.borrow().cap(),
         _ => 0,
     }
 }
@@ -3721,6 +3848,22 @@ pub(crate) fn slice_elem(tt: &TypeTable, t: TypeId) -> TypeId {
         Type::Slice(e) => *e,
         Type::Array { elem, .. } => *elem,
         _ => t,
+    }
+}
+
+/// `chan T` 的 `T`（拿不到就原样返回，调用方只在 `make` 里用）。
+pub(crate) fn chan_elem_ty(tt: &TypeTable, t: TypeId) -> TypeId {
+    match tt.type_of(underlying(tt, unalias(tt, t))) {
+        Type::Chan { elem, .. } => *elem,
+        _ => t,
+    }
+}
+
+/// 从值里取通道句柄（`nil` 通道 ⇒ `None`，那是 Task 23 的「永久阻塞」）。
+pub(crate) fn chan_of(v: &Value) -> Option<Rc<RefCell<ChanObj>>> {
+    match v {
+        Value::Chan(c) => Some(Rc::clone(c)),
+        _ => None,
     }
 }
 
