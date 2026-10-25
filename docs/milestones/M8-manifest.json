@@ -1,0 +1,237 @@
+{
+  "stage": "M8",
+  "name": "并发解释执行（goroutine / channel / select）",
+  "generated_at": "2026-10-25T00:00:00Z",
+  "filled_at": null,
+  "fill_task": "M8-plan.md Task 57（骨架：gate 全 pending、done=false；由 Task 61–66 收口时按实测数字填实，填实者 rgoc-driver/tests/manifest_m8.rs 对账）",
+  "status": "进行中 —— 骨架阶段。Task 1–56 已落地（lowering 六节点 + 调度器 + 通道 + select + 死锁 + map 快照 + range over func + 三条语料零回归）；Task 57–66 是收口簿记",
+  "scope": "HIR 之上的 M:1 协作式调度：goroutine / 无缓冲与缓冲 channel / close / select 三阶段 / 死锁判定 / --sched=seed:N 可回放；解释器（--via=hir），native 与 SSA 两条通路不在本里程碑面内",
+  "docs": {
+    "design": "docs/milestones/M8-design.md（D-M8-1..16 / F1..F14 / 门禁 CON-1..9 / 不变式四条）",
+    "tests": "docs/milestones/M8-tests.md（T-CON-01..62 + 修订表；§6.1 语料切片、§7 门禁↔测试 ID、§8 不变式）",
+    "plan": "docs/milestones/M8-plan.md（Task 1–66；进度台账 .superpowers/sdd/M8-plan/progress.md，不入库）",
+    "contracts": [
+      "契约 C11（并发）：docs/contracts/ 下的 C11 —— goroutine/channel/select 的语义与退出码分界",
+      "契约 C9（值与输出）：退出码 0/1/2 的三分沿用 C9 §6"
+    ]
+  },
+  "crates": [
+    "rgoc-hir（六个并发节点：Stmt::{Go,Send,Select} / ExprKind::{Recv,Make(chan)} / RangeKind::{Chan,Func}；RejectKind 五件套含 ALL）",
+    "rgoc-interp（Shared/G 拆分、M:1 调度、ChanObj 四操作、Task::{Recv,Send,Go,Select}、Halt::{Deadlock}）",
+    "rgoc-driver（--sched=seed:N / con_* 五个测试文件）",
+    "rgoc-check（recv 的 commaok 操作数模式；select 子句 env.push 时机）",
+    "rgoc-ssa（下线 SsaCode::RangeFunc —— HIR 不再产出对应节点）"
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/test/chan（只读；corpus-manifest.sha256 锁定）",
+    "input": {
+      "file": "tools/run-oracle/chan-input.txt",
+      "count": 19,
+      "note": "test/chan/*.go 全部 19 个（20 行含 1 行注释）"
+    },
+    "supported": {
+      "count": 7,
+      "frozen_by": "M8-plan Task 56（R-6-1 同源）",
+      "note": "7 = 19 − 12。**三栏如实记录：这 7 个的官方 .exp 全是 0 字节**（test/chan/*.go 是编译器测试用例，大多带 // errorcheck 指令、本身不打印）⇒ 只证明「没崩」，不构成「并发算对了」的证据"
+    },
+    "rejected": {
+      "file": "tools/run-oracle/chan-rejected.txt",
+      "count": 12,
+      "codes": {
+        "stdlib": 11,
+        "errorcheck": 1
+      },
+      "note": "11 个 import stdlib（TYP-UNSUPPORTED-IMPORT-FORM）；perm.go 是 errorcheck 用例（<-chan int 赋给 chan int ⇒ CHK-INVALID-ASSIGN，拒它是对的）"
+    },
+    "output_split": {
+      "with_output": 0,
+      "empty_output": 7,
+      "note": "与 supported 的 7 个对应：空跑 7/7、仅有输出 0/0。并发语义的证据在 con_chan/con_select/con_exit/con_rangefunc 的 50+ 条输出顺序断言，不在这三栏里"
+    }
+  },
+  "measurement_deviations": [
+    {
+      "item": "N'（可跑语料数）",
+      "planned": 8,
+      "actual": 7,
+      "trigger": "M8-tests §6.1 的 Q4 签字时按 19 − 11 = 8（只算 11 个 import stdlib 的）。实测还有第 12 个要拒：perm.go 是 // errorcheck 用例（`<-chan int` 赋给 `chan int` ⇒ CHK-INVALID-ASSIGN），拒它才对 ⇒ 19 − 12 = 7",
+      "resolution": "按实测冻结 7；chan-rejected.txt 12 行 = 11 stdlib + 1 errorcheck。另：zerosize.go 曾被误列进 M'（抄清单时看错），实测它是绿的（// run 测试、无输出、官方 .exp 也是 0 字节），已移出 M'"
+    }
+  ],
+  "gate": [
+    {
+      "id": "CON-1",
+      "name": "无缓冲 handoff + 值深拷贝",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-2",
+      "name": "缓冲 FIFO + 补位",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-3",
+      "name": "close 三态 + 三个 panic",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-4",
+      "name": "select 五形态 + 撤销",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-5",
+      "name": "死锁与四情形退出",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-6",
+      "name": "并发语料 7/7 + 三栏",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-7",
+      "name": "同 seed 可回放 + 多 seed + 缩减",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-8",
+      "name": "range-over-func 窄面",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    },
+    {
+      "id": "CON-9",
+      "name": "三块补齐 + 零回归",
+      "status": "pending",
+      "evidence": "",
+      "gap": ""
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U-M8-01",
+      "what": "抢占（goroutine 按步数/时间被切走）",
+      "code": null,
+      "exit": null,
+      "test_id": "T-CON-07",
+      "evidence": "con_chan::t_con_07_死循环的_goroutine_不会被切走 —— go func(){ for {} }() + main 阻塞 ⇒ 预算烧完退出 2（有一丁点抢占就会变 0）",
+      "map_note": "「不存在入口」是守卫测试：断言当前行为，行为一变就红"
+    },
+    {
+      "id": "U-M8-02",
+      "what": "select 多就绪时的均匀随机",
+      "code": null,
+      "exit": null,
+      "test_id": "T-CON-28",
+      "evidence": "con_select：seed=0 时多就绪总是第一个 case（跑 8 次同一结果）；seed≠0 才按 rng 打乱",
+      "map_note": "同上：守卫测试"
+    },
+    {
+      "id": "U-M8-03",
+      "what": "range over func 的 body 里 return / goto",
+      "code": "HIR-UNSUPPORTED-RANGEFUNC-RETURN",
+      "exit": 1,
+      "test_id": "T-CON-48",
+      "evidence": "con_rangefunc::t_con_48a/48b + run_semantics::t_ex_02（换面后）",
+      "map_note": "body 被下沉成合成函数，而 HIR 的 return/goto 是函数作用域的 ⇒ 显式拒绝。官方 go 接受这两种写法，所以这是**有记录的窄化**"
+    },
+    {
+      "id": "U-M8-04",
+      "what": "11 个 import stdlib 的并发语料",
+      "code": "TYP-UNSUPPORTED-IMPORT-FORM",
+      "exit": 1,
+      "test_id": "T-CON-54",
+      "evidence": "con_slice::t_con_54_清单就是目录_拒绝是它的子集 —— chan-rejected.txt 12 行逐条有类别与理由",
+      "map_note": "码来自检查面（C8），不是 HIR 拒绝面"
+    },
+    {
+      "id": "U-M8-05",
+      "what": "定时器 / time.Sleep / select 超时",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "无 stdlib ⇒ import 期就失败；沿用 U-M5-01，不新增判据",
+      "map_note": "「不存在面」：只需登记"
+    },
+    {
+      "id": "U-M8-06",
+      "what": "goroutine 栈按需增长",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "帧深 1000 超了退出 2（EX-7 形态）；协作式调度下深递归就是预算烧完",
+      "map_note": "「不存在面」：只需登记"
+    },
+    {
+      "id": "U-M8-07",
+      "what": "竞态检测（-race）",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "不适用：解释器单线程执行，不存在真实数据竞争",
+      "map_note": "「不存在面」：只需登记"
+    },
+    {
+      "id": "U-M8-08",
+      "what": "panic 穿过 go 边界的包装（不转成主 goroutine 的 panic）",
+      "code": null,
+      "exit": null,
+      "test_id": "T-CON-39",
+      "evidence": "con_exit：任何 G 的未捕获 panic ⇒ Halt::Panic ⇒ 退出 2、panic: <值> 不包装",
+      "map_note": "官方会打印 goroutine 栈；我们只有一行的 panic 文本"
+    }
+  ],
+  "coverage": {
+    "sched_invariants": 4,
+    "sched_invariants_note": "M8-design §4.3 四条（漏删 / 删了没唤醒 / 三态并存 / buf 越界）；RGOC_SCHED_DEBUG=1 时每步校验，本身也要做变异验证",
+    "con_test_files": [
+      "rgoc-driver/tests/con_cli.rs",
+      "rgoc-driver/tests/con_lower.rs",
+      "rgoc-driver/tests/con_single.rs",
+      "rgoc-driver/tests/con_chan.rs",
+      "rgoc-driver/tests/con_select.rs",
+      "rgoc-driver/tests/con_exit.rs",
+      "rgoc-driver/tests/con_misc.rs",
+      "rgoc-driver/tests/con_slice.rs",
+      "rgoc-driver/tests/con_rangefunc.rs"
+    ],
+    "reject_codes": 5,
+    "reject_codes_note": "RejectKind::ALL 现为 5 条（M8 下线了 RANGE-FUNC，新增 RANGEFUNC-RETURN）"
+  },
+  "budget": {
+    "steps": "1e8（默认）；debug 构建吞吐 ~9.5M 步/秒 ⇒ 默认预算要 10.4 s，任何「默认预算跑死循环」的判据都会踩 10 s 线，墙钟判据用显式 1e7",
+    "max_goroutines": 10000,
+    "max_eval": 10000,
+    "note": "M8 新增两项资源上限（goroutine 数 / 求值栈深），超了退出 2"
+  },
+  "open_gaps": [
+    {
+      "id": "G-M8-01",
+      "gate": "CON-9",
+      "what": "待收口时按实测填写",
+      "test_id": null
+    }
+  ],
+  "phase_summary": {
+    "tasks_done": "Task 1–56（Task 22 的 range over chan 已补齐；Task 45–48 range over func 已落地）",
+    "design_revisions": [],
+    "done": false
+  },
+  "measured": {}
+}
