@@ -9,8 +9,9 @@
 //! | 这个值在帧里占几个字节、按几字节对齐 | [`slot_of`] | `C5` §7.2（槽宽表） |
 //! | 传参时进 `x` 还是 `v`、占几个寄存器 | [`arg_kind`] / [`reg_count`] | `C5` §6.1（寄存器表） |
 //!
-//! 两者刻意分开：`complex64` 在帧里是 8 字节（一个槽），传参时是 **1 个 `v`**；
-//! `complex128` 在帧里是 16 字节（**一个**槽，但跨两个 8 字节字），传参时是 **2 个 `v`**。
+//! 两者刻意分开：`complex64` 在帧里是 8 字节（一个槽），传参时是 **2 个 `s`**
+//! （`R-13-2`：AAPCS64 对 HFA 按**元素个数**分寄存器）；`complex128` 在帧里是 16 字节
+//! （**一个**槽，但跨两个 8 字节字），传参时是 **2 个 `d`**。
 //! 把它们合成一张表就会写出「complex128 占两个槽」这种既不对齐也不好用的东西。
 //!
 //! # 槽宽一律 8 的倍数
@@ -183,4 +184,77 @@ pub fn reg_count(tt: &TypeTable, t: TypeId) -> Option<u32> {
 /// 向上取整到 8 的倍数。
 fn round_up_8(n: u32) -> Option<u32> {
     n.checked_add(7).map(|v| v & !7)
+}
+
+// ── 调用点的实参落位（`C5` §6.1；`G-M7-01`） ────────────────────────────
+
+/// 一个实参落在哪儿。
+///
+/// 三种去处，**互斥且有序**：前 8 个 `x`、前 8 个 `v`，其余的走栈。
+/// 「有序」很重要：`place_args` 按形参**声明序**分配，调用方与被调方用**同一个**
+/// 函数算出同一张表 —— 否则两边各算一遍，`string` 的两个字与 `complex64` 的两个
+/// `s` 会错位（`R-13-3` 就是这条的一个实例）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgLoc {
+    /// `x{reg}` 起，占 `n` 个（`string` 是 2，聚合按指针是 1）。
+    X {
+        /// 起始寄存器号（0..8）。
+        reg: u32,
+        /// 占几个。
+        n: u32,
+    },
+    /// `v{reg}` 起，占 `n` 个（`complex128` 是 2）。
+    V {
+        /// 起始寄存器号（0..8）。
+        reg: u32,
+        /// 占几个。
+        n: u32,
+    },
+    /// 栈上：相对 `sp` 的字节偏移（调用方写、被调方从 `fp+16` 读）。
+    Stack {
+        /// 字节偏移。
+        off: u32,
+    },
+}
+
+/// 给一串形参分配位置，返回（每个形参的位置，**栈区总字节数**）。
+///
+/// # 规则（AAPCS64 C.14，逐条照抄）
+///
+/// 1. `x0..x7` 与 `v0..v7` **两套独立计数**；
+/// 2. 一个实参要 `n` 个同类寄存器：`已用 + n <= 8` 就进寄存器，否则**整个**走栈；
+/// 3. 走栈时 `NSAA`（栈区游标）按 8 字节对齐向上长；
+/// 4. 走栈**不清空**寄存器计数 —— 后面更小的实参仍然可以进剩余寄存器。
+///    （这条最容易被写成「一旦溢出就全走栈」，那样与 AAPCS64 不一致，
+///    调外部 C 函数时会读错参数。）
+#[must_use]
+pub fn place_args(tt: &TypeTable, want: &[TypeId]) -> (Vec<ArgLoc>, u32) {
+    let mut out = Vec::with_capacity(want.len());
+    let (mut xi, mut vi, mut sp) = (0u32, 0u32, 0u32);
+    for t in want {
+        let class = slot_of(tt, *t).map_or(SlotClass::Int, |s| s.class);
+        let n = reg_count(tt, *t).unwrap_or(1).max(1);
+        // 聚合按指针传（`C5` §6.1）⇒ 无论多大都只占一个 `x`。
+        let (is_v, need) = match class {
+            SlotClass::Float | SlotClass::Complex64 | SlotClass::Complex128 => (true, n),
+            SlotClass::Agg => (false, 1),
+            SlotClass::Int => (false, n),
+        };
+        if is_v {
+            if vi + need <= 8 {
+                out.push(ArgLoc::V { reg: vi, n: need });
+                vi += need;
+            } else {
+                out.push(ArgLoc::Stack { off: sp });
+                sp += need * 8;
+            }
+        } else if xi + need <= 8 {
+            out.push(ArgLoc::X { reg: xi, n: need });
+            xi += need;
+        } else {
+            out.push(ArgLoc::Stack { off: sp });
+            sp += need * 8;
+        }
+    }
+    (out, sp)
 }

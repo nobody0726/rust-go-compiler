@@ -75,7 +75,7 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
     for f in &m.funcs {
-        let fr = frame::layout(f, tt).map_err(CompileError::Frame)?;
+        let fr = frame::layout_with(f, tt, &siblings).map_err(CompileError::Frame)?;
         isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
     }
 

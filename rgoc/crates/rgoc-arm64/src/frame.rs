@@ -73,6 +73,11 @@ pub struct Frame {
     pub heap: BTreeMap<SlotId, HeapSlot>,
     /// 并行拷贝临时区的起点（相对 `fp`，负数）；`None` ⇒ 该函数没有边实参。
     pub tmp_base: Option<i32>,
+    /// **调用方 outgoing 区**的字节数（在帧的最底部，`[sp, sp+n)`）。
+    ///
+    /// `G-M7-01`：AAPCS64 规定「寄存器装不下的实参由**调用方**在 `sp` 处预留」。
+    /// 这块必须算进帧大小 —— 不算就等于往自己的槽上写。
+    pub outgoing: u32,
     /// 临时区有几个 8 字节格。
     pub tmp_slots: u32,
     /// `sub sp, sp, #(frame_size - 16)` 里的那个数（**16 的倍数**）。
@@ -173,6 +178,24 @@ const SAVED: u32 = 16;
 ///
 /// 任一值或取址槽的类型没有运行期布局（泛型 / `Invalid` / 元组）。
 pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
+    layout_with(f, tt, &BTreeMap::new())
+}
+
+/// 同 [`layout`]，但能按 `FuncId` 查到被调方的形参类型。
+///
+/// 为什么要它：outgoing 区的大小由**被调方的形参表**决定（`R-13-3`），
+/// 只拿到实参类型算不准 —— `untyped` 常量与形参的默认类型可能不同（`complex128`
+/// vs `complex64` 会差一个寄存器，进而改变「第几个实参开始走栈」）。
+///
+/// # Errors
+///
+/// 同 [`layout`]。
+pub fn layout_with(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> Result<Frame, FrameError> {
+    let outgoing = max_outgoing(f, tt, siblings);
     // `cur` 是**槽区**的游标（从 0 起，不含保存区）。
     // 槽的偏移一律是 `-(SAVED + cur)`：保存区占 `[fp-16, fp)`，槽区在它下面。
     //
@@ -244,6 +267,11 @@ pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
         Some(neg(SAVED + cur))
     };
 
+    // ③.5 调用方 outgoing 区：放帧的**最底部** `[sp, sp+outgoing)`。
+    // 只在最底部才成立 —— `pass_args` 写的是 `[sp, #k]`，而 `sp = fp - sub`，
+    // 所以「帧底」必须是 outgoing 区，不能是值槽。
+    cur = cur.checked_add(outgoing).expect("帧大小溢出 u32");
+
     // ④ 帧大小向上取 16（`sp` 恒 16 对齐）。
     //
     // ⚠️ `sub sp` 的量必须**覆盖到最低的槽**，不是「总大小减去 saved」。
@@ -272,6 +300,7 @@ pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
         values,
         addr_slots,
         heap,
+        outgoing,
         tmp_base,
         tmp_slots,
         frame_size,
@@ -456,4 +485,63 @@ fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
         }
     }
     out
+}
+
+/// 调用点的**形参类型表**：有被调方就用它的声明类型，查不到才退回实参类型。
+///
+/// 调用方（`isel::pass_args`）与被调方（`isel::bind_params`）必须得到**同一张表**，
+/// 否则寄存器/栈的分配会错位。所以两边都走这个函数，不许各写一遍。
+#[must_use]
+pub fn callee_param_tys(
+    arg_tys: &[TypeId],
+    callee: Option<rgoc_hir::FuncId>,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> Vec<TypeId> {
+    let Some(c) = callee.and_then(|id| siblings.get(&id)) else {
+        return arg_tys.to_vec();
+    };
+    (0..arg_tys.len())
+        .map(|i| {
+            c.params
+                .get(i)
+                .and_then(|p| c.value_types.get(p.index()).copied())
+                .unwrap_or(arg_tys[i])
+        })
+        .collect()
+}
+
+/// 全函数所有调用点里，**最大的 outgoing 区字节数**。
+fn max_outgoing(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> u32 {
+    let mut max = 0u32;
+    for b in &f.blocks {
+        for i in &b.instrs {
+            let (callee, args) = match i {
+                Instr::Call { callee, args, .. } => (callee, args),
+                _ => continue,
+            };
+            let arg_tys: Vec<TypeId> = args
+                .iter()
+                .map(|a| {
+                    f.value_types
+                        .get(a.index())
+                        .copied()
+                        .unwrap_or_else(|| TypeId::from_index(0))
+                })
+                .collect();
+            let fid = match callee {
+                CalleeRef::Func(id) => Some(*id),
+                CalleeRef::Method { func, .. } => Some(*func),
+                // 内建走 runtime 的固定签名，没有栈实参。
+                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) => None,
+            };
+            let want = callee_param_tys(&arg_tys, fid, siblings);
+            let (_, sp) = crate::abi::place_args(tt, &want);
+            max = max.max(sp);
+        }
+    }
+    max
 }

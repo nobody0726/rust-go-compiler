@@ -27,10 +27,10 @@ use rgoc_hir::{BinOp, BuiltinKind, UnOp};
 use rgoc_ssa::ir::{Block, CalleeRef, Instr, SsaFunc, Term, ValueId};
 use rgoc_types::{BasicId, TypeId, TypeTable};
 
-use crate::abi::{SlotClass, slot_of};
+use crate::abi::{ArgLoc, SlotClass, place_args, slot_of};
 use crate::diag::CgCode;
 use crate::emit::Asm;
-use crate::frame::{Frame, Slot};
+use crate::frame::{Frame, Slot, callee_param_tys};
 use crate::parallel_copy;
 
 /// 地址临时寄存器。
@@ -301,49 +301,83 @@ fn block_label(sym: &str, bi: usize) -> String {
     format!("{sym}.b{bi}")
 }
 
-/// 形参落槽：整数走 `x`、浮点走 `v`（两个序列**独立计数**，`C5` §6.1）。
+/// 形参落槽（`C5` §6.1；分配表由 `abi::place_args` 给，与调用方**同一张**）。
+///
+/// # 栈上的形参从哪读
+///
+/// 入口处 `stp x29, x30, [sp, #-16]!` + `mov x29, sp` ⇒ `[fp]` 是调用方的 `fp`、
+/// `[fp+8]` 是返回地址、`[fp+16]` 起是**调用方写的栈实参**。所以第 `off` 字节在
+/// `[x29, #(16 + off)]`。
+///
+/// # 聚合形参要**拷贝**
+///
+/// 我们的 ABI 把聚合按指针传（`C5` §6.1），但 Go 的语义是**按值**：
+/// 被调方改了形参不能影响调用方。所以入口要把指针指向的内容拷进自己的槽 ——
+/// 直接把指针存进槽是错的（后续的 `field`/`load` 会把指针字节当字段值）。
 fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
-    let mut xi = 0usize;
-    let mut vi = 0usize;
-    for p in &cx.f.params {
-        let class = cx.class(*p);
+    let want: Vec<TypeId> = cx.f.params.iter().map(|p| cx.ty(*p)).collect();
+    let (locs, _) = place_args(cx.tt, &want);
+    for (i, p) in cx.f.params.iter().enumerate() {
         let s = cx.slot(*p);
-        match class {
-            // `complex64` 是**两个 `f32` 的 HFA** ⇒ 占两个 `s` 寄存器（`R-13-2`）。
-            SlotClass::Complex64 => {
-                st_s(asm, &format!("s{vi}"), s.off);
-                st_s(asm, &format!("s{}", vi + 1), s.off + 4);
-                vi += 2;
-            }
-            SlotClass::Float => {
-                if cx.is_f32(cx.ty(*p)) {
-                    st_s(asm, &format!("s{vi}"), s.off);
-                } else {
-                    st_d(asm, &format!("d{vi}"), s.off);
+        let class = cx.class(*p);
+        let loc = locs.get(i).copied().unwrap_or(ArgLoc::X { reg: 0, n: 1 });
+        match loc {
+            ArgLoc::X { reg, n } => match class {
+                // 聚合：从寄存器里拿到**指针**，把内容拷进本帧的槽（值语义）。
+                SlotClass::Agg => {
+                    addr(asm, s.off);
+                    asm.ins("mov x0, x9");
+                    asm.ins(&format!("mov x1, x{reg}"));
+                    load_imm(asm, "x2", i64::from(s.size));
+                    asm.ins("bl rt_memcpy");
                 }
-                vi += 1;
-            }
-            SlotClass::Complex128 => {
-                st_d(asm, &format!("d{vi}"), s.off);
-                st_d(asm, &format!("d{}", vi + 1), s.off + 8);
-                vi += 2;
-            }
-            // 聚合按指针传（`C5` §6.1），所以这里落到槽里的是**地址**。
-            SlotClass::Agg => {
-                st_x(asm, &format!("x{xi}"), s.off);
-                xi += 1;
-            }
-            // ⚠️ `Int` 类里 `string` 是 **16 字节**（`(ptr,len)` 两个字）。
-            // 只存 `x{xi}` 会丢掉长度 —— 于是 `mk("ab")` 返回的 len 是**上一个
-            // 调用留下的寄存器值**，表现为「内容对但比较/拼接全错」。
-            // 实测 `probe2.go`：`mk("ab")==mk("ab")` 给 0、`+"b"` 触发
-            // `panic: out of arena`（拿一个巨大的 len 去分配）。
-            SlotClass::Int => {
-                st_x(asm, &format!("x{xi}"), s.off);
-                xi += 1;
-                if s.size > 8 {
-                    st_x(asm, &format!("x{xi}"), s.off + 8);
-                    xi += 1;
+                _ => {
+                    st_x(asm, &format!("x{reg}"), s.off);
+                    if n > 1 {
+                        st_x(asm, &format!("x{}", reg + 1), s.off + 8);
+                    }
+                }
+            },
+            ArgLoc::V { reg, n: _ } => match class {
+                // `complex64` 是**两个 `f32` 的 HFA** ⇒ 两个 `s`（`R-13-2`）。
+                SlotClass::Complex64 => {
+                    st_s(asm, &format!("s{reg}"), s.off);
+                    st_s(asm, &format!("s{}", reg + 1), s.off + 4);
+                }
+                SlotClass::Float => {
+                    if cx.is_f32(cx.ty(*p)) {
+                        st_s(asm, &format!("s{reg}"), s.off);
+                    } else {
+                        st_d(asm, &format!("d{reg}"), s.off);
+                    }
+                }
+                SlotClass::Complex128 => {
+                    st_d(asm, &format!("d{reg}"), s.off);
+                    st_d(asm, &format!("d{}", reg + 1), s.off + 8);
+                }
+                // `place_args` 只会给浮点/复数分 `v`。
+                SlotClass::Int | SlotClass::Agg => {}
+            },
+            ArgLoc::Stack { off } => {
+                let base = 16 + off;
+                match class {
+                    SlotClass::Agg => {
+                        // 栈上那一格是指针；拷内容进槽。
+                        asm.ins(&format!("ldr x1, [x29, #{base}]"));
+                        addr(asm, s.off);
+                        asm.ins("mov x0, x9");
+                        load_imm(asm, "x2", i64::from(s.size));
+                        asm.ins("bl rt_memcpy");
+                    }
+                    _ => {
+                        // 按「字」搬：`string` 两个、`complex128` 两个、其余一个。
+                        let words = if s.size > 8 { 2 } else { 1 };
+                        for k in 0..words {
+                            let at = base + k * 8;
+                            asm.ins(&format!("ldr x10, [x29, #{at}]"));
+                            st_x(asm, "x10", s.off + (k as i32) * 8);
+                        }
+                    }
                 }
             }
         }
@@ -1397,90 +1431,96 @@ impl Ctx<'_> {
     }
 }
 
-/// 装实参（`C5` §6.1：`x`/`v` 两个序列独立计数）。
+/// 装实参（`C5` §6.1：`x`/`v` 两个序列独立计数，装不下的走 `sp`）。
 ///
 /// # 类别必须来自**被调方**的形参，不是实参
 ///
 /// `R-13-3`：同一个值在不同上下文里可以有不同的表示，而寄存器分配只由
 /// **形参类型**决定。实测 `cplx1.go`：`booltest(5+6i, true)` 的实参是
 /// **无类型复数**（默认类型 `complex128` ⇒ 走 `d0`），形参却是 `complex64`
-/// （⇒ 期望 `s0/s1`）。按实参走，被调方读到 `d0` 的低 32 位 —— 也就是 `0`，
-/// 于是整个 `(0+0i)`。`float32` 形参配无类型浮点常量同理。
+/// （⇒ 期望 `s0/s1`）。按实参走，被调方读到 `d0` 的低 32 位 —— 也就是 `0`。
+///
+/// # 落位表由 `abi::place_args` 给
+///
+/// 调用方与被调方（`bind_params`）必须用**同一个函数**算同一张表。各写一遍就是
+/// `string` 的两个字与 `complex64` 的两个 `s` 会错位 —— 而错位的表现是
+/// 「参数值看起来对、比较全错」，最难查。
 fn pass_args(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], asm: &mut Asm) {
-    let mut xi = 0usize;
-    let mut vi = 0usize;
-    let mut stack = 0u32;
+    let arg_tys: Vec<TypeId> = args.iter().map(|a| cx.ty(*a)).collect();
+    let want = callee_param_tys(&arg_tys, callee, cx.siblings);
+    let (locs, _) = place_args(cx.tt, &want);
     for (i, a) in args.iter().enumerate() {
         let s = cx.slot(*a);
-        // 有被调方就用它的形参类型；查不到（内建/外部）退回实参类型。
-        let want = callee
-            .and_then(|c| cx.param_ty(c, i))
-            .unwrap_or_else(|| cx.ty(*a));
-        let wcls = slot_of(cx.tt, want).map_or(SlotClass::Int, |s| s.class);
-        let wsize = slot_of(cx.tt, want).map_or(s.size, |s| s.size);
         let acls = cx.class(*a);
-        match wcls {
-            // 形参是 `complex64`，实参可能是 `complex128`（无类型复数的默认类型）——
-            // 必须**在这里降精度**，否则被调方读到的是 f64 的低 32 位。
-            SlotClass::Complex64 => {
-                if acls == SlotClass::Complex128 {
-                    ld_d(asm, "d10", s.off);
-                    ld_d(asm, "d11", s.off + 8);
-                    asm.ins(&format!("fcvt s{vi}, d10"));
-                    asm.ins(&format!("fcvt s{}, d11", vi + 1));
-                } else {
-                    ld_s(asm, &format!("s{vi}"), s.off);
-                    ld_s(asm, &format!("s{}", vi + 1), s.off + 4);
+        let wty = want.get(i).copied().unwrap_or_else(|| cx.ty(*a));
+        let wcls = slot_of(cx.tt, wty).map_or(SlotClass::Int, |x| x.class);
+        let wsize = slot_of(cx.tt, wty).map_or(s.size, |x| x.size);
+        let loc = locs.get(i).copied().unwrap_or(ArgLoc::X { reg: 0, n: 1 });
+        match loc {
+            ArgLoc::X { reg, n } => match wcls {
+                // 聚合按指针传：把**本帧槽的地址**交出去（被调方入口会拷贝）。
+                SlotClass::Agg => {
+                    addr(asm, s.off);
+                    asm.ins(&format!("mov x{reg}, x9"));
                 }
-                vi += 2;
-            }
-            SlotClass::Float => {
-                match (cx.is_f32(cx.ty(*a)), cx.is_f32(want)) {
-                    (true, true) => ld_s(asm, &format!("s{vi}"), s.off),
-                    (false, false) => ld_d(asm, &format!("d{vi}"), s.off),
+                _ => {
+                    ld_x(asm, &format!("x{reg}"), s.off);
+                    if n > 1 {
+                        ld_x(asm, &format!("x{}", reg + 1), s.off + 8);
+                    }
+                }
+            },
+            ArgLoc::V { reg, .. } => match wcls {
+                SlotClass::Complex64 => {
+                    if acls == SlotClass::Complex128 {
+                        // 实参可能是 `complex128`（无类型复数的默认类型）—— 必须**降精度**。
+                        ld_d(asm, "d10", s.off);
+                        ld_d(asm, "d11", s.off + 8);
+                        asm.ins(&format!("fcvt s{reg}, d10"));
+                        asm.ins(&format!("fcvt s{}, d11", reg + 1));
+                    } else {
+                        ld_s(asm, &format!("s{reg}"), s.off);
+                        ld_s(asm, &format!("s{}", reg + 1), s.off + 4);
+                    }
+                }
+                SlotClass::Complex128 => {
+                    if acls == SlotClass::Complex64 {
+                        ld_s(asm, "s10", s.off);
+                        ld_s(asm, "s11", s.off + 4);
+                        asm.ins(&format!("fcvt d{reg}, s10"));
+                        asm.ins(&format!("fcvt d{}, s11", reg + 1));
+                    } else {
+                        ld_d(asm, &format!("d{reg}"), s.off);
+                        ld_d(asm, &format!("d{}", reg + 1), s.off + 8);
+                    }
+                }
+                _ => match (cx.is_f32(cx.ty(*a)), cx.is_f32(wty)) {
+                    (true, true) => ld_s(asm, &format!("s{reg}"), s.off),
+                    (false, false) => ld_d(asm, &format!("d{reg}"), s.off),
                     (true, false) => {
                         ld_s(asm, "s10", s.off);
-                        asm.ins(&format!("fcvt d{vi}, s10"));
+                        asm.ins(&format!("fcvt d{reg}, s10"));
                     }
                     (false, true) => {
                         ld_d(asm, "d10", s.off);
-                        asm.ins(&format!("fcvt s{vi}, d10"));
+                        asm.ins(&format!("fcvt s{reg}, d10"));
                     }
-                }
-                vi += 1;
-            }
-            SlotClass::Complex128 => {
-                if acls == SlotClass::Complex64 {
-                    ld_s(asm, "s10", s.off);
-                    ld_s(asm, "s11", s.off + 4);
-                    asm.ins(&format!("fcvt d{vi}, s10"));
-                    asm.ins(&format!("fcvt d{}, s11", vi + 1));
-                } else {
-                    ld_d(asm, &format!("d{vi}"), s.off);
-                    ld_d(asm, &format!("d{}", vi + 1), s.off + 8);
-                }
-                vi += 2;
-            }
-            SlotClass::Agg => {
-                // 聚合按指针传：地址进 `x`。
-                addr(asm, s.off);
-                asm.ins(&format!("mov x{xi}, x9"));
-                xi += 1;
-            }
-            SlotClass::Int => {
-                if wsize > 8 {
-                    // `string`：两个字分别进 `x{xi}` 与 `x{xi+1}`。
-                    ld_x(asm, &format!("x{xi}"), s.off);
-                    ld_x(asm, &format!("x{}", xi + 1), s.off + 8);
-                    xi += 2;
-                } else if xi < 8 {
-                    ld_x(asm, &format!("x{xi}"), s.off);
-                    xi += 1;
-                } else {
-                    // 超出 8 个：走调用方 outgoing 区。
-                    ld_x(asm, "x10", s.off);
-                    asm.ins(&format!("str x10, [sp, #{stack}]"));
-                    stack += 8;
+                },
+            },
+            ArgLoc::Stack { off } => {
+                // 写到帧**最底部**的 outgoing 区（`Frame::outgoing` 已经算进帧大小）。
+                match wcls {
+                    SlotClass::Agg => {
+                        addr(asm, s.off);
+                        asm.ins(&format!("str x9, [sp, #{off}]"));
+                    }
+                    _ => {
+                        let words = if wsize > 8 { 2 } else { 1 };
+                        for k in 0..words {
+                            ld_x(asm, "x10", s.off + (k as i32) * 8);
+                            asm.ins(&format!("str x10, [sp, #{}]", off + k * 8));
+                        }
+                    }
                 }
             }
         }
