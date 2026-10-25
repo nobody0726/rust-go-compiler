@@ -435,6 +435,10 @@ pub struct Shared<'a> {
     methods: std::collections::BTreeMap<(String, String), FuncId>,
     /// 全部 goroutine。`None` = 已退出（槽位保留，编号不回收）。
     gs: Vec<Option<G<'a>>>,
+    /// 就绪队列（FIFO，`D-M8-2`）。存的是 `gs` 的下标。
+    runq: std::collections::VecDeque<usize>,
+    /// 下一个 goroutine 编号（只增不减，便于日志与断言）。
+    next_g: u64,
 }
 
 /// **一个 goroutine 的执行状态**（`D-M8-1`）。
@@ -455,6 +459,11 @@ struct G<'a> {
     targets: Vec<Target>,
     pending: Option<Pending<'a>>,
     phase: TopPhase,
+    /// 是否阻塞在某个等待上（Task 20 会换成 `Option<Block>` 带等待集合）。
+    ///
+    /// Task 4 里恒为 `false`：还没有任何操作会阻塞。留着它是为了
+    /// `all_blocked()` 有一个**真实**的判据而不是 `false` 常量。
+    blocked: bool,
 }
 
 /// 手写 `Debug`：机器状态是四万个值，逐字段展开只会把日志淹掉。
@@ -496,6 +505,8 @@ pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
         halted: None,
         methods: std::collections::BTreeMap::new(),
         gs: Vec::new(),
+        runq: std::collections::VecDeque::new(),
+        next_g: 0,
     };
     sh.setup();
     // main goroutine：`TopPhase::Globals(0)` 起 —— 全局初始化是**它的**第一阶段。
@@ -507,7 +518,11 @@ pub fn run(prog: &Program, tt: &TypeTable, opts: Options) -> Outcome {
         targets: Vec::new(),
         pending: None,
         phase: TopPhase::Globals(0),
+        blocked: false,
     }));
+    // main 是第 0 个 goroutine，也是 runq 的第一个元素。
+    sh.runq.push_back(0);
+    sh.next_g = 1;
     sh.drive();
     sh.finish()
 }
@@ -533,10 +548,67 @@ impl<'a> Shared<'a> {
     ///
     /// Task 3 时 `gs` 里只有 main 一个 —— 循环体就是 [`G::one_step`]，
     /// 语义与 M5 的单循环**逐条对应**（判据：全量测试零改动全绿）。
+    /// 推进整个程序直到结束（`D-M8-2`：当前 goroutine 一直跑，阻塞/退出才换人）。
+    ///
+    /// # 与 M5 单循环的关系
+    ///
+    /// M5 的循环体原样搬进了 [`G::one_step`]（每个 `continue` → `return true`、
+    /// 每个 `return` → `return false`）。这里只是多了一层「谁在跑」：
+    /// 从 `runq` 取一个、把它**跑到底**（直到 `one_step` 返回 `false`）、再取下一个。
+    ///
+    /// 「跑到底」在 Task 4 是对的：还没有任何操作会阻塞（`go` 也还没实现），
+    /// 所以一个 goroutine 就是「一直跑到退出」—— 这正是 `D-M8-2` 的「不抢占」。
     fn drive(&mut self) {
-        let mut g = self.gs[0].take().expect("main goroutine 必须存在");
-        while g.one_step(self) {}
-        self.gs[0] = Some(g);
+        while let Some(id) = self.pick() {
+            let mut g = self.gs[id].take().expect("runq 里的 goroutine 必须活着");
+            while g.one_step(self) {}
+            if self.halted.is_some() {
+                // 预算超限 / panic：整个程序停，剩下的 goroutine 直接丢弃（`D-M8-8`）。
+                return;
+            }
+            if g.frames.is_empty() && matches!(g.phase, TopPhase::Done) {
+                self.reap(id);
+            } else {
+                self.gs[id] = Some(g);
+            }
+        }
+
+        // 队列空了。两种可能：
+        //   ① `main` 已返回 ⇒ 程序正常结束（`D-M8-8`：不等其它 goroutine）；
+        //   ② 还有人活着但没人可跑 ⇒ 死锁（Task 39 接上 `Halt::Deadlock`）。
+        //
+        // Task 4 还造不出 ②（没有任何操作会阻塞），所以这里只判 ①；
+        // ② 用 `debug_assert` 钉住「到了那一步该做什么」，别让它悄悄变成空转。
+        debug_assert!(
+            !self.all_blocked() || self.main_done(),
+            "全员阻塞且 main 未结束 ⇒ 死锁；Task 39 在这里接 Halt::Deadlock"
+        );
+        let _ = self.main_done();
+    }
+
+    // ───────────── 调度（`C11` §2） ─────────────
+
+    /// 从就绪队列取一个 goroutine（FIFO，`C11` §2.1 规则 3）。
+    fn pick(&mut self) -> Option<usize> {
+        self.runq.pop_front()
+    }
+
+    /// 回收一个已退出的 goroutine（槽位保留，编号不回收）。
+    fn reap(&mut self, id: usize) {
+        self.gs[id] = None;
+    }
+
+    /// `main` 是否已经结束（槽位空 ⇒ 结束）。
+    fn main_done(&self) -> bool {
+        match self.gs.first() {
+            None | Some(None) => true,
+            Some(Some(g)) => g.frames.is_empty() && matches!(g.phase, TopPhase::Done),
+        }
+    }
+
+    /// 是否**全员**阻塞（`C11` §5.2 死锁判定的第二条）。
+    fn all_blocked(&self) -> bool {
+        self.gs.iter().flatten().all(|g| g.blocked)
     }
 
     fn finish(self) -> Outcome {
@@ -3686,5 +3758,113 @@ fn type_name(tt: &TypeTable, t: TypeId) -> String {
         }
         Type::Struct(_) => "struct {...}".to_string(),
         _ => "invalid type".to_string(),
+    }
+}
+
+// ───────────────────────── 调度器（Task 4） ─────────────────────────
+//
+// 为什么是 **unit test** 而不是 `tests/sched_loop.rs`：`G` 是私有类型，
+// 集成测试构造不出来；而 `go` 语句要到 Task 24 才能从源码触发，
+// 所以「队列怎么走」这一层现在只能在这里判。等 Task 24 有了 `go`，
+// 端到端的判据由 `con_chan.rs` 承担，这里留着当**单元级**的守门员。
+
+#[cfg(test)]
+mod sched_tests {
+    use super::*;
+
+    fn empty_prog() -> (Program, TypeTable) {
+        (
+            Program {
+                funcs: Vec::new(),
+                globals: Vec::new(),
+                init_order: Vec::new(),
+                inits: Vec::new(),
+                main: None,
+            },
+            TypeTable::new(),
+        )
+    }
+
+    fn shared<'a>(prog: &'a Program, tt: &'a TypeTable) -> Shared<'a> {
+        Shared {
+            prog,
+            tt,
+            globals: Vec::new(),
+            out: String::new(),
+            steps: 0,
+            opts: Options::default(),
+            halted: None,
+            methods: std::collections::BTreeMap::new(),
+            gs: Vec::new(),
+            runq: std::collections::VecDeque::new(),
+            next_g: 0,
+        }
+    }
+
+    /// 一个「跑一步就结束」的假 goroutine（帧空 + `Done`）。
+    fn idle(phase: TopPhase) -> G<'static> {
+        G {
+            frames: Vec::new(),
+            eval: Vec::new(),
+            values: Vec::new(),
+            targets: Vec::new(),
+            pending: None,
+            phase,
+            blocked: false,
+            panic_val: None,
+        }
+    }
+
+    #[test]
+    fn pick_是_fifo() {
+        let (prog, tt) = empty_prog();
+        let mut sh = shared(&prog, &tt);
+        for id in [2usize, 0, 1] {
+            sh.gs.push(Some(idle(TopPhase::Done)));
+            sh.runq.push_back(id);
+        }
+        // 入队顺序 2,0,1 ⇒ 出队顺序也必须是 2,0,1（`C11` §2.1 规则 3）。
+        assert_eq!(sh.pick(), Some(2));
+        assert_eq!(sh.pick(), Some(0));
+        assert_eq!(sh.pick(), Some(1));
+        assert_eq!(sh.pick(), None);
+    }
+
+    #[test]
+    fn drive_把队列里每个_goroutine_都跑到退出并回收() {
+        let (prog, tt) = empty_prog();
+        let mut sh = shared(&prog, &tt);
+        for id in 0..3usize {
+            sh.gs.push(Some(idle(TopPhase::Done)));
+            sh.runq.push_back(id);
+        }
+        sh.drive();
+
+        assert!(sh.runq.is_empty(), "队列必须被抽干");
+        assert!(
+            sh.gs.iter().all(Option::is_none),
+            "三个都跑完了，槽位必须全部回收"
+        );
+        assert_eq!(
+            sh.steps, 3,
+            "每个假 goroutine 恰好推进一次（`one_step` 的第一件事就是 +1）"
+        );
+        assert!(sh.halted.is_none(), "没有预算超限也没有 panic");
+    }
+
+    #[test]
+    fn main_done_的四种形态() {
+        let (prog, tt) = empty_prog();
+        let mut sh = shared(&prog, &tt);
+        assert!(sh.main_done(), "还没有 goroutine ⇒ 视为结束");
+
+        sh.gs.push(None);
+        assert!(sh.main_done(), "main 的槽位是 None ⇒ 已结束");
+
+        sh.gs[0] = Some(idle(TopPhase::Done));
+        assert!(sh.main_done(), "帧空 + phase=Done ⇒ 已结束");
+
+        sh.gs[0] = Some(idle(TopPhase::Globals(0)));
+        assert!(!sh.main_done(), "还在跑全局初始化 ⇒ 没结束");
     }
 }
