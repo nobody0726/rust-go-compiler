@@ -132,6 +132,10 @@ mod tests {
                 .all(|t| t.starts_with("HIR-UNSUPPORTED-") || t.starts_with("HIR-")),
             "全部进 HIR- 命名空间：{texts:?}"
         );
-        assert_eq!(RejectKind::ALL.len(), 5, "改数量要同步 M8-tests §5 的白名单");
+        assert_eq!(
+            RejectKind::ALL.len(),
+            5,
+            "改数量要同步 M8-tests §5 的白名单"
+        );
     }
 }

@@ -64,63 +64,63 @@
       "name": "无缓冲 handoff + 值深拷贝",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待 Task 61–66 收口时填（判据 T-CON-11/12/13/24，con_chan/con_single）"
     },
     {
       "id": "CON-2",
       "name": "缓冲 FIFO + 补位",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-14/15/16/23，con_chan::t_con_14 缓冲补位）"
     },
     {
       "id": "CON-3",
       "name": "close 三态 + 三个 panic",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-17..22，con_chan/con_single 的 close 三态与三个 panic）"
     },
     {
       "id": "CON-4",
       "name": "select 五形态 + 撤销",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-25..34，con_select 11 条含 seed 选择）"
     },
     {
       "id": "CON-5",
       "name": "死锁与四情形退出",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-35..41，con_exit 9 条；死锁文本逐字节走 stderr）"
     },
     {
       "id": "CON-6",
       "name": "并发语料 7/7 + 三栏",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-52/53/54；run-chan.sh 实测 ok=7 skip=12 bad=0，但 7 个官方 .exp 全 0 字节 ⇒ 只证明没崩）"
     },
     {
       "id": "CON-7",
       "name": "同 seed 可回放 + 多 seed + 缩减",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-42/55/56/61；--sched=seed:N 可回放 + 缩减脚本 Task 60）"
     },
     {
       "id": "CON-8",
       "name": "range-over-func 窄面",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-43..48，con_rangefunc 15 条；窄面 U-M8-03）"
     },
     {
       "id": "CON-9",
       "name": "三块补齐 + 零回归",
       "status": "pending",
       "evidence": "",
-      "gap": ""
+      "gap": "骨架期：证据待填（判据 T-CON-49/50/51/58/59；map 快照 + defer/comma-ok + 三个里程碑零回归）"
     }
   ],
   "unsupported": [
@@ -220,18 +220,15 @@
     "max_eval": 10000,
     "note": "M8 新增两项资源上限（goroutine 数 / 求值栈深），超了退出 2"
   },
-  "open_gaps": [
-    {
-      "id": "G-M8-01",
-      "gate": "CON-9",
-      "what": "待收口时按实测填写",
-      "test_id": null
-    }
-  ],
+  "open_gaps": [],
   "phase_summary": {
     "tasks_done": "Task 1–56（Task 22 的 range over chan 已补齐；Task 45–48 range over func 已落地）",
     "design_revisions": [],
     "done": false
   },
-  "measured": {}
+  "measured": {
+    "chan_input": 19,
+    "chan_rejected": 12,
+    "chan_supported": 7
+  }
 }
