@@ -262,6 +262,8 @@ impl FnBuilder {
 #[must_use]
 pub fn module_of(funcs: Vec<SsaFunc>) -> Module {
     Module {
+        methods: Vec::new(),
+        itabs: Vec::new(),
         funcs,
         globals: Vec::new(),
         global_types: Vec::new(),

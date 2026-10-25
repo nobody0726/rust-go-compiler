@@ -362,6 +362,104 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
     return p;
 }
 
+/* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
+
+/* `MethodTable` / `MethodEntry` 的内存布局（`C5` §10 冻结）。
+ * 与 `rgoc_meta::desc` 的 `#[repr(C)]` 逐字段对应 —— 两边各有 `offset_of`
+ * 判据（Rust 侧 `方法表的字节形状`，C 侧下面两条 `_Static_assert`）。 */
+typedef struct {
+    u32 name_hash;
+    u32 sig_hash;
+    const void *fn;
+} MethodEntry;
+
+typedef struct {
+    u32 count;
+    u32 pad;
+} MethodTable;
+
+_Static_assert(sizeof(MethodEntry) == 16, "MethodEntry 必须是 16 字节（C5 §10）");
+_Static_assert(sizeof(MethodTable) == 8, "MethodTable 表头必须是 8 字节");
+
+/* 静态 ITab：`{ iface, concrete, fn[] }`，`fn` 从 **+16** 起。
+ * `isel` 的 `tab.fn[slot]` 就是 `[tab + 16 + 8*slot]`。 */
+typedef struct {
+    const TypeDesc *iface;
+    const TypeDesc *concrete;
+} ITab;
+
+/* 装箱：分配一个 `T` 并把值搬进去。
+ *
+ * 零大小类型不分配（所有实例共享 `rt_zerobase`）—— `rt_alloc` 已经这么做了，
+ * 这里只是别去 memcpy 0 字节之外的东西。
+ *
+ * **指针动态类型不走这里**：`isel` 直接把指针值当 `data`（官方同口径）。
+ * 理由不是省一次分配，而是「两个 nil 指针的接口必须相等」——
+ * 装箱会让它们指向两个不同的盒子。 */
+void *rt_box(const TypeDesc *d, const void *src) {
+    void *p = rt_alloc(d, 0);
+    if (d->size != 0) {
+        rt_memcpy(p, src, d->size);
+    }
+    return p;
+}
+
+/* 运行期构造 itab（`D-M9-9` 的兜底路径）：`x.(J)` 的 `(J, T)` 对在编译期
+ * 枚举不出来（`T` 是 `x` 的静态类型的所有可能实现）。
+ *
+ * **不缓存**（`D-M9-16`）：没有并发、语料里最多几百次，缓存的收益抵不上
+ * 一张 `inter×concrete` 哈希表 + 它的正确性负担。
+ *
+ * 返回 0 表示 `concrete` 没实现 `iface`（缺方法 / 签名不同）。
+ * 内存用 `rt_arena_alloc`（**不带对象头**）：itab 是元数据，不是 Go 对象 ——
+ * 与切片底层数组同一条理由（`R-9-5`）。 */
+void *rt_itab(const TypeDesc *iface, const TypeDesc *concrete) {
+    const MethodTable *imt = (const MethodTable *)iface->methods;
+    const MethodTable *cmt = (const MethodTable *)concrete->methods;
+    if (imt == 0 || imt->count == 0) {
+        return 0;
+    }
+    if (cmt == 0) {
+        return 0;
+    }
+    u64 n = (u64)imt->count;
+    u8 *tab = (u8 *)rt_arena_alloc((2 + n) * 8, 8);
+    ((const TypeDesc **)tab)[0] = iface;
+    ((const TypeDesc **)tab)[1] = concrete;
+    const MethodEntry *ie = (const MethodEntry *)((const u8 *)imt + 8);
+    const MethodEntry *ce = (const MethodEntry *)((const u8 *)cmt + 8);
+    for (u64 i = 0; i < n; i++) {
+        const void *fn = 0;
+        for (u32 j = 0; j < cmt->count; j++) {
+            if (ce[j].name_hash == ie[i].name_hash && ce[j].sig_hash == ie[i].sig_hash) {
+                fn = ce[j].fn;
+                break;
+            }
+        }
+        if (fn == 0) {
+            return 0;
+        }
+        ((const void **)tab)[2 + i] = fn;
+    }
+    return tab;
+}
+
+/* 断言失败（`v := x.(T)` 的单值形态）。
+ *
+ * ⚠️ 文本与**解释器**不一致：官方与解释器都写
+ * `interface conversion: <I> is <T>, not <U>`，而那要**类型名**——
+ * 名字不在 `TypeDesc` 里（`U-M9-04`，归 M12）。这里只给前缀 + `failed`，
+ * 记在 `G-M9-03`。D 腿的语料不该走到这里（走到就是真 bug）。 */
+void rt_panic_assert(void) {
+    const char *m = "panic: interface conversion: failed\n";
+    u64 n = 0;
+    while (m[n] != 0) {
+        n++;
+    }
+    write_all(FD_STDERR, m, n);
+    rt_exit(2);
+}
+
 /* 前向声明：`rt_map_set` 要用它，而它的定义在 panic 那一节（文件后半）。 */
 void rt_panic_nilmap(void);
 

@@ -14,12 +14,13 @@
 
 use std::collections::BTreeMap;
 
-use rgoc_meta::desc::{DescBuilder, type_hash};
-use rgoc_ssa::ir::Module;
+use rgoc_meta::desc::{DescBuilder, name_hash, sig_hash, type_hash};
+use rgoc_ssa::ir::{Hop, Module, SsaFunc};
 use rgoc_types::TypeTable;
 use rgoc_types::layout::{layout, ptr_mask};
 use rgoc_types::typ::TypeId;
 
+use crate::abi::{SlotClass, slot_of};
 use crate::diag::CgCode;
 use crate::emit::Asm;
 use crate::frame::{self, FrameError};
@@ -77,15 +78,22 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // **必须在 desc 之后**：表的每一条要引用 `__desc_<hash>`，而那些符号由
     // `emit_descs` 定义（GNU as 的 `.quad` 允许前向引用，但先定义后引用能
     // 让「符号名怎么拼」只有一处来源）。
-    emit_descs(&mut asm, m, tt);
-    emit_global_roots(&mut asm, m, tt);
-
-    // ③ 逐函数。
-    //
     // 先把 `FuncId → 函数` 建起来：调用点的寄存器分配由**被调方的形参类型**
     // 决定（`R-13-3`），`isel` 需要能按 `FuncId` 查到那些类型。
     let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
+
+    // ②b 方法表（`M9/Task 27`）与静态 ITab（`M9/Task 28`）。
+    //
+    // 顺序是硬的：方法表先（desc 的 `methods` 字段要引用它的符号），
+    // itab 后（它引用 desc 与方法表两侧的符号）。GNU as 允许前向引用，
+    // 但「符号名一处来源」这条纪律要求先定义后引用。
+    let mt = emit_method_tables(&mut asm, m, tt, &siblings);
+    emit_itabs(&mut asm, m, tt, &siblings);
+    emit_descs(&mut asm, m, tt, &mt);
+    emit_global_roots(&mut asm, m, tt);
+
+    // ③ 逐函数。
     for f in &m.funcs {
         let fr = frame::layout_with(f, tt, &siblings).map_err(CompileError::Frame)?;
         isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
@@ -128,6 +136,262 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
 #[must_use]
 pub fn desc_symbol(hash: u32) -> String {
     format!("__desc_{hash:08x}")
+}
+
+/// 方法表符号。
+///
+/// 键是**类型 hash**（不是 `TypeId`）：`__desc_*` 同理，理由见 [`desc_symbol`]。
+#[must_use]
+pub fn mt_symbol(hash: u32) -> String {
+    format!("__mt_{hash:08x}")
+}
+
+/// 静态 ITab 符号。
+#[must_use]
+pub fn itab_symbol(iface_hash: u32, concrete_hash: u32) -> String {
+    format!("__itab_{iface_hash:08x}_{concrete_hash:08x}")
+}
+
+/// 接收者适配桩符号（`itab.fn[slot]` 指它）。
+#[must_use]
+pub fn imeth_symbol(concrete_hash: u32, slot: usize) -> String {
+    format!("__imeth_{concrete_hash:08x}_{slot}")
+}
+
+/// 接收者适配的一步（`x0` 是当前地址）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// `x0 = *(void **)(x0 + off)`
+    Load(u32),
+    /// `x0 = x0 + off`
+    Add(u32),
+}
+
+/// `data`（指向动态类型的存储）→ 方法第 0 个实参的适配步骤。
+///
+/// # 三条规则（`M9-design.md` §3.8 的落地）
+///
+/// 1. **嵌入链**：每一跳按「字段是不是指针」选 `Load` / `Add`；
+/// 2. **指针接收者**（`*U`）：`data` 本身就是那个指针 ⇒ 不再动；
+/// 3. **聚合值接收者**（`U` 且 `SlotClass::Agg`）：本后端的聚合**按指针传参**
+///    ⇒ `data` 正好是它要的，不再动；
+/// 4. **其余值接收者**（标量 / `string` 这类走整数寄存器的）：要把**值**读出来
+///    ⇒ 末尾加一条 `Load(0)`。
+///
+/// 第 3 条是 `R-9-11` 记下的「借来的便宜」：官方 Go 在这里要生成一份
+/// `func (u U) M` 的包装（把指针解引用成值再调），我们因为聚合本来就按指针传，
+/// 白拿一层。
+fn recv_steps(
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    hops: &[Hop],
+    func: rgoc_hir::FuncId,
+) -> Vec<Step> {
+    let mut out: Vec<Step> = hops
+        .iter()
+        .map(|h| {
+            if h.via_ptr {
+                Step::Load(h.off)
+            } else {
+                Step::Add(h.off)
+            }
+        })
+        .collect();
+    let Some(f) = siblings.get(&func) else {
+        return out;
+    };
+    // 第 0 个形参是接收者（`build.rs::call` 的约定），它的类型在 `value_types` 里
+    let Some(pid) = f.params.first() else {
+        return out;
+    };
+    let Some(&recv_ty) = f.value_types.get(pid.index()) else {
+        return out;
+    };
+    let is_ptr = matches!(
+        tt.type_of(rgoc_types::underlying(tt, recv_ty)),
+        rgoc_types::typ::Type::Pointer(_)
+    );
+    let agg = slot_of(tt, recv_ty).map(|s| s.class) == Some(SlotClass::Agg);
+    if !is_ptr && !agg {
+        out.push(Step::Load(0));
+    }
+    out
+}
+
+/// 发射一块方法表，返回 `类型 hash → 符号`（`emit_descs` 用它填 `methods`）。
+///
+/// # 两类表
+///
+/// | 谁 | 条目 | `func` 槽 |
+/// |---|---|---|
+/// | **具体类型** | 名字 hash + 签名 hash | 真实方法（或 thunk）|
+/// | **接口类型** | 名字 hash + 签名 hash | `0`（接口没有实现）|
+///
+/// 接口表只有 `rt_itab` 用（`x.(J)` 要按 J 的方法名去具体类型的表里查）。
+fn emit_method_tables(
+    asm: &mut Asm,
+    m: &Module,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> BTreeMap<u32, String> {
+    let mut labels: BTreeMap<u32, String> = BTreeMap::new();
+    // ① 具体类型
+    for ms in &m.methods {
+        let h = type_hash(tt, ms.ty);
+        // 同一个 hash 可能来自**两个 TypeId**（`*T` 在类型表里可以有多个条目，
+        // 只要结构相同 hash 就相同）⇒ 只发一块，否则 GNU as 报
+        // `symbol '__mt_xxx' is already defined`（实测 `ken/interbasic.go`）。
+        if labels.contains_key(&h) {
+            continue;
+        }
+        let mut body: Vec<String> = Vec::new();
+        body.push(format!(".long {}", ms.methods.len()));
+        body.push(".long 0".to_string());
+        for (i, mi) in ms.methods.iter().enumerate() {
+            body.push(format!(".long {}", name_hash(&mi.name)));
+            body.push(format!(".long {}", sig_hash(tt, &mi.params, &mi.results)));
+            body.push(format!(
+                ".quad {}",
+                method_entry_symbol(asm, tt, siblings, h, i, mi.func, &[])
+            ));
+        }
+        asm.rodata_named_raw(&mt_symbol(h), &body);
+        labels.insert(h, mt_symbol(h));
+    }
+    // ② 接口类型：闭包里每个**有方法**的接口都发一块（`rt_itab` 要读它）
+    let closure = type_closure(m, tt);
+    for (h, t) in &closure {
+        if labels.contains_key(h) {
+            continue;
+        }
+        let names = rgoc_ssa::ir::iface_methods(tt, *t);
+        if names.is_empty() {
+            continue;
+        }
+        let mut body: Vec<String> = Vec::new();
+        body.push(format!(".long {}", names.len()));
+        body.push(".long 0".to_string());
+        for n in &names {
+            body.push(format!(".long {}", name_hash(n)));
+            body.push(format!(".long {}", iface_sig_hash(tt, *t, n)));
+            body.push(".quad 0".to_string());
+        }
+        asm.rodata_named_raw(&mt_symbol(*h), &body);
+        labels.insert(*h, mt_symbol(*h));
+    }
+    labels
+}
+
+/// 接口方法 `name` 的签名 hash（与具体类型那边**同编码**）。
+fn iface_sig_hash(tt: &TypeTable, iface: TypeId, name: &str) -> u32 {
+    use rgoc_types::typ::Type;
+    let mut cur = iface;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Interface(iid) => {
+                let def = tt.interface_def(*iid);
+                let Some((_, sig)) = def.methods.iter().find(|(n, _)| n == name) else {
+                    return 0;
+                };
+                let Some(Type::Signature(sid)) = Some(tt.type_of(*sig)) else {
+                    return 0;
+                };
+                let sd = tt.signature_def(*sid);
+                let params = tuple_types(tt, sd.params);
+                let results = tuple_types(tt, sd.results);
+                return sig_hash(tt, &params, &results);
+            }
+            _ => return 0,
+        }
+    }
+    0
+}
+
+/// 元组的元素类型（非元组 ⇒ 空）。
+fn tuple_types(tt: &TypeTable, t: TypeId) -> Vec<TypeId> {
+    match tt.type_of(t) {
+        rgoc_types::typ::Type::Tuple(tid) => {
+            tt.tuple_def(*tid).vars.iter().map(|(_, x)| *x).collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// 方法表某一格的符号：`Identity` ⇒ 真实方法；否则发一段尾跳桩。
+fn method_entry_symbol(
+    asm: &mut Asm,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    concrete_hash: u32,
+    slot: usize,
+    func: rgoc_hir::FuncId,
+    hops: &[Hop],
+) -> String {
+    let steps = recv_steps(tt, siblings, hops, func);
+    if steps.is_empty() {
+        return isel::fn_sym(func);
+    }
+    let sym = imeth_symbol(concrete_hash, slot);
+    asm.label(&sym);
+    for st in &steps {
+        match st {
+            Step::Load(off) => load_off(asm, *off, "ldr x0, [x0, x9]", "ldr x0, [x0, #"),
+            Step::Add(off) => add_off(asm, *off),
+        }
+    }
+    asm.ins(&format!("b {}", isel::fn_sym(func)));
+    sym
+}
+
+/// `add x0, x0, #off`（超过 12 位立即数就走寄存器）。
+fn add_off(asm: &mut Asm, off: u32) {
+    if off <= 4095 {
+        asm.ins(&format!("add x0, x0, #{off}"));
+    } else {
+        isel::load_imm(asm, "x9", i64::from(off));
+        asm.ins("add x0, x0, x9");
+    }
+}
+
+/// `ldr x0, [x0, #off]`（`off` 必须是 8 的倍数且 ≤ 32760，否则走寄存器）。
+fn load_off(asm: &mut Asm, off: u32, _via_reg: &str, _prefix: &str) {
+    if off.is_multiple_of(8) && off <= 32760 {
+        asm.ins(&format!("ldr x0, [x0, #{off}]"));
+    } else {
+        isel::load_imm(asm, "x9", i64::from(off));
+        asm.ins("ldr x0, [x0, x9]");
+    }
+}
+
+/// 发射全部静态 ITab（`M9/Task 28`）。
+///
+/// 布局（`M9-design.md` §3.8）：`{ iface: *TypeDesc, concrete: *TypeDesc, fn: [*u8] }`。
+/// `fn` 从偏移 **16** 起 —— `isel` 的 `tab.fn[slot]` 就是这个 `16 + 8*slot`。
+fn emit_itabs(
+    asm: &mut Asm,
+    m: &Module,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) {
+    let mut done: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for it in &m.itabs {
+        let ih = type_hash(tt, it.iface);
+        let ch = type_hash(tt, it.concrete);
+        // 同上：`(I, T)` 的 TypeId 对可能有多份，hash 对只有一份
+        if !done.insert(itab_symbol(ih, ch)) {
+            continue;
+        }
+        let mut body: Vec<String> = Vec::new();
+        body.push(format!(".quad {}", desc_symbol(ih)));
+        body.push(format!(".quad {}", desc_symbol(ch)));
+        for (slot, e) in it.fns.iter().enumerate() {
+            let sym = method_entry_symbol(asm, tt, siblings, ch, slot, e.func, &e.hops);
+            body.push(format!(".quad {sym}"));
+        }
+        asm.rodata_named_raw(&itab_symbol(ih, ch), &body);
+    }
 }
 
 /// 收集「需要发射 desc 的类型闭包」。
@@ -271,7 +535,7 @@ fn emit_global_roots(asm: &mut Asm, m: &Module, tt: &TypeTable) {
 }
 
 /// 把类型闭包的 desc 全部发射进 `.rodata`。
-fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable) {
+fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, String>) {
     let closure = type_closure(m, tt);
     // 位图去重：同一份字节只发一份（`[]int` 与 `[3]int` 的位图可能相同）。
     let mut bitmaps: BTreeMap<Vec<u8>, String> = BTreeMap::new();
@@ -323,7 +587,21 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable) {
                 format!(".byte {}", byte_list.join(",")),
                 format!(".quad {gc_label}"),
                 format!(".quad {elem_label}"),
-                ".quad 0".to_string(), // methods（Task 27 填）
+                // methods：无方法表 ⇒ `.quad 0`（`C5` §10：`methods == null` 等价于「没有方法」）。
+                //
+                // `*T` 要**借用** `T` 的表：`rt_itab(desc(J), desc(*T))` 拿的是动态类型
+                // 的 desc，而指针接收者的方法全在 `T` 的表里（`collect_methods` 按
+                // 基类型分组）。不借的话 `x.(J)` 里 `x` 装着 `*T` 就永远「没实现」
+                // （实测 `ken/interfun.go`：`interface conversion: failed`）。
+                format!(
+                    ".quad {}",
+                    mt.get(h)
+                        .or_else(|| match tt.type_of(*t) {
+                            rgoc_types::typ::Type::Pointer(e) => mt.get(&type_hash(tt, *e)),
+                            _ => None,
+                        })
+                        .map_or_else(|| "0".to_string(), std::string::String::clone)
+                ),
             ],
         );
     }

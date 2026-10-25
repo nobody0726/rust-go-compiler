@@ -4195,7 +4195,7 @@ fn struct_fields_of(tt: &TypeTable, t: TypeId) -> Option<Vec<rgoc_types::Field>>
     }
 }
 
-fn field_of(v: &Value, index: usize) -> Option<Value> {
+pub(crate) fn field_of(v: &Value, index: usize) -> Option<Value> {
     match peel_value(v) {
         Value::Struct(cells) => cells.get(index).map(|c| c.borrow().deep_copy()),
         _ => None,
@@ -4885,7 +4885,7 @@ fn string_convert(tt: &TypeTable, v: &Value, from: TypeId) -> Value {
 }
 
 /// 类型名（诊断用；覆盖官方 `TypeString` 的常见子集）。
-fn type_name(tt: &TypeTable, t: TypeId) -> String {
+pub(crate) fn type_name(tt: &TypeTable, t: TypeId) -> String {
     let t = unalias(tt, t);
     match tt.type_of(t) {
         Type::Basic(b) => b.as_str().to_string(),

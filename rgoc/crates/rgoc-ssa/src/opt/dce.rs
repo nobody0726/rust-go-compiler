@@ -53,6 +53,11 @@ fn keep(i: &Instr, used: &BTreeSet<ValueId>) -> bool {
     match i {
         // 写内存：永远留（它的 mem 令牌没人用是常态，不是死代码）
         Instr::Store { .. } => true,
+        // 类型断言：单值形态**会 panic**（失败即 `rt_panic_assert`），
+        // comma-ok 形态的 `ok` 也是一个可观察的结果 ⇒ 两个 dst 都没人用才删。
+        Instr::TypeAssert { dst, ok, .. } => {
+            used.contains(dst) || ok.is_some_and(|o| used.contains(&o))
+        }
         Instr::Call {
             dsts,
             callee,
@@ -87,6 +92,7 @@ fn dst_of(i: &Instr) -> Option<ValueId> {
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => *dst,
+        Instr::TypeAssert { dst, .. } => *dst,
         // `Call` 由调用方特判（多结果），走到这里说明有人漏了
         Instr::Call { .. } => return None,
     })

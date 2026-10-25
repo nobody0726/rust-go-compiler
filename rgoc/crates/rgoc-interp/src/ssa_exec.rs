@@ -57,6 +57,29 @@ use crate::interp::{
 use crate::ops::{self, RtError};
 use crate::print;
 use crate::value::{Cell, NilKind, Value, cell, zero_of};
+/// 是不是接口类型（剥具名 / 别名）。
+fn is_iface_ty(tt: &TypeTable, t: TypeId) -> bool {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Interface(_) => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// 某个 SSA 值的静态类型（断言失败的文案要它）。
+fn value_type_of(_tt: &TypeTable, x: ValueId, m: &Module, fi: usize) -> TypeId {
+    m.funcs[fi]
+        .value_types
+        .get(x.index())
+        .copied()
+        .unwrap_or_else(|| TypeId::from_index(0))
+}
 
 /// 一个 SSA 帧。
 ///
@@ -360,6 +383,57 @@ impl Exec<'_> {
                 self.write(*dst, apply_unary(*op, v, *typ, tt));
                 Ok(None)
             }
+            // 类型断言（`M9/Task 33`）：与 M5 的 `type_assert` 同一套判据
+            // （`implements` / `identical`），所以 `--via=ssa` 与 `--via=hir`
+            // 在断言上不会分叉。
+            Instr::TypeAssert { dst, ok, x, typ } => {
+                let v = self.read(*x)?;
+                let (dt, data) = match v {
+                    Value::Iface { typ, data } => (typ, data),
+                    // 静态类型不是接口（检查器该已拒）—— 按「断言恒成功」处理，
+                    // 与 M5 的 `type_assert` 兜底一致
+                    other => (None, Box::new(other)),
+                };
+                let hit = match dt {
+                    None => false,
+                    Some(dt) => {
+                        if is_iface_ty(tt, *typ) {
+                            rgoc_types::implements(tt, dt, *typ, false).unwrap_or(false)
+                        } else {
+                            rgoc_types::identical(tt, dt, *typ).unwrap_or(false)
+                        }
+                    }
+                };
+                if hit {
+                    let out = if is_iface_ty(tt, *typ) {
+                        Value::Iface {
+                            typ: dt,
+                            data: data.clone(),
+                        }
+                    } else {
+                        (*data).clone()
+                    };
+                    self.write(*dst, out);
+                    if let Some(o) = ok {
+                        self.write(*o, Value::Bool(true));
+                    }
+                } else if let Some(o) = ok {
+                    self.write(*dst, zero_of(tt, *typ));
+                    self.write(*o, Value::Bool(false));
+                } else {
+                    let got = match dt {
+                        Some(t) => crate::interp::type_name(tt, t),
+                        None => "nil".to_string(),
+                    };
+                    return Err(Halt::Runtime(format!(
+                        "panic: interface conversion: {} is {}, not {}",
+                        crate::interp::type_name(tt, value_type_of(tt, *x, m, fi)),
+                        got,
+                        crate::interp::type_name(tt, *typ)
+                    )));
+                }
+                Ok(None)
+            }
             Instr::Convert { dst, x, typ } => {
                 let v = self.read(*x)?;
                 let from = m.funcs[fi].value_types[x.index()];
@@ -613,6 +687,50 @@ impl Exec<'_> {
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的方法 func#{}", func.0)))?;
                 let mut all = Vec::with_capacity(avals.len() + 1);
                 all.push(r);
+                all.extend(avals);
+                self.push_frame(idx, &all, dsts)?;
+                Ok(None)
+            }
+            // 接口方法派发（`M9/Task 32`）：槽号 → 方法名 → 沿嵌入链找 FuncId。
+            //
+            // 三处必须同源（`R-9-10`）：静态 ITab 的填序、`build` 的取槽序、
+            // 这里的查序 —— 都走 `rgoc_ssa::ir::iface_methods` + `resolve_method`。
+            CalleeRef::Iface { recv, slot } => {
+                let r = self.read(recv)?;
+                let it = self.m.funcs[fi].value_types[recv.index()];
+                let names = rgoc_ssa::ir::iface_methods(self.tt, it);
+                let name = names
+                    .get(slot as usize)
+                    .cloned()
+                    .ok_or_else(|| Halt::Runtime(format!("接口方法槽 {slot} 越界（构建 bug）")))?;
+                let (dt, data) = match r {
+                    Value::Iface { typ, data } => (typ, *data),
+                    other => {
+                        return Err(Halt::Runtime(format!(
+                            "接口方法调用：接收者不是接口值（{}）",
+                            print::format_operand(&other, self.tt, it)
+                        )));
+                    }
+                };
+                // nil 接口上调用 ⇒ 与 Go 同文本
+                let Some(dt) = dt else {
+                    return Err(Halt::Runtime(RtError::NilDeref.message()));
+                };
+                let (fid, hops) = rgoc_ssa::ir::resolve_method(self.tt, &self.m.methods, dt, &name)
+                    .ok_or_else(|| {
+                        Halt::Runtime(format!("类型 t{} 没有方法 {name}（构建 bug）", dt.index()))
+                    })?;
+                // 沿嵌入链把接收者取到位（与 `resolve_method` 的 hops 同源）
+                let mut rv = data;
+                for h in &hops {
+                    rv = crate::interp::field_of(&rv, h.index).ok_or_else(|| {
+                        Halt::Runtime(format!("嵌入链下降失败（字段 {}）", h.index))
+                    })?;
+                }
+                let idx = index_of(self.m, fid)
+                    .ok_or_else(|| Halt::Runtime(format!("调用不存在的方法 func#{}", fid.0)))?;
+                let mut all = Vec::with_capacity(avals.len() + 1);
+                all.push(rv);
                 all.extend(avals);
                 self.push_frame(idx, &all, dsts)?;
                 Ok(None)

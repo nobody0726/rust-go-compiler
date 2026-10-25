@@ -291,6 +291,50 @@ fn mix_bytes(h: &mut u32, s: &[u8]) {
     }
 }
 
+/// 方法**名字**的 hash（`MethodEntry.name_hash`）。
+///
+/// # 为什么是 hash 而不是名字指针
+///
+/// `TypeDesc` 是 `#[repr(C)]` 的 40 字节冻结面（`C5` §10），里面放不下变长字符串。
+/// 而且真名字归 M12（`U-M9-04` 的 reflect 面）—— M9 只需要「两个方法是不是同一个」。
+///
+/// 名字**不**进 `sig_hash`（两者分开存）：`interface{ M(x int) }` 与
+/// `func (t T) M(y int)` 是同一个签名，参数名不同不影响实现关系。
+#[must_use]
+pub fn name_hash(name: &str) -> u32 {
+    let mut h = FNV_OFFSET;
+    mix_bytes(&mut h, name.as_bytes());
+    h
+}
+
+/// 方法**签名**的 hash（`MethodEntry.sig_hash`）。
+///
+/// # 编码
+///
+/// `param 个数 | 每个 param 的 type_hash | result 个数 | 每个 result 的 type_hash`。
+/// 两侧的「个数」是**边界**：不写个数，`M(int) bool` 与 `M(bool) int`
+/// 会喂出同一串字节。
+///
+/// # 调用方要剥接收者
+///
+/// 具体类型那边 `Func::param_types[0]` 是接收者，接口那边 `SignatureDef.params`
+/// **不含**接收者。两边必须喂同一形状，否则合法的实现会被判成「没实现」。
+#[must_use]
+pub fn sig_hash(tt: &TypeTable, params: &[TypeId], results: &[TypeId]) -> u32 {
+    let mut h = FNV_OFFSET;
+    mix(&mut h, b'(');
+    mix_u32(&mut h, u32::try_from(params.len()).unwrap_or(u32::MAX));
+    for p in params {
+        mix_u32(&mut h, type_hash(tt, *p));
+    }
+    mix(&mut h, b')');
+    mix_u32(&mut h, u32::try_from(results.len()).unwrap_or(u32::MAX));
+    for r in results {
+        mix_u32(&mut h, type_hash(tt, *r));
+    }
+    h
+}
+
 /// 类型 hash（接口 `==` 与 map 键都用它）。
 ///
 /// # 三条硬规矩
@@ -517,7 +561,7 @@ impl<'a> DescBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Kind, TypeDesc};
+    use super::{Kind, MethodEntry, MethodTable, TypeDesc, name_hash, sig_hash};
 
     /// `T-META-01`：布局是 `C5` §10 冻结的 40 字节。
     ///
@@ -816,5 +860,75 @@ mod tests {
             type_hash(&tt, tt.named_type(nb)),
             "type A int 与 type B int 的 hash 必须不同"
         );
+    }
+
+    // ── 方法表的两条 hash（`M9/Task 27`）────────────────────────────
+
+    /// 名字 hash：同名同 hash、不同名不同 hash。
+    ///
+    /// 「不同名不同 hash」是**判据的牙**：`rt_itab` 靠它查方法，撞了就会调错方法
+    /// （症状是「方法被调了但算错」，比崩溃更难查）。
+    #[test]
+    fn 方法名_hash_有区分度() {
+        assert_eq!(name_hash("M"), name_hash("M"), "同名必须同 hash");
+        assert_ne!(name_hash("M"), name_hash("N"));
+        assert_ne!(name_hash("A"), name_hash("B"));
+        // 长度不同的前缀不撞（`mix_bytes` 喂了长度）
+        assert_ne!(name_hash("M"), name_hash("MM"));
+        assert_ne!(name_hash(""), name_hash("M"));
+    }
+
+    /// 签名 hash：`(params, results)` 的**结构**进 hash，名字不进。
+    ///
+    /// 为什么名字不进：接口 `interface{ M(x int) }` 与实现 `func (t T) M(y int)`
+    /// 的参数名可以不同，但它们是**同一个**签名 —— 名字进 hash 会让合法的实现
+    /// 被判成「没实现」。
+    #[test]
+    fn 签名_hash_只看结构不看参数名() {
+        let mut tt = TypeTable::new();
+        let int_ = tt.add_basic(BasicId::Int);
+        let str_ = tt.add_basic(BasicId::String);
+        let bool_ = tt.add_basic(BasicId::Bool);
+
+        // 同名同结构 ⇒ 同 hash（与参数名无关：这里干脆用切片，没有名字）
+        assert_eq!(
+            sig_hash(&tt, &[int_], &[str_]),
+            sig_hash(&tt, &[int_], &[str_])
+        );
+
+        // 参数类型不同 ⇒ 不同
+        assert_ne!(sig_hash(&tt, &[int_], &[]), sig_hash(&tt, &[str_], &[]));
+        // 结果类型不同 ⇒ 不同
+        assert_ne!(sig_hash(&tt, &[], &[int_]), sig_hash(&tt, &[], &[str_]));
+        // 参数个数不同 ⇒ 不同
+        assert_ne!(
+            sig_hash(&tt, &[int_], &[]),
+            sig_hash(&tt, &[int_, int_], &[])
+        );
+        // 结果个数不同 ⇒ 不同
+        assert_ne!(
+            sig_hash(&tt, &[], &[int_]),
+            sig_hash(&tt, &[], &[int_, int_])
+        );
+        // 参数与结果**不能互换**：`M(int) bool` 与 `M(bool) int` 必须不同
+        assert_ne!(
+            sig_hash(&tt, &[int_], &[bool_]),
+            sig_hash(&tt, &[bool_], &[int_]),
+            "参数/结果的边界必须进 hash"
+        );
+    }
+
+    /// `MethodEntry` 是 16 字节、`MethodTable` 表头 8 字节 —— `C5` §10 的冻结形状。
+    ///
+    /// 表头之后**紧跟**变长的 `entries`（不是指针），所以 `entries` 的偏移是 8。
+    /// 这条判据是 `rt_itab` 的地址算术（`(char*)mt + 8 + 16*i`）的唯一依据。
+    #[test]
+    fn 方法表的字节形状() {
+        assert_eq!(core::mem::size_of::<MethodEntry>(), 16);
+        assert_eq!(core::mem::size_of::<MethodTable>(), 8);
+        assert_eq!(core::mem::offset_of!(MethodTable, count), 0);
+        assert_eq!(core::mem::offset_of!(MethodEntry, name_hash), 0);
+        assert_eq!(core::mem::offset_of!(MethodEntry, sig_hash), 4);
+        assert_eq!(core::mem::offset_of!(MethodEntry, func), 8);
     }
 }

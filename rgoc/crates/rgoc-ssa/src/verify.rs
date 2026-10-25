@@ -129,6 +129,11 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
+        Instr::TypeAssert { dst, ok, .. } => {
+            let mut v = vec![*dst];
+            v.extend(ok.iter().copied());
+            v
+        }
     }
 }
 
@@ -241,6 +246,7 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
             out.push(*rhs);
         }
         Instr::Un { x, .. } | Instr::Convert { x, .. } => out.push(*x),
+        Instr::TypeAssert { x, .. } => out.push(*x),
         Instr::Field { base, .. } => out.push(*base),
         Instr::Index { base, i, .. } => {
             out.push(*base);
@@ -268,6 +274,7 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
         Instr::Call { callee, args, .. } => {
             match callee {
                 CalleeRef::Method { recv, .. } => out.push(*recv),
+                CalleeRef::Iface { recv, .. } => out.push(*recv),
                 CalleeRef::Indirect(v) => out.push(*v),
                 CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
             }
@@ -562,7 +569,13 @@ fn check_v5(f: &SsaFunc) -> Result<(), VerifyError> {
             let fid = match callee {
                 CalleeRef::Func(x) => Some(*x),
                 CalleeRef::Method { func, .. } => Some(*func),
-                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
+                // 接口派发没有静态签名可查（被调方运行期才定）—— `V5` 管不到它。
+                // 这不是漏判：`CalleeRef::Iface` 的实参形状由 build 按**接口签名**打包，
+                // 而接口签名在 HIR 里已经检查过（`M5` 的 `C4`/`C8`）。
+                CalleeRef::Builtin(_)
+                | CalleeRef::Indirect(_)
+                | CalleeRef::Runtime(_)
+                | CalleeRef::Iface { .. } => None,
             };
             let Some(fid) = fid else { continue };
             let Some(sig) = f.call_sigs.get(&fid) else {

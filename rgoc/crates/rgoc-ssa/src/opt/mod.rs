@@ -192,6 +192,8 @@ pub(crate) fn instr_uses(i: &mut Instr, g: &mut impl FnMut(&mut ValueId)) {
             g(rhs);
         }
         Instr::Un { x, .. } | Instr::Convert { x, .. } => g(x),
+        // 断言只读 `x`（`ok` 是**结果**不是操作数）
+        Instr::TypeAssert { x, .. } => g(x),
         Instr::Field { base, .. } => g(base),
         Instr::Index { base, i, .. } => {
             g(base);
@@ -232,6 +234,8 @@ pub(crate) fn instr_uses(i: &mut Instr, g: &mut impl FnMut(&mut ValueId)) {
             match callee {
                 crate::ir::CalleeRef::Indirect(v) => g(v),
                 crate::ir::CalleeRef::Method { recv, .. } => g(recv),
+                // 接口值（`tab` / `data` 两个字）也是被读的
+                crate::ir::CalleeRef::Iface { recv, .. } => g(recv),
                 crate::ir::CalleeRef::Func(_)
                 | crate::ir::CalleeRef::Builtin(_)
                 // 运行期助手没有值操作数（map 的键/值都走 `args`）。
@@ -306,6 +310,11 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
+        Instr::TypeAssert { dst, ok, .. } => {
+            let mut v = vec![*dst];
+            v.extend(ok.iter().copied());
+            v
+        }
     }
 }
 
@@ -326,6 +335,10 @@ fn dsts_of_mut(i: &mut Instr) -> Vec<&mut ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![dst],
         Instr::Call { dsts, .. } => dsts.iter_mut().collect(),
+        Instr::TypeAssert { dst, ok, .. } => match ok {
+            Some(o) => vec![dst, o],
+            None => vec![dst],
+        },
     }
 }
 

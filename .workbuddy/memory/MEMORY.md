@@ -8,7 +8,22 @@
 - git 身份 `nobody0726` / `102368194+nobody0726@users.noreply.github.com`；见到 `wangf <yhome@…local>` 即丢失，`git config --global` 重设
 - commit 纪律（2026-10-15 授权）：阶段收口即 commit + push（按交付块分 commit）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore；`tools/ast-oracle` vendor 入库
 
-## 当前状态（2026-10-24）
+## 当前状态（2026-10-25）
+- **M7/M8 已收口**；**M9 进行中**：Phase 0（M9a 骨架）+ Phase 1（slice，`R-9-4`）+ Phase 2（map）已收口。
+  下一阶段 = **Phase 3（iface，语料 50 → 60）**
+- **M9 语料现态**：native **ok=50 / skip=19 / bad=0**（69 个入选）；三方差分 **50 绿 / 19 跳过 / 0 红**；
+  `cargo test --workspace` **2157 passed 0 failed**；`rgoc-meta`（新 crate）+ `rgoc-arm64` desc 发射 +
+  `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
+- ⚠️ **SSA 拒绝面已重冻结 46/23 → 50/19**（`R-9-8`）：map 实现后 5 条 MAP 拒绝 4 条消失，
+  第 5 条 `print.go` 的第一条拒绝暴露成 DEFER。**Phase 5 因此是 +3 不是 +2**（计划写 +2）。
+  按码分类的清单只告诉你「第一条拒绝是什么」，不告诉你「这个文件只剩这一条」
+- ⚠️ **`Instr::Index` 的 base 必须是地址**（`R-9-9`）：右值聚合（调用结果 / map 值 / 复合字面量）
+  当底座会**把数组内容当地址** ⇒ 段错误。`for k := range a` 不塌只因为 key-only 不发 `Index`。
+  同理 `Field`/`Index` 的 dst 类型必须是 `*成员类型`（`R-9-6`，沿用底座类型会算错偏移）
+- ⚠️ **manifest 是现状、报告是历史**（`R-9-8`）：M6 `corpus_lists` 计数必须等于磁盘，离开原值
+  就要写 `re_frozen`；历史里程碑的自报数字对着**快照**算（`native-input-m7.txt` / `native-rejected-m7.txt`）
+- ⚠️ **每次 `in-container.sh` 是新容器**：上一步 build 的 `/tmp/x` 下一步就没了（像莫名 rc=127）。
+  产物落仓库内目录
 - **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
 - **M6 已收口（2026-10-24，Task 1–53）**：九条门禁 9/9 pass；语料 **N=46 / M=23**；
   `--via=hir` == `--via=ssa` 46/46；`--opt=all` == `none` 46/46；`SSA-LIVE v1` 可被只读文本的桩消费；

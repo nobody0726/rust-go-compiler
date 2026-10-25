@@ -128,6 +128,189 @@ pub struct Module {
     /// 这没问题 —— mem 种子表示「进入本函数时的内存状态」，而 init 一定先跑完。
     /// 跨函数的内存效果由 `Call.effect` 表达，不是 mem 链。
     pub init: Option<usize>,
+    /// 每个**有方法的具名类型**一块方法表（`M9/Task 27`）。
+    ///
+    /// 顺序按 `type_hash` 升序 —— 发射的 `.rodata` 与它逐条对应，顺序必须是确定的。
+    pub methods: Vec<MethodSet>,
+    /// 每个 `(接口, 具体类型)` 对一张静态 ITab（`M9/Task 28`）。
+    ///
+    /// 顺序按 `(iface_hash, concrete_hash)` 升序，理由同上。
+    pub itabs: Vec<ItabDef>,
+}
+
+/// 沿**嵌入字段**下降到声明类型的一跳。
+///
+/// # 为什么在 IR 里记这个
+///
+/// 接口派发时 `data` 指向**动态类型**的盒子，而方法要的接收者是**声明类型**的
+/// 那份存储。中间差多少，由嵌入链决定：`struct{ *U }` 要 `load`、`struct{ U }`
+/// 要 `add`。这是纯**布局**事实（不依赖 `SlotClass`），所以归 IR；
+/// 而「最后要不要把值读出来」（标量 vs 聚合）才是 ABI 知识，归 `rgoc-arm64`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hop {
+    /// 字段在结构体里的**下标**（求值器按它下钻 `Value`）。
+    pub index: usize,
+    /// 字段在结构体里的字节偏移。
+    pub off: u32,
+    /// 那个嵌入字段是不是**指针**（`struct{ *U }` ⇒ 要 `load`，否则 `add`）。
+    pub via_ptr: bool,
+}
+
+/// 一个具体类型的**一个方法实现**（`MethodTable` 的一条）。
+#[derive(Clone, Debug)]
+pub struct MethodImpl {
+    /// 方法名（不含类型前缀）。
+    pub name: String,
+    /// 形参类型（**不含**接收者）。
+    pub params: Vec<TypeId>,
+    /// 结果类型。
+    pub results: Vec<TypeId>,
+    /// 方法体。
+    pub func: FuncId,
+    /// 从**本类型的存储**到**声明类型的存储**的嵌入链（空 ⇒ 方法声明在本类型上）。
+    pub hops: Vec<Hop>,
+}
+
+/// 一个具体类型的方法集（`MethodTable` 一整块）。
+#[derive(Clone, Debug)]
+pub struct MethodSet {
+    /// 具体类型（`T`，不是 `*T`）。
+    pub ty: TypeId,
+    /// 方法，**按名字升序**（`MethodTable` 的条目序；查表靠它做二分也好、
+    /// 线性扫也好，顺序必须确定）。
+    pub methods: Vec<MethodImpl>,
+}
+
+/// 一个 `(接口, 具体类型)` 对的静态 ITab（`M9/Task 28`）。
+#[derive(Clone, Debug)]
+pub struct ItabDef {
+    /// 接口类型。
+    pub iface: TypeId,
+    /// 动态类型（可能是 `*T`）。
+    pub concrete: TypeId,
+    /// `fn[]`：按**接口的方法序**（见 [`iface_methods`]）逐个填。
+    pub fns: Vec<ItabEntry>,
+}
+
+/// ITab 的一个槽。
+#[derive(Clone, Debug)]
+pub struct ItabEntry {
+    /// 真实方法（`itab.fn[i]` 可能指它，也可能指一段 `__imeth_` 尾部跳转桩 ——
+    /// 「要不要桩」是 **ABI 知识**（`SlotClass` / 嵌入偏移），归 `rgoc-arm64`）。
+    pub func: FuncId,
+    /// 嵌入链（见 [`Hop`]）。
+    pub hops: Vec<Hop>,
+}
+
+/// 在 `from`（或它的嵌入字段链）上找方法 `name`，返回 `(FuncId, 嵌入链)`。
+///
+/// # 为什么要走嵌入
+///
+/// `method5.go` 的 `T1 ⊃ T2 ⊃ *T3 ⊃ *T4` 里 `M` 声明在 `T4` 上，而接口的动态类型
+/// 是 `T1`。只查 `(T1, "M")` 会查不到 —— 然后填一个 `FuncId(u32::MAX)` 进 itab，
+/// 运行期跳到垃圾地址。
+///
+/// # 两个消费者必须同源
+///
+/// `rgoc-arm64` 用它决定「`data` 要加多少偏移」（发射 thunk），
+/// `rgoc-interp::ssa_exec` 用它决定「接收者沿链取到哪」（执行）。
+/// 抄两份的话 `--via=ssa` 与 native 会在嵌入类型上分叉。
+#[must_use]
+pub fn resolve_method(
+    tt: &rgoc_types::TypeTable,
+    methods: &[MethodSet],
+    from: rgoc_types::TypeId,
+    name: &str,
+) -> Option<(FuncId, Vec<Hop>)> {
+    let mut hops = Vec::new();
+    let fid = walk_method(tt, methods, from, name, &mut hops, 0)?;
+    Some((fid, hops))
+}
+
+fn walk_method(
+    tt: &rgoc_types::TypeTable,
+    methods: &[MethodSet],
+    cur: rgoc_types::TypeId,
+    name: &str,
+    hops: &mut Vec<Hop>,
+    depth: u32,
+) -> Option<FuncId> {
+    if depth > 32 {
+        return None;
+    }
+    let base = strip_ptr(tt, cur);
+    if let Some(ms) = methods.iter().find(|m| m.ty == base)
+        && let Some(mi) = ms.methods.iter().find(|m| m.name == name)
+    {
+        return Some(mi.func);
+    }
+    // 嵌入提升：逐个 `embedded` 字段递归（接收者随之下降一层）
+    let sid = match tt.type_of(rgoc_types::underlying(tt, base)) {
+        rgoc_types::typ::Type::Struct(sid) => *sid,
+        _ => return None,
+    };
+    let fields = tt.struct_def(sid).fields.clone();
+    for (i, f) in fields.iter().enumerate() {
+        if !f.embedded {
+            continue;
+        }
+        let off = rgoc_types::layout::field_offset(tt, sid, i)?;
+        let via_ptr = matches!(
+            tt.type_of(rgoc_types::underlying(tt, f.typ)),
+            rgoc_types::typ::Type::Pointer(_)
+        );
+        hops.push(Hop {
+            index: i,
+            off,
+            via_ptr,
+        });
+        if let Some(fid) = walk_method(tt, methods, f.typ, name, hops, depth + 1) {
+            return Some(fid);
+        }
+        hops.pop();
+    }
+    None
+}
+
+/// 剥一层指针（`*T` ⇒ `T`；其余原样）。
+#[must_use]
+pub fn strip_ptr(tt: &rgoc_types::TypeTable, t: rgoc_types::TypeId) -> rgoc_types::TypeId {
+    match tt.type_of(t) {
+        rgoc_types::typ::Type::Pointer(e) => *e,
+        _ => t,
+    }
+}
+
+/// 接口类型的方法名，**按名字升序**。
+///
+/// # 为什么是字典序而不是声明序
+///
+/// 设计稿 §3.8 写的是「`I` 的方法声明序」。实现时发现 `InterfaceDef.methods`
+/// 是**检查器插入的顺序**，没有对外承诺（`C7` §4 只承诺 dump 按名字升序）。
+/// 槽序**只要两侧一致**就正确（静态 ITab 填序 == 调用点取槽序 == `rt_itab` 查序），
+/// 而「插入序」是个内部细节。用字典序把这个细节钉死（`R-9-10`）。
+#[must_use]
+pub fn iface_methods(tt: &rgoc_types::TypeTable, iface: TypeId) -> Vec<String> {
+    use rgoc_types::typ::Type;
+    let mut cur = iface;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Interface(iid) => {
+                let mut v: Vec<String> = tt
+                    .interface_def(*iid)
+                    .methods
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                v.sort();
+                return v;
+            }
+            _ => return Vec::new(),
+        }
+    }
+    Vec::new()
 }
 
 /// 合成函数的 `src` 哨兵（`Task 32b`）。
@@ -205,6 +388,12 @@ impl Instr {
             | Instr::Load { dst, .. }
             | Instr::Store { dst, .. } => vec![*dst],
             Instr::Call { dsts, .. } => dsts.clone(),
+            // `ok` 也是这条指令**定义**的值（`V1` 要求每个值有定义点）
+            Instr::TypeAssert { dst, ok, .. } => {
+                let mut out = vec![*dst];
+                out.extend(ok.iter().copied());
+                out
+            }
         }
     }
 
@@ -249,10 +438,13 @@ impl Instr {
                 match callee {
                     CalleeRef::Indirect(v) => out.push(*v),
                     CalleeRef::Method { recv, .. } => out.push(*recv),
+                    // 接口值也是被读的（`tab` / `data` 两个字都在里面）
+                    CalleeRef::Iface { recv, .. } => out.push(*recv),
                     CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
                 }
                 out.extend(args.iter().copied());
             }
+            Instr::TypeAssert { x, .. } => out.push(*x),
         }
         out
     }
@@ -385,6 +577,22 @@ pub enum CalleeRef {
     /// 那些函数没有 HIR 函数体（它们是 C），没有 `FuncId` 可指。`isel` 直接把
     /// 变体翻成一个符号名 —— 这也是唯一需要维护的映射。
     Runtime(RuntimeFn),
+    /// 接口方法调用（`i.M(...)`，`M9/Task 32`）。
+    ///
+    /// # 为什么不是 `Indirect(fn)`
+    ///
+    /// 取 `itab.fn[slot]` 要**读两个字**（`tab` 从 `data` 旁边取、`fn` 从 `tab + 16 + 8*slot`），
+    /// 而且第 0 个实参必须是 `data`（不是调用者写的）。这些都依赖接口的**布局**，
+    /// 而布局是后端的知识（`C5` §10）。写成 `Indirect` 会把这些泄漏进 build，
+    /// 还要在 IR 里造两条 `Field`/`Index` —— 而 `Field` 只认结构体。
+    ///
+    /// `slot` 是方法名在 [`iface_methods`] 序里的下标。
+    Iface {
+        /// 接口值（两个字：`tab` / `data`）。
+        recv: ValueId,
+        /// 方法槽下标。
+        slot: u32,
+    },
     /// 静态方法调用（接收者已按值/指针语义准备好）。
     Method {
         /// 接收者值。
@@ -562,6 +770,30 @@ pub enum Instr {
         /// 副作用摘要。
         effect: Effect,
     },
+    /// 类型断言（`x.(T)` / `x.(J)`，`M9/Task 33`）。
+    ///
+    /// # 两种形态
+    ///
+    /// | `ok` | 源码 | 失败时 |
+    /// |---|---|---|
+    /// | `None` | `v := x.(T)` | **panic**（`rt_panic_assert`）|
+    /// | `Some(v)` | `v, ok := x.(T)` | `ok = false`，`dst` 是零值 |
+    ///
+    /// # 为什么不是 `Convert`
+    ///
+    /// `Convert` 有一个 `dst`，而 comma-ok 形态要**两个**结果；并且「失败」在
+    /// `Convert` 里没有位置（它要么成功要么 panic）。`Instr` 是多结果的
+    /// （`Call` 的 `dsts` 就是），但 `Convert` 的语义已经冻结成单值。
+    TypeAssert {
+        /// 结果值（`typ` 类型）。
+        dst: ValueId,
+        /// `ok`（comma-ok 形态）。
+        ok: Option<ValueId>,
+        /// 被断言的接口值。
+        x: ValueId,
+        /// 目标类型（具体类型或接口）。
+        typ: TypeId,
+    },
 }
 
 /// 终止符。**边上的实参挂在终止符上**（`V7` 的比对面）。
@@ -610,6 +842,7 @@ pub fn kind_of_instr(i: &Instr) -> &'static str {
         Instr::Load { .. } => "load",
         Instr::Store { .. } => "store",
         Instr::Call { .. } => "call",
+        Instr::TypeAssert { .. } => "assert",
     }
 }
 
@@ -644,5 +877,6 @@ pub fn kind_of_callee(c: &CalleeRef) -> &'static str {
         CalleeRef::Builtin(_) => "builtin",
         CalleeRef::Runtime(_) => "runtime",
         CalleeRef::Indirect(_) => "indirect",
+        CalleeRef::Iface { .. } => "iface",
     }
 }

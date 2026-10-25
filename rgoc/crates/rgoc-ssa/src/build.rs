@@ -25,8 +25,8 @@ use rgoc_types::{TypeId, TypeTable};
 
 use crate::diag::{Reject, SsaCode};
 use crate::ir::{
-    Block, BlockId, CalleeRef, Effect, Instr, Module, RuntimeFn, SYNTHETIC_FUNC, Sig, SsaFunc,
-    Term, ValueId,
+    Block, BlockId, CalleeRef, Effect, Instr, ItabDef, ItabEntry, MethodImpl, MethodSet, Module,
+    RuntimeFn, SYNTHETIC_FUNC, Sig, SsaFunc, Term, ValueId,
 };
 
 /// 空白标识符 `_` 的槽（HIR 约定：`_` 用 `SlotId(u32::MAX)` 占位）。
@@ -80,6 +80,11 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
         funcs.push(sf);
     }
 
+    // 方法表与静态 ITab（M9/Task 27/28）。两件事都要**在全部函数建完之后**做：
+    // 前者要按 (类型, 方法名) 查 FuncId，后者要扫所有 `Convert` 找 (接口, 具体类型) 对。
+    let methods = collect_methods(program, tt);
+    let itabs = collect_itabs(&funcs, &methods, tt);
+
     BuildOutcome {
         module: Module {
             funcs,
@@ -89,9 +94,115 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
             global_types: program.globals.iter().map(|g| g.typ).collect(),
             main: program.main,
             init,
+            methods,
+            itabs,
         },
         rejected,
     }
+}
+
+/// 诊断用的类型名（只给 `todo!` 的文案用；真名字归 M12）。
+fn dump_ty(_tt: &TypeTable, t: TypeId) -> String {
+    format!("t{}", t.index())
+}
+
+/// 方法名：`Func::name` 形如 `T.M` / `(*T).M`，取最后一个 `.` 之后。
+fn method_name(f: &rgoc_hir::Func) -> Option<String> {
+    f.name.rsplit('.').next().map(ToString::to_string)
+}
+
+/// 每个**有方法的具名类型**一块方法表（`MethodTable` 的原料）。
+///
+/// # 类型从哪来
+///
+/// `Func::method_of` 只有**名字**，而本 crate 要的是 `TypeId`。所以反过来取：
+/// `param_types[0]` 就是接收者的静态类型，剥一层指针即基类型。名字只用来取
+/// 方法名（`T.M` 的 `M`）—— 名字到类型的那一跳到不了这里。
+fn collect_methods(program: &Program, tt: &TypeTable) -> Vec<MethodSet> {
+    let mut by_ty: BTreeMap<TypeId, Vec<MethodImpl>> = BTreeMap::new();
+    for (i, f) in program.funcs.iter().enumerate() {
+        if f.method_of.is_none() {
+            continue;
+        }
+        let Some(&recv) = f.param_types.first() else {
+            continue;
+        };
+        let base = crate::ir::strip_ptr(tt, recv);
+        let Some(name) = method_name(f) else { continue };
+        by_ty.entry(base).or_default().push(MethodImpl {
+            name,
+            params: f.param_types.iter().skip(1).copied().collect(),
+            results: f.result_types.clone(),
+            func: FuncId(i as u32),
+            hops: Vec::new(),
+        });
+    }
+    let mut out: Vec<MethodSet> = by_ty
+        .into_iter()
+        .map(|(ty, mut methods)| {
+            // 名字升序：`MethodTable` 的条目序必须确定（查表与发射两侧一致）
+            methods.sort_by(|a, b| a.name.cmp(&b.name));
+            MethodSet { ty, methods }
+        })
+        .collect();
+    // 外层顺序按 `TypeId`：`.rodata` 的字节与它逐条对应。
+    // 用 `TypeId` 而不是 `type_hash`：本 crate 不依赖 `rgoc-meta`（`type_hash`
+    // 在那边），而**同一次编译**里 `TypeId` 是确定的 —— 排序只需要「确定」。
+    out.sort_by_key(|m| m.ty.index());
+    out
+}
+
+/// 扫出所有 `(接口, 具体类型)` 对 —— 每个 `Convert` 到接口类型的指令就是一个赋值点。
+///
+/// # 为什么要扫 IR 而不是 HIR
+///
+/// 装箱的**落点**是 `Instr::Convert`：`build` 把「具体 → 接口」的转换统一降到那里。
+/// 扫 HIR 会漏掉「形参传递时隐式装箱」这类没有显式 `Convert` 节点的地方吗？不会 ——
+/// `build` 在绑形参时也会发 `Convert`。所以 IR 是**唯一完备**的来源。
+fn collect_itabs(funcs: &[SsaFunc], methods: &[MethodSet], tt: &TypeTable) -> Vec<ItabDef> {
+    let mut pairs: BTreeSet<(TypeId, TypeId)> = BTreeSet::new();
+    let mut raw: Vec<(TypeId, TypeId)> = Vec::new();
+    for f in funcs {
+        for b in &f.blocks {
+            for i in &b.instrs {
+                let Instr::Convert { x, typ, .. } = i else {
+                    continue;
+                };
+                let src = f.value_types[x.index()];
+                if !is_iface(tt, *typ) || is_iface(tt, src) {
+                    continue;
+                }
+                let key = (*typ, src);
+                if pairs.insert(key) {
+                    raw.push((*typ, src));
+                }
+            }
+        }
+    }
+    let mut out: Vec<ItabDef> = raw
+        .into_iter()
+        .map(|(iface, concrete)| {
+            let names = crate::ir::iface_methods(tt, iface);
+            let fns: Vec<ItabEntry> = names
+                .iter()
+                .map(|n| {
+                    // 查不到方法 ⇒ 这个 (I, T) 对本来就不该出现（检查器已判 implements）。
+                    // 走到这里说明 build 造了一个非法的装箱 —— 给 `FuncId(u32::MAX)`
+                    // 让发射期当场炸，而不是安静地填一个 0 进 itab（那会在调用时跳 0）。
+                    let (func, hops) = crate::ir::resolve_method(tt, methods, concrete, n)
+                        .unwrap_or((rgoc_hir::FuncId(u32::MAX), Vec::new()));
+                    ItabEntry { func, hops }
+                })
+                .collect();
+            ItabDef {
+                iface,
+                concrete,
+                fns,
+            }
+        })
+        .collect();
+    out.sort_by_key(|it| (it.iface.index(), it.concrete.index()));
+    out
 }
 
 /// 扫**包级初始化式**（`Program::init_order` 的右侧）里的不支持面。
@@ -419,10 +530,11 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             unsup_expr(tt, x)
         }
         ExprKind::Call { callee, args, .. } => match callee {
-            Callee::Iface { .. } => Some((
-                SsaCode::IfaceDyn,
-                "接口方法调用（目标函数运行期才定）".to_string(),
-            )),
+            // 接口方法调用支持了（M9/Task 32）：`CalleeRef::Iface` 走 itab 派发。
+            // 被调方运行期才定 ⇒ 只扫实参与接收者。
+            Callee::Iface { recv, .. } => {
+                unsup_expr(tt, recv).or_else(|| args.iter().find_map(|a| unsup_expr(tt, a)))
+            }
             Callee::Method { recv, .. } => {
                 unsup_expr(tt, recv).or_else(|| args.iter().find_map(|a| unsup_expr(tt, a)))
             }
@@ -458,9 +570,8 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             "函数字面量 / 函数名当值用（IR 里没有函数引用值）".to_string(),
         )),
         ExprKind::Bound { .. } => Some((SsaCode::FuncValue, "方法值（`x.M` 不调用）".to_string())),
-        ExprKind::TypeAssert { .. } => {
-            Some((SsaCode::IfaceDyn, "类型断言（运行期类型判定）".to_string()))
-        }
+        // 类型断言支持了（M9/Task 33）：`Instr::TypeAssert`。
+        ExprKind::TypeAssert { x, .. } => unsup_expr(tt, x),
         ExprKind::Make { kind, args } => match kind {
             MakeKind::Chan => Some((SsaCode::Chan, "make(chan)".to_string())),
             // `make(map)` 与 `make([]T)` 都支持了：只看实参里有没有不可表达的东西。
@@ -963,6 +1074,22 @@ fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
         tt.type_of(rgoc_types::underlying(tt, t)),
         rgoc_types::typ::Type::Struct(_) | rgoc_types::typ::Type::Array { .. }
     )
+}
+
+/// 是不是接口类型（剥具名 / 别名）。
+///
+/// 只剥具名与别名，**不剥指针**：`*I` 不是接口（Go 里接口值不能取地址后当接口用）。
+fn is_iface(tt: &TypeTable, t: TypeId) -> bool {
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            rgoc_types::typ::Type::Named(id) => cur = tt.named_underlying(*id),
+            rgoc_types::typ::Type::Alias(id) => cur = tt.alias_rhs(*id),
+            rgoc_types::typ::Type::Interface(_) => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// 是否是**数组**（含具名数组、别名；`[]T` 不算）。
@@ -1824,6 +1951,28 @@ impl Fb<'_> {
         dst
     }
 
+    /// 这个表达式是不是 `nil` 字面量（静态类型是 `untyped nil`）。
+    fn is_untyped_nil_expr(&self, e: &Expr) -> bool {
+        if e.typ.index() >= self.tt.len() {
+            return false;
+        }
+        matches!(
+            self.tt.type_of(rgoc_types::underlying(self.tt, e.typ)),
+            rgoc_types::typ::Type::Basic(rgoc_types::BasicId::UntypedNil)
+        )
+    }
+
+    /// 某个类型的零值（`Const Int(0)` 在任意类型上表示零值，`R-20-1`）。
+    fn zero_of_ty(&mut self, t: TypeId) -> ValueId {
+        let dst = self.new_value(t);
+        self.emit(Instr::Const {
+            dst,
+            c: rgoc_hir::types::ConstVal::Int(0),
+            typ: t,
+        });
+        dst
+    }
+
     fn is_invalid(&self, t: TypeId) -> bool {
         t.index() >= self.tt.len() || matches!(self.tt.type_of(t), rgoc_types::typ::Type::Invalid)
     }
@@ -2285,6 +2434,20 @@ impl Fb<'_> {
     /// 以及「唯一实参是多值调用」的调用实参表。这三处都走这个入口。
     fn expr_multi(&mut self, e: &Expr) -> Vec<ValueId> {
         match &e.kind {
+            // `v, ok := x.(T)`：断言在**多值位置**一定是 comma-ok 形态
+            ExprKind::TypeAssert { x, to, .. } => {
+                let xv = self.expr(x);
+                let dst = self.new_value(*to);
+                let b = self.bool_ty();
+                let ok = self.new_value(b);
+                self.emit(Instr::TypeAssert {
+                    dst,
+                    ok: Some(ok),
+                    x: xv,
+                    typ: *to,
+                });
+                vec![dst, ok]
+            }
             ExprKind::Call {
                 callee,
                 args,
@@ -2418,9 +2581,113 @@ impl Fb<'_> {
                 };
                 self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, false, eff)
             }
-            Callee::Iface { .. } => {
-                todo!("M6/Task 31：接口动态派发要报 `SSA-UNSUPPORTED-IFACE-DYN`")
+            // 接口方法调用（`M9/Task 32`）：槽号 = 方法名在 `iface_methods` 序里的下标。
+            //
+            // 槽序**只在一处定义**（`crates::ir::iface_methods`）：静态 ITab 的填序、
+            // 这里的取槽序、`rt_itab` 的查序三处必须一致，否则 `i.A()` 会调到 `B`。
+            Callee::Iface { recv, name } => {
+                let rv = self.expr(recv);
+                let names = crate::ir::iface_methods(self.tt, recv.typ);
+                let slot = names.iter().position(|n| n == name).unwrap_or_else(|| {
+                    todo!(
+                        "接口 {} 没有方法 {name}（检查器应已拒绝）",
+                        dump_ty(self.tt, recv.typ)
+                    )
+                });
+                let (rtypes, sig) = self.iface_sig(recv.typ, name);
+                let avs = self.eval_args(args, spread);
+                let avs = self.pack_variadic(avs, &sig, None, dots);
+                // 被调方运行期才定 ⇒ 副作用按最保守算（可能写、可能 panic、可能打印）
+                let eff = Effect {
+                    writes: Vec::new(),
+                    writes_all: true,
+                    may_panic: true,
+                    may_call_back: true,
+                    prints: true,
+                };
+                self.emit_call(
+                    CalleeRef::Iface {
+                        recv: rv,
+                        slot: slot as u32,
+                    },
+                    avs,
+                    &rtypes,
+                    false,
+                    eff,
+                )
             }
+        }
+    }
+
+    /// 接口方法 `name` 的 `(结果类型表, 签名摘要)`。
+    ///
+    /// 静态可读：接口的方法签名就写在 `InterfaceDef` 里，没有理由去猜。
+    fn iface_sig(&self, iface: TypeId, name: &str) -> (Vec<TypeId>, Sig) {
+        use rgoc_types::typ::Type;
+        let mut cur = iface;
+        for _ in 0..64 {
+            match self.tt.type_of(cur) {
+                Type::Named(id) => cur = self.tt.named_underlying(*id),
+                Type::Alias(id) => cur = self.tt.alias_rhs(*id),
+                Type::Interface(iid) => {
+                    let def = self.tt.interface_def(*iid);
+                    let Some((_, sig)) = def.methods.iter().find(|(n, _)| n == name) else {
+                        return (
+                            Vec::new(),
+                            Sig {
+                                params: 0,
+                                results: 0,
+                                variadic: false,
+                            },
+                        );
+                    };
+                    let Some(Type::Signature(sid)) = Some(self.tt.type_of(*sig)) else {
+                        return (
+                            Vec::new(),
+                            Sig {
+                                params: 0,
+                                results: 0,
+                                variadic: false,
+                            },
+                        );
+                    };
+                    let sd = self.tt.signature_def(*sid);
+                    let params = self.tuple_types(sd.params);
+                    let results = self.tuple_types(sd.results);
+                    return (
+                        results.clone(),
+                        Sig {
+                            params: params.len(),
+                            results: results.len(),
+                            variadic: sd.variadic,
+                        },
+                    );
+                }
+                _ => break,
+            }
+        }
+        (
+            Vec::new(),
+            Sig {
+                params: 0,
+                results: 0,
+                variadic: false,
+            },
+        )
+    }
+
+    /// 元组的元素类型（非元组 ⇒ 单元素 / 空）。
+    fn tuple_types(&self, t: TypeId) -> Vec<TypeId> {
+        match self.tt.type_of(t) {
+            rgoc_types::typ::Type::Tuple(tid) => self
+                .tt
+                .tuple_def(*tid)
+                .vars
+                .iter()
+                .map(|(_, x)| *x)
+                .collect(),
+            rgoc_types::typ::Type::Invalid => Vec::new(),
+            _ => vec![t],
         }
     }
 
@@ -2603,8 +2870,20 @@ impl Fb<'_> {
                 y,
             } => self.short_circuit(e, *op, x, y),
             ExprKind::Binary { op, x, y } => {
-                let mut lhs = self.expr(x);
-                let mut rhs = self.expr(y);
+                // `i == nil` / `p == nil`：nil 那侧**不能按 `untyped nil` 建值** ——
+                // 那个类型没有运行期布局（帧建不起来，实测 i4 fixture：
+                // 「v4 的类型 t31 没有运行期布局」）。直接建成对面那个类型的零值，
+                // 也正是 Go 的语义（nil 在上下文里取对面的类型）。
+                let mut lhs = if self.is_untyped_nil_expr(x) {
+                    self.zero_of_ty(y.typ)
+                } else {
+                    self.expr(x)
+                };
+                let mut rhs = if self.is_untyped_nil_expr(y) {
+                    self.zero_of_ty(x.typ)
+                } else {
+                    self.expr(y)
+                };
                 match op {
                     // 移位：只有左操作数要跟结果同型（计数可以是别的整数型）
                     BinOp::Shl | BinOp::Shr => {
@@ -2719,6 +2998,25 @@ impl Fb<'_> {
                     0 => todo!("0 结果的调用不能当值使用（检查器应已拒绝）"),
                     n => todo!("{n} 个结果的调用出现在单值位置（检查器应已拒绝）"),
                 }
+            }
+            // 类型断言（`M9/Task 33`）：`x.(T)` / `v, ok := x.(T)`。
+            //
+            // 单值形态**会 panic**（失败即 `rt_panic_assert`），所以 `ok == None`
+            // 不是「省一个结果」，而是「失败即终止」。
+            ExprKind::TypeAssert { x, to, comma_ok } => {
+                let xv = self.expr(x);
+                let dst = self.new_value(*to);
+                let ok = comma_ok.then(|| {
+                    let b = self.bool_ty();
+                    self.new_value(b)
+                });
+                self.emit(Instr::TypeAssert {
+                    dst,
+                    ok,
+                    x: xv,
+                    typ: *to,
+                });
+                dst
             }
             ExprKind::Composite(c) => self.composite(c),
             // `a[i]`：数组元素在槽的存储里（走那个根），slice 元素在堆根上，

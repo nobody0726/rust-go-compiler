@@ -205,6 +205,11 @@ fn render_instr(i: &Instr) -> String {
             // `...` 是**语义**（展开 vs 单个），不是排版（`R-35-1`）
             if *dots { " ..." } else { "" }
         ),
+        // `C10` §3（M9/Task 33 追加）：`v3 = assert v1 : t5` / `v3, v4 = assert v1 : t5`
+        Instr::TypeAssert { dst, ok, x, typ } => match ok {
+            Some(o) => format!("{}, {} = assert {} : {}", v(*dst), v(*o), v(*x), t(*typ)),
+            None => format!("{} = assert {} : {}", v(*dst), v(*x), t(*typ)),
+        },
     }
 }
 
@@ -217,6 +222,8 @@ fn render_callee(c: &CalleeRef) -> String {
         // （不含 `rt_` 前缀，与 `builtin` 的写法同构）。
         CalleeRef::Runtime(f) => format!("runtime {}", f.as_str()),
         CalleeRef::Indirect(x) => format!("indirect {}", v(*x)),
+        // `C10` §3（M9/Task 32 追加）：`call iface(v1, slot#2)(...)`
+        CalleeRef::Iface { recv, slot } => format!("iface({}, slot#{})", v(*recv), slot),
     }
 }
 

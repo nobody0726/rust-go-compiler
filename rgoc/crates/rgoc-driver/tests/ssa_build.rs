@@ -768,6 +768,7 @@ fn def_block(f: &SsaFunc, v: ValueId) -> BlockId {
                 | Instr::Make { dst, .. }
                 | Instr::Load { dst, .. }
                 | Instr::Store { dst, .. } => Some(*dst),
+                Instr::TypeAssert { dst, .. } => Some(*dst),
                 Instr::Call { dsts, .. } => {
                     if dsts.contains(&v) {
                         Some(v)
@@ -1821,6 +1822,7 @@ fn stores(f: &SsaFunc) -> Vec<(RootId, ValueId, ValueId)> {
 fn def_instr(f: &SsaFunc, v: ValueId) -> Option<&Instr> {
     instrs(f).into_iter().find(|i| match i {
         Instr::Load { dst, .. }
+        | Instr::TypeAssert { dst, .. }
         | Instr::Const { dst, .. }
         | Instr::Copy { dst, .. }
         | Instr::Bin { dst, .. }

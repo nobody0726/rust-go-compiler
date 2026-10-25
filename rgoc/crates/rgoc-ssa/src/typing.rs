@@ -203,6 +203,22 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
         Instr::Composite { dst, typ, .. } => match_type(f, *dst, *typ, "composite"),
         Instr::Make { dst, typ, .. } => match_type(f, *dst, *typ, "make"),
         Instr::Load { dst, typ, .. } => match_type(f, *dst, *typ, "load"),
+        // 类型断言（`M9/Task 33`）：dst 的类型必须等于 `typ`；源必须是接口；
+        // `ok` 必须是 bool。三条都是「原料在本层」的判定（不像 `Field` 要字段表）。
+        Instr::TypeAssert { dst, ok, x, typ } => {
+            match_type(f, *dst, *typ, "assert")?;
+            let xt = need(f, *x)?;
+            if !is_iface_ty(tt, xt) {
+                return Err(format!("assert 的源类型 {xt:?} 不是接口"));
+            }
+            if let Some(o) = ok {
+                let ot = need(f, *o)?;
+                if !is_bool(tt, ot) {
+                    return Err(format!("assert 的 ok 必须是 bool，实际 {ot:?}"));
+                }
+            }
+            Ok(())
+        }
         Instr::AddrOf { .. }
         | Instr::Field { .. }
         | Instr::Index { .. }
@@ -210,6 +226,21 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
         | Instr::Store { .. }
         | Instr::Call { .. } => Ok(()),
     }
+}
+
+/// 是不是接口类型（剥具名 / 别名，不剥指针）。
+fn is_iface_ty(tt: &TypeTable, t: TypeId) -> bool {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Interface(_) => return true,
+            _ => return false,
+        }
+    }
+    false
 }
 
 fn need(f: &SsaFunc, v: crate::ir::ValueId) -> Result<TypeId, String> {

@@ -167,7 +167,7 @@ fn st_s(asm: &mut Asm, reg: &str, off: i32) {
 }
 
 /// 把一个 64 位立即数装进寄存器（`movz` + 最多三条 `movk`）。
-fn load_imm(asm: &mut Asm, reg: &str, v: i64) {
+pub(crate) fn load_imm(asm: &mut Asm, reg: &str, v: i64) {
     let u = v as u64;
     let chunks = [
         (u & 0xffff) as u16,
@@ -290,7 +290,7 @@ fn epilogue(fr: &Frame, asm: &mut Asm) {
 }
 
 /// 函数的汇编符号名。
-fn fn_sym(id: rgoc_hir::FuncId) -> String {
+pub(crate) fn fn_sym(id: rgoc_hir::FuncId) -> String {
     format!("fn{}", id.0)
 }
 
@@ -404,6 +404,7 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         } => bin(cx, *dst, *op, *lhs, *rhs, *typ, asm),
         Instr::Un { dst, op, x, typ } => un(cx, *dst, *op, *x, *typ, asm),
         Instr::Convert { dst, x, typ } => convert(cx, *dst, *x, *typ, asm),
+        Instr::TypeAssert { dst, ok, x, typ } => type_assert(cx, *dst, *ok, *x, *typ, asm),
         Instr::AddrOf { dst, root } => addr_of(cx, *dst, root, asm),
         Instr::Field { dst, base, index } => field(cx, *dst, *base, *index, asm),
         Instr::Index { dst, base, i } => index(cx, *dst, *base, *i, asm),
@@ -988,10 +989,232 @@ fn un(cx: &Ctx<'_>, dst: ValueId, op: UnOp, x: ValueId, typ: TypeId, asm: &mut A
     }
 }
 
+// ------------------------ 接口（M9/Task 31-35）------------------------
+
+/// 是不是接口类型（剥具名 / 别名；不剥指针 —— `*I` 不是接口）。
+fn is_iface_ty(tt: &TypeTable, t: TypeId) -> bool {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Interface(_) => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// 接口的**方法数**。`0` 表示 `any` / `interface{}`（值是 `{type, data}`），
+/// 否则是 `{tab, data}`。
+///
+/// 槽序的**唯一来源**是 `rgoc_ssa::ir::iface_methods` —— 静态 ITab 的填序、
+/// 调用点的取槽序、`rt_itab` 的查序都用它（`R-9-10`）。
+fn iface_arity(tt: &TypeTable, t: TypeId) -> usize {
+    rgoc_ssa::ir::iface_methods(tt, t).len()
+}
+
+/// 具体值到接口值（`M9/Task 31`）。
+///
+/// | 动态类型 | `data` 字 | 为什么 |
+/// |---|---|---|
+/// | 指针 `*C` | 指针**值本身** | 官方同口径；装箱会让「两个 nil 指针的接口」不相等 |
+/// | 其余 `C` | `rt_box(desc(C), &v)` | 值必须活在堆上（接口可能比它活得久）|
+fn box_iface(cx: &Ctx<'_>, dst: ValueId, x: ValueId, to: TypeId, asm: &mut Asm) {
+    let (d, s) = (cx.slot(dst), cx.slot(x));
+    let from = cx.ty(x);
+    let fh = rgoc_meta::desc::type_hash(cx.tt, from);
+    let is_ptr = matches!(
+        cx.tt.type_of(rgoc_types::underlying(cx.tt, from)),
+        rgoc_types::typ::Type::Pointer(_)
+    );
+    if is_ptr {
+        ld_x(asm, "x10", s.off);
+        st_x(asm, "x10", d.off + 8);
+    } else {
+        load_addr(asm, "x0", &crate::module::desc_symbol(fh));
+        addr(asm, s.off);
+        asm.ins("mov x1, x9");
+        asm.ins("bl rt_box");
+        st_x(asm, "x0", d.off + 8);
+    }
+    if iface_arity(cx.tt, to) == 0 {
+        // `any`：第 0 个字是**类型描述符**，不是 itab
+        load_addr(asm, "x10", &crate::module::desc_symbol(fh));
+    } else {
+        load_addr(
+            asm,
+            "x10",
+            &crate::module::itab_symbol(rgoc_meta::desc::type_hash(cx.tt, to), fh),
+        );
+    }
+    st_x(asm, "x10", d.off);
+}
+
+/// 接口到接口（`var j J = i` / `var a any = i`）。
+///
+/// * 目标 `any`：`type = 源的 concrete desc`（不重新装箱）；
+/// * 目标有方法：`tab = rt_itab(desc(J), 源的 concrete desc)`，null 则 panic。
+fn retag_iface(cx: &Ctx<'_>, dst: ValueId, x: ValueId, to: TypeId, asm: &mut Asm) {
+    let (d, s) = (cx.slot(dst), cx.slot(x));
+    let from = cx.ty(x);
+    // 源的具体类型 desc 放进 x11
+    if iface_arity(cx.tt, from) == 0 {
+        ld_x(asm, "x11", s.off);
+    } else {
+        ld_x(asm, "x9", s.off);
+        asm.ins("ldr x11, [x9, #8]");
+    }
+    // data 先落位（后面要 bl，x10 会被打掉）
+    ld_x(asm, "x10", s.off + 8);
+    st_x(asm, "x10", d.off + 8);
+    if iface_arity(cx.tt, to) == 0 {
+        st_x(asm, "x11", d.off);
+        return;
+    }
+    load_addr(
+        asm,
+        "x0",
+        &crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, to)),
+    );
+    asm.ins("mov x1, x11");
+    asm.ins("bl rt_itab");
+    let ok = format!(".Lretag{}", asm.fresh_label());
+    asm.ins(&format!("cbnz x0, {ok}"));
+    asm.ins("bl rt_panic_assert");
+    asm.label(&ok);
+    st_x(asm, "x0", d.off);
+}
+
+/// `x.{typ}`（`M9/Task 33`）。`ok == None` 时失败 panic；`Some` 时失败给零值 + false。
+fn type_assert(
+    cx: &Ctx<'_>,
+    dst: ValueId,
+    ok: Option<ValueId>,
+    x: ValueId,
+    typ: TypeId,
+    asm: &mut Asm,
+) {
+    let (d, s) = (cx.slot(dst), cx.slot(x));
+    let from = cx.ty(x);
+    let dsize = rgoc_types::layout::layout(cx.tt, typ).map_or(0, |l| l.size);
+    let to_iface = is_iface_ty(cx.tt, typ);
+    // 源的具体类型 desc 放进 x11
+    if iface_arity(cx.tt, from) == 0 {
+        ld_x(asm, "x11", s.off);
+    } else {
+        ld_x(asm, "x9", s.off);
+        asm.ins("ldr x11, [x9, #8]");
+    }
+
+    if to_iface {
+        // 到接口：tab = rt_itab(desc(J), concrete)；null 表示失败
+        load_addr(
+            asm,
+            "x0",
+            &crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, typ)),
+        );
+        asm.ins("mov x1, x11");
+        asm.ins("bl rt_itab");
+        // data 与 tab 一起落位（失败时 tab 是 0，正好是零值）
+        st_x(asm, "x0", d.off);
+        ld_x(asm, "x10", s.off + 8);
+        st_x(asm, "x10", d.off + 8);
+        finish_assert(cx, ok, asm, "x0");
+        return;
+    }
+
+    // 到具体类型：比 desc
+    load_addr(
+        asm,
+        "x9",
+        &crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, typ)),
+    );
+    asm.ins("cmp x11, x9");
+    let hit = format!(".Lass_hit{}", asm.fresh_label());
+    let done = format!(".Lass_end{}", asm.fresh_label());
+    asm.ins(&format!("b.eq {hit}"));
+    // 未命中
+    match ok {
+        None => {
+            asm.ins("bl rt_panic_assert");
+            asm.ins(&format!("b {done}"));
+        }
+        Some(o) => {
+            // `v, ok := x.(T)` 失败：v 是**零值**，ok = false
+            zero_slot(asm, d.off, dsize.max(8));
+            st_x(asm, "xzr", cx.slot(o).off);
+            asm.ins(&format!("b {done}"));
+        }
+    }
+    asm.label(&hit);
+    // 命中：data 指向值本身（指针动态类型时**就是**那个指针）
+    let is_ptr = matches!(
+        cx.tt.type_of(rgoc_types::underlying(cx.tt, typ)),
+        rgoc_types::typ::Type::Pointer(_)
+    );
+    if is_ptr {
+        ld_x(asm, "x9", s.off + 8);
+        st_x(asm, "x9", d.off);
+    } else if dsize > 0 {
+        // x0 = dst 地址，x1 = 源（盒子），x2 = 字节数
+        addr(asm, d.off);
+        asm.ins("mov x0, x9");
+        ld_x(asm, "x1", s.off + 8);
+        load_imm(asm, "x2", i64::from(dsize));
+        asm.ins("bl rt_memcpy");
+    }
+    if let Some(o) = ok {
+        load_imm(asm, "x10", 1);
+        st_x(asm, "x10", cx.slot(o).off);
+    }
+    asm.label(&done);
+}
+
+/// 断言的收尾：`ok` 有值时 `ok = (reg != 0)`；没有值时 `reg == 0` 就 panic。
+fn finish_assert(cx: &Ctx<'_>, ok: Option<ValueId>, asm: &mut Asm, reg: &str) {
+    match ok {
+        Some(o) => {
+            asm.ins(&format!("cmp {reg}, #0"));
+            asm.ins("cset x10, ne");
+            st_x(asm, "x10", cx.slot(o).off);
+        }
+        None => {
+            let good = format!(".Lass_nz{}", asm.fresh_label());
+            asm.ins(&format!("cbnz {reg}, {good}"));
+            asm.ins("bl rt_panic_assert");
+            asm.label(&good);
+        }
+    }
+}
+
 /// 类型转换。
 fn convert(cx: &Ctx<'_>, dst: ValueId, x: ValueId, typ: TypeId, asm: &mut Asm) {
     let (d, s) = (cx.slot(dst), cx.slot(x));
     let from = cx.ty(x);
+
+    // 接口的三条转换（M9/Task 31 / 33）。**必须排在最前面**：接口是
+    // `SlotClass::Agg`（16 字节），落到下面按 class 分派的表里只会被按字节搬，
+    // 而「装箱」根本不是搬字节。
+    let to_if = is_iface_ty(cx.tt, typ);
+    let from_if = is_iface_ty(cx.tt, from);
+    match (from_if, to_if) {
+        (false, true) => {
+            box_iface(cx, dst, x, typ, asm);
+            return;
+        }
+        (true, true) => {
+            retag_iface(cx, dst, x, typ, asm);
+            return;
+        }
+        (true, false) => {
+            // 接口到具体：单值形态（失败 panic）。comma-ok 走 `Instr::TypeAssert`。
+            type_assert(cx, dst, None, x, typ, asm);
+            return;
+        }
+        (false, false) => {}
+    }
     let to_class = cx.class(dst);
     let from_class = cx.class(x);
 
@@ -1810,6 +2033,34 @@ fn call(
             take_results(cx, dsts, asm);
             Ok(())
         }
+        // 接口方法调用（`M9/Task 32`）：`fn = tab.fn[slot]`，第 0 个实参是 `data`。
+        CalleeRef::Iface { recv, slot } => {
+            let r = cx.slot(*recv);
+            // 形参表 = [data] + 用户实参。`data` 的类型用 `Invalid` 占位：
+            // `place_args` 只看 class/size，`Invalid` 落 `Int`（8 字节、1 个 `x`），
+            // 正是指针的样子 —— 而本 crate 没有可变 `TypeTable`，造不出 `*T`。
+            let mut want: Vec<TypeId> = Vec::with_capacity(args.len() + 1);
+            want.push(TypeId::from_index(0));
+            want.extend(args.iter().map(|a| cx.ty(*a)));
+            let (locs, _) = place_args(cx.tt, &want);
+            match locs.first().copied() {
+                Some(ArgLoc::X { reg, .. }) => ld_x(asm, &format!("x{reg}"), r.off + 8),
+                Some(ArgLoc::Stack { off }) => {
+                    ld_x(asm, "x10", r.off + 8);
+                    asm.ins(&format!("str x10, [sp, #{off}]"));
+                }
+                // `data` 是指针，永远落 `x` 或栈 —— 落到 `v` 说明布局算错了
+                Some(ArgLoc::V { .. }) | None => unreachable!("接口 data 不是浮点类"),
+            }
+            pass_args_from(cx, &want, args, 1, asm);
+            // `fn` **最后**取：上面装实参用过 `x9`/`x10`。`x16` 是 IP0（链接器
+            // 用来做 veneer 的临时寄存器），被调方不会指望它保活。
+            ld_x(asm, "x9", r.off);
+            asm.ins(&format!("ldr x16, [x9, #{}]", 16 + 8 * slot));
+            asm.ins("blr x16");
+            take_results(cx, dsts, asm);
+            Ok(())
+        }
         CalleeRef::Indirect(_) => Err(CgCode::IndirectCall),
     }
 }
@@ -1844,8 +2095,20 @@ impl Ctx<'_> {
 fn pass_args(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], asm: &mut Asm) {
     let arg_tys: Vec<TypeId> = args.iter().map(|a| cx.ty(*a)).collect();
     let want = callee_param_tys(&arg_tys, callee, cx.siblings);
-    let (locs, _) = place_args(cx.tt, &want);
+    pass_args_from(cx, &want, args, 0, asm);
+}
+
+/// 按**给定的形参类型表**装实参；`args[0]` 落在 `locs[first]`。
+///
+/// # 为什么需要 `first`
+///
+/// 接口派发的第 0 个实参是 `data`（不由调用者给，直接从接口值的第 2 个字取），
+/// 而其余实参的位置要**排在它后面**。传 `first = 1` 就把这件事说清楚了 ——
+/// 比在 `pass_args` 里加一个 `Option<data>` 更少分支。
+fn pass_args_from(cx: &Ctx<'_>, want: &[TypeId], args: &[ValueId], first: usize, asm: &mut Asm) {
+    let (locs, _) = place_args(cx.tt, want);
     for (i, a) in args.iter().enumerate() {
+        let i = i + first;
         let s = cx.slot(*a);
         let acls = cx.class(*a);
         let wty = want.get(i).copied().unwrap_or_else(|| cx.ty(*a));
@@ -1855,6 +2118,14 @@ fn pass_args(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], a
         match loc {
             ArgLoc::X { reg, n } => match wcls {
                 // 聚合按指针传：把**本帧槽的地址**交出去（被调方入口会拷贝）。
+                //
+                // ⚠️ 但实参**自己就是指针**时（方法表达式 `(*T).M(&t)`：形参是
+                // `T`、实参是 `*T`）不能再取地址 —— 那会传一个 `**T` 进去，
+                // 被调方 `len(t)` 读到的是指针的位（实测 `method3.go`：
+                // `(*T).Len 187650284476264`）。
+                SlotClass::Agg if acls != SlotClass::Agg => {
+                    ld_x(asm, &format!("x{reg}"), s.off);
+                }
                 SlotClass::Agg => {
                     addr(asm, s.off);
                     asm.ins(&format!("mov x{reg}, x9"));

@@ -553,6 +553,9 @@ fn max_outgoing(
                 })
                 .collect();
             let fid = match callee {
+                // 接口派发：被调方运行期才定 ⇒ 没有静态签名可查（出参槽按 0 算，
+                // 而 `call` 自己会按接口签名写结果，见 `isel::call`）
+                CalleeRef::Iface { .. } => None,
                 CalleeRef::Func(id) => Some(*id),
                 CalleeRef::Method { func, .. } => Some(*func),
                 // 内建走 runtime 的固定签名，没有栈实参。
