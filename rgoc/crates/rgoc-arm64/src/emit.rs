@@ -143,6 +143,24 @@ impl Asm {
         label
     }
 
+    /// 在 `.rodata` 里定义一个**具名**符号，内容由调用方逐行给出。
+    ///
+    /// # 为什么需要「原始行」而不是 `rodata_bytes`
+    ///
+    /// `TypeDesc` 的 40 字节里混着两种东西：前 16 字节是纯数据，后 24 字节是
+    /// **三个指针**（`gcdata` / `elem` / `methods`）。指针必须发成
+    /// `.quad <符号>`（链接期重定位），而 `rodata_bytes` 只会发 `.byte`。
+    ///
+    /// 标签必须由调用方给（`__desc_<hash>`）：它是**跨模块**的符号（`rt_alloc`
+    /// 的实参、M10 的扫描器都按它找），不能用 `.Lstr<N>` 这种按调用顺序的编号。
+    pub fn rodata_named_raw(&mut self, label: &str, body: &[String]) {
+        let _ = writeln!(self.rodata, ".p2align 3");
+        let _ = writeln!(self.rodata, "{label}:");
+        for line in body {
+            let _ = writeln!(self.rodata, "  {line}");
+        }
+    }
+
     /// 把一段字节放进 `.data` 并**用给定的名字**当标签（包级全局用）。
     ///
     /// 与 [`Asm::data_bytes`] 的区别只有标签来源：全局的符号名必须是稳定的

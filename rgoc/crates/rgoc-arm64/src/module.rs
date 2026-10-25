@@ -12,9 +12,13 @@
 //! 每个 `GlobalId` 一个 `.data` 标签 `g<id>`，大小按 `global_types` 的布局给、
 //! 内容全零（Go 的包级变量零值语义）。零大小全局只发标签不发字节。
 
+use std::collections::BTreeMap;
+
+use rgoc_meta::desc::{DescBuilder, type_hash};
 use rgoc_ssa::ir::Module;
 use rgoc_types::TypeTable;
-use rgoc_types::layout::layout;
+use rgoc_types::layout::{layout, ptr_mask};
+use rgoc_types::typ::TypeId;
 
 use crate::diag::CgCode;
 use crate::emit::Asm;
@@ -68,6 +72,12 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
         }
     }
 
+    // ②b 类型元数据（`.rodata`）。
+    //
+    // 必须在函数之前：`isel` 处理 `new(T)` / `make` 时要按类型查 desc 符号名，
+    // 而符号名由 `emit_descs` 分配（`__desc_<hash>`）。
+    emit_descs(&mut asm, m, tt);
+
     // ③ 逐函数。
     //
     // 先把 `FuncId → 函数` 建起来：调用点的寄存器分配由**被调方的形参类型**
@@ -102,6 +112,190 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     asm.ins("bl rt_exit");
 
     Ok(asm.render())
+}
+
+/// desc 符号名。**唯一来源** —— `isel` 与 M10 都按它找。
+///
+/// 用 `hash` 而不是 `TypeId`：`TypeId` 是容器内的身份，同一个类型在两次编译里
+/// 可以是不同的号；而 hash 是类型自己的身份（`T-META-05`）。
+#[must_use]
+pub fn desc_symbol(hash: u32) -> String {
+    format!("__desc_{hash:08x}")
+}
+
+/// 收集「需要发射 desc 的类型闭包」。
+///
+/// # 闭包怎么算
+///
+/// 起点是模块里**出现过的**类型：包级变量的类型 + 每个值的类型 + 取过地址的槽的
+/// 类型。然后沿 **`elem` 链**递归 —— 因为 `TypeDesc.elem` 是个指针，被指的那块
+/// 必须也存在。
+///
+/// | 类型 | 闭包带谁 |
+/// |---|---|
+/// | `*T` / `[]T` / `[n]T` / `chan T` | `T` |
+/// | `map[K]V` | `K` **与** `V`（`MapObj` 的 `kdesc` / `vdesc` 要指它们）|
+/// | `struct{...}` | **不带**字段类型（字段的根由本块的 `gcdata` 表达，不需要单独一块）|
+/// | `func` | 不带（签名没有 desc）|
+///
+/// # 去重键是 `hash`
+///
+/// 同一个类型（同一个 `hash`）只发一块。这不只是省体积：**两块地址不同**会让
+/// 「接口断言 `x.(int)`」在两条路径上拿到不同的 desc 指针，从而判成不同类型。
+#[must_use]
+pub fn type_closure(m: &Module, tt: &TypeTable) -> BTreeMap<u32, TypeId> {
+    let mut out: BTreeMap<u32, TypeId> = BTreeMap::new();
+    let mut stack: Vec<TypeId> = Vec::new();
+    // **无类型常量不作为根**：它们没有运行期表示（`R-13-1` 在写入点收敛成默认
+    // 类型），给它们发 desc 只会得到「每个含字面量的程序多一块死数据」。
+    //
+    // ⚠️ 但**不能**在闭包扩展里也过滤：`*untyped int` 这种指针真的会出现
+    // （`newexpr.go` 里就有，指向一个常量槽），而它的 `elem` 必须存在，
+    // 否则链接期 `undefined reference to __desc_…`。所以过滤只在根上做。
+    let mut roots: Vec<TypeId> = Vec::new();
+    roots.extend(m.global_types.iter().copied());
+    for f in &m.funcs {
+        roots.extend(f.value_types.iter().copied());
+        roots.extend(f.slot_types.values().copied());
+    }
+    for t in roots {
+        if !is_untyped_basic(tt, t) {
+            stack.push(t);
+        }
+    }
+    while let Some(t) = stack.pop() {
+        // 没有布局的类型不进闭包（它们本就该被拒，`kind_of` 会给 `Invalid`）。
+        if layout(tt, t).is_none() {
+            continue;
+        }
+        let h = type_hash(tt, t);
+        if out.contains_key(&h) {
+            continue;
+        }
+        out.insert(h, t);
+        match tt.type_of(t) {
+            rgoc_types::typ::Type::Pointer(e) | rgoc_types::typ::Type::Slice(e) => stack.push(*e),
+            rgoc_types::typ::Type::Array { elem, .. } => stack.push(*elem),
+            rgoc_types::typ::Type::Chan { elem, .. } => stack.push(*elem),
+            rgoc_types::typ::Type::Map { key, elem } => {
+                stack.push(*key);
+                stack.push(*elem);
+            }
+            // `Named` **不**主动带本体：具名类型的 desc 自带 size/kind/gcdata，
+            // 不需要本体那块。而 `type S struct{...}` 若把匿名结构体也发一块，
+            // 就会有两块 `kind=Struct` 的 desc（大小相同、hash 不同），
+            // 任何「按 kind 找」的调试与判据都会歧义。
+            // 本体真的被用到时它自己会在 `value_types` 里出现。
+            rgoc_types::typ::Type::Alias(id) => stack.push(tt.alias_rhs(*id)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// 是无类型常量的基本类型吗（`untyped int` / `untyped string` …）。
+fn is_untyped_basic(tt: &TypeTable, t: TypeId) -> bool {
+    match tt.type_of(t) {
+        rgoc_types::typ::Type::Basic(b) => b.is_untyped(),
+        _ => false,
+    }
+}
+
+/// `ptrdata`：最后一个为根的字**之后**的字节数（`string` 是 8，不是 16）。
+///
+/// 官方 `internal/abi/type.go` 的 `PtrBytes` 就是这个含义 —— `gcdata` 只覆盖
+/// `[0, ptrdata)`，再往后的位没人读。写大了不会错但会浪费；写小了会**漏扫**。
+#[must_use]
+pub fn ptrdata_of(mask: &[bool]) -> u32 {
+    let last = mask.iter().rposition(|b| *b);
+    match last {
+        Some(i) => u32::try_from((i + 1) * 8).unwrap_or(u32::MAX),
+        None => 0,
+    }
+}
+
+/// 把 ptrmask 打成字节位图（每字 1 位，**LSB first**）。
+///
+/// 位序与官方 `gcdata` 一致：字 `i` 对应字节 `i/8` 的位 `i%8`。
+#[must_use]
+pub fn gcdata_bytes(mask: &[bool]) -> Vec<u8> {
+    let mut out = vec![0u8; mask.len().div_ceil(8)];
+    for (i, b) in mask.iter().enumerate() {
+        if *b {
+            out[i / 8] |= 1 << (i % 8);
+        }
+    }
+    out
+}
+
+/// 把类型闭包的 desc 全部发射进 `.rodata`。
+fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable) {
+    let closure = type_closure(m, tt);
+    // 位图去重：同一份字节只发一份（`[]int` 与 `[3]int` 的位图可能相同）。
+    let mut bitmaps: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    for t in closure.values() {
+        let Some(mask) = ptr_mask(tt, *t) else {
+            continue;
+        };
+        // 没有根的类型**不发位图**：`ptrdata == 0` 时 `gcdata` 必须是 null
+        // （`C5` §10）。发一块全零的位图不算错，但它会让「`gcdata != null`
+        // 等价于有指针」这条推断失效 —— 而 M10 的扫描器很可能就这么写。
+        if !mask.iter().any(|b| *b) {
+            continue;
+        }
+        let bytes = gcdata_bytes(&mask);
+        if bytes.is_empty() {
+            continue;
+        }
+        if let std::collections::btree_map::Entry::Vacant(e) = bitmaps.entry(bytes.clone()) {
+            e.insert(asm.rodata_bytes(&bytes));
+        }
+    }
+    for (h, t) in &closure {
+        let Some(d) = DescBuilder::new(tt, *t).map(DescBuilder::build) else {
+            continue;
+        };
+        let mask = ptr_mask(tt, *t).unwrap_or_default();
+        let mut header: Vec<u8> = Vec::with_capacity(16);
+        header.extend_from_slice(&d.size.to_le_bytes());
+        header.extend_from_slice(&ptrdata_of(&mask).to_le_bytes());
+        header.extend_from_slice(&d.hash.to_le_bytes());
+        header.push(d.kind);
+        header.push(d.flags);
+        header.extend_from_slice(&[0, 0]); // 对齐填充（`kind` + `flags` = 2 字节）
+        let byte_list: Vec<String> = header.iter().map(u8::to_string).collect();
+        let gc_label = if mask.iter().any(|b| *b) {
+            bitmaps
+                .get(&gcdata_bytes(&mask))
+                .cloned()
+                .unwrap_or_else(|| "0".to_string())
+        } else {
+            "0".to_string()
+        };
+        let elem_label = elem_of(tt, *t)
+            .map(|e| desc_symbol(type_hash(tt, e)))
+            .unwrap_or_else(|| "0".to_string());
+        asm.rodata_named_raw(
+            &desc_symbol(*h),
+            &[
+                format!(".byte {}", byte_list.join(",")),
+                format!(".quad {gc_label}"),
+                format!(".quad {elem_label}"),
+                ".quad 0".to_string(), // methods（Task 27 填）
+            ],
+        );
+    }
+}
+
+/// `TypeDesc.elem` 该指谁（`None` ⇒ 发 `.quad 0`）。
+fn elem_of(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    use rgoc_types::typ::Type;
+    match tt.type_of(t) {
+        Type::Pointer(e) | Type::Slice(e) | Type::Array { elem: e, .. } => Some(*e),
+        // map / chan / struct / signature / iface / 标量：设计 §3.2 说「其余为 null」。
+        // map 的 K/V desc 由 `isel` 按 `desc_symbol(type_hash(...))` 直接引用。
+        _ => None,
+    }
 }
 
 /// 渲染整个模块的 `FRAME-MAP v1`（`C5` §8）。

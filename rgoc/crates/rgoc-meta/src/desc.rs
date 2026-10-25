@@ -482,6 +482,7 @@ impl<'a> DescBuilder<'a> {
             t,
             desc: TypeDesc {
                 size: l.size,
+                hash: type_hash(tt, t),
                 kind: kind_of(tt, t) as u8,
                 flags,
                 ..TypeDesc::EMPTY

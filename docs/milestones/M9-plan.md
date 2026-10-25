@@ -68,6 +68,12 @@ freestanding C（`rt.c` 815 → ~2200 行，零 libc，`svc #0`）；AArch64 / `
 
 > **本 Phase 不涨语料数字**（39 → 39）。它的价值是：后面每一段都依赖
 > `TypeDesc` / `ptr_mask` / `rt_alloc`，**绕不过**。
+>
+> ⚠️ **执行期调整（`R-9-1`）**：原计划的 Task 5/6/7 顺序是
+> `rt_alloc` → chunk 增长 → desc 发射。但 `rt_alloc` 的判据必须让 `new(T)` 真的
+> 走它，而 `new(T)` 要传 desc —— desc 还没发射时那条判据会**假绿**
+> （`new` 仍在调 `rt_arena_alloc`，测试照样过）。所以顺序改成
+> **desc 发射 → rt_alloc → chunk 增长**。内容一字未改，只是编号换了位。
 
 ### Task 1: `rgoc-meta` crate 与 `TypeDesc`
 
@@ -81,35 +87,11 @@ freestanding C（`rt.c` 815 → ~2200 行，零 libc，`svc #0`）；AArch64 / `
   `DescBuilder::new(tt: &TypeTable, t: TypeId) -> Option<Self>`；`DescBuilder::build(self) -> TypeDesc`
 - Consumes: `rgoc_types::{layout, TypeTable, TypeId}`
 
-- [ ] **Step 1: 写会红的测试**（`T-META-01`）
-
-```rust
-#[test]
-fn desc_布局是_c5_冻结的_40_字节() {
-    assert_eq!(core::mem::size_of::<TypeDesc>(), 40);
-    assert_eq!(core::mem::offset_of!(TypeDesc, size), 0);
-    assert_eq!(core::mem::offset_of!(TypeDesc, ptrdata), 4);
-    assert_eq!(core::mem::offset_of!(TypeDesc, hash), 8);
-    assert_eq!(core::mem::offset_of!(TypeDesc, kind), 12);
-    assert_eq!(core::mem::offset_of!(TypeDesc, flags), 13);
-    assert_eq!(core::mem::offset_of!(TypeDesc, gcdata), 16);
-    assert_eq!(core::mem::offset_of!(TypeDesc, elem), 24);
-    assert_eq!(core::mem::offset_of!(TypeDesc, methods), 32);
-}
-```
-
-- [ ] **Step 2: 跑它确认红**
-  Run: `… cargo test -p rgoc-meta` — Expected: 编译失败（`TypeDesc` 不存在）
-
-- [ ] **Step 3: 建 crate 与结构体**
-  `#[repr(C)]` 是**必须**的（偏移进契约）；字段序按 `C5` §10。`DescBuilder` 先只填
-  `size` / `kind` / `flags`，`gcdata`/`elem`/`methods` 留 `null`（后面几 Task 填）。
-
-- [ ] **Step 4: 跑它确认绿**
-  Run: `… cargo test -p rgoc-meta` — Expected: PASS
-
-- [ ] **Step 5: Commit**
-  `feat(meta): rgoc-meta crate 与 TypeDesc（Task 1）`
+- [x] **Step 1: 写会红的测试**（`T-META-01`）
+- [x] **Step 2: 跑它确认红**（编译失败：`TypeDesc` 不存在）
+- [x] **Step 3: 建 crate 与结构体**（`#[repr(C)]` 必须；`DescBuilder` 先只填 `size`）
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(meta): rgoc-meta crate 与 TypeDesc（Task 1）`
 
 ### Task 2: `ptr_mask` —— 从类型算指针位图
 
@@ -121,64 +103,27 @@ fn desc_布局是_c5_冻结的_40_字节() {
 - Produces: `pub fn ptr_mask(tt: &TypeTable, t: TypeId) -> Option<Vec<bool>>` —— 每 8 字节一格
 - Consumes: `layout()`、`Type::{Pointer, Slice, Basic, Struct, Array, Interface, Signature, Map, Chan}`
 
-- [ ] **Step 1: 写会红的测试**（`T-META-04` 的五个特例）
+- [x] **Step 1: 写会红的测试**（`T-META-04`：五个特例 + 标量/空类型 + 数组 + 嵌套 + 单字引用 + 具名/别名）
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现 `ptr_mask`**（递归四支；`iface` 的 `[true,true]` 里字 0 是元数据指针）
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(types): ptr_mask（Task 2，T-META-04）`
 
-```rust
-#[test]
-fn 五个特例的位图与_design_一致() {
-    assert_eq!(mask("*int"), vec![true]);            // 单字指针
-    assert_eq!(mask("string"), vec![true, false]);   // ptr + len
-    assert_eq!(mask("[]int"), vec![true, false, false]);
-    assert_eq!(mask("any"), vec![true, true]);       // 元数据指针 + data
-    assert_eq!(mask("struct{a int; b *int}"), vec![false, true]);
-}
-```
-
-- [ ] **Step 2: 跑它确认红** — Expected: `ptr_mask` 未定义
-
-- [ ] **Step 3: 实现 `ptr_mask`**
-  递归四支：指针类（`Pointer`/`Map`/`Chan`/`Signature`/`UnsafePointer`）⇒ `[true]`；
-  `Basic(String)` ⇒ `[true,false]`；`Slice` ⇒ `[true,false,false]`；`Struct` 按
-  `field_offsets` 把每个字段的位图放到位；`Array` 重复 `elem` 的位图 `n` 次；
-  其余标量 ⇒ `[false]`。`iface` 的 `[true,true]` 里字 0 是元数据指针（设计 §3.4 的注释
-  要抄进函数文档）。
-
-- [ ] **Step 4: 跑它确认绿** — Expected: PASS
-
-- [ ] **Step 5: Commit**
-  `feat(types): ptr_mask —— 每个字的指针位图（Task 2）`
-
-### Task 3: `needs_zero` 的判定
+### Task 3: `kind_of` / `needs_zero`
 
 **Files:**
 - Modify: `rgoc/crates/rgoc-meta/src/desc.rs`
 - Test: 同文件
 
 **Interfaces:**
-- Produces: `fn needs_zero(tt: &TypeTable, t: TypeId) -> bool`（写进 `TypeDesc.flags` 的 bit2）
-- Consumes: `ptr_mask`
+- Produces: `fn kind_of(tt, t) -> Kind`；`fn needs_zero(tt, t) -> bool`；`DescBuilder` 填完 `kind` 与三个 `flags`
+- Consumes: `ptr_mask`、`comparable`
 
-- [ ] **Step 1: 写会红的测试**（`T-MEM-04`）
-
-```rust
-#[test]
-fn 需要清零的类型集合() {
-    assert!(!zero("int"), "纯整数不需要");
-    assert!(!zero("struct{a,b int}"), "纯整数聚合不需要");
-    assert!(zero("*int"), "指针需要（nil 是全零，但要明确）");
-    assert!(zero("float64"), "0.0 的位模式不是全零");
-    assert!(zero("string"), "含指针");
-}
-```
-
-- [ ] **Step 2: 跑它确认红**
-
-- [ ] **Step 3: 实现**：`has_pointers(ptr_mask 任一 true) || 含浮点`。
-  浮点判定要**递归**（`struct{f float32}` 也要清）。
-
-- [ ] **Step 4: 跑它确认绿**
-
-- [ ] **Step 5: Commit** `feat(meta): needs_zero 判定（Task 3）`
+- [x] **Step 1: 写会红的测试**（`T-MEM-04` + kind 与变体一一对应 + 无布局不给假 desc + builder 三 flag）
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现**：`needs_zero = has_pointers || has_float`；浮点判定**递归**
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(meta): kind_of / needs_zero（Task 3，T-MEM-04）`
 
 ### Task 4: 类型 hash
 
@@ -190,41 +135,56 @@ fn 需要清零的类型集合() {
 - Produces: `fn type_hash(tt: &TypeTable, t: TypeId) -> u32`
 - Consumes: 无（纯函数）
 
-- [ ] **Step 1: 写会红的测试**（`T-META-05`）
+- [x] **Step 1: 写会红的测试**（`T-META-05`：稳定 / 区分 / 结构敏感 / 跨表同值 / 别名透明具名不透明）
+- [x] **Step 2: 跑它确认红**
+- [x] **Step 3: 实现**：`fnv1a` 过「type_tag + 递归子项」的字节流；**不许**用 `TypeId` 下标
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `feat(meta): type_hash（Task 4，T-META-05）`
+
+### Task 5: desc 表发射进 `.rodata`（原 Task 7）
+
+**Files:**
+- Modify: `rgoc/crates/rgoc-arm64/src/module.rs`（新增 `emit_descs`）、`emit.rs`（`rodata_named_raw`）、
+  `rgoc/crates/rgoc-arm64/Cargo.toml`（加 `rgoc-meta`）
+- Test: `rgoc/crates/rgoc-driver/tests/desc_emit.rs`（新建）
+
+**Interfaces:**
+- Produces: 每个类型一个符号 `__desc_<hash>`；产物里 `.rodata` 的 `TypeDesc` 块（40 B，
+  字段序 == `C5` §10）；`gcdata` 位图各一个 `.Lgc<N>` 标签
+- Consumes: Task 1–4
+
+- [ ] **Step 1: 写会红的测试**（`T-META-02` 的一半：产物里的 `size` / `kind` / `gcdata` 位图）
 
 ```rust
 #[test]
-fn 类型_hash_稳定且区分() {
-    assert_eq!(h("int"), h("int"), "同类型两次同值");
-    let four = [h("int"), h("int64"), h("[]int"), h("[]int64")];
-    assert_eq!(four.iter().collect::<BTreeSet<_>>().len(), 4, "四者互不相同");
-    assert_ne!(h("struct{a,b int}"), h("struct{b,a int}"), "字段序进 hash");
+fn rodata_里的_desc_size_与_layout_一致() {
+    let elf = build_and_read("struct S{ a int; b string }");
+    assert_eq!(desc_field(&elf, "S", "size"), 24);   // 8 + 16
+    assert_eq!(desc_field(&elf, "S", "kind"), 9);    // Kind::Struct
+    assert_eq!(desc_bitmap(&elf, "S"), "0b10");      // 字 0 = int 不是根，字 1 = string 的 ptr 是
 }
 ```
 
 - [ ] **Step 2: 跑它确认红**
-
-- [ ] **Step 3: 实现**：`fnv1a` 过「type_tag + 递归子项」的字节流；
-  **不许**用 `TypeId` 的下标（同一类型在不同 `TypeTable` 里下标不同）。
-
+- [ ] **Step 3: 实现**：按「类型闭包」去重（`hash` 作键）后逐个发射；
+  指针字段用 `.quad __desc_<hash>` 或 `0`（无子类型时）
 - [ ] **Step 4: 跑它确认绿**
+- [ ] **Step 5: Commit** `feat(arm64): desc 表进 .rodata（Task 5，T-META-02）`
 
-- [ ] **Step 5: Commit** `feat(meta): 类型 hash（Task 4）`
-
-### Task 5: `rt_alloc` —— 分配、对齐、递增
+### Task 6: `rt_alloc` —— 分配、对齐、递增（原 Task 5）
 
 **Files:**
-- Modify: `runtime/native/aarch64-unknown-linux-gnu/rt.c`（新增一节）
+- Modify: `runtime/native/aarch64-unknown-linux-gnu/rt.c`（新增一节）、
+  `rgoc/crates/rgoc-arm64/src/isel.rs`（`new_alloc` 改走 `rt_alloc`）
 - Test: `rgoc/crates/rgoc-driver/tests/mem_alloc.rs`（新建，走 `rgoc build` + 跑）
 
 **Interfaces:**
-- Produces: `void *rt_alloc(const TypeDesc *desc, int need_zero)`（desc 的头 4 字节是 size）
-- Consumes: `TypeDesc`（Task 1）
+- Produces: `void *rt_alloc(const TypeDesc *desc, int need_zero)`；`u64 rt_probe_align(void)`
+- Consumes: Task 5
 
 - [ ] **Step 1: 写会红的 fixture + 断言**（`T-MEM-01/02/05`）
 
 ```go
-// target/tmp/m9/t_mem_01.go
 package main
 
 func main() {
@@ -232,88 +192,41 @@ func main() {
 	for i := range ps {
 		ps[i] = new(int)
 	}
-	println(cap(ps))
+	*ps[0] = 7
+	println(*ps[0], len(ps))
 }
 ```
-Rust 侧断言：跑通的**同时**，用一条 C 侧的探针符号 `rt_probe_align()` 报告
-「100 次分配里地址 % 8 != 0 的个数」== 0。
 
-- [ ] **Step 2: 跑它确认红**（`rt_alloc` 未定义 ⇒ 链接期 undefined reference，沿 M7 的
-  「没有实现的入口故意不定义」纪律）
+判据是**三条**：① 跑通并打印 `7 100`；② 产物里 `bl rt_alloc` 出现（不是
+`rt_arena_alloc`）—— 否则「new 走了新分配器」是假绿；③ `rt_alloc` 内部对
+`(p & 7) != 0` 硬断言（misaligned ⇒ `panic: misaligned allocation` + 退出 2）。
 
-- [ ] **Step 3: 实现 `rt_alloc`**
-  bump 指针 + `align_up(8)`；`*p = desc`；`need_zero` 时 `memset(p+8, 0, desc->size)`；
-  当前 chunk 不够时调 `rt_grow`（Task 6）。
-
+- [ ] **Step 2: 跑它确认红**（`rt_alloc` 未定义 ⇒ 链接期 `undefined reference`）
+- [ ] **Step 3: 实现**：bump + `align_up(8)` + `*p = desc` + `need_zero` 时
+  `rt_memset(p+8, 0, desc->size)`；chunk 不够时调 `rt_grow`（Task 7）
 - [ ] **Step 4: 跑它确认绿**
+- [ ] **Step 5: Commit** `feat(rt): rt_alloc（Task 6，T-MEM-01/02/05）`
 
-- [ ] **Step 5: Commit** `feat(rt): rt_alloc（Task 5，T-MEM-01/02/05）`
-
-### Task 6: chunk 增长与堆上限
+### Task 7: chunk 增长与堆上限（原 Task 6）
 
 **Files:**
-- Modify: `runtime/native/.../rt.c`
+- Modify: `runtime/native/.../rt.c`（`rt_arena_alloc` 改成新堆之上的薄壳）
 - Test: `rgoc/crates/rgoc-driver/tests/mem_limit.rs`（新建）
 
 **Interfaces:**
-- Produces: `void rt_grow(size_t need)`；`size_t rt_heap_used(void)`；`size_t rt_heap_limit(void)`；环境变量 `RGOC_HEAP_MAX`（字节，缺省 256 MiB）
-- Consumes: Task 5
+- Produces: `void rt_grow(size_t need)`；`size_t rt_heap_used(void)`；`size_t rt_heap_limit(void)`；
+  环境变量 `RGOC_HEAP_MAX`（字节，缺省 256 MiB）
+- Consumes: Task 6
 
-- [ ] **Step 1: 写会红的测试**（`T-MEM-06/07`）
-
-```go
-package main
-
-func main() {
-	var keep [][1024]int
-	for i := 0; i < 100; i++ {
-		keep = append(keep, [1024]int{})
-	}
-	println(len(keep))
-}
-```
-两条断言：① 缺省上限下跑通并打印 `100`；② `RGOC_HEAP_MAX=1048576` 时
-退出 **2** + stderr 含 `runtime error: out of memory (heap limit 1048576 bytes)`。
-
+- [ ] **Step 1: 写会红的测试**（`T-MEM-06/07`）：一个吃 ~8 MiB 的程序
+  ① 缺省上限下跑通；② `RGOC_HEAP_MAX=1048576` 时退出 **2** + stderr 含
+  `runtime error: out of memory (heap limit 1048576 bytes)`
 - [ ] **Step 2: 跑它确认红**
-
-- [ ] **Step 3: 实现**：`mmap` 新 chunk（16 MiB 起，`max(16MiB, need)`），
-  挂到链上；超限走 `rt_fatal_oom(limit)`（打印 + `exit(2)`，`exit` 用 `svc #0` 的
-  `SYS_exit_group`）。
-
+- [ ] **Step 3: 实现**：`mmap` 新 chunk（16 MiB 起，`max(16MiB, need)`），挂链；
+  超限走 `rt_fatal_oom(limit)`。**`rt_arena_alloc` 必须改成同一套堆上的薄壳** ——
+  否则一个进程里有两个预算，`RGOC_HEAP_MAX` 只管一半
 - [ ] **Step 4: 跑它确认绿**
-
-- [ ] **Step 5: Commit** `feat(rt): chunk 增长与堆上限（Task 6，T-MEM-06/07）`
-
-### Task 7: desc 表发射进 `.rodata`
-
-**Files:**
-- Modify: `rgoc/crates/rgoc-arm64/src/module.rs`（新增 `emit_descs`）
-- Test: `rgoc/crates/rgoc-driver/tests/desc_emit.rs`（新建）
-
-**Interfaces:**
-- Produces: 每个类型一个符号 `__desc_<hash>`；`Module::descs` 列表；产物里 `.rodata` 的
-  `TypeDesc` 块（40 B，字段序 == `C5` §10）
-- Consumes: Task 1–4
-
-- [ ] **Step 1: 写会红的测试**（`T-META-02` 的一半：产物里的 `size` 字段）
-
-```rust
-#[test]
-fn rodata_里的_desc_size_与_layout_一致() {
-    let elf = build_and_read("struct S{ a int; b string }");
-    assert_eq!(desc_field(&elf, "S", "size"), 24);   // 8 + 16
-}
-```
-
-- [ ] **Step 2: 跑它确认红**
-
-- [ ] **Step 3: 实现**：按「类型闭包」去重（`hash` 作键）后逐个发射；
-  指针字段用 `.quad __desc_<hash>` 或 `0`（无子类型时）。
-
-- [ ] **Step 4: 跑它确认绿**
-
-- [ ] **Step 5: Commit** `feat(arm64): desc 表进 .rodata（Task 7）`
+- [ ] **Step 5: Commit** `feat(rt): chunk 增长与堆上限（Task 7，T-MEM-06/07）`
 
 ### Task 8: 全局 roots 表
 
@@ -324,17 +237,14 @@ fn rodata_里的_desc_size_与_layout_一致() {
 **Interfaces:**
 - Produces: 符号 `rt_globals`（`GlobalRoot[]`）与 `rt_nglobals`（`u64`）；
   `GlobalRoot { desc: *TypeDesc, addr: *u8 }`（16 B）
-- Consumes: Task 7
+- Consumes: Task 5
 
 - [ ] **Step 1: 写会红的测试**：`var a int; var b string; var c *int` ⇒
-  `rt_nglobals == 3`，且第 2 条的 `desc` 是 `string` 的（按 `size==16` 认）。
-
+  `rt_nglobals == 3`，且第 2 条的 `desc` 是 `string` 的（按 `size==16` 认）
 - [ ] **Step 2: 跑它确认红**
-
-- [ ] **Step 3: 实现**：包级变量逐个进表；`desc` 取它的静态类型。
-
+- [ ] **Step 3: 实现**：包级变量逐个进表；`desc` 取它的静态类型；零大小全局**不进表**
+  （它没有可扫描的字）
 - [ ] **Step 4: 跑它确认绿**
-
 - [ ] **Step 5: Commit** `feat(arm64): 全局 roots 表（Task 8，T-ROOT-07）`
 
 ### Task 9: 元数据对撞（69 个语料的类型闭包）
@@ -343,31 +253,22 @@ fn rodata_里的_desc_size_与_layout_一致() {
 - Test: `rgoc/crates/rgoc-driver/tests/desc_layout.rs`（新建，`T-META-02/03/06`）
 
 **Interfaces:**
-- Consumes: Task 1–7 全部
+- Consumes: Task 1–5
 
 - [ ] **Step 1: 写会红的测试**：对 `run-selected.txt` 的每个文件，枚举类型闭包，
   逐类型比 `TypeDesc.size` == `layout().size`、`gcdata` 解出的位图 == `ptr_mask()`。
   失败时**报第一个差异的类型名 + 两侧的值**。
-
 - [ ] **Step 2: 跑它确认红**（预期会有差异 —— 这正是它存在的理由）
-
-- [ ] **Step 3: 按差异修**（大概率是 `layout` 的某条与 `ptr_mask` 的某条不一致；
-  **不许**改测试去迁就）
-
+- [ ] **Step 3: 按差异修**（**不许**改测试去迁就）
 - [ ] **Step 4: 跑它确认绿**
-
 - [ ] **Step 5: Commit** `test(meta): 69 语料的元数据对撞（Task 9，T-META-02/03/06）`
 
 ### Task 10: `run-native.sh` 切到 69 清单
 
 **Files:**
 - Modify: `tools/run-oracle/run-native.sh`（默认清单改 `run-selected.txt`）
-- Test: 手动跑一次（Phase 0 的 Verify）
 
-**Interfaces:**
-- Consumes: 无
-
-- [ ] **Step 1: 改默认输入**：`--list` 缺省值 `native-input.txt` → `run-selected.txt`。
+- [ ] **Step 1: 改默认输入**：`--list` 缺省值 `native-input.txt` → `run-selected.txt`
 - [ ] **Step 2: 跑** `bash tools/run-oracle/run-native.sh`
   Expected: `ok=39 skip=30 bad=0 / 69`（7 个 slice + 23 个 SSA 拒）
 - [ ] **Step 3: Commit** `test(native): 语料清单切到 69（Task 10）`
