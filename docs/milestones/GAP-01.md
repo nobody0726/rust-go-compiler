@@ -247,3 +247,36 @@ Frontend 列只在「语义判定发生在前端」时打 ✅；Native / Runtime
 **M7 之后的余额**：`PIPE-20` 的寄存器分配与 spill（M9）、`PIPE-22/23` 的自研后端（不在路线图上，
 `D-M7-1` 明确放弃）、GC 元数据的**扫描器**（M10）、聚合**按值形参**（`G-M7-08`，M6 的表示问题）、
 `U-M7-01` 的切片全集（M9b）。
+
+---
+
+## M8 节：并发解释执行（2026-10-25）
+
+> **口径**：`RT-SCH` 族的 8 个 ID 是 M8 的全部范围。表格只写「做到什么程度」，
+> 判据在 `M8-manifest.json` 的 `gate`（`CON-1..9`）与 `M8-tests.md` 的 `T-CON-*`。
+> **M8 没有新 crate** —— 并发落在既有 `rgoc-hir` / `rgoc-interp` / `rgoc-check`。
+
+| ID | 能力 | M8 后状态 | 说明 |
+|---|---|---|---|
+| `RT-SCH-01` | 协程控制块 Task | ✅ | `rgoc-interp` 的 `G`（`frames` / `eval` / `values` / `targets` / `pending` / `phase` / `blocked` / `waiters` / `select_regs`）+ `Gid`。**不是** OS 线程上的 g，是解释器里的显式帧栈持有者 |
+| `RT-SCH-02` | 有栈上下文切换 | ✗ | **不做**。M:1 单线程 + 协作式让出，没有「保存/恢复被调用者保存寄存器」这回事 —— 切换点就是 Rust 函数返回。这是**有意**的：有栈切换会让「同 seed 同结果」不可实现（`D-M8-13`） |
+| `RT-SCH-03` | GMP 模型 | ✗ | **不做**。一个 M 都没有：全局就绪队列是 `VecDeque`，没有 P、没有 work-stealing、没有 `schedt`。归 M9d（若路线图仍要） |
+| `RT-SCH-04` | `go` 语句实现 | ✅ | `f` 与**全部实参**在**当前** G 求值，求值完把帧搬进新 G（`STM-14`）。判据 `T-CON-02`：`go f(g())` ⇒ `g` 的打印在前 |
+| `RT-SCH-05` | 阻塞点调度 | ✅ | `ChanObj` 的 `recvq`/`sendq` + `Waiter{g, token, slot, done}`；四个操作（`try_recv`/`try_send`/`close`/`len`/`cap`）+ 登记/撤销。判据 `T-CON-11..24` |
+| `RT-SCH-06` | 生命周期与调度循环 | ◐ | 调度循环（`drive`：FIFO 取、跑到 Blocked/Exited、`main` 一回收就**整个进程结束**）与退出语义都在；**不等其它 goroutine** 是有记录的窄化（官方会等） |
+| `RT-SCH-07` | 抢占与安全点 | ✗ | **不做**（`U-M8-01`）。守卫判据 `T-CON-07`：goroutine 里 `for {}` ⇒ 预算烧完退出 2，**不**切走 |
+| `RT-SCH-08` | 定时器子系统 | ✗ | **不做**（`U-M8-05`）。无 stdlib ⇒ `time.Sleep` / select 超时在 import 期就失败 |
+
+**三条口径说明**
+
+1. **`RT-SCH-02/03` 记 ✗ 而不是 ◐**：它们不是「做了一半」，是**整件事都不做** ——
+   而这是 M8 的第一条硬规则（M:1 不抢占）的直接后果。记 ◐ 会让人以为有一条
+   通往「部分有栈切换」的路。
+2. **`RT-SCH-06` 记 ◐**：调度循环本身完整（含死锁判定与退出码三分），差的是
+   「main 返回时等不等其它 goroutine」这一个语义点 —— 我们不等，官方等。
+3. **`RT-SCH-01` 记 ✅ 但形状与官方不同**：官方的 `g` 有真栈与汇编切换点；
+   我们的 `G` 是显式帧栈的持有者。同名不同物，读官方 runtime 时不要对号入座。
+
+**M8 之后的余额**：`RT-SCH-02/03`（有栈切换与 GMP，M9d 若仍要）、
+`RT-SCH-07`（抢占）、`RT-SCH-08`（定时器）、`U-M8-03` 的 range-over-func
+`return`/`goto`、`U-M8-08` 的 goroutine panic 栈。

@@ -3,7 +3,7 @@
 > **本文件的作用**：任何 agent / 协作者在本工作区开始任务前，读这一份即可掌握 —— 工程是什么、文档在哪、各自什么状态、遵守什么纪律、下一步做什么。
 > **遇到细节一律跳转 `docs/`，本文件不复制细节。**
 >
-> **最后同步**：2026-10-23　|　**同步触发条件**：见 §5
+> **最后同步**：2026-10-25　|　**同步触发条件**：见 §5
 
 ---
 
@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6 已收口、M7 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`** 十条正式 crate（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1608 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M7` 七份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **11 条**正式 crate（加 `rgoc-arm64`），workspace **1974 条测试全绿**。
+**一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6/M7/M8 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial / M6 SSA-1..9 = 9/9 / M7 NAT-1..9 = 9/9 / M8 CON-1..9 = 9/9）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-interp` → `rgoc-driver`** 十条正式 crate（`rgoc-hir-spike` / `rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 1608 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M8` 八份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **11 条**正式 crate（加 `rgoc-arm64`），workspace **2110 条测试全绿**。
 
 **M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
 
@@ -32,6 +32,14 @@
 
 **M5（HIR 与顺序解释器）已执行（部分兑现）**（2026-10-23）：新建 **`rgoc-hir`**（正式：`program/stmt/expr/place/types/lower(2891)/dump(566)/diag`，未支持构造 `HIR-UNSUPPORTED-*` 显式拒绝）与 **`rgoc-interp`**（`value/ops/print/interp(3531)`：显式帧栈 + 显式求值栈，四类赋值语义、内建全集、闭包/接口动态语义、defer/panic/recover），原 spike HIR 整体迁 **`rgoc-hir-spike`**（`D-M5-4`，保 `SM-M0-NATIVE-HELLO`）；`rgoc-driver` 加 `run [--dump-hir] [--max-steps]` 子命令（先 check 后 lower 再执行，诊断非空即拒跑）；**新契约 `C9`**（值表示 / 输出字节 / 退出码）、**`C3` 升正式**、`tools/run-oracle` 复刻官方 testdir run 语义。**验收四腿 + 变异**：入选语料 **69/69** 合并流逐字节一致（`ken/` 32/32）、自有 fixture 40 条全绿、`print` 字节表 10 点冻结；**8 条门禁变异 + 4 条 P0 变异**全部实证变红并复原；workspace **1608 条测试全绿**（150 suite）、四条 cargo 无 warning、五条既有自检不回退。**未兑现**：`EX-1`（常量溢出诊断缺失）、`EX-2`（双包 init）、`EX-4`（泛型只到 `any` + 推断）、`EX-8`（M4 的 `CH-2` 遗留仍红）⇒ `status = partial`，缺口 `G-M5-01..06`，详见 `M5-report.md` §5/§6。
 
+
+**M8（并发解释执行）已收口**（2026-10-25）：**没有新 crate** —— 六个并发节点加在 `rgoc-hir`（`Stmt::{Go,Send,Select}` / `ExprKind::{Recv,Make(chan)}` / `RangeKind::{Chan,Func}`），调度与通道落在 `rgoc-interp`（`Shared`/`G` 拆分、M:1 协作式调度、`ChanObj` 四操作、`Task::{Recv,Send,Go,Select}`、`Halt::Deadlock`），`rgoc-check` 修了 `recv` 的 commaok 操作数模式与 `select` 子句的 `env.push` 时机；**新契约 `C11`**（调度 / 通道 / select / 死锁）并在 Task 64 定稿。`rgoc-driver` 加 `--sched=seed:N`（同 seed 逐字节可回放）。
+
+**验收四腿 + 变异**：`con_cli` 5 + `con_lower` 13 + `con_single` 13 + `con_chan` 17 + `con_select` 15 + `con_exit` 9 + `con_misc` 7 + `con_slice` 4 + `con_rangefunc` 15 + `chan_obj` 17 = **115 条**输出顺序断言；并发语料 `run-chan.sh` ⇒ **ok=7 skip=12 bad=0 / 19**（**三栏如实记录：`N'` 的 7 个官方 `.exp` 全是 0 字节 ⇒ 只证明「没崩」**）；M5 零回归 69 绿 / M6 三方差分 46 绿 23 跳过 / M7 native 39 ok 7 skip；**4 条变异脚本全红** + 执行期 17 条（15 红 / 2 绿，绿的结论写进 notes）；workspace **2110 条测试全绿**（210 suite）。
+
+**执行期修掉的既有 bug**：`select` 子句里的无标签 `break` 会穿透到外层 `for`（官方 `33`、我们算出 `1`）—— `select` 不在 body 栈上，子句体是唯一能拦 break 的东西；修法是 `Body::Seq` 加 `breakable` 字段。
+
+**白名单 8 条**（`U-M8-01..08`）：不抢占 / select 非均匀随机 / range-over-func 的 `return`+`goto` / 11 个 stdlib import / 定时器 / 栈增长 / `-race` / panic 不包装。**未承诺**：真实并行（单线程、`go` 只是入队尾）、`main` 返回即结束（官方会等全部 goroutine）。
 ---
 
 ## 1. 目录地图
@@ -158,7 +166,8 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚未开始的 crate**：M8 的泛型、M9 的 runtime 与对象模型、M10 的 GC。
+**尚未开始的 crate**：M9 的 runtime 与对象模型、M10 的 GC。
+（M8 没有新 crate —— 并发落在既有 `rgoc-hir` / `rgoc-interp` / `rgoc-check` 里，见 §0 的 M8 段与 `docs/milestones/M8-report.md`。）
 （`rgoc-arm64` 已建：M7 的 native 代码生成，见 §0 的一句话状态与 `docs/milestones/M7-report.md`。）
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
 

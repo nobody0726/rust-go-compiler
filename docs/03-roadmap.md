@@ -390,6 +390,13 @@ arm64 指令选择、最小寄存器分配、调用/栈对齐、静态/全局数
 
 ### M8：解释器并发、异常补齐与冻结
 
+> **状态：✅ 已收口**（2026-10-25）—— 子阶段 M8a–M8e 全部交付，门禁 `CON-1..9` **9/9 pass**。
+> 语料 `N'`=7 / `M'`=12（**三栏如实记录：`N'` 的 7 个官方 `.exp` 全是 0 字节 ⇒ 只证明「没崩」**）；
+> 115 条并发判据全绿；M5/M6/M7 零回归。详见 [`M8-report.md`](./milestones/M8-report.md)
+> 与 [`M8-manifest.json`](./milestones/M8-manifest.json)。
+> **下游注意**：M9d 的 native channel/调度设计要**参照** `C11` 但**不承诺**与它同构
+> （native 是多核 + 抢占，这里是单线程协作式）。
+
 - **M8a**：显式 continuation/解释帧、M:1 队列、goroutine 创建/退出、无缓冲 channel；可暂停/恢复设计须在 M5/M6 契约留位置，不能让递归 Rust 调用栈成为唯一状态。
 - **M8b**：缓冲队列、nil/满/空 channel、close、唤醒/发送 panic、range。
 - **M8c**：select ready/default/阻塞、重复 channel、取消其他候选等待者、公平性多 seed 测试。
