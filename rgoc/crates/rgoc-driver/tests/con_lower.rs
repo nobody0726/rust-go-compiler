@@ -149,30 +149,39 @@ func main() {
 
 #[test]
 fn t_task9_send_求值顺序是_chan_先于_value() {
-    // 规范：操作数从左到右 ⇒ `chan` 先求值。dump 的子节点顺序就是求值顺序
-    // （`Stmt::Send` 分支先 dump `chan` 再 dump `value`），所以「Send 下面第一
-    // 个子节点是 chan」可以判出来：这里用两个可区分的常量做探针。
+    // 规范：操作数从左到右 ⇒ `chan` 先求值。用两个**可区分的调用**做探针：
+    // dump 的子节点顺序就是求值顺序（`Stmt::Send` 分支先 dump `chan`）。
+    // 用 `c <- 2` 判不了 —— 那时 chan 只是一个 `slot#0`，两种顺序长得一样。
     let d = dump(
         "t9_order",
         r#"
 package main
 
+func getch() chan int { return make(chan int, 1) }
+func gen() int { return 2 }
+
 func main() {
-	c := make(chan int, 1)
-	c <- 2
+	getch() <- gen()
 }
 "#,
     );
     let lines: Vec<&str> = d.lines().collect();
-    let i = lines
+    let send = lines
         .iter()
         .position(|l| l.trim_end().ends_with("Send"))
         .unwrap_or_else(|| panic!("找不到 Send 行：\n{d}"));
-    assert!(
-        lines[i + 1].contains("make chan"),
-        "Send 的第一个子节点必须是通道表达式，实际 {:?}",
-        lines[i + 1]
-    );
+    let chan_at = lines[send..]
+        .iter()
+        .position(|l| l.contains("call func#0"))
+        .map(|i| send + i);
+    let value_at = lines[send..]
+        .iter()
+        .position(|l| l.contains("call func#1"))
+        .map(|i| send + i);
+    let (Some(c), Some(v)) = (chan_at, value_at) else {
+        panic!("Send 下面应当同时有 getch(func#0) 与 gen(func#1) 两个调用：\n{d}");
+    };
+    assert!(c < v, "通道表达式必须先于右值求值（getch@{c} gen@{v}）：\n{d}");
 }
 
 // ───────────────────────── Task 10：<-ch ─────────────────────────

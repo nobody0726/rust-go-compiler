@@ -787,6 +787,6 @@ pub enum BuiltinKind {
     Panic,
     /// `recover`
     Recover,
-    /// `close`（M5 显式拒绝，lowering 不产出）
+    /// `close`（M8/Task 8 起真的产出；`C11` §3.2 的三个 panic 在解释器里发）
     Close,
 }

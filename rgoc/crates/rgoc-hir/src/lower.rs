@@ -942,10 +942,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 let call = self.lower_expr(&c.call);
                 Some(Stmt::Defer { call })
             }
-            AStmt::Send(s) => {
-                self.reject(s.pos, RejectKind::Chan, "通道发送不在 M5 面（U-M5-05）");
-                None
-            }
+            AStmt::Send(s) => Some(self.lower_send(s)),
             AStmt::Select(s) => {
                 self.reject(s.pos, RejectKind::Select, "select 不在 M5 面（U-M5-05）");
                 None
@@ -1335,15 +1332,23 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
     }
 
+    /// `ch <- v`（M8/Task 9）。
+    ///
+    /// **求值顺序：`chan` 先、`value` 后** —— Go 规范「操作数从左到右」。
+    /// 这条不是实现细节：`m()[i()] <- f()` 里 `i()` 必须早于 `f()`，而两个
+    /// 都有副作用时顺序错了只会静默算错（不会报错）。
+    fn lower_send(&mut self, s: &rgoc_ast::SendStmt) -> Stmt {
+        let chan = self.lower_expr(&s.chan);
+        let value = self.lower_expr(&s.value);
+        Stmt::Send { chan, value }
+    }
+
     fn lower_simple(&mut self, s: &SimpleStmt) -> Option<Stmt> {
         match s {
             SimpleStmt::Empty => Some(Stmt::Empty),
             SimpleStmt::Expr(e) => Some(Stmt::Expr(self.lower_expr(&e.x))),
             SimpleStmt::Assign(a) => Some(self.lower_assign(a)),
-            SimpleStmt::Send(s) => {
-                self.reject(s.pos, RejectKind::Chan, "通道发送不在 M5 面（U-M5-05）");
-                None
-            }
+            SimpleStmt::Send(s) => Some(self.lower_send(s)),
             SimpleStmt::Range(_) => None, // 由 lower_for 处理
         }
     }
@@ -2049,10 +2054,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             match n.value.as_str() {
                 "make" => return self.lower_make(c, typ),
                 "new" => return self.lower_new(c, typ),
-                "close" => {
-                    self.reject(c.pos, RejectKind::Close, "close 不在 M5 面（U-M5-12）");
-                    return Expr::new(ExprKind::Nil, typ);
-                }
                 other => {
                     if let Some(kind) = builtin_kind(other) {
                         return self.lower_builtin_call(kind, c, typ);
