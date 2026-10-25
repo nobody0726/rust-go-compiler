@@ -18,6 +18,7 @@ rgoc-hir = { path = "../rgoc-hir" }
 rgoc-interp = { path = "../rgoc-interp" }
 rgoc-lex = { path = "../rgoc-lex" }
 rgoc-load = { path = "../rgoc-load" }
+rgoc-meta = { path = "../rgoc-meta" }
 rgoc-parse = { path = "../rgoc-parse" }
 rgoc-ssa = { path = "../rgoc-ssa" }
 rgoc-types = { path = "../rgoc-types" }

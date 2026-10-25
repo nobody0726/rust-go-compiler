@@ -121,6 +121,7 @@ dependencies = [
  "rgoc-interp",
  "rgoc-lex",
  "rgoc-load",
+ "rgoc-meta",
  "rgoc-parse",
  "rgoc-ssa",
  "rgoc-types",

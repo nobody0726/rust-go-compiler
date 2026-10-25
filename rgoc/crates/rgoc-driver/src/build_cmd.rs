@@ -56,22 +56,28 @@ fn rt_source() -> PathBuf {
 ///
 /// 返回 `Err` 表示「连跑都没跑起来」（文件读不了、写盘失败、`opt` 后图非法）。
 /// **静态拒绝**走 `Ok(exit: 1)`，「跑了但没成」走 `Ok(exit: 2)` —— 三者必须能区分。
-pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
-    for f in &cmd.files {
-        std::fs::metadata(f).map_err(|e| format!("读 {} 失败：{e}", f.display()))?;
+pub fn build_frontend(
+    files: &[PathBuf],
+    opt: rgoc_ssa::opt::Config,
+    lang_opt: Option<&str>,
+) -> Result<Frontend, FrontendError> {
+    for f in files {
+        std::fs::metadata(f)
+            .map_err(|e| FrontendError::Internal(format!("读 {} 失败：{e}", f.display())))?;
     }
 
-    let lang = match cmd.files.first() {
+    let lang = match files.first() {
         Some(f) => {
-            let src = std::fs::read(f).map_err(|e| format!("读 {} 失败：{e}", f.display()))?;
-            version_source(cmd.lang.as_deref(), &src)
-                .map_err(|e| format!("{}: {e}", f.display()))?
+            let src = std::fs::read(f)
+                .map_err(|e| FrontendError::Internal(format!("读 {} 失败：{e}", f.display())))?;
+            version_source(lang_opt, &src)
+                .map_err(|e| FrontendError::Internal(format!("{}: {e}", f.display())))?
         }
-        None => cmd.lang.clone(),
+        None => lang_opt.map(str::to_string),
     };
 
     let mut tt = TypeTable::new();
-    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
+    let (pkg, bag) = load_with_imports(&mut tt, files, &[], lang.as_deref());
 
     let opts = CheckOptions { test_hooks: false };
     let (checked, lowered) =
@@ -113,18 +119,10 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
         }
     };
     let Some(program) = program else {
-        return Ok(BuildOutcome {
-            stderr,
-            exit: 1,
-            ..BuildOutcome::default()
-        });
+        return Err(FrontendError::Rejected(stderr));
     };
     if errors > 0 {
-        return Ok(BuildOutcome {
-            stderr,
-            exit: 1,
-            ..BuildOutcome::default()
-        });
+        return Err(FrontendError::Rejected(stderr));
     }
 
     // ④ SSA
@@ -134,17 +132,63 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
         for r in &built.rejected {
             let _ = writeln!(stderr, "{}", r.render());
         }
-        return Ok(BuildOutcome {
-            stderr,
-            exit: 1,
-            ..BuildOutcome::default()
-        });
+        return Err(FrontendError::Rejected(stderr));
     }
     let mut module = built.module;
-    if cmd.opt.any() {
-        rgoc_ssa::opt::run(&mut module, &tt, cmd.opt)
-            .map_err(|e| format!("pass 之后 verifier 失败：{e:?}"))?;
+    if opt.any() {
+        rgoc_ssa::opt::run(&mut module, &tt, opt)
+            .map_err(|e| FrontendError::Internal(format!("pass 之后 verifier 失败：{e:?}")))?;
     }
+    Ok(Frontend {
+        module,
+        types: tt,
+        stderr,
+    })
+}
+
+/// 前半段（装载 → 检查 → lowering → SSA → opt）。
+///
+/// # 为什么要单独一个函数
+///
+/// M9 的元数据对撞（`desc_layout`）与栈图（`stackmap`）都要**拿到** `Module`
+/// 与 `TypeTable` 才能独立算一遍布局/ptrmask 再与产物比。让它们各自抄一遍
+/// 前半段就等于有两个「什么算合法程序」的答案 —— 而那条分叉会在「检查器
+/// 放行、抄的那份不放行」时静默地让判据失效。
+#[derive(Debug)]
+pub struct Frontend {
+    /// SSA 图（`opt` 之后）。
+    pub module: rgoc_ssa::ir::Module,
+    /// 类型表（与 `module` 里的 `TypeId` 同一张）。
+    pub types: TypeTable,
+    /// 非致命诊断（成功时也可能非空）。
+    pub stderr: String,
+}
+
+/// 前半段的失败。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FrontendError {
+    /// 静态拒绝（诊断 / HIR / SSA）：退出码 **1**。
+    Rejected(String),
+    /// 内部失败（读盘、opt 后图非法）：退出码 **2**。
+    Internal(String),
+}
+
+pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
+    let Frontend {
+        module,
+        types: tt,
+        mut stderr,
+    } = match build_frontend(&cmd.files, cmd.opt, cmd.lang.as_deref()) {
+        Ok(f) => f,
+        Err(FrontendError::Rejected(stderr)) => {
+            return Ok(BuildOutcome {
+                stderr,
+                exit: 1,
+                ..BuildOutcome::default()
+            });
+        }
+        Err(FrontendError::Internal(e)) => return Err(e),
+    };
 
     // ⑤ 汇编
     //

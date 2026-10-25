@@ -113,6 +113,16 @@ fn parse_descs(asm: &str) -> Vec<Desc> {
                     .unwrap_or_else(|| panic!("{sym} 的 gcdata 指向不存在的位图 {l}"))
                     .clone()
             });
+            // 符号名就是 `__desc_<hash>`，所以「头里的 hash 字段」与「符号名」
+            // 必须自洽 —— 这条一行断言能抓住「hash 字段发成 0/截断/字节序错」
+            // 一整类（`desc_layout` 的 177 个类型对撞也会抓，但那是语料级的；
+            // 这里让单条 fixture 自己也能抓）。
+            let got_hash = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
+            assert_eq!(
+                sym,
+                format!("__desc_{got_hash:08x}"),
+                "desc 头里的 hash 与符号名不一致"
+            );
             out.push(Desc {
                 sym,
                 size: u32_at(0),
