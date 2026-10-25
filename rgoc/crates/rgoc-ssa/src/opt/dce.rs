@@ -92,6 +92,8 @@ fn dst_of(i: &Instr) -> Option<ValueId> {
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => *dst,
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => *dst,
+        Instr::MakeClosure { dst, .. } => *dst,
         Instr::TypeAssert { dst, .. } => *dst,
         // `Call` 由调用方特判（多结果），走到这里说明有人漏了
         Instr::Call { .. } => return None,

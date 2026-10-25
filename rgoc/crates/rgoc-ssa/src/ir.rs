@@ -347,6 +347,22 @@ pub struct SsaFunc {
     pub value_types: Vec<TypeId>,
     /// 本函数**调用到的**已知函数签名（`V5` 查它；只记直接调用与方法调用）。
     pub call_sigs: BTreeMap<FuncId, Sig>,
+    /// 本函数的**捕获表**（`M9/Task 38`）。
+    ///
+    /// 每一条是「外层某槽 ↔ 本帧某槽」：本帧那个槽的存储**不在本帧**，
+    /// 而在外层（`CapturePtr` 拿到它的地址）。所以本帧不给它建根。
+    pub captured: Vec<rgoc_hir::Capture>,
+    /// 调用约定带**隐式第 0 实参（ctx）**吗（`M9/Task 40`）。
+    ///
+    /// # 谁会带
+    ///
+    /// * 有捕获的函数（闭包）—— `ctx` 就是 funcval，捕获从 `[ctx+8+8i]` 读；
+    /// * **被当作值用过的**函数（`f := add`）—— 它可能经 funcval 被调用，
+    ///   而调用点不知道静态目标，所以两边的约定必须一致。
+    ///
+    /// 带 `ctx` 的函数，整数实参从 `x1` 起（`x0` 留给 ctx）；浮点仍从 `v0` 起
+    /// （ctx 是整数类，不占浮点寄存器）。
+    pub ctx_abi: bool,
 }
 
 impl SsaFunc {
@@ -388,6 +404,12 @@ impl Instr {
             | Instr::Load { dst, .. }
             | Instr::Store { dst, .. } => vec![*dst],
             Instr::Call { dsts, .. } => dsts.clone(),
+            Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
+            Instr::MakeClosure { dst, captures, .. } => {
+                let mut v = vec![*dst];
+                v.extend(captures.iter().copied());
+                v
+            }
             // `ok` 也是这条指令**定义**的值（`V1` 要求每个值有定义点）
             Instr::TypeAssert { dst, ok, .. } => {
                 let mut out = vec![*dst];
@@ -445,6 +467,11 @@ impl Instr {
                 out.extend(args.iter().copied());
             }
             Instr::TypeAssert { x, .. } => out.push(*x),
+            // `FuncAddr` 只读**符号**，不读值（`func` 是重定位，不是操作数）
+            Instr::FuncAddr { .. } => {}
+            // `CapturePtr` 读的是隐式 ctx（不是 `Instr` 的操作数）
+            Instr::CapturePtr { .. } => {}
+            Instr::MakeClosure { captures, .. } => out.extend(captures.iter().copied()),
         }
         out
     }
@@ -770,6 +797,49 @@ pub enum Instr {
         /// 副作用摘要。
         effect: Effect,
     },
+    /// 取一个**具名函数**的地址（`f := g`，`M9/Task 37`）。
+    ///
+    /// 结果是 `func(...)` 类型的值 —— 运行期就是一个函数指针（`fn` 在偏移 0）。
+    /// 没有捕获，所以它不需要分配：`dst` 里直接放 `adrp/add` 出来的符号地址。
+    ///
+    /// # 为什么它是指令而不是常量
+    ///
+    /// 常量面（`ConstVal`）只有标量：函数符号是**重定位**，不是数值。
+    /// 塞进 `Const` 会让 dump 与 `C10` 的常量语法撒谎。
+    FuncAddr {
+        /// 结果值（`func(...)` 类型）。
+        dst: ValueId,
+        /// 目标函数。
+        func: FuncId,
+    },
+    /// 造一个**闭包**（有捕获的函数值，`M9/Task 38`）。
+    ///
+    /// 布局（`D-M9-10`）：`{ fn: *u8, caps: [*u8; n] }`，堆上分配，`size = 8 + 8n`。
+    ///
+    /// # 捕获是**按引用**的（`R-9-15`）
+    ///
+    /// `captures[i]` 是**指向被捕获变量存储的指针**，不是它的副本。Go 的闭包
+    /// 捕获的是**变量**（`closure2.go` 整份文件就是在钉这件事：改要改到外面去），
+    /// 所以 funcval 里只能放地址。被捕获的变量因此必须**活在堆上**（逃逸）——
+    /// 这件事由「它有了根」自动成立（`Root::Slot` 的存储本来就在 arena）。
+    MakeClosure {
+        /// 结果值（`func(...)` 类型）。
+        dst: ValueId,
+        /// 函数体。
+        func: FuncId,
+        /// 每个捕获变量的**地址**（顺序 == 被调方 `captured` 的顺序）。
+        captures: Vec<ValueId>,
+    },
+    /// 取**本帧**第 `index` 个捕获的地址（`M9/Task 38`）。
+    ///
+    /// 只有带捕获的函数里才出现。它的值来自隐式第 0 实参（ctx = funcval）：
+    /// `[ctx + 8 + 8*index]`。
+    CapturePtr {
+        /// 结果值（`*T`，`T` 是被捕获变量的类型）。
+        dst: ValueId,
+        /// 第几个捕获（== `SsaFunc::captured` 的下标）。
+        index: u32,
+    },
     /// 类型断言（`x.(T)` / `x.(J)`，`M9/Task 33`）。
     ///
     /// # 两种形态
@@ -842,6 +912,9 @@ pub fn kind_of_instr(i: &Instr) -> &'static str {
         Instr::Load { .. } => "load",
         Instr::Store { .. } => "store",
         Instr::Call { .. } => "call",
+        Instr::FuncAddr { .. } => "funcaddr",
+        Instr::MakeClosure { .. } => "closure",
+        Instr::CapturePtr { .. } => "capture",
         Instr::TypeAssert { .. } => "assert",
     }
 }

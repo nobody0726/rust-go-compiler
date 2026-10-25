@@ -205,6 +205,25 @@ fn render_instr(i: &Instr) -> String {
             // `...` 是**语义**（展开 vs 单个），不是排版（`R-35-1`）
             if *dots { " ..." } else { "" }
         ),
+        // `C10` §3（M9/Task 37 追加）：`v3 = funcaddr func#2`
+        Instr::FuncAddr { dst, func } => format!("{} = funcaddr func#{}", v(*dst), func.0),
+        // `C10` §3（M9/Task 38 追加）：`v3 = closure func#2 (v1, v2)`
+        Instr::MakeClosure {
+            dst,
+            func,
+            captures,
+        } => format!(
+            "{} = closure func#{} ({})",
+            v(*dst),
+            func.0,
+            captures
+                .iter()
+                .map(|c| v(*c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        // `C10` §3（M9/Task 38 追加）：`v3 = capture#1`
+        Instr::CapturePtr { dst, index } => format!("{} = capture#{index}", v(*dst)),
         // `C10` §3（M9/Task 33 追加）：`v3 = assert v1 : t5` / `v3, v4 = assert v1 : t5`
         Instr::TypeAssert { dst, ok, x, typ } => match ok {
             Some(o) => format!("{}, {} = assert {} : {}", v(*dst), v(*o), v(*x), t(*typ)),

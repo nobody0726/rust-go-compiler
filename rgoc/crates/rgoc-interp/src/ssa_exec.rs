@@ -458,6 +458,22 @@ impl Exec<'_> {
                 self.write(*dst, convert(tt, v, *typ, from));
                 Ok(None)
             }
+            // 函数值（`M9/Task 37`）：没有捕获 ⇒ 一个不带捕获的闭包值。
+            Instr::FuncAddr { dst, func } => {
+                self.write(
+                    *dst,
+                    Value::Func(std::rc::Rc::new(crate::value::Closure {
+                        func: *func,
+                        captured: Vec::new(),
+                        recv: None,
+                    })),
+                );
+                Ok(None)
+            }
+            // 捕获闭包由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-FUNC-VALUE`）。
+            Instr::MakeClosure { .. } | Instr::CapturePtr { .. } => Err(Halt::Runtime(
+                "捕获闭包不在 SSA 求值面内（Task 38 未做）".to_string(),
+            )),
             Instr::AddrOf { dst, root } => {
                 let c = self.root_cell(*root)?;
                 self.write(*dst, Value::Ptr(c));
@@ -787,9 +803,24 @@ impl Exec<'_> {
                 self.push_frame(idx, &all, dsts)?;
                 Ok(None)
             }
-            CalleeRef::Indirect(_) => Err(Halt::Runtime(
-                "间接调用：函数值不在 M6 的求值面内（`SSA-UNSUPPORTED-FUNC-VALUE`）".to_string(),
-            )),
+            // 间接调用（`M9/Task 37`）：函数值里带 `FuncId` 与（可能的）捕获。
+            CalleeRef::Indirect(v) => {
+                let f = self.read(v)?;
+                let Value::Func(cl) = f else {
+                    return Err(Halt::Runtime(
+                        "间接调用：被调方不是函数值（构建 bug）".to_string(),
+                    ));
+                };
+                if !cl.captured.is_empty() {
+                    return Err(Halt::Runtime(
+                        "捕获闭包不在 SSA 求值面内（Task 38 未做）".to_string(),
+                    ));
+                }
+                let idx = index_of(self.m, cl.func)
+                    .ok_or_else(|| Halt::Runtime(format!("调用不存在的函数 func#{}", cl.func.0)))?;
+                self.push_frame(idx, &avals, dsts)?;
+                Ok(None)
+            }
         }
     }
 

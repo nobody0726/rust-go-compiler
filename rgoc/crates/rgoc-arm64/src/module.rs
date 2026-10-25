@@ -88,6 +88,7 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // 顺序是硬的：方法表先（desc 的 `methods` 字段要引用它的符号），
     // itab 后（它引用 desc 与方法表两侧的符号）。GNU as 允许前向引用，
     // 但「符号名一处来源」这条纪律要求先定义后引用。
+    emit_funcvals(&mut asm, m);
     let mt = emit_method_tables(&mut asm, m, tt, &siblings);
     emit_itabs(&mut asm, m, tt, &siblings);
     emit_descs(&mut asm, m, tt, &mt);
@@ -136,6 +137,34 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
 #[must_use]
 pub fn desc_symbol(hash: u32) -> String {
     format!("__desc_{hash:08x}")
+}
+
+/// 静态 funcval 的符号（**没有捕获**的函数值，`M9/Task 37`）。
+///
+/// # 为什么不是「直接用函数符号」
+///
+/// funcval 的布局是 `{ fn: *u8, caps: [*u8; n] }`，间接调用一律
+/// `ldr x16, [x0]`（`x0` = funcval）。所以**即使没有捕获**，函数值的第一个字
+/// 也必须是 `fn` —— 直接把函数符号当 funcval 用，`ldr` 读到的是函数的第一条
+/// 指令（实测 `Bus error`）。所以给每个被当作值用的函数发一个 8 字节的静态
+/// funcval（`D-M9-10` 的最小形态）。
+#[must_use]
+pub fn fv_symbol(fid: rgoc_hir::FuncId) -> String {
+    format!("__fv_{}", fid.0)
+}
+
+/// 发射全部静态 funcval（每个「带 ctx ABI」的函数一条）。
+///
+/// 判据用 `ctx_abi` 而不是「扫 `FuncAddr`」：两者等价（`build()` 的收尾扫描
+/// 就是按 `FuncAddr`/`MakeClosure` 定的 `ctx_abi`），但这里只拿得到 `Module`。
+fn emit_funcvals(asm: &mut Asm, m: &Module) {
+    for f in &m.funcs {
+        if !f.ctx_abi {
+            continue;
+        }
+        let body = vec![format!(".quad {}", isel::fn_sym(f.src))];
+        asm.rodata_named_raw(&fv_symbol(f.src), &body);
+    }
 }
 
 /// 方法表符号。

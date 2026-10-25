@@ -219,21 +219,37 @@ fn t_ssa_33_chan_现在由_ssa_层拒() {
 #[test]
 fn t_ssa_33_立即调用的函数字面量() {
     // `func(){...}()`：被调方**本身**就是函数字面量。初版只扫实参表，
-    // 漏掉被调方 ⇒ 落进 `expr(FuncLit)` 的 `todo!()`（panic）。
-    // 实测 `closure1.go` / `ddd.go` / `func6.go`。
-    assert_rejected(
+    // 漏掉被调方 ⇒ 落进 `expr(FuncLit)` 的 `todo!()`（panic）。实测 `func6.go`。
+    //
+    // M9/Phase 4a 起无捕获的函数字面量**能建图**（`Instr::FuncAddr` +
+    // 间接调用），所以这条判据**反转**：断言它能过 verifier、退出码 0。
+    // 「被调方也要扫」这条纪律仍然有效 —— 它现在由 `t_ssa_33_闭包`（捕获闭包
+    // 仍被拒）守着。
+    let p = fixture(
         "funclit-call",
         "package main\n\nfunc main() {\n\tfunc() {\n\t\tprintln(1)\n\t}()\n}\n",
-        SsaCode::FuncValue,
+    );
+    let out = run(&p);
+    assert_eq!(
+        out.exit, 0,
+        "无捕获的函数字面量已在 M9/Phase 4a 支持，该退出码 0；stderr = {:?}",
+        out.stderr
     );
 }
 
 #[test]
 fn t_ssa_33_函数值() {
-    assert_rejected(
+    // 无捕获的函数值（具名函数当值 / 空字面量）在 M9/Phase 4a 放行；
+    // **有捕获**的仍拒（`t_ssa_33_闭包` 守它）。这里守放行那一半。
+    let p = fixture(
         "funcvalue",
         "package main\n\nfunc main() {\n\tf := func() {}\n\tf()\n}\n",
-        SsaCode::FuncValue,
+    );
+    let out = run(&p);
+    assert_eq!(
+        out.exit, 0,
+        "无捕获的函数值已支持，该退出码 0；stderr = {:?}",
+        out.stderr
     );
 }
 
@@ -269,7 +285,7 @@ fn front_end(path: &Path) -> (rgoc_hir::Program, rgoc_types::TypeTable) {
 }
 
 #[test]
-fn t_ssa_33_range_over_func_改走_func_value() {
+fn t_ssa_33_range_over_func_现在能跑了() {
     // M8/Task 45 起 HIR 真的放行 range over func：它下降成
     // `seq(__range_body_0)` —— 一次调用 + 一个合成函数字面量。
     // 所以 SSA 看到的**不是** range，而是 `FUNC-VALUE`（IR 里没有函数引用值）。
@@ -277,14 +293,18 @@ fn t_ssa_33_range_over_func_改走_func_value() {
     // 这条守卫的前身是「range over func 在 HIR 层就被拒」。上游放行后它如期
     // 变红，提醒我们回来接 SSA 侧 —— 接完的结论是：SSA 层拒绝它的**入口**
     // 从 `RANGE-FUNC` 换成了 `FUNC-VALUE`，那个码本来就在 `ALL` 里。
+    // 而且 M9/Phase 4a 之后它**真的能跑**了：HIR 把它下降成
+    // `seq(__range_body_0)` —— 一次调用 + 一个**无捕获**的函数字面量，
+    // 正好落在新放行的面上。这条判据因此从「拒绝」翻成「能建图」。
+    //
+    // ⚠️ 体里**捕获外层变量**的 range-over-func 仍被拒（合成函数带捕获 ⇒
+    // `SSA-UNSUPPORTED-FUNC-VALUE`），那是 Task 38 的面。
     let src = "package main\n\nfunc seq(yield func(int) bool) {\n\t_ = yield(1)\n}\n\nfunc main() {\n\tfor i := range seq {\n\t\tprintln(i)\n\t}\n}\n";
     let p = fixture("range-func", src);
     let out = run(&p);
-    assert_eq!(out.exit, 1, "SSA 通路必须拒（不分层）：{out:?}");
-    assert!(
-        out.stderr.contains("SSA-UNSUPPORTED-FUNC-VALUE"),
-        "拒绝该来自 FUNC-VALUE，实际：{:?}",
-        out.stderr
+    assert_eq!(
+        out.exit, 0,
+        "range over func 现在能建图（无捕获的合成函数）：{out:?}"
     );
 }
 

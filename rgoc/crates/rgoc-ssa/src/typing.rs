@@ -219,6 +219,48 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
             }
             Ok(())
         }
+        // `FuncAddr`：dst 必须是 `func(...)` 类型（符号面不需要更多判据）。
+        Instr::FuncAddr { dst, .. } => {
+            let dt = need(f, *dst)?;
+            if !matches!(
+                tt.type_of(rgoc_types::underlying(tt, dt)),
+                rgoc_types::typ::Type::Signature(_)
+            ) {
+                return Err(format!("funcaddr 的 dst 类型 {dt:?} 不是函数类型"));
+            }
+            Ok(())
+        }
+        // 闭包两条：`MakeClosure` 的捕获必须是**指针**、`CapturePtr` 的 dst
+        // 必须是指针。两者都是「形状对不上就是构建 bug」的判据。
+        Instr::MakeClosure { dst, captures, .. } => {
+            let dt = need(f, *dst)?;
+            if !matches!(
+                tt.type_of(rgoc_types::underlying(tt, dt)),
+                rgoc_types::typ::Type::Signature(_)
+            ) {
+                return Err(format!("closure 的 dst 类型 {dt:?} 不是函数类型"));
+            }
+            for c in captures {
+                let ct = need(f, *c)?;
+                if !matches!(
+                    tt.type_of(rgoc_types::underlying(tt, ct)),
+                    rgoc_types::typ::Type::Pointer(_)
+                ) {
+                    return Err(format!("closure 的捕获 {ct:?} 不是指针"));
+                }
+            }
+            Ok(())
+        }
+        Instr::CapturePtr { dst, .. } => {
+            let dt = need(f, *dst)?;
+            if !matches!(
+                tt.type_of(rgoc_types::underlying(tt, dt)),
+                rgoc_types::typ::Type::Pointer(_)
+            ) {
+                return Err(format!("capture 的 dst 类型 {dt:?} 不是指针"));
+            }
+            Ok(())
+        }
         Instr::AddrOf { .. }
         | Instr::Field { .. }
         | Instr::Index { .. }

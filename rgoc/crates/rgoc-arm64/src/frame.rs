@@ -563,6 +563,21 @@ fn max_outgoing(
                 CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
             };
             let want = callee_param_tys(&arg_tys, fid, siblings);
+            // `ctx_abi` 的被调方多占一个整数寄存器（`x0` = ctx，`M9/Task 40`）⇒
+            // 栈实参的起点整体后移。**间接调用**没有静态目标，但按约定它一定是
+            // ctx ABI（凡是被当作值用过的函数都带它）。
+            let needs_ctx = match (callee, fid) {
+                (CalleeRef::Indirect(_), _) => true,
+                (_, Some(id)) => siblings.get(&id).is_some_and(|f| f.ctx_abi),
+                _ => false,
+            };
+            let want = if needs_ctx {
+                let mut w = vec![TypeId::from_index(0)];
+                w.extend(want);
+                w
+            } else {
+                want
+            };
             let (_, sp) = crate::abi::place_args(tt, &want);
             max = max.max(sp);
         }

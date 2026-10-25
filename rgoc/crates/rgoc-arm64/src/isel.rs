@@ -314,11 +314,23 @@ fn block_label(sym: &str, bi: usize) -> String {
 /// 直接把指针存进槽是错的（后续的 `field`/`load` 会把指针字节当字段值）。
 fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
     let want: Vec<TypeId> = cx.f.params.iter().map(|p| cx.ty(*p)).collect();
-    let (locs, _) = place_args(cx.tt, &want);
+    // `ctx_abi` 的函数多一个**隐式第 0 实参**（ctx，占 `x0`）⇒ 形参整体后移一格
+    // （`M9/Task 40`）。浮点不受影响（ctx 是整数类）。
+    let (locs, _) = if cx.f.ctx_abi {
+        let mut w = vec![TypeId::from_index(0)];
+        w.extend(want.iter().copied());
+        place_args(cx.tt, &w)
+    } else {
+        place_args(cx.tt, &want)
+    };
+    let shift = usize::from(cx.f.ctx_abi);
     for (i, p) in cx.f.params.iter().enumerate() {
         let s = cx.slot(*p);
         let class = cx.class(*p);
-        let loc = locs.get(i).copied().unwrap_or(ArgLoc::X { reg: 0, n: 1 });
+        let loc = locs
+            .get(i + shift)
+            .copied()
+            .unwrap_or(ArgLoc::X { reg: 0, n: 1 });
         match loc {
             ArgLoc::X { reg, n } => match class {
                 // 聚合：从寄存器里拿到**指针**，把内容拷进本帧的槽（值语义）。
@@ -404,6 +416,16 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         } => bin(cx, *dst, *op, *lhs, *rhs, *typ, asm),
         Instr::Un { dst, op, x, typ } => un(cx, *dst, *op, *x, *typ, asm),
         Instr::Convert { dst, x, typ } => convert(cx, *dst, *x, *typ, asm),
+        // 函数值（`M9/Task 37`）：没有捕获 ⇒ 就是一个符号地址。
+        Instr::FuncAddr { dst, func } => {
+            load_addr(asm, "x0", &crate::module::fv_symbol(*func));
+            st_x(asm, "x0", cx.slot(*dst).off);
+        }
+        // 捕获闭包由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-FUNC-VALUE`）。
+        // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」。
+        Instr::MakeClosure { .. } | Instr::CapturePtr { .. } => {
+            unreachable!("捕获闭包应由 unsupported() 在建图前拒掉")
+        }
         Instr::TypeAssert { dst, ok, x, typ } => type_assert(cx, *dst, *ok, *x, *typ, asm),
         Instr::AddrOf { dst, root } => addr_of(cx, *dst, root, asm),
         Instr::Field { dst, base, index } => field(cx, *dst, *base, *index, asm),
@@ -2041,7 +2063,14 @@ fn call(
             Ok(())
         }
         CalleeRef::Func(fid) => {
-            pass_args(cx, Some(*fid), args, asm);
+            if ctx_abi(cx, *fid) {
+                // 被调方带隐式 ctx（`M9/Task 40`）：实参从 `x1` 起，`x0` 传 0
+                // （直接调用没有 funcval）。
+                pass_args_ctx(cx, Some(*fid), args, asm);
+                asm.ins("mov x0, xzr");
+            } else {
+                pass_args(cx, Some(*fid), args, asm);
+            }
             asm.ins(&format!("bl {}", cx.tt_fn_name(*fid)));
             take_results(cx, dsts, asm);
             Ok(())
@@ -2089,7 +2118,19 @@ fn call(
             take_results(cx, dsts, asm);
             Ok(())
         }
-        CalleeRef::Indirect(_) => Err(CgCode::IndirectCall),
+        // 间接调用（`M9/Task 37`）：funcval 在 `x0`，`fn` 在它的偏移 0。
+        //
+        // 调用点**不知道**静态目标，所以约定是硬的：凡是被当作值用过的函数
+        // 都带 ctx ABI（`build()` 的收尾扫描保证这一点）。
+        CalleeRef::Indirect(v) => {
+            let fv = cx.slot(*v);
+            pass_args_ctx(cx, None, args, asm);
+            ld_x(asm, "x0", fv.off);
+            asm.ins("ldr x16, [x0]");
+            asm.ins("blr x16");
+            take_results(cx, dsts, asm);
+            Ok(())
+        }
     }
 }
 
@@ -2124,6 +2165,22 @@ fn pass_args(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], a
     let arg_tys: Vec<TypeId> = args.iter().map(|a| cx.ty(*a)).collect();
     let want = callee_param_tys(&arg_tys, callee, cx.siblings);
     pass_args_from(cx, &want, args, 0, asm);
+}
+
+/// 被调方带隐式 ctx 吗（`M9/Task 40`）。
+///
+/// 静态目标查 `siblings`；**间接调用**没有静态目标 ⇒ 一律按 ctx ABI 处理
+/// （凡是被当作值用过的函数都带它，见 `build()` 的收尾扫描）。
+fn ctx_abi(cx: &Ctx<'_>, fid: rgoc_hir::FuncId) -> bool {
+    cx.siblings.get(&fid).is_some_and(|f| f.ctx_abi)
+}
+
+/// 按 ctx ABI 装实参：`x0` 留给 ctx，用户实参从 `x1` 起。
+fn pass_args_ctx(cx: &Ctx<'_>, callee: Option<rgoc_hir::FuncId>, args: &[ValueId], asm: &mut Asm) {
+    let arg_tys: Vec<TypeId> = args.iter().map(|a| cx.ty(*a)).collect();
+    let mut want: Vec<TypeId> = vec![TypeId::from_index(0)];
+    want.extend(callee_param_tys(&arg_tys, callee, cx.siblings));
+    pass_args_from(cx, &want, args, 1, asm);
 }
 
 /// 按**给定的形参类型表**装实参；`args[0]` 落在 `locs[first]`。

@@ -24,6 +24,8 @@ fn one_block(term: Term) -> Vec<Block> {
 
 fn func(value_types: Vec<TypeId>, blocks: Vec<Block>) -> SsaFunc {
     SsaFunc {
+        captured: Vec::new(),
+        ctx_abi: false,
         src: FuncId(0),
         name: "f".to_string(),
         params: Vec::new(),

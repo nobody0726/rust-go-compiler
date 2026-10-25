@@ -22,6 +22,8 @@ fn func_with_call(value_types: Vec<TypeId>) -> SsaFunc {
     let t0 = value_types[0];
     let t1 = value_types[1];
     SsaFunc {
+        captured: Vec::new(),
+        ctx_abi: false,
         src: FuncId(0),
         name: "main".to_string(),
         params: Vec::new(),
@@ -147,6 +149,8 @@ fn 没有_safepoint_时只有头与_slot() {
     let mut t = TypeTable::new();
     let i = t.add_basic(BasicId::Int);
     let f = SsaFunc {
+        captured: Vec::new(),
+        ctx_abi: false,
         src: FuncId(0),
         name: "f".to_string(),
         params: Vec::new(),

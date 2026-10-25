@@ -194,6 +194,12 @@ pub(crate) fn instr_uses(i: &mut Instr, g: &mut impl FnMut(&mut ValueId)) {
         Instr::Un { x, .. } | Instr::Convert { x, .. } => g(x),
         // 断言只读 `x`（`ok` 是**结果**不是操作数）
         Instr::TypeAssert { x, .. } => g(x),
+        Instr::FuncAddr { .. } | Instr::CapturePtr { .. } => {}
+        Instr::MakeClosure { captures, .. } => {
+            for c in captures {
+                g(c);
+            }
+        }
         Instr::Field { base, .. } => g(base),
         Instr::Index { base, i, .. } => {
             g(base);
@@ -310,6 +316,12 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
+        Instr::MakeClosure { dst, captures, .. } => {
+            let mut v = vec![*dst];
+            v.extend(captures.iter().copied());
+            v
+        }
         Instr::TypeAssert { dst, ok, .. } => {
             let mut v = vec![*dst];
             v.extend(ok.iter().copied());
@@ -335,6 +347,12 @@ fn dsts_of_mut(i: &mut Instr) -> Vec<&mut ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![dst],
         Instr::Call { dsts, .. } => dsts.iter_mut().collect(),
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![dst],
+        Instr::MakeClosure { dst, captures, .. } => {
+            let mut v = vec![dst];
+            v.extend(captures.iter_mut());
+            v
+        }
         Instr::TypeAssert { dst, ok, .. } => match ok {
             Some(o) => vec![dst, o],
             None => vec![dst],

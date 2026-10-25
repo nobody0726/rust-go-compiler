@@ -18,6 +18,8 @@ use rgoc_types::{BasicId, TypeId};
 
 fn func(value_types: Vec<TypeId>, slot_types: Vec<(SlotId, TypeId)>) -> SsaFunc {
     SsaFunc {
+        captured: Vec::new(),
+        ctx_abi: false,
         src: FuncId(0),
         name: "f".to_string(),
         params: Vec::new(),

@@ -129,6 +129,12 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
+        Instr::MakeClosure { dst, captures, .. } => {
+            let mut v = vec![*dst];
+            v.extend(captures.iter().copied());
+            v
+        }
         Instr::TypeAssert { dst, ok, .. } => {
             let mut v = vec![*dst];
             v.extend(ok.iter().copied());
@@ -247,6 +253,8 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
         }
         Instr::Un { x, .. } | Instr::Convert { x, .. } => out.push(*x),
         Instr::TypeAssert { x, .. } => out.push(*x),
+        Instr::FuncAddr { .. } | Instr::CapturePtr { .. } => {}
+        Instr::MakeClosure { captures, .. } => out.extend(captures.iter().copied()),
         Instr::Field { base, .. } => out.push(*base),
         Instr::Index { base, i, .. } => {
             out.push(*base);

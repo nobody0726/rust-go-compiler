@@ -33,21 +33,21 @@
       "note": "沿用 M5 的入选清单（已冻结）"
     },
     "buildable": {
-      "count": 57,
+      "count": 60,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；57 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4（Phase 2）→ iface +6（Phase 3）→ type switch +1（Phase 3b）。"
+      "note": "能建图且 verifier 通过的个数 N；60 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3（Phase 4a）。"
     },
     "rejected": {
       "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 12,
+      "count": 9,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 7 / DEFER 5；N+M=69 两向断言。M6 收口时是 23（IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）。"
+      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 5 / DEFER 4；N+M=69 两向断言。M6 收口时是 23（IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）。"
     },
     "re_frozen": {
-      "by": "M9/Phase 2（map，R-9-8）+ Phase 3（iface，R-9-12）+ Phase 3b（type switch，R-9-14）",
+      "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）",
       "when": "2026-10-25",
-      "why": "map、iface、type switch 从「宿主面」变成「已实现」，拒绝面三次收缩：46/23 → 50/19 → 56/13 → 57/12。最后一次是 `alias1.go` 的 type switch 转绿，同时 `SSA-UNSUPPORTED-IFACE-DYN` 整条下线（没有生产者）。",
-      "delta": "N 46 → 57（+11）/ M 23 → 12（−11）；N + M 仍等于 69"
+      "why": "map / iface / type switch / 无捕获函数值依次从「宿主面」变成「已实现」，拒绝面四次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9。",
+      "delta": "N 46 → 60（+14）/ M 23 → 9（−14）；N + M 仍等于 69"
     }
   },
   "gate": {

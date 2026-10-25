@@ -90,6 +90,8 @@ fn dst_of(i: &Instr) -> ValueId {
     match i {
         // 断言的主结果（`ok` 不进 fold：它没有可折叠的运算）
         Instr::TypeAssert { dst, .. } => *dst,
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => *dst,
+        Instr::MakeClosure { dst, .. } => *dst,
         Instr::Const { dst, .. }
         | Instr::Copy { dst, .. }
         | Instr::Bin { dst, .. }

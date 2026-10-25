@@ -9,14 +9,19 @@
 - commit 纪律（2026-10-15 授权）：阶段收口即 commit + push（按交付块分 commit）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore；`tools/ast-oracle` vendor 入库
 
 ## 当前状态（2026-10-25）
-- **M7/M8 已收口**；**M9 进行中**：Phase 0（M9a 骨架）+ Phase 1（slice，`R-9-4`）+ Phase 2（map）已收口。
-  下一阶段 = **Phase 3（iface，语料 50 → 60）**
-- **M9 语料现态**：native **ok=50 / skip=19 / bad=0**（69 个入选）；三方差分 **50 绿 / 19 跳过 / 0 红**；
-  `cargo test --workspace` **2157 passed 0 failed**；`rgoc-meta`（新 crate）+ `rgoc-arm64` desc 发射 +
+- **M7/M8 已收口**；**M9 进行中**：Phase 0（M9a）+ 1（slice）+ 2（map）+ 3/3b（iface + type switch）已收口。
+  下一阶段 = **Phase 4（funcval，语料 57 → 65）**
+- **M9 语料现态**：native **ok=57 / skip=12 / bad=0**（69 个入选）；三方差分 **57 绿 / 12 跳过 / 0 红**；
+  `cargo test --workspace` **2159 passed 0 failed**；`rgoc-meta`（新 crate）+ desc/方法表/ITab 发射 +
   `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
-- ⚠️ **SSA 拒绝面已重冻结 46/23 → 50/19**（`R-9-8`）：map 实现后 5 条 MAP 拒绝 4 条消失，
-  第 5 条 `print.go` 的第一条拒绝暴露成 DEFER。**Phase 5 因此是 +3 不是 +2**（计划写 +2）。
+- ⚠️ **SSA 拒绝面三次重冻结 46/23 → 50/19 → 56/13 → 57/12**（`R-9-8`/`R-9-12`/`R-9-14`）。
+  剩下 12 条全是 **FUNC-VALUE 8 + DEFER 4** ⇒ Phase 4 是 **+8**、Phase 5 是 **+4**（计划写 +7/+3）。
   按码分类的清单只告诉你「第一条拒绝是什么」，不告诉你「这个文件只剩这一条」
+- ⚠️ **码会整条下线**：`MAP`/`IFACE-DYN`/`RANGE-FUNC` 都已没有生产者，`SsaCode::ALL` 8 → 7。
+  下线要在 manifest 记 `retired_codes`（code/retired_by/revision/why），并把判据反转成
+  「能建图 + 该码不出现」—— **不留永远不产出的码**
+- ⚠️ **求值器与后端必须同口径**（`R-9-13`）：方法接收者在 IR 里**总是地址**（`Field` 只认
+  `Value::Ptr`）。`ssa_exec` 的接口派发曾按值下降 ⇒ `panic: 地址不是指针`（native 却对）
 - ⚠️ **`Instr::Index` 的 base 必须是地址**（`R-9-9`）：右值聚合（调用结果 / map 值 / 复合字面量）
   当底座会**把数组内容当地址** ⇒ 段错误。`for k := range a` 不塌只因为 key-only 不发 `Index`。
   同理 `Field`/`Index` 的 dst 类型必须是 `*成员类型`（`R-9-6`，沿用底座类型会算错偏移）

@@ -243,6 +243,8 @@ impl FnBuilder {
     fn finish_inner(self) -> (SsaFunc, TypeTable) {
         let tt = self.tt;
         let f = SsaFunc {
+            captured: Vec::new(),
+            ctx_abi: false,
             src: rgoc_hir::FuncId(0),
             name: self.name,
             params: Vec::new(),

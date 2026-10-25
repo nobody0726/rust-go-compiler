@@ -9,8 +9,8 @@
 //! | 条目 | 能不能在这里正面测 | 为什么 |
 //! |---|---|---|
 //! | `U-M7-01` `[]T` | ✅ | 后端主动拒，码就在 `CgCode` 里 |
-//! | `U-M7-02` 间接调用 | ⚠️ **守卫** | M6 已拒函数值（`SSA-UNSUPPORTED-FUNC-VALUE`），后端**够不着** |
-//! | `U-M7-03` 方法值 | ⚠️ **守卫** | 同上（`SSA-UNSUPPORTED-IFACE-DYN`） |
+//! | `U-M7-02` 间接调用 | ✅ | M9/Phase 4a 起函数值放行（`R-9-15`），本文件给正向证据 |
+//! | `U-M7-03` 方法值 | ⚠️ **守卫** | SSA 仍拒（`SSA-UNSUPPORTED-FUNC-VALUE`），后端**够不着** |
 //! | `U-M7-04` arena 耗尽 | ✅ | 运行期，跑出来就是 |
 //!
 //! 守卫测试的形态是**反向**的：断言「这个码**不出现**，拒绝来自 M6」。M6 一旦
@@ -78,20 +78,24 @@ fn u_m7_01_切片面已经放行() {
 }
 
 #[test]
-fn u_m7_02_间接调用够不着_守卫() {
-    // 函数值调用：M6 的拒绝面先拦住，后端到不了 `CalleeRef::Indirect`。
-    let src =
-        "package main\n\nfunc f() int { return 1 }\n\nfunc main() {\n\tg := f\n\tprintln(g())\n}\n";
-    let (exit, stderr, _) = build("indirect_probe", src);
-    assert_eq!(exit, 1, "应被静态拒绝，stderr={stderr}");
-    assert!(
-        !stderr.contains("CG-UNSUPPORTED-INDIRECT-CALL"),
-        "M6 应该先拒（函数值）。若这条红了，说明 M6 放行了 —— \
-         那时才需要给后端补间接调用的正向证据。实际：{stderr}"
-    );
-    assert!(
-        stderr.contains("SSA-UNSUPPORTED-"),
-        "拒绝必须来自 M6 的码，实际：{stderr}"
+fn u_m7_02_间接调用已经放行_转正向() {
+    // # 这条判据换过面（`M9/Phase 4a`，`R-9-15`）
+    //
+    // M7 时它是**守卫**：函数值被 SSA 拒绝，后端的 `CalleeRef::Indirect` 到不了，
+    // 所以只断言「`CG-UNSUPPORTED-INDIRECT-CALL` 不出现」。M9/Phase 4a 实现了
+    // 无捕获的函数值（`Instr::FuncAddr` + 间接调用 + ctx ABI）⇒ 守卫按设计变红，
+    // 换成**正向证据**：真的跑起来、真的算对。
+    //
+    // 这正是守卫测试该有的寿命：它红的那天，就是补正向证据的那天。
+    let src = "package main\n\nfunc f() int { return 1 }\n\nfunc add(a, b int) int { return a + b }\n\nfunc main() {\n\tg := f\n\tprintln(g())\n\th := add\n\tprintln(h(20, 22))\n}\n";
+    let (exit, stderr, exe) = build("indirect_probe", src);
+    assert_eq!(exit, 0, "构建应成功，stderr={stderr}");
+    let out = std::process::Command::new(&exe).output().expect("跑不起来");
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "1\n42\n",
+        "间接调用的结果不对；stderr={}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

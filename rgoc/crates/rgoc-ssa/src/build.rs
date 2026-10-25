@@ -53,6 +53,17 @@ pub struct BuildOutcome {
 /// 一起长大，所以这里要 `&mut`。
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
+    // 「哪些函数有捕获」要先让 `unsup_expr` 看得见：它只拿得到 `TypeTable`。
+    // 这是**预扫描**，与建图无关（只读 HIR）。
+    CAPTURED_FUNCS.with(|c| {
+        let mut set = c.borrow_mut();
+        set.clear();
+        for (i, f) in program.funcs.iter().enumerate() {
+            if !f.captured.is_empty() {
+                set.insert(FuncId(i as u32));
+            }
+        }
+    });
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
     let effs = crate::effect::summarize(program, tt);
     let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
@@ -82,6 +93,30 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
 
     // 方法表与静态 ITab（M9/Task 27/28）。两件事都要**在全部函数建完之后**做：
     // 前者要按 (类型, 方法名) 查 FuncId，后者要扫所有 `Convert` 找 (接口, 具体类型) 对。
+    // 调用约定（`M9/Task 40`）：**被当作值用过的**函数、以及所有闭包，整数实参
+    // 从 `x1` 起（`x0` 留给隐式 ctx）。这件事必须在**全部函数建完之后**做 ——
+    // 「被当作值用过」是模块级事实（使用点可能在被调方之后才建）。
+    //
+    // 判据取自 IR 而不是 HIR：`FuncAddr` / `MakeClosure` 就是「取过地址」的
+    // 全部来源，而 HIR 的 `FuncLit` 还包含「立刻调用」那种不需要 ctx 的情形
+    // （`func(){}()` 的 `FuncAddr` 也会发，所以仍然一致 —— 见下）。
+    let mut value_funcs: std::collections::BTreeSet<FuncId> = std::collections::BTreeSet::new();
+    for f in &funcs {
+        for b in &f.blocks {
+            for i in &b.instrs {
+                match i {
+                    Instr::FuncAddr { func, .. } | Instr::MakeClosure { func, .. } => {
+                        value_funcs.insert(*func);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    for f in &mut funcs {
+        f.ctx_abi = !f.captured.is_empty() || value_funcs.contains(&f.src);
+    }
+
     let methods = collect_methods(program, tt);
     let itabs = collect_itabs(&funcs, &methods, tt);
 
@@ -564,13 +599,19 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             | CompositeItem::Index(_, x)
             | CompositeItem::Key(_, x) => unsup_expr(tt, x),
         }),
-        // 函数值：`FuncLit` 既覆盖 `func(){}`，也覆盖**具名函数当值用**（`f := g`），
-        // 两者在 HIR 里同一个节点（`lower_name` 落成 `FuncLit(fid)`）。
-        // IR 里没有「把函数变成值」的指令 ⇒ 整个函数值面拒掉。
-        ExprKind::FuncLit(_) => Some((
-            SsaCode::FuncValue,
-            "函数字面量 / 函数名当值用（IR 里没有函数引用值）".to_string(),
-        )),
+        // 函数值支持了（`M9/Task 37`）：没有捕获的函数是一个符号地址
+        // （`Instr::FuncAddr`）。**有捕获的闭包还不行** —— funcval 的分配与
+        // `CapturePtr` 是 Task 38，那之前拒掉（不留「建出图但后端不认」的中间态）。
+        ExprKind::FuncLit(fid) => {
+            if tt_has_captures(tt, *fid) {
+                Some((
+                    SsaCode::FuncValue,
+                    "闭包（捕获外层变量的函数值，Task 38 未做）".to_string(),
+                ))
+            } else {
+                None
+            }
+        }
         ExprKind::Bound { .. } => Some((SsaCode::FuncValue, "方法值（`x.M` 不调用）".to_string())),
         // 类型断言支持了（M9/Task 33）：`Instr::TypeAssert`。
         ExprKind::TypeAssert { x, .. } => unsup_expr(tt, x),
@@ -1076,6 +1117,20 @@ fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
         tt.type_of(rgoc_types::underlying(tt, t)),
         rgoc_types::typ::Type::Struct(_) | rgoc_types::typ::Type::Array { .. }
     )
+}
+
+/// 这个 HIR 函数有捕获吗（`unsup_expr` 只能拿到 `TypeTable`，拿不到 `Program`）。
+///
+/// 用一张**全局登记表**把「哪些 FuncId 有捕获」传进来 —— 见 [`build`] 开头的
+/// `CAPTURED_FUNCS`。这是本 crate 唯一的线程局部状态，只写一次、只读一次。
+fn tt_has_captures(_tt: &TypeTable, fid: FuncId) -> bool {
+    CAPTURED_FUNCS.with(|c| c.borrow().contains(&fid))
+}
+
+thread_local! {
+    /// `FuncId → 有捕获`（`build()` 填，`unsup_expr` 读）。
+    static CAPTURED_FUNCS: std::cell::RefCell<std::collections::BTreeSet<FuncId>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// 是不是接口类型（剥具名 / 别名）。
@@ -3026,6 +3081,31 @@ impl Fb<'_> {
                     0 => todo!("0 结果的调用不能当值使用（检查器应已拒绝）"),
                     n => todo!("{n} 个结果的调用出现在单值位置（检查器应已拒绝）"),
                 }
+            }
+            // 函数值（`M9/Task 37`）：`func(){}` 与「具名函数当值」在 HIR 里
+            // 是**同一个节点**（`lower_name` 落成 `FuncLit(fid)`），区别只在
+            // 那个 `Func` 有没有 `captured`。
+            //
+            // 没有捕获 ⇒ 一个符号地址就够（`FuncAddr`）；有捕获 ⇒ 得分配一个
+            // funcval 把捕获塞进去（`MakeClosure`，Task 38）。
+            ExprKind::FuncLit(fid) => {
+                let t = e.typ;
+                let dst = self.new_value(t);
+                let caps = &self.program.funcs[fid.index()].captured;
+                if caps.is_empty() {
+                    self.emit(Instr::FuncAddr { dst, func: *fid });
+                } else {
+                    let ptrs: Vec<ValueId> = caps
+                        .iter()
+                        .map(|c| self.place_addr_root(&rgoc_hir::Place::Slot(c.outer_slot)).0)
+                        .collect();
+                    self.emit(Instr::MakeClosure {
+                        dst,
+                        func: *fid,
+                        captures: ptrs,
+                    });
+                }
+                dst
             }
             // 类型断言（`M9/Task 33`）：`x.(T)` / `v, ok := x.(T)`。
             //
@@ -5234,6 +5314,9 @@ impl Fb<'_> {
             slot_root: self.slot_root,
             value_types: self.values,
             call_sigs: self.call_sigs,
+            captured: self.f.captured.clone(),
+            // 由 `build()` 的收尾扫描决定（「被当作值用过」要看全模块）
+            ctx_abi: false,
         }
     }
 }
