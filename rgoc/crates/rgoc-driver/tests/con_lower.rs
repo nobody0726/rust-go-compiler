@@ -319,12 +319,12 @@ func main() {
     has(&d, "#1 recv targets=0 send=false");
 }
 
-// ───────────────────────── Task 14：四条码下线 ─────────────────────────
+// ───────────────────────── Task 14 + Task 45：五条码下线 ─────────────────────────
 
 #[test]
-fn t_task14_四条码不许再出现() {
-    // `HIR-UNSUPPORTED-{GO,CHAN,SELECT,CLOSE}` 在 M8 之后没有任何产出点。
-    // 留着它们（哪怕不产出）会让「哪个构造还不支持」有四个错误答案，
+fn t_task14_五条码不许再出现() {
+    // `HIR-UNSUPPORTED-{GO,CHAN,SELECT,CLOSE,RANGE-FUNC}` 在 M8 之后没有任何
+    // 产出点。留着它们（哪怕不产出）会让「哪个构造还不支持」有错误答案，
     // 所以判据是**源码里 grep 不到**，不是「运行时没见到」。
     //
     // 扫的是 `rgoc/crates/` 下的 `.rs`（含测试）：测试里写一条旧码的字符串
@@ -332,6 +332,9 @@ fn t_task14_四条码不许再出现() {
     // 扫的是 `crates/*/src/` 下的 `.rs`。**不含** `tests/`：那里允许出现旧码，
     // 因为「这条码不该出现」这种负向断言本身是有意义的判据
     // （`ssa_reject.rs` 就是这么写的）。真正的产出点只有 `src/`。
+    //
+    // `RANGE-FUNC` 是 Task 45 下线的：range over func 现在真的被 lowering，
+    // 换面成 `RANGEFUNC-RETURN`（body 里的 return/goto，`U-M8-03`）。
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut hits = Vec::new();
     scan_rs(&root, &mut hits);
@@ -340,6 +343,7 @@ fn t_task14_四条码不许再出现() {
         "HIR-UNSUPPORTED-CHAN",
         "HIR-UNSUPPORTED-SELECT",
         "HIR-UNSUPPORTED-CLOSE",
+        "HIR-UNSUPPORTED-RANGE-FUNC",
     ] {
         // `-CHAN` 是 `-CHANNEL` 之类的前缀吗？不是 —— 但 `-CLOSE` 会命中
         // `-CLOSED`，所以按「完整码后不跟字母」判。
@@ -350,7 +354,7 @@ fn t_task14_四条码不许再出现() {
             .collect();
         assert!(
             found.is_empty(),
-            "`{code}` 已下线（M8/Task 14），但仍在这些文件里出现：{found:?}"
+            "`{code}` 已下线（M8/Task 14 / Task 45），但仍在这些文件里出现：{found:?}"
         );
     }
 }

@@ -230,16 +230,15 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         )),
         Stmt::Range { x, body, kind, .. } => match kind {
             RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
-            RangeKind::Func => Some((
-                SsaCode::RangeFunc,
-                "range over func（迭代器协议要调 func 值）".to_string(),
-            )),
             RangeKind::Map => Some((SsaCode::Map, "range over map".to_string())),
             RangeKind::Str => Some((
                 SsaCode::RangeStr,
                 "range over string（要按 rune 解码，指令集里没有对应操作）".to_string(),
             )),
-            RangeKind::Array | RangeKind::Slice | RangeKind::Int => {
+            // `RangeKind::Func` 到不了这里：M8/Task 45 起 HIR 把 range over func
+            // 下降成「调用迭代器 + 传合成函数」，**不产出** `Stmt::Range`。SSA
+            // 对它的拒绝因此走 `FUNC-VALUE`（合成函数是个函数字面量）。
+            RangeKind::Array | RangeKind::Slice | RangeKind::Int | RangeKind::Func => {
                 unsup_expr(tt, x).or_else(|| unsup_block(tt, body))
             }
         },

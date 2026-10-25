@@ -1,7 +1,8 @@
 # M6 的 SSA 拒绝清单（`ssa-rejected.txt`）—— 与 `run-selected.txt`（69 行）互补。
 #
 # 格式：<相对路径>	<码>	<原因>
-# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,IFACE-DYN,MAP,RANGE-FUNC,RANGE-STR}
+# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,IFACE-DYN,MAP,RANGE-STR}
+# （M8/Task 45 下线 RANGE-FUNC：range over func 改走 FUNC-VALUE）
 #
 # 纪律（M6-tests.md §4.2 / §5）：
 #  * `能建图 N + 拒绝 M == 69`（两向断言，见 `rgoc-driver/tests/ssa_slice.rs`）

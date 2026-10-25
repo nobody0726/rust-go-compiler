@@ -9,13 +9,16 @@
 //! 2. stderr 里有那条 **`SSA-UNSUPPORTED-*` 文本**；
 //! 3. 建图结果里被拒的函数**带**那个 `SsaCode`（结构断言，不靠文本匹配）。
 //!
-//! # 为什么有两条「够不着」的码
+//! # 为什么只剩一条「够不着」的码
 //!
-//! `SSA-UNSUPPORTED-RANGE-FUNC` / `-GENERIC` 在**这个前端**里没有入口：
-//! `RangeKind` 没有 `Func` 变体（`range` over func 在 lowering 就拒了），
-//! 泛型也被检查器挡住（`G-M5-03`）。两条各有一个「守卫测试」：断言它们
-//! **在 HIR 层就被拒**（`HIR-*` / `C8` 诊断）—— 一旦哪天上游开始放行，
-//! 守卫就会红，提醒我们回来实现 SSA 侧的码，而不是留一个永远走不到的 `todo!`。
+//! `SSA-UNSUPPORTED-GENERIC` 在**这个前端**里没有入口：泛型被检查器挡住
+//! （`G-M5-03`）。它有一个「守卫测试」：断言它**在检查器层就被拒**
+//! （`C8` 诊断）—— 一旦哪天上游开始放行，守卫就会红，提醒我们回来实现
+//! SSA 侧的码，而不是留一个永远走不到的 `todo!`。
+//!
+//! 曾经还有一条 `-RANGE-FUNC`，M8/Task 45 把它下线了：HIR 放行 range over
+//! func 之后下降成「调用 + 合成函数字面量」，SSA 的拒绝入口换成
+//! `-FUNC-VALUE`（见 `t_ssa_33_range_over_func_改走_func_value`）。
 
 use std::path::{Path, PathBuf};
 
@@ -217,22 +220,21 @@ fn front_end(path: &Path) -> (rgoc_hir::Program, rgoc_types::TypeTable) {
 }
 
 #[test]
-fn t_ssa_33_range_over_func_在_hir_层就被拒() {
-    // `range` over func：HIR 的 `RangeKind` 没有 `Func` 变体 ⇒ lowering 就拒
-    // （`U-M5-06`）。SSA 的 `-RANGE-FUNC` 因此**无输入**。
-    // 这条守卫的意义：上游一旦放行，这里会红 —— 那时才轮到 SSA 侧的码。
-    let src = "package main\n\nfunc yield(y func(int) bool) {\n\t_ = y(1)\n}\n\nfunc main() {\n\tfor i := range yield {\n\t\tprintln(i)\n\t}\n}\n";
+fn t_ssa_33_range_over_func_改走_func_value() {
+    // M8/Task 45 起 HIR 真的放行 range over func：它下降成
+    // `seq(__range_body_0)` —— 一次调用 + 一个合成函数字面量。
+    // 所以 SSA 看到的**不是** range，而是 `FUNC-VALUE`（IR 里没有函数引用值）。
+    //
+    // 这条守卫的前身是「range over func 在 HIR 层就被拒」。上游放行后它如期
+    // 变红，提醒我们回来接 SSA 侧 —— 接完的结论是：SSA 层拒绝它的**入口**
+    // 从 `RANGE-FUNC` 换成了 `FUNC-VALUE`，那个码本来就在 `ALL` 里。
+    let src = "package main\n\nfunc seq(yield func(int) bool) {\n\t_ = yield(1)\n}\n\nfunc main() {\n\tfor i := range seq {\n\t\tprintln(i)\n\t}\n}\n";
     let p = fixture("range-func", src);
     let out = run(&p);
-    assert_eq!(out.exit, 1, "range over func 必须被拒（不分层）：{out:?}");
+    assert_eq!(out.exit, 1, "SSA 通路必须拒（不分层）：{out:?}");
     assert!(
-        !out.stderr.contains("SSA-UNSUPPORTED-RANGE-FUNC"),
-        "这条码**不该**出现：SSA 层看不到 range-over-func，实际：{:?}",
-        out.stderr
-    );
-    assert!(
-        out.stderr.contains("HIR-") || out.stderr.contains("[C8"),
-        "拒绝该来自 HIR 或检查器，实际：{:?}",
+        out.stderr.contains("SSA-UNSUPPORTED-FUNC-VALUE"),
+        "拒绝该来自 FUNC-VALUE，实际：{:?}",
         out.stderr
     );
 }

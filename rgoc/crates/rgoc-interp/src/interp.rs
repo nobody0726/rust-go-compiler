@@ -351,6 +351,13 @@ enum Body<'a> {
         stmts: &'a [Stmt],
         idx: usize,
         label: Option<&'a str>,
+        /// 无标签 `break` 的目标（`select` 子句体）。
+        ///
+        /// 为什么单立一个字段而不是复用 `label`：具名块的 `label` 是
+        /// 「**带标签的** break 命中它」，而 select 子句体要的是「**不带标签的**
+        /// break 命中它」。两者互斥（Go 里 select 子句不能有标签），但复用同一
+        /// 个字段会让 `label.is_some() && *l == label` 这条既有判据变含糊。
+        breakable: bool,
     },
     If(IfState<'a>),
     For(ForState<'a>),
@@ -1718,6 +1725,21 @@ impl<'a> G<'a> {
             stmts: &b.stmts,
             idx: 0,
             label: None,
+            breakable: false,
+        });
+    }
+
+    /// 压一个 `select` 子句体：它是**无标签 `break` 的目标**。
+    ///
+    /// `select` 本身不在 body 栈上（它由 `Task::Select` 在求值栈上驱动），
+    /// 所以子句体是唯一能拦住 `break` 的东西。少了它，子句里的 `break` 会
+    /// 一路弹到外层循环上 —— 把循环 break 掉（官方 `33`，我们曾算出 `1`）。
+    fn push_clause_seq(&mut self, _sh: &mut Shared<'a>, fi: usize, b: &'a Block) {
+        self.frames[fi].bodies.push(Body::Seq {
+            stmts: &b.stmts,
+            idx: 0,
+            label: None,
+            breakable: true,
         });
     }
 
@@ -1923,6 +1945,7 @@ impl<'a> G<'a> {
                         stmts: &b.stmts,
                         idx: 0,
                         label: Some(label),
+                        breakable: false,
                     },
                 ),
                 other => self.exec_stmt(sh, other),
@@ -1933,6 +1956,7 @@ impl<'a> G<'a> {
                     stmts: &b.stmts,
                     idx: 0,
                     label: None,
+                    breakable: false,
                 },
             ),
             Stmt::Defer { call } => {
@@ -2449,7 +2473,13 @@ impl<'a> G<'a> {
                     return;
                 };
                 let hit = match &b {
-                    Body::Seq { label: l, .. } => label.is_some() && *l == label,
+                    // 具名块：**带标签的** break 命中它。select 子句体：
+                    // **不带标签的** break 命中它（`select` 不在 body 栈上）。
+                    Body::Seq {
+                        label: l,
+                        breakable,
+                        ..
+                    } => (*breakable && label.is_none()) || (l.is_some() && *l == label),
                     Body::If(_) => false,
                     Body::For(s) => label.is_none() || s.label == label,
                     Body::Range(s) => label.is_none() || s.label == label,
@@ -3648,7 +3678,7 @@ impl<'a> G<'a> {
             self.select_bind(sh, &c.recv_targets, outs, &c.body);
         } else {
             let fi = self.frames.len() - 1;
-            self.push_seq(sh, fi, &c.body);
+            self.push_clause_seq(sh, fi, &c.body);
         }
         true
     }
@@ -3684,7 +3714,7 @@ impl<'a> G<'a> {
                     _ => {}
                 }
             }
-            self.push_seq(sh, fi, body);
+            self.push_clause_seq(sh, fi, body);
             return;
         }
         let vbase = self.values.len();

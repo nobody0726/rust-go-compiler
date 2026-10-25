@@ -7,20 +7,23 @@
 //! 用户可见的说明**。所以每个「M5 不做」的构造都有一个稳定码：
 //!
 //! ```text
-//! HIR-UNSUPPORTED-RANGE-FUNC   range over func（M5 的窄面；M8/Task 45 起换成 RANGE-FUNC-RETURN）
+//! HIR-UNSUPPORTED-RANGEFUNC-RETURN  range over func 的 body 里 return/goto
+//!                                    （`U-M8-03`；body 被下沉成合成函数，
+//!                                    而 HIR 的 return/goto 是函数作用域的）
 //! HIR-UNSUPPORTED-GOTO         函数体顶层块以外的 goto（窄面）
 //! HIR-UNSUPPORTED-GENERIC      超出单态化面的泛型
 //! HIR-MISSING-TYPE             拿不到静态类型（`D-M5-2` 的失效条件）
 //! HIR-INCONSISTENT-CHECK       lowering 期会话冒出诊断（检查面不一致）
 //! ```
 //!
-//! # M8 下线了四条
+//! # M8 下线了五条
 //!
-//! `HIR-UNSUPPORTED-{GO,CHAN,SELECT,CLOSE}` 在 M8 全部消失：`go` / `chan` /
-//! `select` / `close` 现在真的被 lowering（`M8-plan.md` Task 7–12）。
-//! **不许**把它们当「保留字」留着 —— 一个永远不会被产出的码只会让
-//! 「哪个构造还不支持」这个问题有四种错误答案。守卫判据：
-//! `rgoc-driver/tests/con_lower.rs` 的 `t_task14_四条码不许再出现`。
+//! `HIR-UNSUPPORTED-{GO,CHAN,SELECT,CLOSE,RANGE-FUNC}` 在 M8 全部消失：
+//! `go` / `chan` / `select` / `close` / `range over func` 现在真的被 lowering
+//! （`M8-plan.md` Task 7–12 / Task 45–48）。**不许**把它们当「保留字」留着 ——
+//! 一个永远不会被产出的码只会让「哪个构造还不支持」这个问题有错误答案。
+//! 守卫判据：`rgoc-driver/tests/con_lower.rs` 的 `t_task14_四条码不许再出现`
+//! 与 `con_rangefunc.rs` 的 `t_con_49_第五条码不许再出现`。
 //!
 //! 每个码都对应 `M5-manifest.json` 的一条 `unsupported` 或一条 `open_gap`。
 
@@ -29,8 +32,8 @@ use rgoc_lex::Pos;
 /// 拒绝码。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum RejectKind {
-    /// `range` over func（`U-M5-06`）。
-    RangeFunc,
+    /// range over func 的 body 里 `return` / `goto`（`U-M8-03`）。
+    RangeFuncReturn,
     /// 顶层块以外的 `goto`（窄面）。
     Goto,
     /// 超出单态化面的泛型（`U-M5-10`）。
@@ -46,7 +49,7 @@ impl RejectKind {
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
-            RejectKind::RangeFunc => "HIR-UNSUPPORTED-RANGE-FUNC",
+            RejectKind::RangeFuncReturn => "HIR-UNSUPPORTED-RANGEFUNC-RETURN",
             RejectKind::Goto => "HIR-UNSUPPORTED-GOTO",
             RejectKind::Generic => "HIR-UNSUPPORTED-GENERIC",
             RejectKind::MissingType => "HIR-MISSING-TYPE",

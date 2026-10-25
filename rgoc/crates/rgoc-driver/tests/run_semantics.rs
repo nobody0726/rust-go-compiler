@@ -89,21 +89,26 @@ fn rejected(name: &str, src: &str, code: &str) {
 
 /// `T-EX-02`：未支持构造**显式拒绝**（退出码 1 + 稳定码），且进程不 abort。
 ///
-/// # M8 之后只剩一条
+/// # M8 之后换面成窄面
 ///
 /// 原本五条：`go` / `chan` / `select` / `range` over func / `close`。
-/// M8 把前四者里的四个（`go`/`chan`/`select`/`close`）真的实现了
-/// （`M8-plan.md` Task 7–12），对应四个 `HIR-UNSUPPORTED-*` 码已下线
-/// （Task 14）。所以这条判据现在只覆盖 `range` over func —— 它到
-/// `M8/Task 45` 才换面（`HIR-UNSUPPORTED-RANGE-FUNC-RETURN`）。
+/// M8 把五个构造**全部**真的实现了（Task 7–12 / Task 45–48），对应的
+/// `HIR-UNSUPPORTED-*` 码已全部下线（Task 14 / Task 45）。所以这条判据
+/// 的对象从「整个构造」换成「range over func 里的 `return`/`goto`」——
+/// 那是 M8 唯一新开的窄面（`U-M8-03`，`HIR-UNSUPPORTED-RANGEFUNC-RETURN`）。
 ///
-/// 「放行的那四条真的产出了节点」由 `con_lower.rs` 判，不是删掉了事。
+/// 为什么它还得留着：HIR 层从此**一条**「构造不支持」的码都不产出了，
+/// 而「显式拒绝」这条契约本身仍然有效 —— 只是入口从「构造」变成了
+/// 「构造里的语句」。删掉整条判据等于宣称「我们不再拒绝任何东西」。
+///
+/// 「放行的那几条真的产出了节点」由 `con_lower.rs` / `con_rangefunc.rs` 判，
+/// 不是删掉了事。
 #[test]
 fn t_ex_02_unsupported_constructs_are_rejected_loudly() {
     rejected(
-        "t_ex_02_rangefunc",
-        "package main\nfunc seq(y func(int) bool) {}\nfunc main() {\n\tfor range seq {\n\t}\n}\n",
-        "HIR-UNSUPPORTED-RANGE-FUNC",
+        "t_ex_02_rangefunc_return",
+        "package main\nfunc seq(yield func(int) bool) {}\nfunc main() {\n\tfor v := range seq {\n\t\tprintln(v)\n\t\treturn\n\t}\n}\n",
+        "HIR-UNSUPPORTED-RANGEFUNC-RETURN",
     );
 }
 

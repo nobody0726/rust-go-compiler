@@ -333,3 +333,124 @@ func main() {
         seen.len()
     );
 }
+
+// ───────────────────────── select 子句里的 break ─────────────────────────
+
+#[test]
+fn t_con_60_select_子句里的_break_只破_select() {
+    // **回归判据**（写 con_rangefunc 的 T-CON-49e 时发现的既有 bug）：
+    // `select` 不在 body 栈上（它由 `Task::Select` 驱动），所以子句体是唯一
+    // 能拦住无标签 `break` 的东西。第一版没拦 ⇒ break 一路弹到外层 `for`
+    // 上，循环第一轮就结束（官方 33，我们算出 1）。
+    let s = out(
+        "t_con_60",
+        r#"
+package main
+
+func main() {
+	done := make(chan bool)
+	close(done)
+	n := 0
+	for i := 0; i < 3; i++ {
+		select {
+		case <-done:
+			n++
+			break
+		}
+		n += 10
+	}
+	println(n)
+}
+"#,
+    );
+    assert_eq!(s, "33\n", "break 只该跳出 select，`n += 10` 每轮都要执行");
+}
+
+#[test]
+fn t_con_60b_switch_case_里的_break_只破_switch() {
+    // 同一机制的另一半：switch 的 case 体也是 `Body::Seq`。它**碰巧**是对的
+    // —— 无标签 break 弹掉 case 体后会命中下面的 `Body::Switch`。这条判据
+    // 钉住那个「碰巧」：给 `breakable` 改错维度时它会红。
+    let s = out(
+        "t_con_60b",
+        r#"
+package main
+
+func main() {
+	n := 0
+	for i := 0; i < 3; i++ {
+		switch i {
+		case 1:
+			n++
+			break
+		default:
+			n += 10
+		}
+		n += 100
+	}
+	println(n)
+}
+"#,
+    );
+    // 逐轮：i=0 ⇒ 10+100=110；i=1 ⇒ +1 再 +100=211；i=2 ⇒ +10 再 +100=321。
+    assert_eq!(s, "321\n", "break 只该跳出 switch，`n += 100` 每轮都要执行");
+}
+
+#[test]
+fn t_con_60c_send_与_default_子句里的_break() {
+    // 另一条提交路径：send / default 子句没有接收目标，走的是
+    // `select_commit` 的 else 分支（不是 `select_bind`）。两条路都要拦 break。
+    let s = out(
+        "t_con_60c",
+        r#"
+package main
+
+func main() {
+	c := make(chan int, 1)
+	n := 0
+	for i := 0; i < 3; i++ {
+		select {
+		case c <- i:
+			n++
+			break
+		default:
+			n += 10
+			break
+		}
+		n += 100
+	}
+	println(n)
+}
+"#,
+    );
+    assert_eq!(s, "321\n");
+}
+
+#[test]
+fn t_con_60d_带标签的_break_穿过_select() {
+    // `break L` 的 L 在**外层循环**上：它必须穿过 select 子句体继续往外找。
+    // 若 `breakable` 不看标签，子句体会把带标签的 break 也拦下来 ⇒ 只跑一轮。
+    let s = out(
+        "t_con_60d",
+        r#"
+package main
+
+func main() {
+	done := make(chan bool)
+	close(done)
+	n := 0
+L:
+	for i := 0; i < 3; i++ {
+		select {
+		case <-done:
+			n++
+			break L
+		}
+		n += 10
+	}
+	println(n)
+}
+"#,
+    );
+    assert_eq!(s, "1\n", "break L 破的是外层循环：第一轮就结束");
+}

@@ -84,6 +84,22 @@ struct FnCtx {
     types: Vec<BTreeMap<String, TypeId>>,
     captures: Vec<Capture>,
     labels: BTreeMap<String, usize>,
+    /// range-over-func 合成出的 yield 函数体（`M8-plan.md` Task 46）。
+    ///
+    /// `Some(_)` ⇒ 正在 lower 这个体。此时**直接落在体这一层**的 `break` /
+    /// `continue` 要翻译成 `return false` / `return true`（规范：body 结束 ⇒
+    /// `yield` 返回 `false`）。深度不为 0（嵌在循环/switch 里）时**不**翻译 ——
+    /// 那个 break 针对的是内层构造。
+    rf: Option<RfState>,
+}
+
+/// range-over-func 的翻译深度。
+#[derive(Clone, Copy)]
+struct RfState {
+    /// 体内「可 break 的构造」数（for / switch / select）。
+    breakable: u32,
+    /// 体内「循环」数（for / range）—— `continue` 只针对循环。
+    loops: u32,
 }
 
 impl FnCtx {
@@ -97,6 +113,7 @@ impl FnCtx {
             types: vec![BTreeMap::new()],
             captures: Vec::new(),
             labels: BTreeMap::new(),
+            rf: None,
         }
     }
 
@@ -662,6 +679,52 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         c.types.pop();
     }
 
+    /// 进入一个 `for`：range-over-func 的 break/continue 翻译深度都 +1。
+    ///
+    /// 返回值配 [`Self::rf_leave`] 用（进之前是什么就还原成什么）。
+    fn rf_for_enter(&mut self) -> Option<RfState> {
+        let c = self.cur_mut();
+        let saved = c.rf;
+        if let Some(s) = &mut c.rf {
+            s.breakable += 1;
+            s.loops += 1;
+        }
+        saved
+    }
+
+    /// 进入 `switch` / `select`：只有 break 的深度 +1（`continue` 不针对它们）。
+    fn rf_break_enter(&mut self) -> Option<RfState> {
+        let c = self.cur_mut();
+        let saved = c.rf;
+        if let Some(s) = &mut c.rf {
+            s.breakable += 1;
+        }
+        saved
+    }
+
+    /// 离开上面两个入口进入的构造：还原深度。
+    fn rf_leave(&mut self, saved: Option<RfState>) {
+        self.cur_mut().rf = saved;
+    }
+
+    /// `break` 是否该翻译成 `return false`（M8/Task 46）。
+    fn rf_translate_break(&self) -> bool {
+        self.cur().rf.is_some_and(|s| s.breakable == 0)
+    }
+
+    /// `continue` 是否该翻译成 `return true`（M8/Task 46）。
+    fn rf_translate_continue(&self) -> bool {
+        self.cur().rf.is_some_and(|s| s.loops == 0)
+    }
+
+    /// `return <bool>` 节点（`break` ⇒ false，`continue` ⇒ true）。
+    ///
+    /// 常量直接造 `Expr`：合成 AST 字面量得连位置一起编，而那对判据没有价值。
+    fn rf_return(&mut self, v: bool) -> Stmt {
+        let bool_ty = self.s.tt.add_basic(BasicId::Bool);
+        Stmt::Return(vec![Expr::new(ExprKind::Const(ConstVal::Bool(v)), bool_ty)])
+    }
+
     fn alloc_slot(&mut self, typ: TypeId) -> SlotId {
         self.cur_mut().alloc_t(typ)
     }
@@ -877,6 +940,21 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             AStmt::Decl(DeclStmt { decls, .. }) => self.lower_decl_stmt(decls),
             AStmt::Block(b) => Some(Stmt::Block(self.lower_block(b))),
             AStmt::Return(r) => {
+                // range-over-func 的 body 被下沉成一个**新函数**，而 HIR 的
+                // `return` 是函数作用域的：这里的 `return` 会从合成函数返回
+                // （语义错：本该从**外层**函数返回）。官方 go 接受这种写法，
+                // 我们是窄面（`U-M8-03`）⇒ 显式拒绝，不静默降级。
+                //
+                // 只查**当前** FnCtx：嵌套函数字面量有它自己的 FnCtx
+                // （`rf = None`），那里的 `return` 是合法的。
+                if self.cur().rf.is_some() {
+                    self.reject(
+                        r.pos,
+                        RejectKind::RangeFuncReturn,
+                        "range over func 的 body 里不许 return（U-M8-03）",
+                    );
+                    return None;
+                }
                 let n = self.cur().scopes.len();
                 let _ = n;
                 let results: Vec<TypeId> = self.result_types_of_current();
@@ -906,6 +984,16 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                         .as_ref()
                         .map(|l| l.value.clone())
                         .unwrap_or_default();
+                    // `goto` 的目标标签在**外层**函数里（HIR 的 `labels` 是
+                    // 函数作用域的，合成函数看不到它）。同为 `U-M8-03` 窄面。
+                    if self.cur().rf.is_some() {
+                        self.reject(
+                            b.pos,
+                            RejectKind::RangeFuncReturn,
+                            format!("goto {label}：range over func 的 body 里不许 goto（U-M8-03）"),
+                        );
+                        return None;
+                    }
                     if !self.cur().labels.contains_key(&label) {
                         self.reject(
                             b.pos,
@@ -914,6 +1002,15 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                         );
                         return None;
                     }
+                }
+                // `break` / `continue` 直接落在合成函数体这一层 ⇒ 翻译成
+                // `return false` / `return true`（规范：body 结束 ⇒ yield 返回
+                // false）。嵌在循环/switch 里的照旧走 `Stmt::Branch`。
+                if kind == BranchKind::Break && self.rf_translate_break() {
+                    return Some(self.rf_return(false));
+                }
+                if kind == BranchKind::Continue && self.rf_translate_continue() {
+                    return Some(self.rf_return(true));
                 }
                 Some(Stmt::Branch {
                     kind,
@@ -960,7 +1057,10 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         for c in &s.clauses {
             // 每个子句一层作用域：`case v := <-c:` 的 `v` 只在它自己的体内可见。
             self.push_scope();
+            // select 也是「可 break 的构造」（M8/Task 46 的深度）。
+            let rf = self.rf_break_enter();
             let clause = self.lower_comm(c);
+            self.rf_leave(rf);
             self.pop_scope();
             if let Some(clause) = clause {
                 clauses.push(clause);
@@ -1529,7 +1629,11 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             .as_ref()
             .and_then(|s| self.lower_simple(s))
             .map(Box::new);
+        // range-over-func 的 break/continue 翻译深度 +1：这个 `for` 是合成
+        // 函数体里的**内层**循环，它的 break/continue 不是 range 的。
+        let rf = self.rf_for_enter();
         let body = self.lower_block(&f.body);
+        self.rf_leave(rf);
         self.pop_scope();
         Stmt::For {
             init: init.map(Box::new),
@@ -1545,6 +1649,11 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         let x = self.lower_expr(&rc.x);
         let xt = x.typ;
         let kind = self.range_kind(xt, rc.pos);
+        // range over func（M8/Task 45）：整条语句下降成**一次调用**
+        // `x(__range_body_<n>)`，没有 `Stmt::Range` 节点。
+        if kind == RangeKind::Func {
+            return self.lower_rangefunc(rc, f, x, xt);
+        }
         let mut key = None;
         let mut value = None;
         if !rc.lhs.is_empty() {
@@ -1577,7 +1686,11 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
             }
         }
+        // range-over-func 的 break/continue 翻译深度 +1（理由同 `lower_for`）：
+        // 这条 range 是合成函数体里的内层循环。
+        let rf = self.rf_for_enter();
         let body = self.lower_block(&f.body);
+        self.rf_leave(rf);
         Stmt::Range {
             key,
             value,
@@ -1644,14 +1757,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             K::Str => RangeKind::Str,
             K::Int => RangeKind::Int,
             K::Chan => RangeKind::Chan,
-            K::Sig => {
-                self.reject(
-                    pos,
-                    RejectKind::RangeFunc,
-                    "range over func 不在 M5 面（U-M5-06）",
-                );
-                RangeKind::Int
-            }
+            K::Sig => RangeKind::Func,
             K::Unknown => {
                 self.reject(pos, RejectKind::MissingType, "range 的遍历形态无法判定");
                 RangeKind::Int
@@ -1716,10 +1822,176 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 };
                 vec![elem]
             }
-            // 迭代器函数的产出类型由**签名**定（`seq` 一个、`seq2` 两个），
-            // 不能在这里靠 `t` 推。归 Task 45。
-            RangeKind::Func => todo!("M8/Task 45：迭代器的产出类型由签名决定"),
+            // 迭代器函数的产出类型由**签名**定：`func(yield func() bool)` 0 个、
+            // `func(yield func(V) bool)` 1 个、`func(yield func(K,V) bool)` 2 个
+            // （规范「For statements with range clause」的表格）。所以要去
+            // **迭代器签名的第一个形参**（yield）里取 yield 自己的形参表。
+            RangeKind::Func => self.yield_param_types(t),
         }
+    }
+
+    /// 迭代器签名 `func(yield func(P…) bool)` ⇒ yield 的形参类型表。
+    ///
+    /// 拿不到（签名形状不对 / 第一个形参不是函数）⇒ 空表 ⇒ 调用方按 0 个
+    /// 迭代变量处理。检查面已经拒过畸形签名，这里是兜底。
+    fn yield_param_types(&self, iter_ty: TypeId) -> Vec<TypeId> {
+        let tt = &*self.s.tt;
+        let sig = match tt.type_of(underlying(tt, iter_ty)) {
+            Type::Signature(sid) => *sid,
+            _ => return Vec::new(),
+        };
+        let d = tt.signature_def(sig);
+        let Type::Tuple(tid) = tt.type_of(d.params) else {
+            return Vec::new();
+        };
+        let Some((_, yield_ty)) = tt.tuple_def(*tid).vars.first() else {
+            return Vec::new();
+        };
+        let Type::Signature(ysid) = tt.type_of(underlying(tt, *yield_ty)) else {
+            return Vec::new();
+        };
+        let yd = tt.signature_def(*ysid);
+        match tt.type_of(yd.params) {
+            Type::Tuple(tid) => tt.tuple_def(*tid).vars.iter().map(|(_, t)| *t).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// yield 的**类型**（合成函数的类型；`ExprKind::FuncLit` 的 `typ` 用）。
+    ///
+    /// 拿不到就退回迭代器类型本身 —— 那个 `typ` 只影响 dump 与装箱判断，
+    /// 不影响调用（调用走 `Callee::Value`，按签名绑形参）。
+    fn yield_type(&self, iter_ty: TypeId) -> TypeId {
+        let tt = &*self.s.tt;
+        let sig = match tt.type_of(underlying(tt, iter_ty)) {
+            Type::Signature(sid) => *sid,
+            _ => return iter_ty,
+        };
+        let d = tt.signature_def(sig);
+        let Type::Tuple(tid) = tt.type_of(d.params) else {
+            return iter_ty;
+        };
+        match tt.tuple_def(*tid).vars.first() {
+            Some((_, t)) => *t,
+            None => iter_ty,
+        }
+    }
+
+    /// range over func（`M8-plan.md` Task 45）：`for v := range seq { body }`
+    /// ⇒ `seq(__range_body_<n>)`。
+    ///
+    /// # 为什么整条语句只是一次调用
+    ///
+    /// 规范的语义就是「用一个新的 yield 函数去调 f」—— `yield` 被调用几次，
+    /// body 就执行几次。所以运行期**没有 range 机器**，合成函数的形参就是
+    /// 迭代变量（每次调用 `yield` 都建一个新帧 ⇒ Go 1.22 的「每轮新变量」
+    /// 白拿），`break` / `continue` 就是 `return false` / `return true`。
+    ///
+    /// # 捕获
+    ///
+    /// body 在**新函数**里 lower，所以它引用的外层变量走 [`Self::resolve`] 的
+    /// 捕获链 —— 与函数字面量完全同一条路（`FnCtx::captures`）。
+    fn lower_rangefunc(&mut self, rc: &RangeClause, f: &ForStmt, x: Expr, xt: TypeId) -> Stmt {
+        let yield_ty = self.yield_type(xt);
+        let fid = self.lower_rangefunc_body(rc, f, xt);
+        let call = Expr::new(
+            ExprKind::Call {
+                callee: Callee::Value(Box::new(x)),
+                args: vec![Expr::new(ExprKind::FuncLit(fid), yield_ty)],
+                variadic: false,
+                spread: 0,
+            },
+            self.s.tt.add_basic(BasicId::Bool),
+        );
+        // `Stmt::Expr` 会把结果丢掉（解释器的 `Pending::ExprStmt` 截断值栈）——
+        // `seq(yield)` 的 bool 结果没人要，正合适。
+        Stmt::Expr(call)
+    }
+
+    /// 造出合成函数 `__range_body_<n>` 并返回它的 `FuncId`。
+    ///
+    /// # 形参名与迭代变量的两条路
+    ///
+    /// * `:=` 形态（规范的 `IdentifierList ":="`）：左值**就是**迭代变量，
+    ///   直接把形参用左值的名字声明 ⇒ body 里的引用解析到形参槽，不用赋值。
+    ///   （每次 `yield` 调用建一个新帧 ⇒ Go 1.22「每轮新变量」白拿。）
+    /// * `=` 形态：左值是**已存在**的位置，形参用 `v0`/`v1`，体首补一条
+    ///   `左值 = v_i`。位置必须在合成函数的作用域里 lower —— 名字沿
+    ///   [`Self::resolve`] 的捕获链走到外层帧，`a[i]` 这类复杂左值也走同一条。
+    fn lower_rangefunc_body(&mut self, rc: &RangeClause, f: &ForStmt, xt: TypeId) -> FuncId {
+        let fid = FuncId(u32::try_from(self.prog.funcs.len()).unwrap_or(u32::MAX));
+        let name = format!("__range_body_{}", fid.index());
+        self.prog.funcs.push(Func::placeholder(name));
+
+        // yield 的形参就是迭代变量：个数与类型都由**签名**定（规范的表：
+        // 0 个 / 1 个 / 2 个），与 range 子句写了几个左值无关。
+        let ptypes = self.yield_param_types(xt);
+        let bool_ty = self.s.tt.add_basic(BasicId::Bool);
+
+        let mut ctx = FnCtx::new(fid);
+        let mut params = Vec::new();
+        let mut param_types = Vec::new();
+        for (i, ty) in ptypes.iter().enumerate() {
+            // `:=` 且左值是普通名字 ⇒ 用那个名字（否则 `v{i}`）。
+            let nm = if rc.is_define {
+                match rc.lhs.get(i) {
+                    Some(AExpr::Name(n)) if n.value != "_" => n.value.clone(),
+                    _ => format!("v{i}"),
+                }
+            } else {
+                format!("v{i}")
+            };
+            let slot = ctx.alloc_t(*ty);
+            params.push(slot);
+            param_types.push(*ty);
+            ctx.declare(&nm, Local { slot, typ: *ty });
+        }
+        let result = ctx.alloc_t(bool_ty);
+
+        self.stack.push(ctx);
+        // `rf = Some(..)`：这一层的 break/continue 要翻译成 return。
+        self.cur_mut().rf = Some(RfState {
+            breakable: 0,
+            loops: 0,
+        });
+        // `=` 形态的体首赋值（见方法文档）。
+        let mut prelude: Vec<Stmt> = Vec::new();
+        if !rc.is_define {
+            for (i, l) in rc.lhs.iter().enumerate() {
+                let Some(&pslot) = params.get(i) else { break };
+                let place = self.lower_place(l);
+                let pt = self.type_of(l);
+                let src = self.coerce(Expr::new(ExprKind::Slot(pslot), ptypes[i]), pt);
+                prelude.push(Stmt::Assign {
+                    lhs: vec![place],
+                    op: None,
+                    rhs: vec![src],
+                });
+            }
+        }
+        let body = self.lower_body_block(&f.body, true);
+        // body 正常结束 ⇒ `yield` 返回 true（规范：「After each successive
+        // loop iteration, yield returns true」）。显式补一条，省得解释器
+        // 去推「没有 return 的函数返回什么」。
+        let mut stmts = prelude;
+        stmts.extend(body.stmts);
+        stmts.push(Stmt::Return(vec![Expr::new(
+            ExprKind::Const(ConstVal::Bool(true)),
+            bool_ty,
+        )]));
+        let ctx = self.stack.pop().expect("合成函数的栈不平衡");
+
+        let func = &mut self.prog.funcs[fid.index()];
+        func.params = params;
+        func.param_types = param_types;
+        func.results = vec![result];
+        func.result_types = vec![bool_ty];
+        func.nslots = ctx.next_slot as usize;
+        func.slot_types = ctx.slot_types;
+        func.body = Block { stmts };
+        func.captured = ctx.captures;
+        func.labels = ctx.labels;
+        fid
     }
 
     fn lower_switch(&mut self, sw: &SwitchStmt) -> Option<Stmt> {
@@ -1744,7 +2016,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                     }
                 });
                 self.push_scope();
+                let rf = self.rf_break_enter();
                 let body = self.lower_case_body(&c.body);
+                self.rf_leave(rf);
                 self.pop_scope();
                 cases.push(TypeCase {
                     types,
@@ -1772,7 +2046,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 None => Vec::new(),
             };
             self.push_scope();
+            let rf = self.rf_break_enter();
             let body = self.lower_case_body(&c.body);
+            self.rf_leave(rf);
             self.pop_scope();
             cases.push(Case {
                 exprs,

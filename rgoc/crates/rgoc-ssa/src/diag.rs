@@ -38,15 +38,13 @@ pub enum SsaCode {
     IfaceDyn,
     /// `map` 的读写（键相等是宿主语义）。
     Map,
-    /// `range` over func。
-    RangeFunc,
     /// `range` over string（要按 rune 解码，指令集里没有）—— `R-31-1`。
     RangeStr,
 }
 
 impl SsaCode {
     /// 全部码（顺序 == 声明顺序 == 字典序）。
-    pub const ALL: [SsaCode; 9] = [
+    pub const ALL: [SsaCode; 8] = [
         SsaCode::Chan,
         SsaCode::Closure,
         SsaCode::Defer,
@@ -54,7 +52,6 @@ impl SsaCode {
         SsaCode::Generic,
         SsaCode::IfaceDyn,
         SsaCode::Map,
-        SsaCode::RangeFunc,
         SsaCode::RangeStr,
     ];
 
@@ -69,7 +66,6 @@ impl SsaCode {
             SsaCode::Generic => "SSA-UNSUPPORTED-GENERIC",
             SsaCode::IfaceDyn => "SSA-UNSUPPORTED-IFACE-DYN",
             SsaCode::Map => "SSA-UNSUPPORTED-MAP",
-            SsaCode::RangeFunc => "SSA-UNSUPPORTED-RANGE-FUNC",
             SsaCode::RangeStr => "SSA-UNSUPPORTED-RANGE-STR",
         }
     }
@@ -108,8 +104,8 @@ mod tests {
     fn 码总数与字典序自洽() {
         assert_eq!(
             SsaCode::ALL.len(),
-            9,
-            "§5 的 7 条 + R-31-1 补的 2 条；改数量要同步 M6-tests §5"
+            8,
+            "§5 的 7 条 + R-31-1 补的 2 条 − M8/Task 45 下线的 RANGE-FUNC：HIR 不再产出 range-over-func 的 Range 节点，它换成 FUNC-VALUE 被拒"
         );
         let mut sorted = SsaCode::ALL;
         sorted.sort_unstable();
