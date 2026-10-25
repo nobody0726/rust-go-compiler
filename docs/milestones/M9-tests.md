@@ -183,6 +183,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | Phase 1（slice） | **46** | 0 | 7 个切片文件全绿 |
 | Phase 2（map） | **50** | 0 | +4（`bigmap` / `indirect` / `ken/complit` / `ken/range`）。`print` 没进来：它的**第一条**拒绝是 defer 不是 map，归 Phase 5（`R-9-8`） |
 | Phase 3（iface） | **56** | 0 | +6（`method3` / `interbasic` / `interfun` / `embed` / `rob1` / `method5`→否）。`alias1`（type switch）/`method`（recover）/`method5`（方法值）卡在别的阶段（`R-9-12`） |
+| Phase 3b（type switch） | **57** | 0 | +1（`alias1`）。`method`（recover）/`method5`（方法值）仍卡在 Phase 5 / Phase 4（`R-9-14`） |
 | Phase 4（funcval） | **67** | 0 | +7 |
 | Phase 5（defer/panic） | **69** | 0 | +3（`closure4` / `defernil` / `print`） |
 | Phase 6（根协议） | 69 | 0 | 不涨 |
@@ -295,6 +296,9 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-10` | 2026-10-25 | **itab 的槽序 = 接口方法的字典序**（不是设计稿写的「声明序」）；`rgoc_ssa::ir::iface_methods` 是唯一来源，静态 ITab 填序 / 调用点取槽序 / `rt_itab` 查序三处都走它 | `InterfaceDef.methods` 是检查器**插入序**，`C7` §4 只承诺 dump 按名字升序 —— 插入序没有对外承诺。而槽序**只要三处一致**就正确，所以用字典序把内部细节钉死 |
 | `R-9-11` | 2026-10-25 | **聚合值接收者不需要包装**：`itab.fn[i]` 直接指真实方法（`data` 就是它要的指针）；只有**标量值接收者**和**嵌入提升**要发 `__imeth_*` 尾跳桩 | 本后端的聚合**按指针传参**（`C5` §6.1）⇒ `data`（指向盒子的指针）正好是第 0 个实参；官方 Go 因为按值传参才要生成 `func (u U) M` 的包装。借来的便宜，记下来免得后来者以为漏了 |
 | `R-9-12` | 2026-10-25 | **拒绝面第二次收缩：50/19 → 56/13**（`R-9-8` 之后）。连带：`ssa_slice` 的 `BUILDABLE/REJECTED`、四处分母、`native-input.txt`（56 行）、M6 manifest 的 `re_frozen`；`ssa_reject::t_ssa_33_接口动态派发` **反转**（普通派发不再被拒），改用 `type switch` 作为 `IFACE-DYN` 的入口 | iface 实现后 9 条 IFACE-DYN 拒绝里 8 条消失。**但只到 56 不是计划的 59**：`alias1`（type switch，Task 34 未做）/ `method`（recover，Phase 5）/ `method5`（方法值，Phase 4）三个 iface 语料卡在**别的阶段**的特性上 |
+| `R-9-13` | 2026-10-25 | **接口派发沿嵌入链按「地址」下降**（不是按值）：`ssa_exec` 的 `CalleeRef::Iface` 起点取 `data`（`Ptr` 就用、值就落格子），每一跳 `via_ptr` 取那个指针字段的**值**、否则取字段的**地址**，末尾按被调方法的第 0 个形参类型决定「传地址还是把值读出来」 | 方法体的 `p.a` 是 `Instr::Field`，而 `Field` 的底座**必须是地址**。按值下降时 `field_of` deref 成 `Value::Struct` ⇒ `i.test2()`（动态类型 `*S`、方法声明在 `*Sub`、中间隔着内嵌的 `Sub` 值字段）把结构体值当接收者传进去 —— `panic: 地址不是指针`（`ken/embed.go`，`G-M9-04`）。native 侧不塌是因为 `recv_steps` 发的是 `add`（取地址）不是 `load`（取值）；两份实现必须**同口径** |
+| `R-9-14` | 2026-10-25 | **`switch x.(type)` 实现**（`M9/Task 34`）+ **拒绝面第三次收缩 56/13 → 57/12** + **`SSA-UNSUPPORTED-IFACE-DYN` 整条下线**（`SsaCode::ALL` 8 → 7 条；M6 manifest 记 `retired_codes`；`ssa_reject::t_ssa_33_接口动态派发` 反转成「四种形态都能建图 + 该码不出现」） | 下降成「断言链 + 体块」：具体类型用 `Instr::TypeAssert` 的 `ok`（比 desc 指针，所以 `byte`/`uint8`、`rune`/`int32` 天然相等，具名类型天然不等）、接口类型同一个指令（`rt_itab` 返 0）、`case nil` 与零值接口比。**体里的绑定变量重新断言一次**：体块建在判定链之前（`break` 要能指到汇合点），断言是纯的，重算比引入块参数简单。⚠️ 码下线不是「放宽判据」：它**再没有生产者**，留着就是死分支（纪律：不留永远不产出的码） |
+
 
 
 ---
@@ -305,7 +309,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 |---|---|
 | M5 的值语义 | **`D` 腿的基准**：69 个语料上解释器与官方逐字节一致，所以 native 与解释器比 = 与官方比 |
 | M5 的 `C9` | 四条运行期 panic 文本沿用 `C9` §4.5；M9 只**追加** `out of memory` 一条 |
-| M6 的 SSA | **零回归**：`--via=ssa` 55 绿 13 跳过 1 红（分母 46/23 → 56/13 见 `R-9-8`/`R-9-12`；红的那个是 `ken/embed.go` 的解释器侧 `G-M9-04`）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图 |
+| M6 的 SSA | **零回归**：`--via=ssa` 57 绿 12 跳过 **0 红**（分母 46/23 → 50/19 → 56/13 → 57/12，见 `R-9-8`/`R-9-12`/`R-9-14`；`G-M9-04` 已收口）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图，其中 `MAP` 与 `IFACE-DYN` 两条**整条下线** |
 | M7 的 native | **零回归**：39 个文件逐个仍绿（`T-CORP-03`）；`.framemap` 产物不变，**新加** `.stackmap` |
 | M8 的并发 | **零回归**：`run-chan.sh` 7 ok 12 skip 0 bad 不变；`M9d` 只交契约，不改解释器 |
 | M8 的 `C11` | `M9d` 的 `hchan` **参照不同构**（单线程 vs 多核）—— 写进 `C11` §8 的抬头 |

@@ -19,7 +19,18 @@
 
 use rgoc_hir::FuncId;
 
-/// SSA 构建期的拒绝码（**9 条**：§5 冻结的 7 条 + `R-31-1` 补的 2 条）。
+/// SSA 构建期的拒绝码（**7 条**）。
+///
+/// # 下线的码（不是「忘了写」）
+///
+/// | 码 | 何时下线 | 为什么 |
+/// |---|---|---|
+/// | `SSA-UNSUPPORTED-MAP` | M9/Phase 2（`R-9-8`） | `rt_map_*` + `CalleeRef::Runtime` 实现了 |
+/// | `SSA-UNSUPPORTED-IFACE-DYN` | M9/Phase 3（`R-9-14`） | 方法表 + 静态 ITab + `Instr::TypeAssert` 实现了派发与 type switch |
+/// | `SSA-UNSUPPORTED-RANGE-FUNC` | M8/Task 45 | HIR 把 range-over-func 下降成合成函数，拒绝改走 `FUNC-VALUE` |
+///
+/// 纪律是「**不留永远不产出的码**」：一条没人能触发的拒绝码，读的人会以为
+/// 「有这个限制」，而实际上它只是一段死分支。
 ///
 /// 变体按**字典序**声明（沿 `DiagCode` 的纪律：顺序进断言，不许重排）。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -34,8 +45,6 @@ pub enum SsaCode {
     FuncValue,
     /// 泛型实例化后的形态。
     Generic,
-    /// 接口**动态**派发 / type switch / 类型断言。
-    IfaceDyn,
     /// `map` 的读写（键相等是宿主语义）。
     Map,
     /// `range` over string（要按 rune 解码，指令集里没有）—— `R-31-1`。
@@ -44,13 +53,12 @@ pub enum SsaCode {
 
 impl SsaCode {
     /// 全部码（顺序 == 声明顺序 == 字典序）。
-    pub const ALL: [SsaCode; 8] = [
+    pub const ALL: [SsaCode; 7] = [
         SsaCode::Chan,
         SsaCode::Closure,
         SsaCode::Defer,
         SsaCode::FuncValue,
         SsaCode::Generic,
-        SsaCode::IfaceDyn,
         SsaCode::Map,
         SsaCode::RangeStr,
     ];
@@ -64,7 +72,6 @@ impl SsaCode {
             SsaCode::Defer => "SSA-UNSUPPORTED-DEFER",
             SsaCode::FuncValue => "SSA-UNSUPPORTED-FUNC-VALUE",
             SsaCode::Generic => "SSA-UNSUPPORTED-GENERIC",
-            SsaCode::IfaceDyn => "SSA-UNSUPPORTED-IFACE-DYN",
             SsaCode::Map => "SSA-UNSUPPORTED-MAP",
             SsaCode::RangeStr => "SSA-UNSUPPORTED-RANGE-STR",
         }
@@ -104,8 +111,8 @@ mod tests {
     fn 码总数与字典序自洽() {
         assert_eq!(
             SsaCode::ALL.len(),
-            8,
-            "§5 的 7 条 + R-31-1 补的 2 条 − M8/Task 45 下线的 RANGE-FUNC：HIR 不再产出 range-over-func 的 Range 节点，它换成 FUNC-VALUE 被拒"
+            7,
+            "§5 的 7 条 + R-31-1 补的 2 条 − 下线的三条（RANGE-FUNC / MAP / IFACE-DYN）"
         );
         let mut sorted = SsaCode::ALL;
         sorted.sort_unstable();

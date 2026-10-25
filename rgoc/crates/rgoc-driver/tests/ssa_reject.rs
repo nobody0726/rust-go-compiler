@@ -118,38 +118,45 @@ fn t_ssa_33_recover() {
 
 #[test]
 fn t_ssa_33_接口动态派发() {
-    // M9/Phase 3 之前这里是「接口方法调用必须被拒」。派发实现了
-    // （`CalleeRef::Iface` + 静态 ITab），所以判据换成**同一类码的另一个入口**：
-    // `type switch`（`M9/Task 34` 未做）。`SSA-UNSUPPORTED-IFACE-DYN` 因此
-    // 仍有一条**真的会走到**的入口 —— 不留「永远不产出」的码。
+    // M9/Phase 3/4 之前：接口派发、类型断言、type switch 都要被拒
+    // （`SSA-UNSUPPORTED-IFACE-DYN`）。派发（Task 32）、断言（Task 33）与
+    // type switch（Task 34）都实现了 ⇒ 判据**反转**成「能建图 + 退出码 0」，
+    // 而那个码**整条下线**（`R-9-14`：不留永远不产出的码）。
     //
-    // 为什么留这条而不是删掉：删掉之后没人守「IFACE-DYN 这个词还在用」，
-    // 哪天 type switch 也实现了，这条会红，提醒把它换成守卫测试。
-    assert_rejected(
-        "iface-dyn-typeswitch",
-        "package main\n\nfunc main() {\n\tvar x any = 1\n\tswitch x.(type) {\n\tcase int:\n\t\tprintln(1)\n\t}\n}\n",
-        SsaCode::IfaceDyn,
-    );
-    // 反向判据：普通接口派发**不再**被拒（`ken/interfun.go` 那类）
-    let p = fixture(
-        "iface-call-ok",
-        "package main\n\ntype I interface{ M() int }\n\ntype T struct{}\n\nfunc (T) M() int { return 1 }\n\nfunc main() {\n\tvar i I = T{}\n\tprintln(i.M())\n}\n",
-    );
-    let out = run(&p);
-    assert_eq!(
-        out.exit, 0,
-        "接口派发已在 M9/Phase 3 支持，该退出码 0；stderr = {:?}",
-        out.stderr
-    );
-}
-
-#[test]
-fn t_ssa_33_type_switch() {
-    assert_rejected(
-        "typeswitch",
-        "package main\n\nfunc main() {\n\tvar x any = 1\n\tswitch x.(type) {\n\tcase int:\n\t\tprintln(1)\n\t}\n}\n",
-        SsaCode::IfaceDyn,
-    );
+    // 这里守两件事：① 四种形态都能过 verifier；② `SSA-UNSUPPORTED-IFACE-DYN`
+    // 这个词**不再出现**（下线的码不许偷偷回来当「兜底」）。
+    let cases = [
+        (
+            "iface-dispatch",
+            "package main\n\ntype I interface{ M() int }\n\ntype T struct{}\n\nfunc (T) M() int { return 1 }\n\nfunc main() {\n\tvar i I = T{}\n\tprintln(i.M())\n}\n",
+        ),
+        (
+            "iface-assert",
+            "package main\n\nfunc main() {\n\tvar a any = 42\n\tprintln(a.(int))\n}\n",
+        ),
+        (
+            "iface-assert-ok",
+            "package main\n\nfunc main() {\n\tvar a any = 42\n\tv, ok := a.(int)\n\tprintln(v, ok)\n}\n",
+        ),
+        (
+            "iface-typeswitch",
+            "package main\n\nfunc main() {\n\tvar x any = 1\n\tswitch x.(type) {\n\tcase int:\n\t\tprintln(1)\n\t}\n}\n",
+        ),
+    ];
+    for (name, src) in cases {
+        let p = fixture(name, src);
+        let out = run(&p);
+        assert_eq!(
+            out.exit, 0,
+            "{name}: 接口面已在 M9/Phase 3 支持，该退出码 0；stderr = {:?}",
+            out.stderr
+        );
+        assert!(
+            !out.stderr.contains("SSA-UNSUPPORTED-IFACE-DYN"),
+            "{name}: `SSA-UNSUPPORTED-IFACE-DYN` 已在 R-9-14 下线，不该再出现：{:?}",
+            out.stderr
+        );
+    }
 }
 
 #[test]

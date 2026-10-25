@@ -1,9 +1,11 @@
-# M9 native 的输入清单 = 入选语料 − 当前 SSA 拒绝面（N 侧，56 行）
+# M9 native 的输入清单 = 入选语料 − 当前 SSA 拒绝面（N 侧，57 行）
 #
-# M7 收口时 46 行，M9/Phase 2（map）→ 50，M9/Phase 3（iface）→ 56。
+# M7 收口时这份是 46 行（N 侧冻结值）。M9 三次收缩：map（Phase 2，46→50）、
+# iface（Phase 3，50→56）、type switch（Phase 3b，56→57）。
 #
 # 分母的唯一权威是 `rgoc-driver/tests/native_slice.rs::t_nat_40_冻结的分母对得上`：
 # 它与 `run-selected.txt` − `ssa-rejected.txt` 做集合比对，差一行就红。
+go_source_code/test/alias1.go
 go_source_code/test/align.go
 go_source_code/test/bigmap.go
 go_source_code/test/compos.go

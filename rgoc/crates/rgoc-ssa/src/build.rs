@@ -406,10 +406,6 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         Stmt::Go { .. } => Some((SsaCode::Chan, "go 语句（并发语义只在解释器面）".to_string())),
         Stmt::Send { .. } => Some((SsaCode::Chan, "`ch <- v` 发送".to_string())),
         Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
-        Stmt::TypeSwitch { .. } => Some((
-            SsaCode::IfaceDyn,
-            "type switch（按运行期动态类型分支）".to_string(),
-        )),
         Stmt::Range { x, body, kind, .. } => match kind {
             RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
             // range over map 支持了（`rt_map_iter` 的一步一个下标）。
@@ -469,6 +465,12 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
                         .or_else(|| unsup_block(tt, &c.body))
                 })
             }),
+        // `switch x.(type)` 本身支持了（`M9/Task 34`）；体与守卫仍要扫。
+        Stmt::TypeSwitch { init, x, cases, .. } => init
+            .as_deref()
+            .and_then(|i| unsup_stmt(tt, i))
+            .or_else(|| unsup_expr(tt, x))
+            .or_else(|| cases.iter().find_map(|c| unsup_block(tt, &c.body))),
         Stmt::Labeled { stmt, .. } => unsup_stmt(tt, stmt),
         Stmt::Block(b) => unsup_block(tt, b),
         Stmt::Branch { .. } | Stmt::Empty => None,
@@ -3621,6 +3623,201 @@ impl Fb<'_> {
         }
     }
 
+    /// `switch x.(type)`（`M9/Task 34`）。
+    ///
+    /// # 去糖成「断言链 + 体块」
+    ///
+    /// ```text
+    ///   entry:  cond1 = assert x : T1   → b1 | next1
+    ///   next1:  cond2 = assert x : T2   → b2 | next2
+    ///   next2:  goto default_or_end
+    ///   b1:     [bind]; ...body...      → end
+    /// ```
+    ///
+    /// # 判定用什么
+    ///
+    /// * 具体类型：`Instr::TypeAssert` 的 `ok`（比 desc 指针）——
+    ///   `byte`/`uint8`、`rune`/`int32` 是**同一个** `TypeId`，所以别名天然相等；
+    ///   具名类型（`type MyInt int`）desc 不同，`case int` 不会误命中（`alias1.go`）。
+    /// * 接口类型：同一个指令，`rt_itab` 返回 0 ⇒ 没实现。
+    /// * `case nil`：与零值接口比（`Const Int(0)` 在接口类型上就是 nil 接口）。
+    ///
+    /// # 绑定变量为什么在体里**重新断言**一次
+    ///
+    /// 体块是在判定链**之前**建好的（`break` 要能指到汇合点，与 `stmt_switch`
+    /// 同序），那时判定链的 `ok` 值还不存在。断言是**纯**的（不写内存、`ok` 形态
+    /// 不 panic），重算一次比引入块参数简单，也不会让 `V1` 抱怨「值没有定义点」。
+    fn stmt_type_switch(
+        &mut self,
+        init: Option<&Stmt>,
+        x: &Expr,
+        cases: &[rgoc_hir::TypeCase],
+        label: Option<&str>,
+    ) {
+        if let Some(i) = init {
+            self.stmt(i);
+        }
+        let xv = self.expr(x);
+        let xt = x.typ;
+        let entry = (self.cur, self.val.clone(), self.mem.clone());
+
+        let bodies: Vec<BlockId> = cases.iter().map(|_| self.new_block()).collect();
+        let default_idx = cases.iter().position(|c| c.is_default);
+        let nomatch = if default_idx.is_none() && !cases.is_empty() {
+            Some(self.new_block())
+        } else {
+            None
+        };
+
+        // ── 各 case 体：都从入口状态起建（case 之间没有落空关系）
+        let idx = self.regions.len();
+        self.regions.push(Region::Switch(SwitchCtx {
+            label: label.map(ToString::to_string),
+            breaks: Vec::new(),
+        }));
+        let mut outs: Vec<BranchOut> = Vec::new();
+        for (i, c) in cases.iter().enumerate() {
+            self.cur = bodies[i];
+            self.terminated = false;
+            self.val = entry.1.clone();
+            self.mem = entry.2.clone();
+            if let Some(b) = c.bind {
+                // 单类型 ⇒ 变量就是那个类型（重新断言取到值）；
+                // 多类型 / `case nil` / `default` ⇒ 变量保持守卫表达式的静态类型。
+                let v = if c.types.len() == 1 && !c.is_nil {
+                    let t = c.types[0];
+                    let dst = self.new_value(c.bind_typ);
+                    self.emit(Instr::TypeAssert {
+                        dst,
+                        ok: None,
+                        x: xv,
+                        typ: t,
+                    });
+                    dst
+                } else {
+                    xv
+                };
+                self.write_slot(b, v);
+            }
+            self.stmts(&c.body.stmts);
+            if !self.terminated {
+                outs.push(BranchOut {
+                    block: self.cur,
+                    val: self.val.clone(),
+                    mem: self.mem.clone(),
+                });
+            }
+        }
+        if let Some(nb) = nomatch {
+            self.cur = nb;
+            self.terminated = false;
+            self.val = entry.1.clone();
+            self.mem = entry.2.clone();
+            outs.push(BranchOut {
+                block: nb,
+                val: self.val.clone(),
+                mem: self.mem.clone(),
+            });
+        }
+        let Region::Switch(ctx) = self.regions.remove(idx) else {
+            unreachable!("刚压进去的是 Switch")
+        };
+        outs.extend(ctx.breaks);
+
+        // ── 合流点
+        let join = self.join_branches(outs);
+        let merged = (self.val.clone(), self.mem.clone());
+
+        // ── 判定链
+        self.cur = entry.0;
+        self.terminated = false;
+        self.val = entry.1;
+        self.mem = entry.2;
+        let fallback = default_idx.map(|i| bodies[i]).or(nomatch);
+        let tested: Vec<usize> = (0..cases.len()).filter(|i| !cases[*i].is_default).collect();
+        if tested.is_empty() {
+            if let Some(b) = fallback {
+                self.set_term(Term::Goto {
+                    to: b,
+                    args: Vec::new(),
+                });
+            }
+        } else {
+            let bt = self.bool_ty();
+            let mut chain = entry.0;
+            let n = tested.len();
+            for (k, &i) in tested.iter().enumerate() {
+                let last = k + 1 == n;
+                let no = if last {
+                    fallback.expect("没有 default 时一定有 nomatch")
+                } else {
+                    self.new_block()
+                };
+                // 候选：`case A, B:` 逐个试；`case nil` 是一个「空候选」
+                let c = &cases[i];
+                let mut cands: Vec<Option<TypeId>> = Vec::with_capacity(c.types.len() + 1);
+                if c.is_nil {
+                    cands.push(None);
+                }
+                cands.extend(c.types.iter().map(|t| Some(*t)));
+                debug_assert!(!cands.is_empty(), "非 default 的 case 至少有一个候选");
+                let m = cands.len();
+                for (j, cand) in cands.iter().enumerate() {
+                    self.cur = chain;
+                    self.terminated = false;
+                    let cond = match cand {
+                        Some(t) => {
+                            let tmp = self.new_value(*t);
+                            let ok = self.new_value(bt);
+                            self.emit(Instr::TypeAssert {
+                                dst: tmp,
+                                ok: Some(ok),
+                                x: xv,
+                                typ: *t,
+                            });
+                            ok
+                        }
+                        None => {
+                            let z = self.zero_of_ty(xt);
+                            let dst = self.new_value(bt);
+                            self.emit(Instr::Bin {
+                                dst,
+                                op: rgoc_hir::BinOp::Eq,
+                                lhs: xv,
+                                rhs: z,
+                                typ: bt,
+                            });
+                            dst
+                        }
+                    };
+                    let else_to = if j + 1 == m { no } else { self.new_block() };
+                    self.set_term(Term::If {
+                        cond,
+                        then_: (bodies[i], Vec::new()),
+                        else_: (else_to, Vec::new()),
+                    });
+                    if j + 1 < m {
+                        chain = else_to;
+                    }
+                }
+                if !last {
+                    chain = no;
+                }
+            }
+        }
+
+        // ── 之后
+        match join {
+            Some(j) => {
+                self.cur = j;
+                self.terminated = false;
+                self.val = merged.0;
+                self.mem = merged.1;
+            }
+            None => self.terminated = true,
+        }
+    }
+
     /// `range` 循环（`Task 28` 并入；计划里原先没有这一项）。
     ///
     /// # 为什么它必须并入 Task 28
@@ -4850,6 +5047,12 @@ impl Fb<'_> {
                 cases,
                 label,
             } => self.stmt_switch(init.as_deref(), tag.as_ref(), cases, label.as_deref()),
+            Stmt::TypeSwitch {
+                init,
+                x,
+                cases,
+                label,
+            } => self.stmt_type_switch(init.as_deref(), x, cases, label.as_deref()),
             Stmt::Range {
                 key,
                 value,

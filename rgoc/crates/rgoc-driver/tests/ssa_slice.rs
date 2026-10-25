@@ -4,13 +4,13 @@
 //!
 //! | 谎 | 长什么样 | 这里怎么拦 |
 //! |---|---|---|
-//! | 「大部分绿」 | 只说「56 个能建图」，不说另外 13 个去哪了 | `N + M == 69` 两向断言 + 两个数都写死 |
+//! | 「大部分绿」 | 只说「57 个能建图」，不说另外 12 个去哪了 | `N + M == 69` 两向断言 + 两个数都写死 |
 //! | 「拒绝清单是装饰」 | 清单里塞了幽灵文件 / 漏了真被拒的 | 逐文件**重跑一遍**构建器，实测集合 == 清单集合（两向） |
 //! | 「拒绝没码」 | 拒了但只说「不支持」 | 每行三栏、码必须落在 `SsaCode::ALL` 里 |
 //!
 //! # 为什么要在测试里重跑一遍分类
 //!
-//! 清单是**冻结**的：它一旦与代码脱节，后续所有「56/13」的引用都成了历史陈述。
+//! 清单是**冻结**的：它一旦与代码脱节，后续所有「57/12」的引用都成了历史陈述。
 //! 重跑一遍的成本是 1~2 秒（69 个文件），换来的是「清单与今天的构建器一致」——
 //! 少了这一条，把某个 `N` 文件改坏、或者把某个 `M` 文件的拒绝修好，都不会有人发现。
 
@@ -26,9 +26,9 @@ use rgoc_types::TypeTable;
 /// 入选总数（`run-selected.txt` 的非注释行数，M5 冻结）。
 const SELECTED: usize = 69;
 /// 能建图（`N`）—— 本文件冻的就是这两个数（`M6-tests.md` §6）。
-const BUILDABLE: usize = 56;
+const BUILDABLE: usize = 57;
 /// 被拒（`M`）。
-const REJECTED: usize = 13;
+const REJECTED: usize = 12;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,7 +86,7 @@ fn t_ssa_31_切片冻结值两向自洽() {
     let sel: BTreeSet<String> = rows("run-selected.txt").into_iter().collect();
     assert_eq!(sel.len(), SELECTED, "入选清单行数变了（M5 冻结的 69）");
     let rej = rejected_map();
-    assert_eq!(rej.len(), REJECTED, "拒绝清单行数变了（冻结 13）");
+    assert_eq!(rej.len(), REJECTED, "拒绝清单行数变了（冻结 12）");
     assert_eq!(
         BUILDABLE + REJECTED,
         SELECTED,
@@ -99,7 +99,7 @@ fn t_ssa_31_切片冻结值两向自洽() {
             "{path}: 在拒绝清单里但不在入选清单里（幽灵行）"
         );
     }
-    assert_eq!(sel.len() - rej.len(), BUILDABLE, "入选 − 拒绝 必须等于 56");
+    assert_eq!(sel.len() - rej.len(), BUILDABLE, "入选 − 拒绝 必须等于 57");
 }
 
 #[test]
@@ -151,5 +151,5 @@ fn t_ssa_31_清单与实测一致() {
             listed = listed.get(path)
         );
     }
-    assert_eq!(actual.len(), REJECTED, "实测被拒数应为 13");
+    assert_eq!(actual.len(), REJECTED, "实测被拒数应为 12");
 }

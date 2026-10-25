@@ -1,16 +1,16 @@
 # M6 的 SSA 拒绝清单（`ssa-rejected.txt`）—— 与 `run-selected.txt`（69 行）互补。
 #
 # 格式：<相对路径>	<码>	<原因>
-# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,IFACE-DYN,MAP,RANGE-STR}
-# （M8/Task 45 下线 RANGE-FUNC：range over func 改走 FUNC-VALUE）
+# 码：SSA-UNSUPPORTED-{CHAN,CLOSURE,DEFER,FUNC-VALUE,GENERIC,RANGE-STR}
+# （下线的三条：RANGE-FUNC / MAP / IFACE-DYN —— 见 `rgoc-ssa/src/diag.rs` 的模块文档）
 #
 # 纪律（M6-tests.md §4.2 / §5）：
 #  * `能建图 N + 拒绝 M == 69`（两向断言，见 `rgoc-driver/tests/ssa_slice.rs`）
 #  * 每行必须有码；码必须落在 §5 的白名单里
 #  * 由 `tools/run-oracle/ssa-classify.sh` 产出，**Task 39 冻结**（`R-6-1`）
 #
-# 冻结值：N=56 / M=13（2026-10-25，go1.27.1 语料 + 本仓 main 的构建器）。
-# 分布：FUNC-VALUE 8 / DEFER 4 / IFACE-DYN 1。
+# 冻结值：N=57 / M=12（2026-10-25，go1.27.1 语料 + 本仓 main 的构建器）。
+# 分布：FUNC-VALUE 7 / DEFER 5。
 #
 # # 三次重冻结（每次都是「实现让拒绝面收缩」，不是「把判据放宽」）
 #
@@ -20,15 +20,15 @@
 # | M9/Phase 1（`R-9-4`） | 46 / 23 → 46 / 0（native 侧） | 切片实现 |
 # | M9/Phase 2（`R-9-8`） | 46 / 23 → 50 / 19 | map 实现（5 条 MAP 拒绝里 4 条消失） |
 # | M9/Phase 3（`R-9-12`） | 50 / 19 → 56 / 13 | iface 实现（9 条 IFACE-DYN 里 8 条消失） |
+# | M9/Phase 3b（`R-9-14`） | 56 / 13 → 57 / 12 | type switch 实现（`alias1` 转绿）+ `IFACE-DYN` 整条下线 |
 #
-# ⚠️ Phase 3 只到 **56** 而不是计划写的 59：`alias1`（type switch，Task 34 未做）、
-# `method`（recover，Phase 5）、`method5`（方法值，Phase 4）三个文件仍被拒 ——
-# 它们是 iface 语料，但卡在**别的阶段**的特性上。
+# ⚠️ Phase 3 到 **57** 而不是计划写的 59：`method`（recover，Phase 5）与
+# `method5`（方法值，Phase 4）两个文件仍被拒 —— 它们是 iface 语料，但卡在
+# **别的阶段**的特性上。剩下的 12 条全是 FUNC-VALUE（7）与 DEFER（5）。
 #
 # 这份清单的**唯一权威**是 `rgoc-driver/tests/ssa_slice.rs` 的逐文件重跑：
 # 清单与实测差一行就红。改代码让某个文件能建图之后，必须回来改这里。
 
-go_source_code/test/alias1.go	SSA-UNSUPPORTED-IFACE-DYN	type switch（按运行期动态类型分支）—— M9/Task 34 未做
 go_source_code/test/closure1.go	SSA-UNSUPPORTED-FUNC-VALUE	函数字面量（IR 里没有函数引用值）—— Phase 4
 go_source_code/test/closure2.go	SSA-UNSUPPORTED-FUNC-VALUE	函数字面量（IR 里没有函数引用值）—— Phase 4
 go_source_code/test/closure4.go	SSA-UNSUPPORTED-DEFER	defer（延迟调用链是运行期结构）—— Phase 5

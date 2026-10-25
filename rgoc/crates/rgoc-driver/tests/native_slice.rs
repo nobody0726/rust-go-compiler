@@ -63,7 +63,11 @@ fn t_nat_40_冻结的分母对得上() {
 
     // `native-input.txt` 就是 `N` 的快照（`run-native.sh` 的输入）。
     assert_eq!(input, n, "native-input.txt 与「入选 − M6 拒绝」不一致");
-    assert_eq!(n.len(), 56, "N 侧应为 56（M6 收口 46 → map +4 → iface +6）");
+    assert_eq!(
+        n.len(),
+        57,
+        "N 侧应为 57（M6 收口 46 → map +4 → iface +6 → type switch +1）"
+    );
 
     // `M'` 的路径集合。
     let m: BTreeSet<String> = line_list("tools/run-oracle/native-rejected.txt")
@@ -79,8 +83,8 @@ fn t_nat_40_冻结的分母对得上() {
     );
     assert_eq!(
         n.len() - m.len(),
-        56,
-        "N' 冻结为 56（M7 的 39 + 切片 7 + map 4 + iface 6）"
+        57,
+        "N' 冻结为 57（M7 的 39 + 切片 7 + map 4 + iface 6 + typeswitch 1）"
     );
 }
 

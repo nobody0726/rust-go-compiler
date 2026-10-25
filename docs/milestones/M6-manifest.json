@@ -33,21 +33,21 @@
       "note": "沿用 M5 的入选清单（已冻结）"
     },
     "buildable": {
-      "count": 56,
+      "count": 57,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；56 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4（Phase 2）→ iface +6（Phase 3）。"
+      "note": "能建图且 verifier 通过的个数 N；57 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4（Phase 2）→ iface +6（Phase 3）→ type switch +1（Phase 3b）。"
     },
     "rejected": {
       "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 13,
+      "count": 12,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 8 / DEFER 4 / IFACE-DYN 1；N+M=69 两向断言。M6 收口时是 23。"
+      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 7 / DEFER 5；N+M=69 两向断言。M6 收口时是 23（IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）。"
     },
     "re_frozen": {
-      "by": "M9/Phase 2（map，R-9-8）+ Phase 3（iface，R-9-12）：`rt_map_*` / 方法表 + 静态 ITab",
+      "by": "M9/Phase 2（map，R-9-8）+ Phase 3（iface，R-9-12）+ Phase 3b（type switch，R-9-14）",
       "when": "2026-10-25",
-      "why": "map 与 iface 从「宿主面」变成「已实现」，拒绝面两次收缩：46/23 → 50/19 → 56/13。Phase 3 少掉的 8 条 IFACE-DYN 里，7 条真的能建图了，`alias1` 卡在 type switch（Task 34）。",
-      "delta": "N 46 → 56（+10）/ M 23 → 13（−10）；N + M 仍等于 69"
+      "why": "map、iface、type switch 从「宿主面」变成「已实现」，拒绝面三次收缩：46/23 → 50/19 → 56/13 → 57/12。最后一次是 `alias1.go` 的 type switch 转绿，同时 `SSA-UNSUPPORTED-IFACE-DYN` 整条下线（没有生产者）。",
+      "delta": "N 46 → 57（+11）/ M 23 → 12（−11）；N + M 仍等于 69"
     }
   },
   "gate": {
@@ -777,5 +777,13 @@
     "corpus_sha_ok": "15618/15618",
     "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
     "collide_forms": "--run 69 绿 / --three-way 69 绿 / --ssa 46 绿 23 跳过 0 红 / --ssa --three-way 同上"
-  }
+  },
+  "retired_codes": [
+    {
+      "code": "SSA-UNSUPPORTED-IFACE-DYN",
+      "retired_by": "M9/Phase 3b",
+      "revision": "R-9-14",
+      "why": "方法表 + 静态 ITab（Task 28）+ `Instr::TypeAssert`（Task 33）+ `switch x.(type)` 的断言链下降（Task 34）都实现了 ⇒ 这个码再没有生产者。纪律是「不留永远不产出的码」：`SsaCode::ALL` 从 8 条收到 7 条，`ssa_reject::t_ssa_33_接口动态派发` 反转成「能建图 + 该码不出现」。"
+    }
+  ]
 }
