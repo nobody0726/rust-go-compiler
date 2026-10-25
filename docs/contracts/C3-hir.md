@@ -252,6 +252,7 @@ M7 若要支持跨帧 panic，必须**新增** CFI 行号表（那是新增能�
 > 指回 `TypeTable`（`D-M5-2`：lowering 不自己推类型，边 lower 边向检查器会话要 `Operand`）。
 > 所以第 9 条在**解释器这条路上已经绕开**，但它仍是 M6 图 verifier 的活。
 
+
 ---
 
 ## 4. 本契约的验证方式
@@ -268,6 +269,7 @@ M7 若要支持跨帧 panic，必须**新增** CFI 行号表（那是新增能�
 | **§2.3 闭包** | `rgoc-driver/tests/run_semantics.rs` 的 `T-EX-25/26/27/28` |
 | **§2.4 异常** | 同上 `T-EX-34..38`；反向证据 `scripts/mutation-m5-notes.md` 的 `T-EX-65/66` |
 | **§2.5 unwind** | `rgoc-interp/src/interp.rs` 的 `panic_val` + `unwinding` 状态机；`T-EX-37/38` |
+| **§6 六节点** | `rgoc-driver/tests/con_lower.rs`（13 条）/ `con_rangefunc.rs`（15 条）/ `rgoc-check/tests/comma_ok.rs`（4 条） |
 
 ---
 
@@ -277,3 +279,20 @@ M7 若要支持跨帧 panic，必须**新增** CFI 行号表（那是新增能�
 |---|---|---|
 | 2026-10-07 | **初稿创建**（T50）。已验证项（§1）与待验证项（§2）**分节列开** | Phase 3 的 S1/S2 + 门禁 E6 |
 | 2026-10-23 | **升正式**：§2 的四项从「推导」改成「已定」；§1 的证据位置改指 `rgoc-hir-spike`；§3 差距清单前四条标为已关闭、第 9 条补「正式 HIR 用 `typ: TypeId` 绕开」；§4 增 6 行 M5 判据 | `M5-plan.md` Task 52；`M5-report.md` §5 第 6 条（`G-M5-07`） |
+| 2026-10-25 | **M8 增补 §6**：六个并发节点 + 求值顺序；`Stmt::Send` 的 chan 先于 value、`Stmt::Select` 的子句顺序与整批求值、`RangeKind::Chan` 的元素落 key 位 | `M8-tests.md` §9.2 的 `R-8-1/3/11/12`；`con_lower`/`con_rangefunc` |
+
+## 6. M8 增补：六个并发节点与它们的求值顺序（2026-10-25 定稿）
+
+M8 往 HIR 加了**六个**节点。本节的强度是「已定」—— 每条都指到实现与判据。
+
+| 节点 | 形状 | 求值顺序（冻结） | 判据 |
+|---|---|---|---|
+| `Stmt::Go { call }` | `go f(...)` | `f` 与**全部实参**在当前 G 求值；求值完才把帧搬进新 G | `con_chan::t_con_02/02b`（实参在旧 G 求值：`go f(g())` ⇒ `g` 先打印） |
+| `Stmt::Send { chan, value }` | `c <- v` | **`chan` 先、`value` 后**（Go 规范「操作数从左到右」） | `con_lower::t_task9`（用 `getch() <- gen()` 两个调用做探针；`c <- 2` 判不出顺序，那时 chan 只是一个 slot） |
+| `ExprKind::Recv { ch, comma_ok }` | `<-ch` | 单值；`comma_ok` 时多产一个 `bool`（`v, ok := <-c`） | `comma_ok` 4 条；`con_chan::t_con_11/12` |
+| `ExprKind::Make { kind: Chan, args }` | `make(chan T[, n])` | `args` 是 `[cap]` 或空 | `con_lower::t_task7`（三种形态） |
+| `Stmt::Select { clauses }` | `select { ... }` | **子句顺序 = 源码顺序**，一个都不许重排；每个 case 的通道表达式与 send 右值**整批**按源码顺序求值（走 `default` 时其它 case 的通道表达式**也已经**求过值） | `con_lower::t_task12`（五种形态 + 子句顺序）；`con_select` 的 `T-CON-25..34` |
+| `RangeKind::{Chan, Func}` | `range` over chan / func | chan：元素落 **key** 位（官方 `rangeKeyVal` 返回 `(elem, nil)`）。func：整条语句下降成一次调用 `seq(__range_body_<n>)`，合成函数形参 = yield 形参 | `con_chan::t_con_17/18/18b/18c`；`con_rangefunc` 15 条 |
+
+> **为什么求值顺序要写进契约**：`m()[i()] <- f()` 这类表达式里顺序错了**不会报错**，
+> 只会静默算错。所以顺序不是实现细节，是契约。

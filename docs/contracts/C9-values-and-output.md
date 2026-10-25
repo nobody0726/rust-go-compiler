@@ -1,6 +1,6 @@
 # C9 契约：值表示 / 输出字节 / 退出码
 
-> **契约级别：正式**（M5 冻结候选；`M9` 的 native 对象模型**不承诺**与本契约同构）
+> **契约级别：正式**（M5 冻结；`M9` 的 native 对象模型**不承诺**与本契约同构）
 > **消费者**：M5 顺序解释器（`rgoc-interp`）、`rgoc-hir` 的 lowering、`rgoc-driver run`；
 > M6+ 的解释器扩展与差分测试装置
 > **上游**：`M5-design.md` §3.3（值模型）/ §3.4（帧栈）/ §4（输出与退出码）/ §4.5（三件不承诺）
@@ -169,11 +169,22 @@ println('A') / println(byte(65)) -> 65\n / 65\n
 | 静态诊断（`C8` 行）非空 ⇒ **不执行** | `1` | `T-EX-49`；`run_cmd.rs` §④ |
 | `HIR-UNSUPPORTED-*` / `HIR-MISSING-TYPE` 等 HIR 拒绝 | `1` | `T-EX-02` |
 | 未捕获 panic | `2` | `T-EX-38` |
-| 资源超限（帧 / 求值栈 / 步数） | `2` | `T-EX-52` |
+| **死锁**（所有 goroutine 睡着且 `main` 未结束） | `2` + stderr `fatal error: all goroutines are asleep - deadlock!` | `T-CON-35`（逐字节）/ `T-CON-22/22b`（nil 通道的 recv 与 send） |
+| **任何 goroutine 内未捕获 panic**（不限 `main`） | `2` + `panic: <值>` 一行，**不包装** | `T-CON-37/38/39` |
+| 资源超限（帧 / 求值栈 / 步数 / goroutine 数） | `2` | `T-EX-52`；`T-CON-07`（goroutine 内 `for {}` ⇒ 预算烧完退出 2） |
 | 参数错 / io 错 / 内部错（`run_run` 返回 `Err`） | `2` | `main_entry` |
 
 **1 与 2 的分界**：`1` = **没跑**（静态面就判死），`2` = **跑了但没跑完**。
 所以退出码 `1` 时 stdout 里绝不允许出现半截程序输出（`EX-2`「诊断优先」的判据）。
+
+**`main` 返回即整个程序结束**（M8/`D-M8-8`）：`main` 一回收，`drive` 立刻 `return`，
+就绪队列里剩下的 goroutine **全部丢弃** —— 不等它们、也不跑它们的 defer。
+官方运行时会等所有 goroutine 结束，这是**有记录的窄化**（`M8-report.md` §8）。
+
+**map 迭代的快照口径**（M8/`D-M8-12`）：`range` 开始时刻照一份 **key 列表**，
+迭代中按这份列表取、**值现读**；迭代中 `delete` 掉的 key **不再产出**，
+迭代中新增的 key **不被访问**。判据：`con_misc::t_con_49`（delete 后不产出）
+与 `t_con_50b`（值现读）。
 
 **诊断去重的唯一口径**（`run` 独有）：`check_package_with` 把会话同时交给 lowering
 （`D-M5-2`），同一个表达式被反复查询 ⇒ 同一条诊断被重复推入。`run_cmd` 按
@@ -241,6 +252,7 @@ println('A') / println(byte(65)) -> 65\n / 65\n
 | `C9-2` | 2026-10-23 | §4.3 明确「地址一律占位」；§4.4 补 `float32` 与指数两位的判据 | `print.rs` 实现与 `T-EX-24` 对齐 |
 | `C9-3` | 2026-10-23 | §5 补「`run` 独有的诊断去重」口径 | `run_cmd.rs` §④ 的实测（`F[int](1)` 推 8 次） |
 | `C9-4` | 2026-10-24 | 补 §7.5「SSA 求值器共用同一 `Value` 与同一合并流」（M6/Task 51） | `D-M6-7` 的兑现：值模型只有一个 crate；`opt_equiv`/`ssa_diff` 是它的判据 |
+| `C9-5` | 2026-10-25 | **M8 增补**：§5 补死锁 / 任何 G 的 panic / goroutine 数上限三行 + `main` 返回即结束 + map 快照口径；状态行由「冻结待定」改为**正式**（M8 收口时复核） | `M8-tests.md` §9.2 的 `R-8-8/10`；`T-CON-35..41`；`con_misc` |
 
 **待办**：`U-M5-14`（非 UTF-8 字符串）兑现时要改 `I4` 与 §4.3 的 `string` 行 —— 届时升 `C9` 的
 次版本，并把 `literal.go` 从排除清单挪回（`M5-tests.md` §6.4）。

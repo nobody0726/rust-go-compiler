@@ -255,3 +255,22 @@ M0 的图能给下游的**具体东西**：
 > **一条仍然成立的边界**：verifier 只检查**图的不变式**，不检查「这张图是否等价于源码」。
 > 后者是 `SSA-4` 的三方差分（`HIR = SSA = go run`）负责的 —— 两者不能互相替代。
 
+---
+
+## 9. M8 为什么不改本契约（2026-10-25 记）
+
+M8 给 HIR 加了六个并发节点（`C3` §6），SSA 侧**一条都不接** —— 这不是遗漏，是既有决定：
+
+| HIR 新节点 | SSA 侧行为 | 依据 |
+|---|---|---|
+| `Stmt::Go` / `Stmt::Send` / `Stmt::Select` / `ExprKind::Recv` | `SSA-UNSUPPORTED-CHAN`（建图前拒） | §7.1 的 memory 模型没有「谁在跑」这个维度 |
+| `RangeKind::Chan` | `SSA-UNSUPPORTED-CHAN` | 同上 |
+| `RangeKind::Func` | **没有专属码了**：M8/Task 45 起 HIR 把 range over func 下降成「调用 + 合成函数字面量」，SSA 看到的是 `SSA-UNSUPPORTED-FUNC-VALUE` | `SsaCode::RangeFunc` 已删（`ALL` 9→8）—— 产不出来的码一律删 |
+
+**三方差分因此退化为两方**：chan 语料上 `--via=ssa` 恒被拒，
+`run-chan.sh` 只做 `run` vs `go run`。这一点写进 `M8-report.md` §4，
+**不许**说成「三方差分绿」。
+
+**本契约的 §1–§8 一字未改**：并发的语义全在 `C11`（运行期），
+SSA 的形状（tuple / memory / phi / 支配）与并发无关 —— 一个单线程 IR
+不需要「谁来跑」的概念。

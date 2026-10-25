@@ -298,7 +298,20 @@
 
 | 修订 | 日期 | 内容 | 触发 |
 |---|---|---|---|
-| — | — | （开工后按 `R-x-y` 追加） | — |
+| `R-8-1` | 2026-10-25 | `range` over chan 的元素落在 **key** 位（不是计划写的 `value` 位） | 官方 `rangeKeyVal` 对通道返回 `(elem, nil)`；写 `value` 位会让 `lower_range` 把它当第二个变量，而检查面只给了一个 |
+| `R-8-2` | 2026-10-25 | `send` 的 `closed` 检查必须排**第一**（设计稿 `M8-design.md` §3.3 与 `C11` §3.2 原表都排在 `buf` 之后） | 官方 `runtime/chan.go:224`（`chansend`）加锁后第一件事就是查 `closed`；按原表 `close(c); c<-v`（cap>0 未满）会静默把值塞进缓冲 |
+| `R-8-3` | 2026-10-25 | `recv` 的操作数模式是 **commaok** 不是 `value` | 官方 `go/types/expr.go:150`；改之前 `v, ok := <-c` 报 "2 variables but 1 value" |
+| `R-8-4` | 2026-10-25 | `select` 被对端完成其中一个 case 时，必须**立刻撤销**其余登记 | 官方 `sudog.dequeue` 的 `g.selectDone.CAS(0,1)`；不撤销 ⇒ 发送方下一笔发送落到作废 waiter 上，**值丢失**（`T-CON-31` 抓到：输出 "first 1" 后死锁） |
+| `R-8-5` | 2026-10-25 | `select` 的登记表（`select_regs`）放 `Shared` 不放 `G` | 撤销发生在**对端** G 里，而被撤销的 G 已被 `drive` `take()` 走 |
+| `R-8-6` | 2026-10-25 | `next_token` 从 **1** 起（0 留给「普通 waiter 没有 token」） | 从 0 起 ⇒ `revoke(0)` 把阻塞的普通发送方一起删掉 ⇒ 死锁 |
+| `R-8-7` | 2026-10-25 | `range` over chan 的执行接法：`RangeIter::Chan` + `step_range` 的 chan 支路，压 `Task::Recv` 进相位机（阻塞天然成立）。计划里的 `R4`（「`next()` 是同步函数，塞不进同一接口」）结论不变，但接法是**新支路**不是改接口 | `t_con_18` 抓到相位机错法：压 recv 的那一步必须直接进 `PH_POST`，否则下一步会再压一个 ⇒ 值栈两份结果 |
+| `R-8-8` | 2026-10-25 | `close` 的 panic 文本**不带** `runtime error:` 前缀 | 容器里 `go run` 实测：`panic: close of closed channel` / `close of nil channel` |
+| `R-8-9` | 2026-10-25 | `--sched` 的写法是 `seed:N` 不是 `seed=N` | `T-CON-29` 的 fixture 按 `seed=` 写全部解析失败 |
+| `R-8-10` | 2026-10-25 | `RangeIter::Map` 必须快照 **key 列表**（不是 `(k,v)` 对） | 迭代中 `delete(m,k)` 之后 Go **不再**产出 `k`（`T-CON-49`）；值仍现读（`T-CON-50b`） |
+| `R-8-11` | 2026-10-25 | `T-CON-48` 的码从 `HIR-UNSUPPORTED-RANGE-FUNC` 换成 **`HIR-UNSUPPORTED-RANGEFUNC-RETURN`**（前者随 range-over-func 实现而下线） | Task 45 落地后旧码无产出点 |
+| `R-8-12` | 2026-10-25 | `select` 子句的 `env.push()` 挪到通信语句**之前** | `case v := <-a:` 的 `v` 属于该子句；挪后报 "no new variables on left side of :=" |
+| `R-8-13` | 2026-10-25 | `Task::Make` 必须带 `nargs`（不靠「栈上还有没有值」猜） | `f(make(map[string]int))` 会把 `f` 的实参吃掉 |
+| `R-8-14` | 2026-10-25 | `select` 子句体是**无标签 `break` 的目标**（`Body::Seq` 加 `breakable`） | 官方 33 / 我们算出 1；`select` 不在 body 栈上，子句体是唯一能拦 break 的东西 |
 
 ---
 
