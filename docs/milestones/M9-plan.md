@@ -291,7 +291,7 @@ func main() {
   （`Slice { void *ptr; u64 len; u64 cap; }`）
 - Consumes: `rt_alloc`
 
-- [ ] **Step 1: 写会红的测试**（`T-SLICE-01/02` + Review Focus ①）
+- [x] **Step 1: 写会红的测试**（`T-SLICE-01/02` + Review Focus ①）
 
 ```go
 package main
@@ -311,14 +311,14 @@ Expected: `3 3 1 5 true\n3 3\n`
 `make([]int, 3)` 之后 `rt_heap_used()` 必须**增长** —— 即使这个 slice 没逃出去。
 （不做逃逸优化是**契约**，不是疏忽；这条断言把「不做」钉成判据。）
 
-- [ ] **Step 2: 跑它确认红**
+- [x] **Step 2: 跑它确认红**
 
-- [ ] **Step 3: 实现**：`ptr = rt_alloc` 按 `len==0 && cap==0` 判 `nil`（`ptr=NULL`）；
+- [x] **Step 3: 实现**：`ptr = rt_alloc` 按 `len==0 && cap==0` 判 `nil`（`ptr=NULL`）；
   **零大小元素**：`elem->size == 0` ⇒ 不分配（`ptr = &zerobase`），`len/cap` 照记。
 
-- [ ] **Step 4: 跑它确认绿**
+- [x] **Step 4: 跑它确认绿**
 
-- [ ] **Step 5: Commit** `feat(rt): rt_makeslice（Task 11，T-SLICE-01/02）`
+- [x] **Step 5: Commit** `feat(rt): rt_makeslice（Task 11，T-SLICE-01/02）`
 
 ### Task 12: `rt_growslice` 与 `append`
 
@@ -330,7 +330,7 @@ Expected: `3 3 1 5 true\n3 3\n`
 - Produces: `void rt_growslice(Slice *out, Slice old, const TypeDesc *elem, size_t extra)`
 - Consumes: Task 11
 
-- [ ] **Step 1: 写会红的测试**（`T-SLICE-05/06`）
+- [x] **Step 1: 写会红的测试**（`T-SLICE-05/06`）
 
 ```go
 func main() {
@@ -346,14 +346,14 @@ func main() {
 ```
 Expected: `7 0\n9 2\n`
 
-- [ ] **Step 2: 跑它确认红**
+- [x] **Step 2: 跑它确认红**
 
-- [ ] **Step 3: 实现**：cap 够 ⇒ 原地写 + `len+1`；不够 ⇒ 新分配
+- [x] **Step 3: 实现**：cap 够 ⇒ 原地写 + `len+1`；不够 ⇒ 新分配
   （`max(2*cap, len+extra)`）+ `memcpy(len*elem->size)` + 写新元素。
 
-- [ ] **Step 4: 跑它确认绿**
+- [x] **Step 4: 跑它确认绿**
 
-- [ ] **Step 5: Commit** `feat(rt): rt_growslice 与 append（Task 12，T-SLICE-05/06）`
+- [x] **Step 5: Commit** `feat(rt): rt_growslice 与 append（Task 12，T-SLICE-05/06）`
 
 ### Task 13: isel 的 slice 三处（`Make` / `Index` / `Slice`）
 
@@ -366,7 +366,7 @@ Expected: `7 0\n9 2\n`
   `Index` 对 slice ⇒ 取字 0 作基址；`Slice` ⇒ 算新 `ptr/len/cap`
 - Consumes: Task 11–12
 
-- [ ] **Step 1: 写会红的测试**（`T-SLICE-03/04`）
+- [x] **Step 1: 写会红的测试**（`T-SLICE-03/04`）
 
 ```go
 func main() {
@@ -381,15 +381,15 @@ func main() {
 ```
 Expected: `2 4 2\n3\n9\n`
 
-- [ ] **Step 2: 跑它确认红**
+- [x] **Step 2: 跑它确认红**
 
-- [ ] **Step 3: 实现**：`Slice` 的三下标 `cap = max-lo`（无 `max` 时 `cap = cap(s)-lo`）。
+- [x] **Step 3: 实现**：`Slice` 的三下标 `cap = max-lo`（无 `max` 时 `cap = cap(s)-lo`）。
   同时补 `string(r)` 的 isel：走 `rt_rune2utf8(r) -> [4]byte + len`（spec §7 `RT-CMP-02`
   点名要补的边界；判据加在同一个 fixture：`println(string(rune(0x4e2d)))` ⇒ `中`）
 
-- [ ] **Step 4: 跑它确认绿**
+- [x] **Step 4: 跑它确认绿**
 
-- [ ] **Step 5: Commit** `feat(arm64): slice 的 Make/Index/Slice（Task 13，T-SLICE-03/04）`
+- [x] **Step 5: Commit** `feat(arm64): slice 的 Make/Index/Slice（Task 13，T-SLICE-03/04）`
 
 ### Task 14: 越界检查与 `rt_panic_bounds`
 
@@ -402,20 +402,20 @@ Expected: `2 4 2\n3\n9\n`
 - Consumes: `D-M9-12` 的 panic 机制（Phase 5 才有；**本 Task 先直接 `exit(2)` 打文本**，
   Phase 5 再接上返回码传播 —— 那是唯一的「临时形态」，Task 47 会改它）
 
-- [ ] **Step 1: 写会红的测试**（`T-SLICE-07/08`）
+- [x] **Step 1: 写会红的测试**（`T-SLICE-07/08`）
 
 ```go
 func main() { s := []int{1,2,3}; i := 3; println(s[i]) }
 ```
 Expected: 退出 2 + `panic: runtime error: index out of range [3] with length 3`
 
-- [ ] **Step 2: 跑它确认红**
+- [x] **Step 2: 跑它确认红**
 
-- [ ] **Step 3: 实现**：`Index` 与 `Slice` 的两处比较 + 分支；文本逐字节照 `C9` §4.5。
+- [x] **Step 3: 实现**：`Index` 与 `Slice` 的两处比较 + 分支；文本逐字节照 `C9` §4.5。
 
-- [ ] **Step 4: 跑它确认绿**
+- [x] **Step 4: 跑它确认绿**
 
-- [ ] **Step 5: Commit** `feat(rt): 越界检查（Task 14，T-SLICE-07/08）`
+- [x] **Step 5: Commit** `feat(rt): 越界检查（Task 14，T-SLICE-07/08）`
 
 ### Task 15: 拆掉 `CG-UNSUPPORTED-SLICE`
 
@@ -428,26 +428,26 @@ Expected: 退出 2 + `panic: runtime error: index out of range [3] with length 3
 - Consumes: Task 11–14
 - Produces: `CgCode::ALL` 从 3 条降到 2 条；**守卫**：源码里扫不到 `CG-UNSUPPORTED-SLICE`
 
-- [ ] **Step 1: 写会红的守卫**（沿 M8 的「五条码不许再出现」做法）
+- [x] **Step 1: 写会红的守卫**（沿 M8 的「五条码不许再出现」做法）
 
-- [ ] **Step 2: 跑它确认红**（现在还能扫到）
+- [x] **Step 2: 跑它确认红**（现在还能扫到）
 
-- [ ] **Step 3: 删码 + 删拒绝分支 + 清 `native-rejected.txt` 的 7 行**
+- [x] **Step 3: 删码 + 删拒绝分支 + 清 `native-rejected.txt` 的 7 行**
 
-- [ ] **Step 4: 跑它确认绿** + `cargo test -p rgoc-arm64 -p rgoc-driver --test native_slice`
+- [x] **Step 4: 跑它确认绿** + `cargo test -p rgoc-arm64 -p rgoc-driver --test native_slice`
 
-- [ ] **Step 5: Commit** `feat(arm64): 下线 CG-UNSUPPORTED-SLICE（Task 15）`
+- [x] **Step 5: Commit** `feat(arm64): 下线 CG-UNSUPPORTED-SLICE（Task 15）`
 
 ### Task 16: 语料 46
 
 **Files:**
 - Test: `rgoc/crates/rgoc-driver/tests/native_corpus_run.rs`（扩到 69 清单，本 Phase 预期 46）
 
-- [ ] **Step 1: 改 `native_corpus_run` 读 `run-selected.txt`**，逐文件断言
+- [x] **Step 1: 改 `native_corpus_run` 读 `run-selected.txt`**，逐文件断言
   「`ok` 的 stdout == 官方 `.exp`」；`skip` 的必须有码。
-- [ ] **Step 2: 跑** Expected: `ok=46 skip=23 bad=0`
-- [ ] **Step 3: 逐文件确认 39 个的字节没变**（`T-CORP-03`）
-- [ ] **Step 4: Commit** `test(native): 语料 46（Task 16，T-CORP-01/03）`
+- [x] **Step 2: 跑** Expected: `ok=46 skip=23 bad=0`
+- [x] **Step 3: 逐文件确认 39 个的字节没变**（`T-CORP-03`）
+- [x] **Step 4: Commit** `test(native): 语料 46（Task 16，T-CORP-01/03）`
 
 ### Task 17: `D` 腿（native vs 解释器）
 
@@ -457,12 +457,12 @@ Expected: 退出 2 + `panic: runtime error: index out of range [3] with length 3
 **Interfaces:**
 - Consumes: `rgoc_driver::run_cmd::run_run`（解释器）与 `build_cmd`（native）
 
-- [ ] **Step 1: 写会红的测试**：对 46 个可跑文件，`native` 的合并流 == `rgoc run` 的；
+- [x] **Step 1: 写会红的测试**：对 46 个可跑文件，`native` 的合并流 == `rgoc run` 的；
   不等时报「第一个不同的行号 + 两侧内容」。
-- [ ] **Step 2: 跑它确认红**（预期会有差异 —— 这是 `D` 腿第一天就该做的事）
-- [ ] **Step 3: 按差异修**（不要改测试）
-- [ ] **Step 4: 跑它确认绿**
-- [ ] **Step 5: Commit** `test(native): D 腿 = native vs 解释器（Task 17）`
+- [x] **Step 2: 跑它确认红**（预期会有差异 —— 这是 `D` 腿第一天就该做的事）
+- [x] **Step 3: 按差异修**（不要改测试）
+- [x] **Step 4: 跑它确认绿**
+- [x] **Step 5: Commit** `test(native): D 腿 = native vs 解释器（Task 17）`
 
 **Verify:** `… bash tools/run-oracle/run-native.sh` ⇒ `ok=46 skip=23 bad=0 / 69`；
 `… cargo test --workspace --no-fail-fast` ⇒ 0 failed。

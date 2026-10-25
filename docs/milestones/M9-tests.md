@@ -286,6 +286,8 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-1` | 2026-10-25 | Phase 0 的 Task 5/6/7 换序：**desc 发射 → `rt_alloc` → chunk 增长**（原顺序是 `rt_alloc` → chunk → desc）。内容一字未改，只换编号位 | 原计划 Task 5 的判据是「`new(int)` × 100 跑通 + 对齐探针」。但 `new(T)` 要到 desc 发射之后才能接 `rt_alloc` —— 按原顺序写，`new` 仍在调 `rt_arena_alloc`，**测试照样过**（假绿）。新判据补了第二条：「产物里必须出现 `bl rt_alloc`」，这条不依赖 desc 是否已发射，但仍需 desc 存在才能真跑，所以顺序必须换 |
 | `R-9-2` | 2026-10-25 | `rt_alloc` 的签名保持 `(desc, need_zero)` 两个参数（没有改成「从 desc 的 flags 读」） | 两条信息同源（都来自 `rgoc_meta::needs_zero`），但**走编译期参数**能让它出现在 `.s` 里 ⇒ `need_zero` 的判定有可观测判据（`mem_alloc::含指针的类型要清零`）。若改成运行期读 flags，`needs_zero` 算错就完全不可观测（M9 的 arena 拿到的都是零页） |
 | `R-9-3` | 2026-10-25 | M7 的 `u_m7_04_arena_耗尽打一行并退出2` 换面成 `u_m7_04_堆耗尽打一行并退出2`：触发手段从「2000 次 `new` 撑爆静态 8 MiB」改成「`RGOC_HEAP_MAX=1048576`」，文本从 `panic: out of arena` 换成 `runtime error: out of memory (heap limit N bytes)` | M9/Task 7 把静态 arena 换成可增长的 mmap chunk 链 ⇒ 原 fixture 正常跑完，判据前提消失。**意图**（耗尽 ⇒ 一行 stderr + 退出 2 + 不继续执行）不变 |
+| `R-9-4` | 2026-10-25 | 四条 M7 判据换面：`u_m7_01`（切片报码退出 1）→「切片已放行」；`nat2`（Slice 变体永远到不了）→「切片变体真的被选择」；`CgCode::ALL` 3 → 2；M7 manifest 的码集合改成 `ALL ∪ retired_codes`，拒绝清单改读快照 `native-rejected-m7.txt` | M9/Phase 1 把 `[]T` 真的实现了 ⇒ 原判据的前提（切片被拒）消失。**不能删 M7 的记录**（那是历史事实），也不能让冻结数字变成假错 ⇒ 用 `retired_codes` + 快照两条机制把「历史」与「现状」分开 |
+| `R-9-5` | 2026-10-25 | `rt_alloc` 之外再加一个**不带对象头**的分配入口：切片的底层数组走 `rt_arena_alloc(cap*elemsize, 8)`，`rt_alloc` 只用于「一个 T」 | 底层数组的形状是 `cap × elem` 的元素数组，不是一个 `T` —— 给它写一个 `elem` 的 desc 是错的（`size` 对不上），写「数组类型」的 desc 又要为每个 `[n]T` 生成一块。M10 扫它要靠「元素 desc + 元素个数」（官方用 span 的 `elemtype`），那条契约归 M10（`G-M9-01`） |
 
 ---
 
