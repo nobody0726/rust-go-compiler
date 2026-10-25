@@ -334,26 +334,29 @@ fn 合成反例都必须红() {
         "标 pass 但证据里有",
     );
 
-    // `pending` 没人认领 ⇒ 挂着不写理由。
+    // 非 pass 没人认领 ⇒ 挂着不写理由。
     //
-    // ⚠️ 反例要跟着真 manifest 的形状走：骨架期 `open_gaps` 是**空的**（九条
-    // 门禁各自写了 `gap`），所以「从 open_gaps 里删」是恒真的改坏。真正的
-    // 矛盾是「把某个 pending 门禁的 gap 也删掉」—— 那它既没人认领也没理由。
+    // ⚠️ 反例要跟着真 manifest 的形状走：收口后九条全是 pass，所以要把某条
+    // **改成 partial 再把它的 gap 清空**才构得成矛盾（清 gap 本身不够 ——
+    // pass 的门禁不走这条检查）。
     expect_red(
-        "pending 既没人认领也没写 gap",
+        "partial 既没人认领也没写 gap",
         |m| {
+            m["gate"][0]["status"] = Value::String("partial".into());
             m["gate"][0]["gap"] = Value::String(String::new());
+            let g = m["open_gaps"].as_array_mut().unwrap();
+            g.retain(|x| x["gate"].as_str() != Some("CON-1"));
         },
         "既没进 open_gaps 也没写 gap",
     );
 
-    // `pending` 却已写 evidence ⇒ 挂名装成有据
+    // pass 却没有 evidence ⇒ 「做完了」不是证据
     expect_red(
-        "pending 却写了 evidence",
+        "pass 却没有 evidence",
         |m| {
-            m["gate"][0]["evidence"] = Value::String("跑过了".into());
+            m["gate"][0]["evidence"] = Value::String(String::new());
         },
-        "还是 pending 却已经写了 evidence",
+        "没有 evidence",
     );
 
     expect_red(
@@ -433,12 +436,14 @@ fn 合成反例都必须红() {
 
     // `done` 与「九条门禁全 pass」必须**同真同假**。
     //
-    // ⚠️ 反例要跟着真 manifest 的形状走：骨架期九条全是 pending，
-    // 所以「把 done 设成 true」是**有效的**改坏（与 all_pass=false 矛盾）。
+    // ⚠️ 反例要跟着真 manifest 的形状走：收口后九条全 pass 且 done 已经是
+    // true，所以「把 done 设成 true」是恒真的改坏。真正的矛盾是「把一条门禁
+    // 拉下来却还留着 done=true」—— 那才是这条断言要抓的。
     expect_red(
         "门禁没全过却自称 done",
         |m| {
-            m["phase_summary"]["done"] = Value::Bool(true);
+            m["gate"][0]["status"] = Value::String("partial".into());
+            m["gate"][0]["gap"] = Value::String("合成：故意拉下来一条".into());
         },
         "phase_summary.done=true",
     );

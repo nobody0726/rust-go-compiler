@@ -2,9 +2,9 @@
   "stage": "M8",
   "name": "并发解释执行（goroutine / channel / select）",
   "generated_at": "2026-10-25T00:00:00Z",
-  "filled_at": null,
-  "fill_task": "M8-plan.md Task 57（骨架：gate 全 pending、done=false；由 Task 61–66 收口时按实测数字填实，填实者 rgoc-driver/tests/manifest_m8.rs 对账）",
-  "status": "进行中 —— 骨架阶段。Task 1–56 已落地（lowering 六节点 + 调度器 + 通道 + select + 死锁 + map 快照 + range over func + 三条语料零回归）；Task 57–66 是收口簿记",
+  "filled_at": "2026-10-25T00:00:00Z",
+  "fill_task": "M8-plan.md Task 61–63（按实测数字填；由 rgoc-driver/tests/manifest_m8.rs 对账）",
+  "status": "已收口 —— 九条门禁 9/9 pass；语料 69/46+23/39+7/7+12 四个数字与 M5/M6/M7 冻结值逐字节一致；open_gaps 只剩收口期的两条记录性缺口（CON-6 的三栏性质、CON-7 的缩减下限）",
   "scope": "HIR 之上的 M:1 协作式调度：goroutine / 无缓冲与缓冲 channel / close / select 三阶段 / 死锁判定 / --sched=seed:N 可回放；解释器（--via=hir），native 与 SSA 两条通路不在本里程碑面内",
   "docs": {
     "design": "docs/milestones/M8-design.md（D-M8-1..16 / F1..F14 / 门禁 CON-1..9 / 不变式四条）",
@@ -62,65 +62,65 @@
     {
       "id": "CON-1",
       "name": "无缓冲 handoff + 值深拷贝",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待 Task 61–66 收口时填（判据 T-CON-11/12/13/24，con_chan/con_single）"
+      "status": "pass",
+      "evidence": "con_chan 6 条端到端（t_con_01..06、11、12）+ con_single t15/t16（双次深拷贝）；无缓冲 handoff 的判据是输出行顺序",
+      "gap": "—"
     },
     {
       "id": "CON-2",
       "name": "缓冲 FIFO + 补位",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-14/15/16/23，con_chan::t_con_14 缓冲补位）"
+      "status": "pass",
+      "evidence": "con_chan::t_con_14_缓冲满时接收会补位（收一个立刻补一个，len 回 cap）；用 gate 通道逼出「缓冲满+发送方已阻塞」那一帧",
+      "gap": "—"
     },
     {
       "id": "CON-3",
       "name": "close 三态 + 三个 panic",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-17..22，con_chan/con_single 的 close 三态与三个 panic）"
+      "status": "pass",
+      "evidence": "con_chan t_con_17/18/18b/18c/22/22b（close 后排空 / range 期间 close / nil 死锁）+ con_single 的 close/len/cap/print 分支；panic 文本按官方实测（无 runtime error: 前缀）",
+      "gap": "—"
     },
     {
       "id": "CON-4",
       "name": "select 五形态 + 撤销",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-25..34，con_select 11 条含 seed 选择）"
+      "status": "pass",
+      "evidence": "con_select 15 条：五形态 + 子句顺序 + 撤销（T-CON-25..34）+ T-CON-28 八次同一结果 / T-CON-29 seed 1..8 至少两种结果；另修了 select 子句 break 穿透的既有 bug（t_con_60..60d）",
+      "gap": "—"
     },
     {
       "id": "CON-5",
       "name": "死锁与四情形退出",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-35..41，con_exit 9 条；死锁文本逐字节走 stderr）"
+      "status": "pass",
+      "evidence": "con_exit 9 条：死锁文本逐字节走 stderr（T-CON-35）、main 返回即退出（T-CON-36/40）、goroutine panic 终止全程序（T-CON-37/38/39/41）；Halt::Deadlock 退出码 2",
+      "gap": "goroutine  panic 只有一行 `panic: <值>`，不打 goroutine 栈（U-M8-08）"
     },
     {
       "id": "CON-6",
       "name": "并发语料 7/7 + 三栏",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-52/53/54；run-chan.sh 实测 ok=7 skip=12 bad=0，但 7 个官方 .exp 全 0 字节 ⇒ 只证明没崩）"
+      "status": "pass",
+      "evidence": "run-chan.sh --list chan-input.txt ⇒ ok=7 skip=12 bad=0 / 19；con_slice::t_con_54 冻结断言（清单==目录、M'⊆清单、|清单|−|M'|==7、每条 M' 类别合法）",
+      "gap": "N' 的 7 个官方 .exp 全是 0 字节 ⇒ 这一栏只证明「没崩」；并发语义的证据在 con_* 的 100+ 条断言"
     },
     {
       "id": "CON-7",
       "name": "同 seed 可回放 + 多 seed + 缩减",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-42/55/56/61；--sched=seed:N 可回放 + 缩减脚本 Task 60）"
+      "status": "pass",
+      "evidence": "con_cli 5 条（--sched=seed:N 解析与两种写法）+ con_select::t_con_29（8 个 seed 至少两种结果）+ shrink-m8.sh 实测（13 行两 goroutine 死锁 ⇒ 删 5 条剩 7 行）",
+      "gap": "缩减脚本的结构性下限是 4 个非空行（语句级删除不做字面量内联），达不到计划写的 ≤3 行"
     },
     {
       "id": "CON-8",
       "name": "range-over-func 窄面",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-43..48，con_rangefunc 15 条；窄面 U-M8-03）"
+      "status": "pass",
+      "evidence": "con_rangefunc 15 条（T-CON-43..48 + 边界 4 条）：基本形态 / 捕获 / break / continue / seq2 / 嵌套 / return+goto 拒 / = 形态 / 0 参 yield / switch 与 select 里的 break 与 continue",
+      "gap": "U-M8-03：body 里 return/goto 静态拒（官方 go 接受）—— 有记录的窄化"
     },
     {
       "id": "CON-9",
       "name": "三块补齐 + 零回归",
-      "status": "pending",
-      "evidence": "",
-      "gap": "骨架期：证据待填（判据 T-CON-49/50/51/58/59；map 快照 + defer/comma-ok + 三个里程碑零回归）"
+      "status": "pass",
+      "evidence": "con_misc 7 条（map 快照三条 + defer 四条）+ comma_ok 4 条 + run-collide.sh 69 绿 / --ssa 46 绿 23 跳过 0 红 / run-native.sh 39 ok 7 skip 0 bad / check-m1-consistency.py 全过",
+      "gap": "—"
     }
   ],
   "unsupported": [
@@ -220,15 +220,58 @@
     "max_eval": 10000,
     "note": "M8 新增两项资源上限（goroutine 数 / 求值栈深），超了退出 2"
   },
-  "open_gaps": [],
+  "open_gaps": [
+    {
+      "id": "G-M8-01",
+      "gate": "CON-6",
+      "what": "并发语料的三栏只证明「没崩」：N' 的 7 个官方 .exp 全是 0 字节（test/chan/*.go 是编译器测试用例，多带 // errorcheck）。语义证据在 con_* 的 100+ 条输出顺序断言",
+      "test_id": "T-CON-53"
+    },
+    {
+      "id": "G-M8-02",
+      "gate": "CON-7",
+      "what": "缩减脚本（shrink-m8.sh）只做语句级删除，结构性下限 4 个非空行；计划写的「≤3 行」不可达（要内联字面量，故意不做）",
+      "test_id": "T-CON-61"
+    }
+  ],
   "phase_summary": {
-    "tasks_done": "Task 1–56（Task 22 的 range over chan 已补齐；Task 45–48 range over func 已落地）",
+    "tasks_done": "Task 1–63（Task 64–66 是报告后的收尾：见 M8-plan Phase 8）",
     "design_revisions": [],
-    "done": false
+    "done": true
   },
   "measured": {
+    "workspace_suites": 210,
+    "workspace_tests": 2110,
+    "workspace_failed": 0,
+    "workspace_ignored": 1,
+    "m7_baseline_tests": 1974,
     "chan_input": 19,
     "chan_rejected": 12,
-    "chan_supported": 7
+    "chan_supported": 7,
+    "chan_with_output": 0,
+    "chan_empty_output": 7,
+    "chan_bad": 0,
+    "con_test_counts": {
+      "con_cli": 5,
+      "con_lower": 13,
+      "con_single": 13,
+      "con_chan": 17,
+      "con_select": 15,
+      "con_exit": 9,
+      "con_misc": 7,
+      "con_slice": 4,
+      "con_rangefunc": 15,
+      "chan_obj": 17
+    },
+    "m5_corpus_green": 69,
+    "m5_corpus_red": 0,
+    "ssa_three_way": "46 绿 / 23 跳过 / 0 红",
+    "native": "39 ok / 7 skip / 0 bad",
+    "m1_consistency": "全部通过",
+    "mutations_red": 4,
+    "mutations_script": "scripts/mutation-m8.sh ⇒ 红 4 / 失手 0",
+    "hir_reject_codes": 5,
+    "ssa_codes": 8,
+    "shrink_result": "13 行两 goroutine 死锁 ⇒ 删 5 条、剩 7 个非空行（两个 goroutine 都被删掉）"
   }
 }
