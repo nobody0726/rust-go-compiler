@@ -1598,6 +1598,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             Str,
             Int,
             Sig,
+            Chan,
             Unknown,
         }
         let k = {
@@ -1632,6 +1633,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                     | BasicId::UntypedRune,
                 ) => K::Int,
                 Type::Signature(_) => K::Sig,
+                Type::Chan { .. } => K::Chan,
                 _ => K::Unknown,
             }
         };
@@ -1641,6 +1643,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             K::Map => RangeKind::Map,
             K::Str => RangeKind::Str,
             K::Int => RangeKind::Int,
+            K::Chan => RangeKind::Chan,
             K::Sig => {
                 self.reject(
                     pos,
@@ -1698,8 +1701,21 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 vec![t, t]
             }
             // `for v := range c`：**只产出一个值**（通道没有下标）。
-            // 这一步在 Task 13 落地（那条 Task 同时要判 `chan<- T` 上 range 是非法）。
-            RangeKind::Chan => todo!("M8/Task 13：chan 的 range 只产出元素，不产出下标"),
+            //
+            // 这个值落在 `key` 位（不是 `value` 位）：官方 `rangeKeyVal` 对
+            // 通道返回 `(elem, nil)` —— 第一个迭代变量就是「key」，与
+            // `for k, v := range m` 的位置约定一致。写进 `value` 的话
+            // `lower_range` 会把它当第二个变量，而检查面只给了一个。
+            RangeKind::Chan => {
+                let elem = {
+                    let tt = &*self.s.tt;
+                    match tt.type_of(underlying(tt, t)) {
+                        Type::Chan { elem, .. } => *elem,
+                        _ => t,
+                    }
+                };
+                vec![elem]
+            }
             // 迭代器函数的产出类型由**签名**定（`seq` 一个、`seq2` 两个），
             // 不能在这里靠 `t` 推。归 Task 45。
             RangeKind::Func => todo!("M8/Task 45：迭代器的产出类型由签名决定"),

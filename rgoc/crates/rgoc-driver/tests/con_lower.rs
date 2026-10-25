@@ -45,7 +45,11 @@ fn dump_raw(name: &str, src: &str) -> RunOutcome {
 #[track_caller]
 fn dump(name: &str, src: &str) -> String {
     let o = dump_raw(name, src);
-    assert_eq!(o.exit, 0, "{name}: 退出码 {}（stderr={}）", o.exit, o.stderr);
+    assert_eq!(
+        o.exit, 0,
+        "{name}: 退出码 {}（stderr={}）",
+        o.exit, o.stderr
+    );
     assert!(
         !o.stderr.contains("HIR-UNSUPPORTED"),
         "{name}: 不该再被拒：{}",
@@ -132,7 +136,7 @@ func main() {
 // ───────────────────────── Task 9：ch <- v ─────────────────────────
 
 #[test]
-fn t_task9_send_语句产出_Send_节点() {
+fn t_task9_send_语句产出_send_节点() {
     let d = dump(
         "t9_send",
         r#"
@@ -181,7 +185,10 @@ func main() {
     let (Some(c), Some(v)) = (chan_at, value_at) else {
         panic!("Send 下面应当同时有 getch(func#0) 与 gen(func#1) 两个调用：\n{d}");
     };
-    assert!(c < v, "通道表达式必须先于右值求值（getch@{c} gen@{v}）：\n{d}");
+    assert!(
+        c < v,
+        "通道表达式必须先于右值求值（getch@{c} gen@{v}）：\n{d}"
+    );
 }
 
 // ───────────────────────── Task 10：<-ch ─────────────────────────
@@ -223,7 +230,7 @@ func main() {
 // ───────────────────────── Task 11：go f() ─────────────────────────
 
 #[test]
-fn t_task11_go_调用产出_Go_节点() {
+fn t_task11_go_调用产出_go_节点() {
     let d = dump(
         "t11_go",
         r#"
@@ -312,6 +319,78 @@ func main() {
     has(&d, "#1 recv targets=0 send=false");
 }
 
+// ───────────────────────── Task 14：四条码下线 ─────────────────────────
+
+#[test]
+fn t_task14_四条码不许再出现() {
+    // `HIR-UNSUPPORTED-{GO,CHAN,SELECT,CLOSE}` 在 M8 之后没有任何产出点。
+    // 留着它们（哪怕不产出）会让「哪个构造还不支持」有四个错误答案，
+    // 所以判据是**源码里 grep 不到**，不是「运行时没见到」。
+    //
+    // 扫的是 `rgoc/crates/` 下的 `.rs`（含测试）：测试里写一条旧码的字符串
+    // 同样是错的 —— 那说明有人还在断言旧行为。
+    // 扫的是 `crates/*/src/` 下的 `.rs`。**不含** `tests/`：那里允许出现旧码，
+    // 因为「这条码不该出现」这种负向断言本身是有意义的判据
+    // （`ssa_reject.rs` 就是这么写的）。真正的产出点只有 `src/`。
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut hits = Vec::new();
+    scan_rs(&root, &mut hits);
+    for code in [
+        "HIR-UNSUPPORTED-GO",
+        "HIR-UNSUPPORTED-CHAN",
+        "HIR-UNSUPPORTED-SELECT",
+        "HIR-UNSUPPORTED-CLOSE",
+    ] {
+        // `-CHAN` 是 `-CHANNEL` 之类的前缀吗？不是 —— 但 `-CLOSE` 会命中
+        // `-CLOSED`，所以按「完整码后不跟字母」判。
+        let found: Vec<&String> = hits
+            .iter()
+            .filter(|(_, text)| contains_code(text, code))
+            .map(|(p, _)| p)
+            .collect();
+        assert!(
+            found.is_empty(),
+            "`{code}` 已下线（M8/Task 14），但仍在这些文件里出现：{found:?}"
+        );
+    }
+}
+
+/// 递归收集 `root` 下所有 `.rs` 文件的 `(路径, 全文)`。
+fn scan_rs(root: &std::path::Path, out: &mut Vec<(String, String)>) {
+    let Ok(rd) = std::fs::read_dir(root) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            // `target/` 是编译产物；`tests/` 允许提旧码（见调用点的说明）。
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == "target" || name == "tests" {
+                continue;
+            }
+            scan_rs(&p, out);
+        } else if p.extension().is_some_and(|x| x == "rs")
+            && let Ok(text) = std::fs::read_to_string(&p)
+        {
+            out.push((p.display().to_string(), text));
+        }
+    }
+}
+
+/// 文本里是否出现这个码（后面不许紧跟字母 —— 否则 `-CLOSE` 会命中 `-CLOSED`）。
+fn contains_code(text: &str, code: &str) -> bool {
+    let mut from = 0;
+    while let Some(i) = text[from..].find(code) {
+        let at = from + i + code.len();
+        let next = text[at..].chars().next();
+        if !next.is_some_and(|c| c.is_ascii_alphabetic()) {
+            return true;
+        }
+        from = at;
+    }
+    false
+}
+
 // ───────────────────────── Task 13：range over chan ─────────────────────────
 
 #[test]
@@ -329,5 +408,7 @@ func main() {
 }
 "#,
     );
-    has(&d, "kind=Chan key=0 value=1");
+    // 值落在 **key** 位：官方 `rangeKeyVal` 对通道返回 `(elem, nil)`
+    // —— 第一个迭代变量就是「key」（与 `for k, v := range m` 同位）。
+    has(&d, "kind=Chan key=1 value=0");
 }

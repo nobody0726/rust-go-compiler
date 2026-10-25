@@ -89,34 +89,21 @@ fn rejected(name: &str, src: &str, code: &str) {
 
 /// `T-EX-02`：未支持构造**显式拒绝**（退出码 1 + 稳定码），且进程不 abort。
 ///
-/// 五条：`go` / `chan` / `select` / `range` over func / `close`。每条的码
-/// 都在 `RejectKind::code()` 里冻结过 —— 改码等于契约变更。
+/// # M8 之后只剩一条
+///
+/// 原本五条：`go` / `chan` / `select` / `range` over func / `close`。
+/// M8 把前四者里的四个（`go`/`chan`/`select`/`close`）真的实现了
+/// （`M8-plan.md` Task 7–12），对应四个 `HIR-UNSUPPORTED-*` 码已下线
+/// （Task 14）。所以这条判据现在只覆盖 `range` over func —— 它到
+/// `M8/Task 45` 才换面（`HIR-UNSUPPORTED-RANGE-FUNC-RETURN`）。
+///
+/// 「放行的那四条真的产出了节点」由 `con_lower.rs` 判，不是删掉了事。
 #[test]
 fn t_ex_02_unsupported_constructs_are_rejected_loudly() {
-    rejected(
-        "t_ex_02_go",
-        "package main\nfunc f() {}\nfunc main() { go f() }\n",
-        "HIR-UNSUPPORTED-GO",
-    );
-    rejected(
-        "t_ex_02_chan",
-        "package main\nfunc main() { _ = make(chan int) }\n",
-        "HIR-UNSUPPORTED-CHAN",
-    );
-    rejected(
-        "t_ex_02_select",
-        "package main\nfunc main() {\n\tselect {\n\tdefault:\n\t}\n}\n",
-        "HIR-UNSUPPORTED-SELECT",
-    );
     rejected(
         "t_ex_02_rangefunc",
         "package main\nfunc seq(y func(int) bool) {}\nfunc main() {\n\tfor range seq {\n\t}\n}\n",
         "HIR-UNSUPPORTED-RANGE-FUNC",
-    );
-    rejected(
-        "t_ex_02_close",
-        "package main\nfunc main() { var c chan int; close(c) }\n",
-        "HIR-UNSUPPORTED-CLOSE",
     );
 }
 

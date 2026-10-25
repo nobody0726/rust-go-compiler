@@ -141,24 +141,25 @@ fn t_ssa_33_map() {
 }
 
 #[test]
-fn t_ssa_33_chan_在_hir_层就被拒() {
-    // 实测：`make(chan int)` 在 lowering 就拒（`U-M5-05`，`HIR-UNSUPPORTED-CHAN`）
-    // ⇒ `SSA-UNSUPPORTED-CHAN` 在本前端**没有入口**。守卫同上：
-    // 上游一旦放行（比如 M8 开了 chan），这里会红，提醒回来接 SSA 侧的码。
+fn t_ssa_33_chan_现在由_ssa_层拒() {
+    // 这条判据的**前身**是「chan 在 HIR 层就被拒，所以 `SSA-UNSUPPORTED-CHAN`
+    // 没有入口」—— 它当时是一条守卫：上游一旦放行就会红。
+    // M8/Task 14 正是那次放行（`HIR-UNSUPPORTED-CHAN` 已下线），所以这里改成
+    // 判「入口打开了、SSA 侧的码真的接住了」：SSA 不实现并发（`M8-design.md` §1.3）。
     let p = fixture(
         "chan",
         "package main\n\nfunc main() {\n\tc := make(chan int)\n\t_ = c\n}\n",
     );
     let out = run(&p);
-    assert_eq!(out.exit, 1, "chan 必须被拒：{out:?}");
+    assert_eq!(out.exit, 1, "chan 在 SSA 面必须被拒：{out:?}");
     assert!(
-        !out.stderr.contains("SSA-UNSUPPORTED-CHAN"),
-        "这条码**不该**出现（HIR 更早拒），实际：{:?}",
+        out.stderr.contains("SSA-UNSUPPORTED-CHAN"),
+        "拒绝该来自 SSA 侧（HIR 已放行），实际：{:?}",
         out.stderr
     );
     assert!(
-        out.stderr.contains("HIR-UNSUPPORTED-CHAN"),
-        "拒绝该来自 HIR 的 U-M5-05，实际：{:?}",
+        !out.stderr.contains("HIR-UNSUPPORTED-CHAN"),
+        "`HIR-UNSUPPORTED-CHAN` 已下线，不该再出现：{:?}",
         out.stderr
     );
 }
