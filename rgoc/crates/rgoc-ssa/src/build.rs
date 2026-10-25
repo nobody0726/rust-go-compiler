@@ -374,13 +374,16 @@ fn unsup_place(tt: &TypeTable, p: &Place) -> Option<(SsaCode, String)> {
 }
 
 fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
-    // 类型优先：`map` / `chan` 的**任何**出现（读、写、`len`、当实参）都不在面。
-    // 先按类型判就不必给每个节点各写一支（`m[k]` / `delete(m,k)` / `range m` …）。
+    // 类型优先：`chan` 的**任何**出现（读、写、`len`、当实参）都不在面。
+    // 先按类型判就不必给每个节点各写一支（`<-ch` / `make(chan T)` / …）。
+    //
+    // map 曾经也在这里（M6/Task 31），M9/Phase 2 实现后撤了（`D-M9-5`）——
+    // `SsaCode::Map` 这个变体本身留着（`diag.rs` 的 `ALL` 是稳定出口），
+    // 但**没有入口**：反向判据在 `rgoc-driver/tests/ssa_reject.rs::t_ssa_33_map`。
     if let Some(code) = face_kind(tt, e.typ) {
-        let what = if code == SsaCode::Map { "map" } else { "chan" };
         return Some((
             code,
-            format!("{what} 类型出现在表达式里（键相等 / 并发语义属宿主面）"),
+            "chan 类型出现在表达式里（并发语义属宿主面）".to_string(),
         ));
     }
     match &e.kind {
@@ -1987,37 +1990,55 @@ impl Fb<'_> {
 
     /// 下标底座的「指针值 + 根」。
     ///
-    /// 三种形态各有各的底座：
-    /// * **数组槽**（`[N]T` 局部变量）：元素住在槽的存储里 ⇒ 底座是 `AddrOf(槽根)`；
+    /// 底座按**类型**分四类，不按语法猜：
     /// * **指向数组的指针**（`p[i]`，`p *[N]T`）：底座**就是** `p` 的值；
-    /// * **slice**：元素在底层数组（堆根）⇒ 底座是 slice 值本身。
+    /// * **数组**（可寻址的槽/全局/字段链）：底座是那个存储的地址；
+    /// * **数组右值**（调用结果 / map 值 / 复合字面量）：底座是**临时槽**的地址；
+    /// * **slice / string**：底座是值本身（`{ptr,len[,cap]}` 头），元素在堆根。
     ///
-    /// 只按**类型**分叉，不按语法猜 —— `a[i]` 里 `a` 是数组还是 slice 决定根，
-    /// 而写 `a[i] = v` 与读 `a[i]` 必须走同一条路，否则读写落在不同根上（静默丢写）。
+    /// 而写 `a[i] = v` 与读 `a[i]` 必须走同一条路 —— 否则读写落在不同根上
+    /// （静默丢写）。
     fn index_base(&mut self, base: &Expr) -> (ValueId, Option<RootId>) {
-        if !self.is_pointer(base.typ) {
-            match &base.kind {
-                ExprKind::Slot(s)
-                    if is_array(self.tt, base.typ) && self.slot_root.contains_key(s) =>
-                {
-                    let r = self.slot_root[s];
-                    return (self.addr_of(r), Some(r));
-                }
-                ExprKind::Global(g) if is_array(self.tt, base.typ) => {
-                    let r = RootId(g.0);
-                    return (self.addr_of(r), Some(r));
-                }
-                _ => {}
-            }
+        // 指针底座（`p[i]`，`p *[N]T`）：底座**就是** `p` 的值。
+        //
+        // 这条必须排在最前面：`p` 是形参 / 调用结果时它自己没有地址，但它
+        // **指向**数组，而 `Instr::Index` 要的就是那个地址。
+        if self.is_pointer(base.typ) {
+            let v = self.expr(base);
+            return (v, self.ptr_hint(v));
         }
+        // 数组底座必须落到**地址**上：`Instr::Index` 的 `base` 是「元素 0 的地址」，
+        // 运行期 `ld_x x10, [base_slot]` 直接把底座槽的第一个字当地址用。
+        //
+        // # 不这么做的后果（`R-9-9`）
+        //
+        // 初版对「不是指针的底座」一律落到 `self.expr(base)`，于是 rvalue 数组
+        // （`m[1]` / `seq8()` / `[8]byte{...}`）把**数组内容**当地址用 ——
+        // `m[1][0]` 段错误，`bigmap.go` 三个文件 rc139。数组槽那两条分支
+        // （`slot_root` / `Global`）当时只覆盖了「有根的具名槽」，覆盖不了右值。
+        if is_array(self.tt, base.typ) {
+            if let Some((a, r)) = self.expr_addr_root(base) {
+                return (a, r);
+            }
+            return self.spill_addr(base);
+        }
+        // slice / string：值本身就是头（`{ptr,len[,cap]}`），元素在底层数组（堆根）。
         let v = self.expr(base);
-        // 指针底座：`p` 指向哪就写哪（有记录才知道）；slice 底座：底层数组在堆根。
-        let root = if self.is_pointer(base.typ) {
-            self.ptr_hint(v)
-        } else {
-            Some(self.heap_root())
-        };
-        (v, root)
+        (v, Some(self.heap_root()))
+    }
+
+    /// 把**不可寻址的右值**（调用结果 / map 值 / 复合字面量）落进一个有根的
+    /// 临时槽，返回那个槽的地址。
+    ///
+    /// `Instr::Field` / `Instr::Index` 的 `base` 都是「指针」—— 它们算的是
+    /// `base + 常量/下标*步长`。所以右值要当底座，就得先有块真存储。
+    fn spill_addr(&mut self, e: &Expr) -> (ValueId, Option<RootId>) {
+        let v = self.expr(e);
+        let r = self.temp_root(e.typ);
+        let a = self.addr_of(r);
+        self.store_root(r, a, v);
+        let a2 = self.addr_of(r);
+        (a2, Some(r))
     }
 
     fn is_pointer(&self, t: TypeId) -> bool {
@@ -2051,13 +2072,7 @@ impl Fb<'_> {
         if let ExprKind::Index { base, .. } = &e.kind
             && map_kv(self.tt, base.typ).is_some()
         {
-            let v = self.expr(e);
-            let vt = e.typ;
-            let r = self.temp_root(vt);
-            let a = self.addr_of(r);
-            self.store_root(r, a, v);
-            let a2 = self.addr_of(r);
-            return Some((a2, Some(r)));
+            return Some(self.spill_addr(e));
         }
         // 指针类型的表达式：它**本身的值**就是所指对象的地址。
         //
@@ -3537,7 +3552,24 @@ impl Fb<'_> {
                 unreachable!("range over chan/func 应由 unsupported() 在建图前拒掉")
             }
         }
-        let xs = self.expr(x);
+        // 数组的底座必须是**地址**（`Instr::Index` 的 `base` 是「元素 0 的地址」，
+        // 运行期直接把底座槽的第一个字当地址用）。
+        //
+        // # 不这么做的后果（`R-9-9`）
+        //
+        // 初版对数组也走 `self.expr(x)`，于是 `for k, v := range a`（`a` 是全局
+        // 数组）把**数组值**当地址 —— `ken/range.go` 段错误。`for k := range a`
+        // 不塌只因为 key-only 根本不发 `Index`。
+        //
+        // **只求值一次**：`range f()` 里 `f` 有副作用，地址与元素底座必须同源
+        // （`R-28-2` 的同款理由）。
+        let (xs, arr_root) = match kind {
+            RangeKind::Array => {
+                let (a, r) = self.array_base_addr(x);
+                (a, Some(r))
+            }
+            _ => (self.expr(x), None),
+        };
         let int_ty = self.int_ty();
 
         // 用户给的下标目标（`for i = range x` 里的 `i`）：**它只是结果存放处**，
@@ -3615,14 +3647,29 @@ impl Fb<'_> {
         self.mem = hs.1.clone();
 
         // cond: idx < len(xs)（`range n` 时上界直接是 n）
-        let up = if matches!(kind, RangeKind::Int) {
-            // `range 4` 的上界是**未定型常量**（`untyped int`），而下标槽是 `int`。
-            // 不对齐的话这里就是一条 `lt int untyped-int`，`V3` 当场拒
-            // （实测 `range3.go` / `turing.go`）。
-            self.coerce_to(key_ty, xs)
-        } else {
-            let n = self.emit_len(xs);
-            self.coerce_to(key_ty, n)
+        let up = match kind {
+            RangeKind::Int => {
+                // `range 4` 的上界是**未定型常量**（`untyped int`），而下标槽是 `int`。
+                // 不对齐的话这里就是一条 `lt int untyped-int`，`V3` 当场拒
+                // （实测 `range3.go` / `turing.go`）。
+                self.coerce_to(key_ty, xs)
+            }
+            RangeKind::Array => {
+                // 数组的 len 是**编译期常量**（Go 规范：数组长度是类型的一部分）。
+                //
+                // 上面已经把底座换成地址（`*[n]T`），而 `len(*[n]T)` 在运行期
+                // 没有实现（`ssa_exec::len_of` 对指针落 `_ => 0`）—— 照旧发
+                // 一条 `len` 会让上界变成 0，循环一次都不进。
+                let n = self
+                    .array_len_const(x.typ)
+                    .expect("RangeKind::Array 的底座一定是数组（含 *[n]T）");
+                let c = self.const_int(i128::from(n), int_ty);
+                self.coerce_to(key_ty, c)
+            }
+            _ => {
+                let n = self.emit_len(xs);
+                self.coerce_to(key_ty, n)
+            }
         };
         let idx_v = self.read_slot(idx_slot);
         let bt = self.bool_ty();
@@ -3676,7 +3723,14 @@ impl Fb<'_> {
                 Some(s) => self.slot_typ(s),
                 None => TypeId::from_index(0),
             };
-            let elem = self.range_elem(xs, x, cur_idx, vt, kind);
+            // 数组的底座是**地址**（上面算好的），slice/string 是值本身。
+            // 根跟着底座走：数组落在它自己的存储根上，slice 落在堆根。
+            let base = xs;
+            let root = match arr_root {
+                Some(r) => r,
+                None => self.heap_root(),
+            };
+            let elem = self.range_elem(base, root, cur_idx, vt);
             self.write_place(p, elem);
         }
         self.stmts(&body.stmts);
@@ -3748,28 +3802,10 @@ impl Fb<'_> {
 
     /// `range` 里取第 `i` 个元素的值。
     ///
-    /// 数组：元素在槽的存储里 ⇒ 从 `AddrOf(root)` 起算地址；
-    /// slice：元素在底层数组（堆根）⇒ 直接以 slice 值为 base。
-    /// 两者都靠 `Index` 出地址、`Load` 取值 —— 与 `a[i]` 的读法完全一致，
-    /// 求值器不必为 `range` 单独写一条路径。
-    fn range_elem(
-        &mut self,
-        xs: ValueId,
-        x: &Expr,
-        i: ValueId,
-        vt: TypeId,
-        kind: RangeKind,
-    ) -> ValueId {
-        // 数组：元素在槽的存储里 ⇒ 从 `AddrOf(root)` 起算；slice：在堆根上。
-        // 注意 `x` 只用来**判断**底座形态，不再求值 —— 求值会重复执行副作用
-        // （`range f()` 只该调一次）。
-        let (base, root) = match (kind, &x.kind) {
-            (RangeKind::Array, ExprKind::Slot(s)) if self.slot_root.contains_key(s) => {
-                let r = self.slot_root[s];
-                (self.addr_of(r), r)
-            }
-            _ => (xs, self.heap_root()),
-        };
+    /// `base` 已经是「元素 0 的地址」（数组）或 slice/string 的头（值本身），
+    /// `root` 是那块存储的根。与 `a[i]` 的读法完全一致（`Index` 出地址、
+    /// `Load` 取值）—— 求值器不必为 `range` 单独写一条路径。
+    fn range_elem(&mut self, base: ValueId, root: RootId, i: ValueId, vt: TypeId) -> ValueId {
         let pt = self.ptr_ty_of(root);
         let addr = self.new_value(pt);
         self.emit(Instr::Index { dst: addr, base, i });
@@ -3783,6 +3819,34 @@ impl Fb<'_> {
             typ: vt,
         });
         dst
+    }
+
+    /// `range` 一个数组时的「元素 0 地址 + 根」。
+    ///
+    /// 与 `index_base` 的数组分支同一套判据：可寻址（槽 / 全局 / 字段链 /
+    /// `*[n]T` 指针）直接取址，右值（调用结果 / map 值）落临时槽。
+    /// 根未知时读落**堆根**（保守，与 `place_addr_root` 的约定一致）。
+    fn array_base_addr(&mut self, x: &Expr) -> (ValueId, RootId) {
+        if let Some((a, r)) = self.expr_addr_root(x) {
+            return (a, r.unwrap_or_else(|| self.heap_root()));
+        }
+        let (a, r) = self.spill_addr(x);
+        (a, r.unwrap_or_else(|| self.heap_root()))
+    }
+
+    /// 数组类型的长度（`[n]T` / `*[n]T` / 具名都剥到 `Type::Array`）。
+    fn array_len_const(&self, t: TypeId) -> Option<u32> {
+        use rgoc_types::typ::Type;
+        let mut cur = t;
+        for _ in 0..64 {
+            match self.tt.type_of(cur) {
+                Type::Pointer(e) => cur = *e,
+                Type::Named(id) => cur = self.tt.named_underlying(*id),
+                Type::Alias(id) => cur = self.tt.alias_rhs(*id),
+                _ => break,
+            }
+        }
+        rgoc_types::layout::array_len_of(self.tt, cur)
     }
 
     /// 建一条 `len(x)`（用内建调用表达，见 `stmt_range` 的说明）。
