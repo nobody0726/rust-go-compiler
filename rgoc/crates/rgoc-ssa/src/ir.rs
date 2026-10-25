@@ -405,11 +405,8 @@ impl Instr {
             | Instr::Store { dst, .. } => vec![*dst],
             Instr::Call { dsts, .. } => dsts.clone(),
             Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
-            Instr::MakeClosure { dst, captures, .. } => {
-                let mut v = vec![*dst];
-                v.extend(captures.iter().copied());
-                v
-            }
+            // 捕获是**操作数**不是定义（它们在 `uses` 里）
+            Instr::MakeClosure { dst, .. } => vec![*dst],
             // `ok` 也是这条指令**定义**的值（`V1` 要求每个值有定义点）
             Instr::TypeAssert { dst, ok, .. } => {
                 let mut out = vec![*dst];

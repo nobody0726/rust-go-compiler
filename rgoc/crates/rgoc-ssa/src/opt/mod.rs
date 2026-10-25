@@ -317,11 +317,8 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
-        Instr::MakeClosure { dst, captures, .. } => {
-            let mut v = vec![*dst];
-            v.extend(captures.iter().copied());
-            v
-        }
+        // 捕获是**操作数**不是定义（它们在 `uses` 里）
+        Instr::MakeClosure { dst, .. } => vec![*dst],
         Instr::TypeAssert { dst, ok, .. } => {
             let mut v = vec![*dst];
             v.extend(ok.iter().copied());
@@ -348,11 +345,8 @@ fn dsts_of_mut(i: &mut Instr) -> Vec<&mut ValueId> {
         | Instr::Store { dst, .. } => vec![dst],
         Instr::Call { dsts, .. } => dsts.iter_mut().collect(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![dst],
-        Instr::MakeClosure { dst, captures, .. } => {
-            let mut v = vec![dst];
-            v.extend(captures.iter_mut());
-            v
-        }
+        // 捕获是**操作数**不是定义（它们在 `uses` 里）
+        Instr::MakeClosure { dst, .. } => vec![dst],
         Instr::TypeAssert { dst, ok, .. } => match ok {
             Some(o) => vec![dst, o],
             None => vec![dst],

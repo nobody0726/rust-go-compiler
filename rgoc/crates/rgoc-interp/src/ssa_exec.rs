@@ -110,6 +110,10 @@ struct SFrame {
     block: BlockId,
     /// 块内**下一条**待执行指令的下标（`== instrs.len()` ⇒ 该走终止符了）。
     idx: usize,
+    /// 本帧的**闭包**（`M9/Task 38`）：`CapturePtr` 从它取捕获。
+    ///
+    /// `None` ⇒ 普通函数（没有 `CapturePtr`）。经 funcval 调用的帧才带。
+    closure: Option<std::rc::Rc<crate::value::Closure>>,
     /// 值表（下标即 `ValueId`；块参数写在这里）。
     ///
     /// `Option` 而不是裸 `Value`：`V1`/`V2` 保证「每个值都有定义点且使用处被它支配」，
@@ -198,7 +202,7 @@ enum Halt {
 impl Exec<'_> {
     /// 无参跑一个函数（`init` / `main`）。
     fn run_func(&mut self, func: usize) -> Result<(), Halt> {
-        self.push_frame(func, &[], Vec::new())?;
+        self.push_frame(func, &[], Vec::new(), None)?;
         self.drive()
     }
 
@@ -214,6 +218,7 @@ impl Exec<'_> {
         func: usize,
         args: &[Value],
         ret_to: Vec<ValueId>,
+        closure: Option<std::rc::Rc<crate::value::Closure>>,
     ) -> Result<(), Halt> {
         if self.frames.len() >= self.max_frames {
             return Err(Halt::StackOverflow);
@@ -230,6 +235,7 @@ impl Exec<'_> {
             func,
             block: entry,
             idx: 0,
+            closure,
             values,
             roots,
             ret_to,
@@ -470,10 +476,47 @@ impl Exec<'_> {
                 );
                 Ok(None)
             }
-            // 捕获闭包由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-FUNC-VALUE`）。
-            Instr::MakeClosure { .. } | Instr::CapturePtr { .. } => Err(Halt::Runtime(
-                "捕获闭包不在 SSA 求值面内（Task 38 未做）".to_string(),
-            )),
+            // 造闭包（`M9/Task 38`）：捕获值都是**指针**（指向被捕获变量的存储），
+            // 与外层**共享**同一块存储 —— 这正是「按引用捕获」（`R-9-15`）。
+            Instr::MakeClosure {
+                dst,
+                func,
+                captures,
+            } => {
+                let mut caps = Vec::with_capacity(captures.len());
+                for c in captures {
+                    let v = self.read(*c)?;
+                    let Value::Ptr(cell) = v else {
+                        return Err(Halt::Runtime(
+                            "closure 的捕获不是指针（构建 bug）".to_string(),
+                        ));
+                    };
+                    caps.push(cell);
+                }
+                self.write(
+                    *dst,
+                    Value::Func(std::rc::Rc::new(crate::value::Closure {
+                        func: *func,
+                        captured: caps,
+                        recv: None,
+                    })),
+                );
+                Ok(None)
+            }
+            Instr::CapturePtr { dst, index } => {
+                let cl = self
+                    .frames
+                    .last()
+                    .and_then(|f| f.closure.clone())
+                    .ok_or_else(|| {
+                        Halt::Runtime("capture 出现在没有闭包的帧里（构建 bug）".to_string())
+                    })?;
+                let cell = cl.captured.get(*index as usize).cloned().ok_or_else(|| {
+                    Halt::Runtime(format!("捕获下标 {index} 越界（构建 bug）"))
+                })?;
+                self.write(*dst, Value::Ptr(cell));
+                Ok(None)
+            }
             Instr::AddrOf { dst, root } => {
                 let c = self.root_cell(*root)?;
                 self.write(*dst, Value::Ptr(c));
@@ -710,7 +753,7 @@ impl Exec<'_> {
             CalleeRef::Func(fid) => {
                 let idx = index_of(self.m, fid)
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的函数 func#{}", fid.0)))?;
-                self.push_frame(idx, &avals, dsts)?;
+                self.push_frame(idx, &avals, dsts, None)?;
                 Ok(None)
             }
             CalleeRef::Method { recv, func } => {
@@ -722,7 +765,7 @@ impl Exec<'_> {
                 let mut all = Vec::with_capacity(avals.len() + 1);
                 all.push(r);
                 all.extend(avals);
-                self.push_frame(idx, &all, dsts)?;
+                self.push_frame(idx, &all, dsts, None)?;
                 Ok(None)
             }
             // 接口方法派发（`M9/Task 32`）：槽号 → 方法名 → 沿嵌入链找 FuncId。
@@ -800,7 +843,7 @@ impl Exec<'_> {
                 let mut all = Vec::with_capacity(avals.len() + 1);
                 all.push(rv);
                 all.extend(avals);
-                self.push_frame(idx, &all, dsts)?;
+                self.push_frame(idx, &all, dsts, None)?;
                 Ok(None)
             }
             // 间接调用（`M9/Task 37`）：函数值里带 `FuncId` 与（可能的）捕获。
@@ -811,14 +854,9 @@ impl Exec<'_> {
                         "间接调用：被调方不是函数值（构建 bug）".to_string(),
                     ));
                 };
-                if !cl.captured.is_empty() {
-                    return Err(Halt::Runtime(
-                        "捕获闭包不在 SSA 求值面内（Task 38 未做）".to_string(),
-                    ));
-                }
                 let idx = index_of(self.m, cl.func)
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的函数 func#{}", cl.func.0)))?;
-                self.push_frame(idx, &avals, dsts)?;
+                self.push_frame(idx, &avals, dsts, Some(cl))?;
                 Ok(None)
             }
         }

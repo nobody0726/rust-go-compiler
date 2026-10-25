@@ -88,6 +88,7 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // 顺序是硬的：方法表先（desc 的 `methods` 字段要引用它的符号），
     // itab 后（它引用 desc 与方法表两侧的符号）。GNU as 允许前向引用，
     // 但「符号名一处来源」这条纪律要求先定义后引用。
+    EMITTED_THUNKS.with(|s| s.borrow_mut().clear());
     emit_funcvals(&mut asm, m);
     let mt = emit_method_tables(&mut asm, m, tt, &siblings);
     emit_itabs(&mut asm, m, tt, &siblings);
@@ -137,6 +138,12 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
 #[must_use]
 pub fn desc_symbol(hash: u32) -> String {
     format!("__desc_{hash:08x}")
+}
+
+thread_local! {
+    /// 已发射的 `__imeth_*` 桩（去重用；每次编译开头清空）。
+    static EMITTED_THUNKS: std::cell::RefCell<std::collections::BTreeSet<String>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// 静态 funcval 的符号（**没有捕获**的函数值，`M9/Task 37`）。
@@ -363,6 +370,12 @@ fn method_entry_symbol(
         return isel::fn_sym(func);
     }
     let sym = imeth_symbol(concrete_hash, slot);
+    // 同一个 `(具体类型, 槽)` 可能出现在**多张** itab 里（`ddd.go`：同一类型
+    // 同时喂给两个接口）⇒ 桩只能发一次，否则 GNU as 报 `symbol already defined`。
+    let fresh = EMITTED_THUNKS.with(|s| s.borrow_mut().insert(sym.clone()));
+    if !fresh {
+        return sym;
+    }
     asm.label(&sym);
     for st in &steps {
         match st {

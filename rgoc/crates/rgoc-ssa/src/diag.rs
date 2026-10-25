@@ -19,7 +19,7 @@
 
 use rgoc_hir::FuncId;
 
-/// SSA 构建期的拒绝码（**7 条**）。
+/// SSA 构建期的拒绝码（**6 条**）。
 ///
 /// # 下线的码（不是「忘了写」）
 ///
@@ -27,6 +27,7 @@ use rgoc_hir::FuncId;
 /// |---|---|---|
 /// | `SSA-UNSUPPORTED-MAP` | M9/Phase 2（`R-9-8`） | `rt_map_*` + `CalleeRef::Runtime` 实现了 |
 /// | `SSA-UNSUPPORTED-IFACE-DYN` | M9/Phase 3（`R-9-14`） | 方法表 + 静态 ITab + `Instr::TypeAssert` 实现了派发与 type switch |
+/// | `SSA-UNSUPPORTED-CLOSURE` | M9/Phase 4b（`R-9-16`） | 闭包实现了（捕获按引用，funcval 存变量地址） |
 /// | `SSA-UNSUPPORTED-RANGE-FUNC` | M8/Task 45 | HIR 把 range-over-func 下降成合成函数，拒绝改走 `FUNC-VALUE` |
 ///
 /// 纪律是「**不留永远不产出的码**」：一条没人能触发的拒绝码，读的人会以为
@@ -37,8 +38,6 @@ use rgoc_hir::FuncId;
 pub enum SsaCode {
     /// `chan` / `go` / `select`。
     Chan,
-    /// 闭包（捕获变量写外层根）。
-    Closure,
     /// `defer` / `recover`。
     Defer,
     /// 函数值（`func(){}` / 方法值 / 间接调用）—— `R-31-1`。
@@ -53,9 +52,8 @@ pub enum SsaCode {
 
 impl SsaCode {
     /// 全部码（顺序 == 声明顺序 == 字典序）。
-    pub const ALL: [SsaCode; 7] = [
+    pub const ALL: [SsaCode; 6] = [
         SsaCode::Chan,
-        SsaCode::Closure,
         SsaCode::Defer,
         SsaCode::FuncValue,
         SsaCode::Generic,
@@ -68,7 +66,6 @@ impl SsaCode {
     pub const fn code(self) -> &'static str {
         match self {
             SsaCode::Chan => "SSA-UNSUPPORTED-CHAN",
-            SsaCode::Closure => "SSA-UNSUPPORTED-CLOSURE",
             SsaCode::Defer => "SSA-UNSUPPORTED-DEFER",
             SsaCode::FuncValue => "SSA-UNSUPPORTED-FUNC-VALUE",
             SsaCode::Generic => "SSA-UNSUPPORTED-GENERIC",
@@ -111,8 +108,8 @@ mod tests {
     fn 码总数与字典序自洽() {
         assert_eq!(
             SsaCode::ALL.len(),
-            7,
-            "§5 的 7 条 + R-31-1 补的 2 条 − 下线的三条（RANGE-FUNC / MAP / IFACE-DYN）"
+            6,
+            "§5 的 7 条 + R-31-1 补的 2 条 − 下线的四条（RANGE-FUNC / MAP / IFACE-DYN / CLOSURE）"
         );
         let mut sorted = SsaCode::ALL;
         sorted.sort_unstable();
@@ -132,7 +129,7 @@ mod tests {
     fn 拒绝渲染成一行且带函数号() {
         let r = Reject {
             func: FuncId(3),
-            code: SsaCode::Closure,
+            code: SsaCode::Defer,
             detail: "捕获 2 个变量".to_string(),
         };
         let line = r.render();

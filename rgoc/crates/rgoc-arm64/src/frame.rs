@@ -80,6 +80,11 @@ pub struct Frame {
     pub outgoing: u32,
     /// 临时区有几个 8 字节格。
     pub tmp_slots: u32,
+    /// **隐式第 0 实参（ctx）**的帧格（`M9/Task 40`）。
+    ///
+    /// 只有带捕获的函数才有：`CapturePtr` 会在函数体任意位置读 ctx（funcval），
+    /// 而序言之后 `x0` 会被形参绑定与堆槽分配打掉，所以必须落进帧里保活。
+    pub ctx_off: Option<i32>,
     /// `sub sp, sp, #(frame_size - 16)` 里的那个数（**16 的倍数**）。
     pub frame_size: u32,
 }
@@ -273,6 +278,15 @@ pub fn layout_with(
         }
     }
 
+    // ③b **ctx 格**（`M9/Task 40`）：带捕获的函数把隐式第 0 实参（funcval）
+    // 落在这里。放在槽区最前（紧跟 saved 寄存器之后），它不参与任何别名。
+    let ctx_off = if f.captured.is_empty() {
+        None
+    } else {
+        cur = cur.checked_add(8).expect("帧大小溢出 u32");
+        Some(neg(SAVED + cur))
+    };
+
     // ③ 并行拷贝临时区：格数 = 所有边里最多的实参个数。
     let tmp_slots = max_edge_args(f);
     let tmp_base = if tmp_slots == 0 {
@@ -314,6 +328,7 @@ pub fn layout_with(
     Ok(Frame {
         values,
         addr_slots,
+        ctx_off: ctx_off,
         heap,
         outgoing,
         tmp_base,
@@ -486,6 +501,13 @@ fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
                 } => {
                     for a in args {
                         mark(a, &mut out);
+                    }
+                }
+                // 闭包捕获的变量活得比本帧长（funcval 在堆上，`M9/Task 38`）⇒
+                // 捕获指针指向的存储必须逃逸。
+                Instr::MakeClosure { captures, .. } => {
+                    for c in captures {
+                        mark(c, &mut out);
                     }
                 }
                 // 写进全局 / 堆 ⇒ 地址活得比这一帧长。

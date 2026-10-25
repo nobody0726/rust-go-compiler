@@ -70,31 +70,24 @@ fn assert_rejected(name: &str, src: &str, code: SsaCode) {
 
 #[test]
 fn t_ssa_33_闭包() {
-    // 闭包会**提升成独立函数**：子函数因捕获被拒（CLOSURE），
-    // 父函数因「函数字面量」被拒（FUNC-VALUE）—— 两条都在理，都要求带码。
+    // M9/Phase 4b 之前：闭包（`Func.captured` 非空）必须被拒
+    // （`SSA-UNSUPPORTED-CLOSURE`）。现在捕获按**引用**实现（funcval 存指向
+    // 变量存储的指针，`R-9-15`）⇒ 判据反转成「能建图 + 退出码 0」，
+    // 那个码**整条下线**（`R-9-16`）。
     let p = fixture(
         "closure",
-        "package main\n\nfunc main() {\n\tx := 1\n\tf := func() int { return x }\n\tprintln(f())\n}\n",
+        "package main\n\nfunc main() {\n\tx := 1\n\tf := func() int { x++; return x }\n\tprintln(f(), x)\n}\n",
     );
     let out = run(&p);
-    assert_eq!(out.exit, 1, "闭包必须被拒：{:?}", out.stderr);
-    assert!(
-        out.stderr.contains("SSA-UNSUPPORTED-CLOSURE"),
-        "被提升的闭包函数要报 CLOSURE（捕获跨帧写）：{:?}",
+    assert_eq!(
+        out.exit, 0,
+        "闭包已在 M9/Phase 4b 支持，该退出码 0；stderr = {:?}",
         out.stderr
     );
     assert!(
-        out.stderr.contains("SSA-UNSUPPORTED-FUNC-VALUE"),
-        "父函数里的函数字面量要报 FUNC-VALUE：{:?}",
+        !out.stderr.contains("SSA-UNSUPPORTED-CLOSURE"),
+        "`SSA-UNSUPPORTED-CLOSURE` 已在 R-9-16 下线：{:?}",
         out.stderr
-    );
-    // 结构断言：至少一个 Reject 带 Closure
-    let (program, mut tt) = front_end(&p);
-    let built = rgoc_ssa::build::build(&program, &mut tt);
-    assert!(
-        built.rejected.iter().any(|r| r.code == SsaCode::Closure),
-        "rejected 里必须有 Closure：{:?}",
-        built.rejected
     );
 }
 

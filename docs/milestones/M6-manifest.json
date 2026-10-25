@@ -33,21 +33,21 @@
       "note": "沿用 M5 的入选清单（已冻结）"
     },
     "buildable": {
-      "count": 60,
+      "count": 63,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；60 个全部与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3（Phase 4a）。"
+      "note": "能建图且 verifier 通过的个数 N；**63 个里 62 个与官方 .out 逐字节一致**，`ddd.go` 语义还没对（`G-M9-05`）⇒ `ssa_corpus_run` 现在有一条真阳性红。"
     },
     "rejected": {
       "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 9,
+      "count": 6,
       "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；三栏（文件/码/原因）；FUNC-VALUE 5 / DEFER 4；N+M=69 两向断言。M6 收口时是 23（IFACE-DYN 9 / FUNC-VALUE 7 / MAP 5 / DEFER 2）。"
+      "note": "拒绝 M；FUNC-VALUE 1（方法值）/ DEFER 5；N+M=69。"
     },
     "re_frozen": {
-      "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）",
+      "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）+ 4b（闭包）",
       "when": "2026-10-25",
-      "why": "map / iface / type switch / 无捕获函数值依次从「宿主面」变成「已实现」，拒绝面四次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9。",
-      "delta": "N 46 → 60（+14）/ M 23 → 9（−14）；N + M 仍等于 69"
+      "why": "拒绝面五次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6。",
+      "delta": "N 46 → 63（+17）/ M 23 → 6（−17）；N + M 仍等于 69"
     }
   },
   "gate": {
@@ -784,6 +784,12 @@
       "retired_by": "M9/Phase 3b",
       "revision": "R-9-14",
       "why": "方法表 + 静态 ITab（Task 28）+ `Instr::TypeAssert`（Task 33）+ `switch x.(type)` 的断言链下降（Task 34）都实现了 ⇒ 这个码再没有生产者。纪律是「不留永远不产出的码」：`SsaCode::ALL` 从 8 条收到 7 条，`ssa_reject::t_ssa_33_接口动态派发` 反转成「能建图 + 该码不出现」。"
+    },
+    {
+      "code": "SSA-UNSUPPORTED-CLOSURE",
+      "retired_by": "M9/Phase 4b",
+      "revision": "R-9-16",
+      "why": "闭包实现了（捕获按引用：funcval 存**指向变量存储的指针**，`R-9-15`）⇒ `unsupported()` 里那条 `Func.captured` 非空的拒绝再没有生产者。`SsaCode::ALL` 7 → 6。"
     }
   ]
 }

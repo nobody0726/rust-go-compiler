@@ -53,17 +53,6 @@ pub struct BuildOutcome {
 /// 一起长大，所以这里要 `&mut`。
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
-    // 「哪些函数有捕获」要先让 `unsup_expr` 看得见：它只拿得到 `TypeTable`。
-    // 这是**预扫描**，与建图无关（只读 HIR）。
-    CAPTURED_FUNCS.with(|c| {
-        let mut set = c.borrow_mut();
-        set.clear();
-        for (i, f) in program.funcs.iter().enumerate() {
-            if !f.captured.is_empty() {
-                set.insert(FuncId(i as u32));
-            }
-        }
-    });
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
     let effs = crate::effect::summarize(program, tt);
     let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
@@ -330,15 +319,9 @@ fn build_init(
 /// 被拒的函数**整个**不进 `Module::funcs`，列十条也没人多看一眼。
 /// 挑一条具体的（`defer` / `map[K]V` 的读）才能让人立刻定位。
 fn unsupported(tt: &TypeTable, f: &Func) -> Option<(SsaCode, String)> {
-    if !f.captured.is_empty() {
-        return Some((
-            SsaCode::Closure,
-            format!(
-                "被提升的闭包捕获了 {} 个外层变量（帧槽与外层 Cell 别名，值唯一定义不成立）",
-                f.captured.len()
-            ),
-        ));
-    }
+    // 闭包（`Func.captured` 非空）在 M9/Task 38 起支持了：捕获走
+    // `CapturePtr` + 堆上 funcval（按引用，`R-9-15`），`SSA-UNSUPPORTED-CLOSURE`
+    // 因此下线（`SsaCode::ALL` 里已删）。
     unsup_block(tt, &f.body)
 }
 
@@ -599,19 +582,10 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             | CompositeItem::Index(_, x)
             | CompositeItem::Key(_, x) => unsup_expr(tt, x),
         }),
-        // 函数值支持了（`M9/Task 37`）：没有捕获的函数是一个符号地址
-        // （`Instr::FuncAddr`）。**有捕获的闭包还不行** —— funcval 的分配与
-        // `CapturePtr` 是 Task 38，那之前拒掉（不留「建出图但后端不认」的中间态）。
-        ExprKind::FuncLit(fid) => {
-            if tt_has_captures(tt, *fid) {
-                Some((
-                    SsaCode::FuncValue,
-                    "闭包（捕获外层变量的函数值，Task 38 未做）".to_string(),
-                ))
-            } else {
-                None
-            }
-        }
+        // 函数值支持了（`M9/Task 37` 无捕获 / `Task 38` 有捕获）：
+        // `Instr::FuncAddr` / `Instr::MakeClosure`。函数字面量的**体**是独立
+        // 函数，它自己会被扫（`unsupported()` 逐函数跑）。
+        ExprKind::FuncLit(_) => None,
         ExprKind::Bound { .. } => Some((SsaCode::FuncValue, "方法值（`x.M` 不调用）".to_string())),
         // 类型断言支持了（M9/Task 33）：`Instr::TypeAssert`。
         ExprKind::TypeAssert { x, .. } => unsup_expr(tt, x),
@@ -656,9 +630,31 @@ fn build_func(
 
     let unsafe_slots = unsafe_slots_of(f);
     // 需要根的槽 = 取址 ∪ 部分写 ∪ **读前可能未赋值**
-    let mut rooted: BTreeSet<SlotId> = scan_rooted(tt, f);
+    let (mut rooted, lits) = scan_rooted(tt, f);
     rooted.extend(unsafe_slots.iter().copied());
     rooted.remove(&BLANK_SLOT);
+    // **被捕获的槽**要成根（`M9/Task 38`）：`MakeClosure` 会取它们的地址。
+    // 子函数的 `captured[i].outer_slot` 指向**本帧**的槽 —— 只有体里出现了
+    // 那个子函数的 `FuncLit`，捕获才发生在本帧（闭包链的中间层各自在自己
+    // 的 build 里处理自己那份）。
+    if std::env::var_os("RGOC_DBG").is_some() {
+        eprintln!(
+            "[dbg] {} lits={:?} caps={:?}",
+            f.name,
+            lits,
+            lits.iter()
+                .map(|fid| program.funcs[fid.index()].captured.len())
+                .collect::<Vec<_>>()
+        );
+    }
+    for fid in &lits {
+        for c in &program.funcs[fid.index()].captured {
+            if std::env::var_os("RGOC_DBG").is_some() {
+                eprintln!("[dbg] {} lit func#{} captures outer s{}", f.name, fid.0, c.outer_slot.0);
+            }
+            rooted.insert(c.outer_slot);
+        }
+    }
 
     // 含 `goto` ⇒ **一律不提升**，所有槽进内存。
     //
@@ -690,6 +686,16 @@ fn build_func(
 
     let ng = program.globals.len();
     // 根表顺序固定：先全局（按 GlobalId），再槽（按 SlotId 升序）—— dump 的 r<k> 靠它稳定
+    // **捕获槽**（`M9/Task 38`）：存储在外层，本帧既不给它根、也不提升它 ——
+    // 读写一律走 `CapturePtr` 拿到的地址。混进这两张表都会错：
+    // 进 `rooted` ⇒ 帧里白分配一块没人用的存储（`slot_types` 也跟着多一条）；
+    // 进 `promoted` ⇒ `write_slot` 把值写进 `self.val`，外层永远看不到这次写。
+    if std::env::var_os("RGOC_DBG").is_some() && f.name == "main" {
+        eprintln!("[dbg] main rooted={:?} lits={:?}", rooted, lits);
+    }
+    let captured: BTreeSet<SlotId> = f.captured.iter().map(|c| c.slot).collect();
+    rooted.retain(|s| !captured.contains(s));
+
     let mut roots: Vec<Root> = (0..ng).map(|i| Root::Global(GlobalId(i as u32))).collect();
     let mut slot_root: BTreeMap<SlotId, RootId> = BTreeMap::new();
     for s in &rooted {
@@ -705,7 +711,7 @@ fn build_func(
     } else {
         (0..f.slot_types.len())
             .map(|i| SlotId(i as u32))
-            .filter(|s| !rooted.contains(s) && !unsafe_slots.contains(s))
+            .filter(|s| !rooted.contains(s) && !unsafe_slots.contains(s) && !captured.contains(s))
             .collect()
     };
 
@@ -722,6 +728,7 @@ fn build_func(
         },
     );
     fb.entry_params();
+    fb.setup_captures();
 
     let body = &f.body;
     if !body.stmts.is_empty() {
@@ -788,6 +795,11 @@ struct Scanned {
     /// SSA 没有「改一个字段」的指令（只有整值 `Composite`），把 `s` 提升成值
     /// 就再也写不进 `s.f` 了。M6 的口径是：部分写 ⇒ 整个槽走内存。
     partial: BTreeSet<SlotId>,
+    /// 本函数体里出现的**函数字面量目标**（`M9/Task 38`）。
+    ///
+    /// `MakeClosure` 要取「子函数捕获的变量」的地址 ⇒ 那些槽必须成根。
+    /// 顺手在扫描时收集，免得再走一遍表达式。
+    lits: Vec<FuncId>,
     /// 槽 → 静态类型（只用来判「字段底座是不是指针」，`R-35-2`）。
     ///
     /// 放进 `Scanned` 而不是给每个 scan 函数加参数：这几个函数是纯递归的，
@@ -826,15 +838,15 @@ pub fn scan_addressed(tt: &TypeTable, f: &Func) -> BTreeSet<SlotId> {
     sc.addressed
 }
 
-/// 收集**需要内存根**的槽（取址 ∪ 部分写）。
+/// 收集**需要内存根**的槽（取址 ∪ 部分写），顺带返回体里的函数字面量目标。
 #[must_use]
-pub fn scan_rooted(tt: &TypeTable, f: &Func) -> BTreeSet<SlotId> {
+pub fn scan_rooted(tt: &TypeTable, f: &Func) -> (BTreeSet<SlotId>, Vec<FuncId>) {
     let mut sc = Scanned {
         slots: f.slot_types.clone(),
         ..Scanned::default()
     };
     scan_block(tt, &f.body, &mut sc);
-    sc.rooted()
+    (sc.rooted(), sc.lits)
 }
 
 /// 按槽号升序建根表（`Root::Slot`），并给出 `slot_root` 映射（`V9` 要求两向互逆）。
@@ -845,7 +857,8 @@ pub fn scan_rooted(tt: &TypeTable, f: &Func) -> BTreeSet<SlotId> {
 pub fn roots_of(tt: &TypeTable, f: &Func) -> (Vec<Root>, BTreeMap<SlotId, RootId>) {
     let mut roots = Vec::new();
     let mut slot_root = BTreeMap::new();
-    for slot in scan_rooted(tt, f) {
+    let (rooted, _) = scan_rooted(tt, f);
+    for slot in rooted {
         let id = RootId(roots.len() as u32);
         roots.push(Root::Slot(slot));
         slot_root.insert(slot, id);
@@ -983,6 +996,8 @@ fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
             unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
         }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
+        // 函数字面量：记下目标（`MakeClosure` 要取它捕获的槽的地址）
+        ExprKind::FuncLit(fid) => sc.lits.push(*fid),
         ExprKind::Field { base, .. } => scan_expr(tt, base, sc),
         ExprKind::Index { base, index, .. } => {
             scan_expr(tt, base, sc);
@@ -1006,7 +1021,12 @@ fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
             scan_expr(tt, x, sc);
             scan_expr(tt, y, sc);
         }
-        ExprKind::Call { args, .. } => {
+        ExprKind::Call { callee, args, .. } => {
+            // 被调方也可能是表达式（`func(){}()` 的 FuncLit）—— 它的捕获目标
+            // 要成根，所以必须扫（`M9/Task 38`）。
+            if let Callee::Value(v) = callee {
+                scan_expr(tt, v, sc);
+            }
             for a in args {
                 scan_expr(tt, a, sc);
             }
@@ -1024,12 +1044,7 @@ fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
                 }
             }
         }
-        ExprKind::FuncLit(_) => {
-            // 函数字面量已提升为独立 `Func`，它的体**不属于**本函数 ——
-            // 闭包里的 `&x` 会让 `x` 逃逸到闭包帧（`Root::Slot` 的边界），
-            // 但 M6 把闭包整体拒掉（`SSA-UNSUPPORTED-CLOSURE`，Task 31），
-            // 所以这里不扫。
-        }
+
         ExprKind::Bound { recv, .. } => scan_expr(tt, recv, sc),
         ExprKind::TypeAssert { x, .. } => scan_expr(tt, x, sc),
         ExprKind::Make { kind, args } => {
@@ -1117,20 +1132,6 @@ fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
         tt.type_of(rgoc_types::underlying(tt, t)),
         rgoc_types::typ::Type::Struct(_) | rgoc_types::typ::Type::Array { .. }
     )
-}
-
-/// 这个 HIR 函数有捕获吗（`unsup_expr` 只能拿到 `TypeTable`，拿不到 `Program`）。
-///
-/// 用一张**全局登记表**把「哪些 FuncId 有捕获」传进来 —— 见 [`build`] 开头的
-/// `CAPTURED_FUNCS`。这是本 crate 唯一的线程局部状态，只写一次、只读一次。
-fn tt_has_captures(_tt: &TypeTable, fid: FuncId) -> bool {
-    CAPTURED_FUNCS.with(|c| c.borrow().contains(&fid))
-}
-
-thread_local! {
-    /// `FuncId → 有捕获`（`build()` 填，`unsup_expr` 读）。
-    static CAPTURED_FUNCS: std::cell::RefCell<std::collections::BTreeSet<FuncId>> =
-        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
 /// 是不是接口类型（剥具名 / 别名）。
@@ -1601,7 +1602,14 @@ impl Def<'_> {
                 self.expr(x);
                 self.expr(y);
             }
-            ExprKind::Call { args, .. } => {
+            ExprKind::Call { callee, args, .. } => {
+                // **被调方也是表达式**：`f()` 里 `f` 是一次读。漏了它 ⇒ `f`
+                // 被当成「确定赋值」提升成纯值，而它在合流点会被丢掉 ——
+                // 实测 `closure2.go` 的 `g()`（`g` 只在循环里有条件赋值）
+                // 在读它的块里 panic「既不提升也没有根」。
+                if let Callee::Value(v) = callee {
+                    self.expr(v);
+                }
                 for a in args {
                     self.expr(a);
                 }
@@ -1732,6 +1740,12 @@ struct Fb<'a> {
     promoted: BTreeSet<SlotId>,
     /// 每个根的地址类型缓存（`*T`；避免同一根建出多个相同的指针类型槽）
     ptr_ty: BTreeMap<RootId, TypeId>,
+    /// **捕获槽 → 它的地址值**（`M9/Task 38`）。
+    ///
+    /// 被捕获的槽，存储**不在本帧**（在外层，或者更外层的堆上），所以它既不能
+    /// 提升成值，也不能有 `Root::Slot`。读写一律走这个指针（`root` 记 `Heap`，
+    /// 求值器按真实地址访存，见 `ssa_exec` 的内存模型）。
+    slot_ptr: BTreeMap<SlotId, ValueId>,
     /// 指针值 → 它指向的根（`Task 30`）。
     ///
     /// # 这不是别名分析，是**构造性**事实
@@ -1798,6 +1812,7 @@ impl Fb<'_> {
             mem: BTreeMap::new(),
             roots: init.roots,
             slot_root: init.slot_root,
+            slot_ptr: BTreeMap::new(),
             promoted: init.promoted,
             ptr_ty: BTreeMap::new(),
             ptr_root: BTreeMap::new(),
@@ -1967,10 +1982,30 @@ impl Fb<'_> {
         if let Some(&v) = self.val.get(&s) {
             return v;
         }
+        // 捕获槽：存储在外层（`M9/Task 38`）⇒ 走 `CapturePtr` 拿到的地址。
+        if let Some(&p) = self.slot_ptr.get(&s) {
+            let t = self.slot_typ(s);
+            let root = self.heap_root();
+            let mem = self.mem_of(root);
+            let dst = self.new_value(t);
+            self.emit(Instr::Load {
+                dst,
+                mem,
+                root,
+                addr: p,
+                typ: t,
+            });
+            return dst;
+        }
         let root = *self.slot_root.get(&s).unwrap_or_else(|| {
             panic!(
-                "槽 s{} 既不提升也没有根（不该发生：promoted ∪ rooted == 全部槽）",
-                s.0
+                "槽 s{} 既不提升也没有根（{} captured={:?} cur={:?} val={:?} typ={:?}）（不该发生）",
+                s.0,
+                self.f.name,
+                self.f.captured,
+                self.cur,
+                self.val.keys().collect::<Vec<_>>(),
+                self.f.slot_types.get(s.index()),
             )
         });
         let t = self.slot_typ(s);
@@ -2088,6 +2123,12 @@ impl Fb<'_> {
             self.val.insert(s, v);
             return;
         }
+        // 捕获槽：写的是**外层**的存储（`M9/Task 38`）。
+        if let Some(&p) = self.slot_ptr.get(&s) {
+            let root = self.heap_root();
+            self.store_root(root, p, v);
+            return;
+        }
         let Some(&root) = self.slot_root.get(&s) else {
             // **死写**：这个槽既不提升也没有根 ⇒ 全函数没人能观察它
             // （有读 ⇒ 它在 `definite`（提升）或 `unsafe`（成根）里）。丢掉是安全的。
@@ -2142,6 +2183,10 @@ impl Fb<'_> {
     fn place_addr_root(&mut self, p: &Place) -> (ValueId, Option<RootId>) {
         match p {
             Place::Slot(s) => {
+                // 捕获槽：它的地址就是 `CapturePtr` 拿到的那个指针。
+                if let Some(&p) = self.slot_ptr.get(s) {
+                    return (p, Some(self.heap_root()));
+                }
                 let root = *self
                     .slot_root
                     .get(s)
@@ -2292,6 +2337,10 @@ impl Fb<'_> {
         }
         match &e.kind {
             ExprKind::Slot(s) => {
+                // 捕获槽：地址就是 `CapturePtr` 拿到的指针（`M9/Task 38`）。
+                if let Some(&p) = self.slot_ptr.get(s) {
+                    return Some((p, Some(self.heap_root())));
+                }
                 if let Some(&root) = self.slot_root.get(s) {
                     return Some((self.addr_of(root), Some(root)));
                 }
@@ -2354,6 +2403,11 @@ impl Fb<'_> {
                 let addr = self.expr(x);
                 Some((addr, self.ptr_hint(addr)))
             }
+            // 不可寻址的**聚合值**：`A(a).f()`（方法提升）的 `A(a)`、复合字面量、
+            // 调用结果。Go 对「非可寻址接收者」本来就是做**副本**（`A(a).f()` 改的
+            // 是副本，`method.go` 的 `promotion` 就是钉这件事），所以落一个临时槽
+            // 再取地址 —— 与 `R-9-7`/`R-9-9` 的 `spill_addr` 同一条路。
+            _ if is_aggregate(self.tt, e.typ) => Some(self.spill_addr(e)),
             _ => None,
         }
     }
@@ -2647,7 +2701,13 @@ impl Fb<'_> {
             Callee::Builtin(k) => self.emit_builtin(e, *k, args, dots),
             Callee::Value(v) => {
                 let fv = self.expr(v);
-                let avs = self.eval_args(args, spread);
+                let mut avs = self.eval_args(args, spread);
+                // 实参按**函数值的静态签名**对齐（`untyped nil` / 无类型常量要物化）。
+                if let Some(ps) = self.func_param_types(v.typ) {
+                    for (a, want) in avs.iter_mut().zip(ps) {
+                        *a = self.coerce_to(want, *a);
+                    }
+                }
                 // 间接调用的签名**静态可读**：被调方是个函数值，它的静态类型
                 // 就是签名（`func(int, byte) (byte, int)`）。不读它就只能猜
                 // 「一个结果」—— 实测 `method5.go` 的 `b, x := f(1000, 99)`
@@ -2778,6 +2838,35 @@ impl Fb<'_> {
     ///
     /// 间接调用要用它定 `Call.dsts` 的个数与类型：被调方的值是运行期的，
     /// 但它的**静态类型**（签名）就在眼前，没有理由去猜。
+    /// 函数值类型的**形参类型表**（`Callee::Value` 的实参对齐用）。
+    ///
+    /// 间接调用没有静态被调方，但 funcval 的**静态类型**就是签名 —— 拿它把
+    /// 实参（尤其是 `untyped nil`）对齐成具体类型。不对齐的话 `f(nil)` 会留一个
+    /// `untyped nil` 类型的值，而它**没有运行期布局**（帧建不起来，
+    /// 实测 `ddd.go`：`v231 的类型 t31 没有运行期布局`）。
+    fn func_param_types(&self, t: TypeId) -> Option<Vec<TypeId>> {
+        if t.index() >= self.tt.len() {
+            return None;
+        }
+        let rgoc_types::typ::Type::Signature(sid) =
+            self.tt.type_of(rgoc_types::underlying(self.tt, t))
+        else {
+            return None;
+        };
+        let params = self.tt.signature_def(*sid).params;
+        match self.tt.type_of(params) {
+            rgoc_types::typ::Type::Tuple(tid) => Some(
+                self.tt
+                    .tuple_def(*tid)
+                    .vars
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .collect(),
+            ),
+            _ => Some(vec![params]),
+        }
+    }
+
     fn func_result_types(&self, t: TypeId) -> Option<Vec<TypeId>> {
         if t.index() >= self.tt.len() {
             return None;
@@ -3006,6 +3095,13 @@ impl Fb<'_> {
                 dst
             }
             ExprKind::Convert { to, x } => {
+                // `nil` 转成具体类型：**直接建目标类型的零值**，不要先建一个
+                // `untyped nil` 的值再转 —— `untyped nil` 没有运行期布局，
+                // 它会留在帧里让布局失败（实测 `ddd.go`：
+                // `v234 = const 0 : t31`（t31 = untyped nil））。
+                if self.is_untyped_nil_expr(x) {
+                    return self.zero_of_ty(*to);
+                }
                 let xv = self.expr(x);
                 let dst = self.new_value(*to);
                 self.emit(Instr::Convert {
@@ -3039,8 +3135,11 @@ impl Fb<'_> {
             ExprKind::Field { base, index } => {
                 let Some((addr, hint)) = self.expr_addr_root(base) else {
                     todo!(
-                        "M6/Task 30：字段底座不可取址（`{}` 不是地址形态）",
-                        expr_kind_name(&base.kind)
+                        "M6/Task 30：字段底座不可取址（`{}` base.kind=`{}` base.typ={:?} fn={}）",
+                        expr_kind_name(&base.kind),
+                        expr_kind_name(&base.kind),
+                        base.typ,
+                        self.f.name
                     );
                 };
                 let (root, mem) = match hint {
@@ -3090,22 +3189,28 @@ impl Fb<'_> {
             // funcval 把捕获塞进去（`MakeClosure`，Task 38）。
             ExprKind::FuncLit(fid) => {
                 let t = e.typ;
-                let dst = self.new_value(t);
+                // ⚠️ `dst` 必须在**操作数之后**分配：`ValueId` 要与指令顺序一致
+                // （dump 的编号、以及依赖这个顺序的 pass 都按这个假设走）。
+                // 先分配 dst 再算捕获地址，会得到 `v5 = addr-of` 排在
+                // `v4 = closure` 后面的图（实测 opt 面直接报 V1 双重定义）。
                 let caps = &self.program.funcs[fid.index()].captured;
                 if caps.is_empty() {
+                    let dst = self.new_value(t);
                     self.emit(Instr::FuncAddr { dst, func: *fid });
+                    dst
                 } else {
                     let ptrs: Vec<ValueId> = caps
                         .iter()
                         .map(|c| self.place_addr_root(&rgoc_hir::Place::Slot(c.outer_slot)).0)
                         .collect();
+                    let dst = self.new_value(t);
                     self.emit(Instr::MakeClosure {
                         dst,
                         func: *fid,
                         captures: ptrs,
                     });
+                    dst
                 }
-                dst
             }
             // 类型断言（`M9/Task 33`）：`x.(T)` / `v, ok := x.(T)`。
             //
@@ -4313,9 +4418,18 @@ impl Fb<'_> {
         self.val = bstate.0;
         self.mem = bstate.1;
         // 下标目标 = 本轮的计数器值（**体首**赋值：出口才拿得到最后一次的值）
-        if let Some(k) = user_key {
-            let iv = self.read_slot(idx_slot);
-            self.write_slot(k, iv);
+        let iv = self.read_slot(idx_slot);
+        match key {
+            Some(Place::Slot(k)) if *k != BLANK_SLOT => self.write_slot(*k, iv),
+            // 复合下标目标（`a[f()] = range x`，closure2.go）：Go 语义是**每轮**
+            // 求值下标表达式并写入。丢掉它 ⇒ 表达式的副作用整个消失
+            // （实测：下标里的闭包调用负责 `q++`，结果 `q` 恒为 0）。
+            Some(p) => {
+                let pt = self.place_value_type(p);
+                let iv2 = self.coerce_to(pt, iv);
+                self.write_place(p, iv2);
+            }
+            None => {}
         }
         // value = xs[idx]
         if let (Some(p), false) = (value, matches!(kind, RangeKind::Int)) {
@@ -5281,6 +5395,27 @@ impl Fb<'_> {
                     None => self.store_to_unknown(addr, v),
                 }
             }
+        }
+    }
+
+    /// 入口处把每个捕获的地址取出来（`M9/Task 38`）。
+    ///
+    /// 一条 `CapturePtr` 一条：`dst = [ctx + 8 + 8*i]`。之后所有对那个槽的读写
+    /// 都走 `dst`（见 `read_slot` / `write_slot` / `place_addr_root`）。
+    ///
+    /// 必须**紧跟 `entry_params`**：`CapturePtr` 读的是隐式第 0 实参，而它只在
+    /// 序言里保活（后端会把它落到帧里的 ctx 格）。
+    fn setup_captures(&mut self) {
+        let caps = self.f.captured.clone();
+        for (i, c) in caps.iter().enumerate() {
+            let t = self.slot_typ(c.slot);
+            let pt = self.tt.add_pointer(t);
+            let dst = self.new_value(pt);
+            self.emit(Instr::CapturePtr {
+                dst,
+                index: i as u32,
+            });
+            self.slot_ptr.insert(c.slot, dst);
         }
     }
 

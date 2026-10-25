@@ -229,6 +229,13 @@ pub fn func(
     asm.label(&sym);
     prologue(fr, asm);
 
+    // **隐式第 0 实参（ctx）**（`M9/Task 40`）：`CapturePtr` 会在任意位置读它，
+    // 所以必须先落进帧里保活。⚠️ 必须在 `bind_params` 之前 —— 聚合形参分支
+    // 会把 `x0` 当临时用（`mov x0, x9`）。
+    if let Some(off) = fr.ctx_off {
+        st_x(asm, "x0", off);
+    }
+
     // 形参：入口块的 `params` 从寄存器落到槽里。
     bind_params(&cx, asm);
 
@@ -421,10 +428,47 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
             load_addr(asm, "x0", &crate::module::fv_symbol(*func));
             st_x(asm, "x0", cx.slot(*dst).off);
         }
-        // 捕获闭包由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-FUNC-VALUE`）。
-        // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」。
-        Instr::MakeClosure { .. } | Instr::CapturePtr { .. } => {
-            unreachable!("捕获闭包应由 unsupported() 在建图前拒掉")
+        // 捕获指针（`M9/Task 38`）：`dst = [ctx + 8 + 8*i]`（funcval 的第 i 个
+        // 捕获槽，首字是 `fn`）。
+        Instr::CapturePtr { dst, index } => {
+            let d = cx.slot(*dst);
+            let Some(off) = cx.fr.ctx_off else {
+                unreachable!("CapturePtr 出现在没有 ctx 格的帧里（构建 bug）")
+            };
+            ld_x(asm, "x10", off);
+            asm.ins(&format!("ldr x10, [x10, #{}]", 8 + 8 * index));
+            st_x(asm, "x10", d.off);
+        }
+        // 造闭包（`M9/Task 38`）：`rt_arena_alloc(8 + 8n, 8)`，填 fn 与各捕获。
+        //
+        // ⚠️ 寄存器纪律：`st_x`/`ld_x` 拿 `x9` 当**地址**暂存（`ADDR`），所以
+        // funcval 的基地址放 `x10`，数据放 `x11` —— 用 `x9` 装数据会被下一次
+        // 访存指令自己打掉（`R-9-12` 记过 `st_x(x9, ..)` 的同款坑）。
+        Instr::MakeClosure {
+            dst,
+            func,
+            captures,
+        } => {
+            let d = cx.slot(*dst);
+            let total = 8 + 8 * captures.len();
+            load_imm(asm, "x0", i64::try_from(total).unwrap_or(i64::MAX));
+            load_imm(asm, "x1", 8);
+            asm.ins("bl rt_arena_alloc");
+            st_x(asm, "x0", d.off);
+            ld_x(asm, "x10", d.off);
+            load_addr(asm, "x11", &fn_sym(*func));
+            asm.ins("str x11, [x10]");
+            for (i, c) in captures.iter().enumerate() {
+                let s = cx.slot(*c);
+                ld_x(asm, "x11", s.off);
+                let off = 8 + 8 * i;
+                if off <= 32760 {
+                    asm.ins(&format!("str x11, [x10, #{off}]"));
+                } else {
+                    load_imm(asm, "x9", i64::try_from(off).unwrap_or(i64::MAX));
+                    asm.ins("str x11, [x10, x9]");
+                }
+            }
         }
         Instr::TypeAssert { dst, ok, x, typ } => type_assert(cx, *dst, *ok, *x, *typ, asm),
         Instr::AddrOf { dst, root } => addr_of(cx, *dst, root, asm),
