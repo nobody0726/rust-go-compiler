@@ -351,3 +351,98 @@ func main() {
         o.stderr
     );
 }
+
+// ───────────────────────── Task 22：range over chan ─────────────────────────
+
+#[test]
+fn t_con_17_range_在空通道上阻塞到有值() {
+    // `range` 会阻塞：`close` 之前它必须一直等，而不是「看到空就结束」。
+    let s = out(
+        "t_con_17",
+        r#"
+package main
+
+func main() {
+	c := make(chan int)
+	go func() {
+		println("g1")
+		c <- 1
+		close(c)
+	}()
+	for v := range c {
+		println(v)
+	}
+	println("end")
+}
+"#,
+    );
+    assert_eq!(s, "g1\n1\nend\n");
+}
+
+#[test]
+fn t_con_18_close_之后_range_先排空再结束() {
+    let s = out(
+        "t_con_18",
+        r#"
+package main
+
+func main() {
+	c := make(chan int, 3)
+	c <- 1
+	c <- 2
+	close(c)
+	for v := range c {
+		println(v)
+	}
+	println("end")
+}
+"#,
+    );
+    assert_eq!(s, "1\n2\nend\n", "close 不排空缓冲，range 要把剩下的吐完");
+}
+
+#[test]
+fn t_con_18b_range_期间_close_立刻结束() {
+    let s = out(
+        "t_con_18b",
+        r#"
+package main
+
+func main() {
+	c := make(chan int)
+	go func() {
+		c <- 1
+		close(c)
+	}()
+	n := 0
+	for range c {
+		n++
+	}
+	println(n)
+}
+"#,
+    );
+    assert_eq!(s, "1\n");
+}
+
+#[test]
+fn t_con_18c_range_nil_通道是死锁() {
+    let o = run_src(
+        "t_con_18c",
+        r#"
+package main
+
+func main() {
+	var c chan int
+	for range c {
+	}
+}
+"#,
+    );
+    assert_eq!(o.exit, 2, "nil 通道的 range 永久阻塞 ⇒ 死锁");
+    assert!(
+        o.stderr.contains("all goroutines are asleep - deadlock!"),
+        "实际：{}",
+        o.stderr
+    );
+}

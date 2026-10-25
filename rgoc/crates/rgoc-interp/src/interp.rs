@@ -419,6 +419,13 @@ enum RangeIter {
         i: i128,
         n: i128,
     },
+    /// `range` over chan：`None` ⇒ nil 通道（永久阻塞）。
+    ///
+    /// 这个变体**不参与** `range_next`：通道的取值会阻塞，由
+    /// `Act::RangeRecv` 压 `Task::Recv` 完成。
+    Chan {
+        ch: Option<Rc<RefCell<ChanObj>>>,
+    },
 }
 
 // ───────────────────────── 帧 ─────────────────────────
@@ -1495,22 +1502,47 @@ impl<'a> G<'a> {
             let Body::Range(s) = &mut self.frames[fi].bodies[bi] else {
                 return;
             };
-            match s.phase {
-                PH_INIT => {
-                    s.phase = PH_COND;
-                    Some(Act::RangeInit(s.x))
-                }
-                // PH_COND（首轮）与 PH_BODY（体刚结束）做的是**同一件事**：
-                // 取下一对 key/value。以前 PH_BODY 走 `Act::RangeBind`，那会
-                // 拿空的 `kv` 重新绑一次并把体再进一遍 —— `range` 多跑一轮。
-                _ => match range_next(&mut s.iter) {
-                    Some((k, v)) => {
-                        s.kv = Some((k, v));
-                        s.phase = PH_BODY;
-                        Some(Act::RangeBind)
+            // 通道的 range 会**阻塞**，走不了 `range_next` 那种同步取下一个
+            // 的路子（`M8-plan.md` R4）。它借 `Task::Recv`：任务卡住时留在
+            // 求值栈上、G 被 park，醒来接着跑 —— 与普通 `<-c` 同一条通路。
+            if s.kind == RangeKind::Chan {
+                match s.phase {
+                    PH_INIT => {
+                        s.phase = PH_COND;
+                        Some(Act::RangeInit(s.x))
                     }
-                    None => Some(Act::Pop),
-                },
+                    PH_COND => {
+                        s.phase = PH_POST;
+                        Some(Act::RangeRecv)
+                    }
+                    PH_POST => Some(Act::RangeChanBind),
+                    // 体刚结束：再收一个。**直接进 `PH_POST`**（不是 `PH_COND`）——
+                    // recv 是在这一步压下去的，它的结果要到下一步才落栈；
+                    // 若把相位留给 `PH_COND`，下一步会再压一个 recv（值栈上
+                    // 于是有两份结果，bind 取到的是后一份）。
+                    _ => {
+                        s.phase = PH_POST;
+                        Some(Act::RangeRecv)
+                    }
+                }
+            } else {
+                match s.phase {
+                    PH_INIT => {
+                        s.phase = PH_COND;
+                        Some(Act::RangeInit(s.x))
+                    }
+                    // PH_COND（首轮）与 PH_BODY（体刚结束）做的是**同一件事**：
+                    // 取下一对 key/value。以前 PH_BODY 走 `Act::RangeBind`，那会
+                    // 拿空的 `kv` 重新绑一次并把体再进一遍 —— `range` 多跑一轮。
+                    _ => match range_next(&mut s.iter) {
+                        Some((k, v)) => {
+                            s.kv = Some((k, v));
+                            s.phase = PH_BODY;
+                            Some(Act::RangeBind)
+                        }
+                        None => Some(Act::Pop),
+                    },
+                }
             }
         };
         self.apply(sh, fi, act);
@@ -1604,6 +1636,8 @@ impl<'a> G<'a> {
                 self.eval.push(Task::Eval(x));
             }
             Some(Act::RangeBind) => self.start_range_bind(sh, fi),
+            Some(Act::RangeRecv) => self.range_chan_recv(sh, fi),
+            Some(Act::RangeChanBind) => self.range_chan_bind(sh, fi),
             Some(Act::SwitchTag(t)) => {
                 self.pending = Some(Pending::SwitchTag);
                 self.eval.push(Task::Eval(t));
@@ -2178,6 +2212,58 @@ impl<'a> G<'a> {
             }
         }
         self.push_seq(sh, fi, body);
+    }
+
+    /// `range` over chan：压一个 `Task::Recv`（`comma_ok` ⇒ 值 + ok 两个）。
+    ///
+    /// nil 通道也走这里：压一个 nil 值 + `Task::Recv`，它会**永久阻塞**
+    /// 且不登记（`C11` §3.4）—— 与 `<-c` 完全同一条路，不另写一套。
+    fn range_chan_recv(&mut self, sh: &mut Shared<'a>, fi: usize) {
+        let bi = self.frames[fi].bodies.len() - 1;
+        let (ch, x_typ) = match &self.frames[fi].bodies[bi] {
+            Body::Range(s) => (
+                match &s.iter {
+                    Some(RangeIter::Chan { ch }) => ch.clone(),
+                    _ => None,
+                },
+                s.x.typ,
+            ),
+            _ => return,
+        };
+        let (value, typ) = match ch {
+            Some(obj) => {
+                let elem = obj.borrow().elem();
+                (Value::Chan(obj), elem)
+            }
+            // nil 通道：元素类型只能从静态类型取（没有对象可问）。
+            None => (Value::Nil(NilKind::Chan), chan_elem_ty(sh.tt, x_typ)),
+        };
+        self.values.push(value);
+        self.eval.push(Task::Recv {
+            typ,
+            comma_ok: true,
+            waiter: None,
+        });
+    }
+
+    /// `range` over chan：读 `[值, ok]`；`ok == false` ⇒ 迭代结束。
+    fn range_chan_bind(&mut self, sh: &mut Shared<'a>, fi: usize) {
+        let ok = matches!(self.values.pop(), Some(Value::Bool(true)));
+        let v = self.values.pop().unwrap_or(Value::Nil(NilKind::Ptr));
+        if !ok {
+            self.apply(sh, fi, Some(Act::Pop));
+            return;
+        }
+        let bi = self.frames[fi].bodies.len() - 1;
+        if let Body::Range(s) = &mut self.frames[fi].bodies[bi] {
+            // 相位推进到「体正在跑」。少了这一步，下一次 `step_range` 又会落到
+            // `PH_POST` ⇒ 拿一个空栈当 recv 结果 ⇒ range 只跑一轮就结束。
+            s.phase = PH_BODY;
+            // 通道没有下标：值落在 **key** 位（`rangeKeyVal` 对 chan 返回
+            // `(elem, nil)`，见 Task 13 的裁决）。
+            s.kv = Some((v, Value::Nil(NilKind::Ptr)));
+        }
+        self.start_range_bind(sh, fi);
     }
 
     fn start_range_bind(&mut self, sh: &mut Shared<'a>, fi: usize) {
@@ -3618,6 +3704,10 @@ enum Act<'a> {
     ForCond(&'a Expr),
     RangeInit(&'a Expr),
     RangeBind,
+    /// `range` over chan：压一个 `Task::Recv`（值 + ok）。
+    RangeRecv,
+    /// `range` over chan：读值栈上的 `[值, ok]`，`ok == false` 就结束。
+    RangeChanBind,
     SwitchTag(&'a Expr),
     SwitchScan,
     TypeSwitchX(&'a Expr),
@@ -3940,6 +4030,9 @@ fn range_next(iter: &mut Option<RangeIter>) -> Option<(Value, Value)> {
             *i += 1;
             Some((Value::Int(cur), Value::Int(cur)))
         }
+        // 不可达：`step_range` 对 `RangeKind::Chan` 走的是 `Act::RangeRecv`
+        // 那条路（会阻塞，不能在这里同步取）。
+        RangeIter::Chan { .. } => None,
     }
 }
 
@@ -3958,11 +4051,10 @@ fn build_iter(v: &Value, kind: RangeKind) -> RangeIter {
             RangeIter::Map { entries, idx: 0 }
         }
         (RangeKind::Int, Value::Int(n)) => RangeIter::Int { i: 0, n },
-        // `range` over chan 会**阻塞**，而 `RangeIter::next` 是同步函数 ——
-        // 两者放不进同一个接口（`M8-plan.md` R4）。在 Task 22 的 range 执行
-        // 落地之前，这里必须**响亮地**拒绝，不能落到「迭代 0 次」的兜底：
-        // 那会让 `for v := range c` 静默什么都不做。
-        (RangeKind::Chan, _) => todo!("M8/Task 22：range over chan（会阻塞，不能走 next()）"),
+        // `range` over chan：只把通道句柄存下来，取值由 `Act::RangeRecv`
+        // 压 `Task::Recv` 完成（它会阻塞，`next()` 做不到）。
+        (RangeKind::Chan, Value::Chan(ch)) => RangeIter::Chan { ch: Some(ch) },
+        (RangeKind::Chan, _) => RangeIter::Chan { ch: None },
         _ => RangeIter::Int { i: 0, n: 0 },
     }
 }
