@@ -211,6 +211,61 @@ fn map_kv(tt: &TypeTable, t: TypeId) -> Option<(TypeId, TypeId)> {
     None
 }
 
+/// 地址值的类型：`*成员类型`（M9/`R-9-6`）。
+///
+/// # 为什么不能沿用底座类型
+///
+/// 原先 `Field` / `Index` 的 dst 直接 `new_value(底座类型)`，于是 `ss.aa`
+/// （语义上是「指向 `S` 的地址」）在 IR 里标成 `*SS`。后端只能按**类型**算
+/// 字段偏移，于是 `.b` 走 `field_offset(SS, 1) = 24` 而不是 `8`。
+///
+/// 症状极隐蔽：初始化侧与读取侧用**同一个错偏移**，所以首字段碰巧对、
+/// 后面的字段错（`ken/complit.go` 打印 `ss.aa.b is 3104 should be 3102`）。
+///
+/// # 为什么带兜底
+///
+/// `field_ty` / `elem_ty` 拿不到时退回 `*底座`（而不是 `底座`）：地址值的类型
+/// 必须至少是「指针」，否则 `Load`/`Store` 的类型判据会看不清这是地址。
+fn addr_of_ty(tt: &mut TypeTable, base_ty: TypeId, member: Option<TypeId>) -> TypeId {
+    match member {
+        Some(m) => tt.add_pointer(m),
+        None => tt.add_pointer(base_ty),
+    }
+}
+
+/// `base`（可能是 `*T` / `[n]T` / `[]T` / 具名）里第 `index` 个字段的类型。
+fn field_ty(tt: &TypeTable, base_ty: TypeId, index: usize) -> Option<TypeId> {
+    use rgoc_types::typ::Type;
+    let mut cur = base_ty;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Pointer(e) => cur = *e,
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Struct(sid) => return tt.struct_def(*sid).fields.get(index).map(|f| f.typ),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `base`（可能是 `*[n]T` / `[n]T` / `[]T` / 具名）的元素类型。
+fn elem_ty(tt: &TypeTable, base_ty: TypeId) -> Option<TypeId> {
+    use rgoc_types::typ::Type;
+    let mut cur = base_ty;
+    // 先剥一层指针（`a[i]` 的底座可能是 `AddrOf(a)` 给的 `*[n]T`）
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Pointer(e) => cur = *e,
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            Type::Array { elem, .. } | Type::Slice(elem) => return Some(*elem),
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// `map` / `chan` 类型 ⇒ 对应的码。接口**不在这里**：接口值当数据传是支持的，
 /// 只有「按动态类型派发/分支」不支持（那由调用点与 `TypeSwitch` 判）。
 fn face_kind(tt: &TypeTable, t: TypeId) -> Option<SsaCode> {
@@ -1897,7 +1952,8 @@ impl Fb<'_> {
                 } else {
                     self.place_addr_root(base)
                 };
-                let t = self.values[base_v.index()];
+                let bt = self.values[base_v.index()];
+                let t = addr_of_ty(self.tt, bt, field_ty(self.tt, bt, *index));
                 let dst = self.new_value(t);
                 self.emit(Instr::Field {
                     dst,
@@ -1910,7 +1966,8 @@ impl Fb<'_> {
             Place::Index { base, index } => {
                 let (base_v, root) = self.index_base(base);
                 let idx = self.expr(index);
-                let t = self.values[base_v.index()];
+                let bt = self.values[base_v.index()];
+                let t = addr_of_ty(self.tt, bt, elem_ty(self.tt, bt));
                 let dst = self.new_value(t);
                 self.emit(Instr::Index {
                     dst,
@@ -2000,7 +2057,8 @@ impl Fb<'_> {
             }
             ExprKind::Field { base, index } => {
                 let (bv, hint) = self.expr_addr_root(base)?;
-                let t = self.values[bv.index()];
+                let bt = self.values[bv.index()];
+                let t = addr_of_ty(self.tt, bt, field_ty(self.tt, bt, *index));
                 let dst = self.new_value(t);
                 self.emit(Instr::Field {
                     dst,
@@ -2013,7 +2071,8 @@ impl Fb<'_> {
             ExprKind::Index { base, index, .. } => {
                 let (bv, hint) = self.index_base(base);
                 let i = self.expr(index);
-                let t = self.values[bv.index()];
+                let bt = self.values[bv.index()];
+                let t = addr_of_ty(self.tt, bt, elem_ty(self.tt, bt));
                 let dst = self.new_value(t);
                 self.emit(Instr::Index { dst, base: bv, i });
                 self.note_root(dst, hint);
@@ -2639,7 +2698,9 @@ impl Fb<'_> {
                 let (base_ptr, hint) = self.index_base(base);
                 let idx = self.expr(index);
                 let root = hint.unwrap_or_else(|| self.heap_root());
-                let pt = self.ptr_ty_of(root);
+                // 地址值标成 `*元素类型`（M9/`R-9-6`）—— 沿用「`*根类型`」会让
+                // 之后的 `.f` 拿不到元素类型，字段偏移就按错的结构算。
+                let pt = addr_of_ty(self.tt, base.typ, elem_ty(self.tt, base.typ));
                 let addr = self.new_value(pt);
                 self.emit(Instr::Index {
                     dst: addr,
