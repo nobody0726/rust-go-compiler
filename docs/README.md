@@ -61,6 +61,8 @@
 | M7 | [`milestones/M7-manifest.json`](./milestones/M7-manifest.json) | **机器可读事实** —— gate `NAT-1..9`（**9/9 pass**）、`N'`=39 / `M'`=7、白名单 4 条、`open_gaps` 1 条（上游）+ `closed_gaps` 6 条、`measured`；由 `manifest_m7.rs` 对账（9 种合成反例） | ✅ **已填实**（2026-10-25；`phase_summary.done = true`） |
 | M7 | [`milestones/M7-report.md`](./milestones/M7-report.md) | **交付报告** —— 十九条真错的分类（语料抓不到 / 静默错 / 装置说谎）、九条门禁证据、13 条契约级修订、缺口与三条分别声明、接手指南 | ✅ **已收口**（2026-10-25） |
 | M8 | [`milestones/M8-design.md`](./milestones/M8-design.md) | **怎么建 M8** —— 决策 D-M8-1~14（抽 `G` / M:1 不抢占 / select 源码顺序 / 任务不弹出 / range-over-func 窄面 / map 快照）、事实基线 F1–F16、门禁 CON-1..9、白名单 8 条 | ✅ **已确认**（2026-10-25；`Q1..Q4` 已签字） |
+| M8 | [`milestones/M8-tests.md`](./milestones/M8-tests.md) | **怎么验 M8** —— 69 个 `T-CON-*`（甲10/乙14/丙10/丁8/戊9/己10/反8）、**并发语料三栏**（自检 5 / 有输出 0 / 空跑 2）、白名单 8 条、不变式 4 条 | ✅ **判据面已冻结**（2026-10-25；`N'`=7 / `M'`=12） |
+| M8 | [`milestones/M8-plan.md`](./milestones/M8-plan.md) | **怎么干 M8** —— **Task 1–66**（七个 Phase：契约与纯重构 → lowering → 通道与调度 → select → 死锁 → 三块补齐 → 语料 → 收口） | 🟡 **待执行**（2026-10-25） |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -139,7 +141,7 @@
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
 | `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **10 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3 spike 级 / **C4 正式**〔M6/Task 51〕/ **C5 正式**〔M7/Task 1〕/ **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 已冻结（候选）**〔M5/Task 9〕/ **C10 已冻结**〔M6/Task 51〕） |
-| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>✅ **M6 / M7 均已收口**（M6 `SSA-1..9` 9/9、M7 `NAT-1..9` 9/9）<br>🟡 **M8 只有 `design`**（2026-10-25 已确认）；`tests`/`plan`/`manifest` 待产出 |
+| `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>✅ **M6 / M7 均已收口**（M6 `SSA-1..9` 9/9、M7 `NAT-1..9` 9/9）<br>🟡 **M8 三件套已就位**（2026-10-25：`design` 已确认 / `tests` 判据面冻结 / `plan` Task 1–66）；`manifest` 待 Task 58 填实 |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：
 
