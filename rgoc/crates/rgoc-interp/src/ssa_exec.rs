@@ -127,6 +127,11 @@ struct SFrame {
     roots: Vec<Cell>,
     /// 本函数返回时，把结果写回调用方的哪些值（空 ⇒ 没人接结果）。
     ret_to: Vec<ValueId>,
+    /// 本帧登记的 defer 的 **funcval**（登记序；跑的时候逆序）。
+    ///
+    /// 与 native 侧同口径（`R-9-18`）：`defer f(args...)` 的实参由 build 打包进
+    /// 闭包，所以这里只需要 funcval —— 求值器不必知道任何 ABI 布局。
+    deferred: Vec<Value>,
 }
 
 /// 执行状态。
@@ -141,6 +146,21 @@ struct Exec<'a> {
     steps: u64,
     max_steps: u64,
     max_frames: usize,
+    /// 正在传播的 panic（`None` ⇒ 没有）。
+    panic: Option<PanicState>,
+    /// 跑 defer 时被**挂起**的那个 panic（`recover()` 取的就是它）。
+    saved: Option<PanicState>,
+    /// 当前是不是在「被 defer 调用的函数」里（`recover` 只在这样的帧里有效）。
+    defer_depth: usize,
+    /// 正在展开（`Term::Panic` 之后、帧弹完之前）。
+    unwinding: bool,
+}
+
+/// 一个正在传播的 panic：值 + 它的静态类型（`recover()` 要包成接口）。
+#[derive(Clone)]
+struct PanicState {
+    val: Value,
+    ty: TypeId,
 }
 
 /// 跑一个 SSA 模块（`Module::init` → `main`）。
@@ -164,6 +184,10 @@ pub fn run_ssa(m: &Module, tt: &TypeTable, opts: Options) -> Outcome {
         steps: 0,
         max_steps: opts.max_steps,
         max_frames: opts.max_frames,
+        panic: None,
+        saved: None,
+        defer_depth: 0,
+        unwinding: false,
     };
 
     // ① 包初始化（`Task 32b` 合成的那个函数）
@@ -239,13 +263,30 @@ impl Exec<'_> {
             values,
             roots,
             ret_to,
+            deferred: Vec::new(),
         });
         Ok(())
     }
 
     /// 主循环：一直执行到帧栈空。
     fn drive(&mut self) -> Result<(), Halt> {
+        self.drive_to(0)
+    }
+
+    /// 主循环：执行到帧栈只剩 `depth` 帧为止。
+    ///
+    /// `depth > 0` 用在「跑 defer」上：那个 funcval 的帧压在当前帧之上，
+    /// 跑到它返回（帧数回落到 `depth`）就停 —— 而不是把外层帧也一起跑掉。
+    fn drive_to(&mut self, depth: usize) -> Result<(), Halt> {
         loop {
+            if self.frames.len() <= depth {
+                return Ok(());
+            }
+            // 展开中：先跑本帧的 defer，再弹帧（`M9/Phase 5`）。
+            if self.unwinding {
+                self.unwind_one()?;
+                continue;
+            }
             let Some(frame) = self.frames.last() else {
                 return Ok(());
             };
@@ -268,6 +309,21 @@ impl Exec<'_> {
                     let mut ret: Vec<Value> = Vec::with_capacity(vals.len());
                     for v in &vals {
                         ret.push(self.read(*v)?);
+                    }
+                    // **正常返回也要跑 defer**（`M9/Phase 5`）：`defer` 的语义是
+                    // 「帧退出时执行」，不是「panic 时执行」。
+                    let defers: Vec<Value> = self
+                        .frames
+                        .last()
+                        .map(|f| f.deferred.iter().rev().cloned().collect())
+                        .unwrap_or_default();
+                    for fv in defers {
+                        self.run_defer(fv)?;
+                    }
+                    if self.panic.is_some() {
+                        // defer 里起了新 panic ⇒ 转成展开，别把这一帧当成正常返回
+                        self.unwinding = true;
+                        continue;
                     }
                     let ret_to = self
                         .frames
@@ -297,12 +353,107 @@ impl Exec<'_> {
                     self.jump(to, &args)?;
                 }
                 Term::Panic(v) => {
+                    // 只**置状态**，不立刻返回：本帧（以及每一层调用者）的 defer
+                    // 要先跑完，其中任何一层都可能 `recover` 掉（`M9/Phase 5`）。
                     let v = *v;
+                    let ty = self.m.funcs[fi].value_types[v.index()];
                     let val = self.read(v)?;
-                    return Err(Halt::Panic(val));
+                    self.panic = Some(PanicState { val, ty });
+                    self.unwinding = true;
                 }
                 Term::Unreachable => return Err(Halt::Unreachable),
             }
+        }
+    }
+
+    /// 展开一步：跑掉**栈顶帧**的 defer，然后弹帧。
+    ///
+    /// # 为什么按帧弹而不是「一次弹到底」
+    ///
+    /// 每一层的 defer 都可能 `recover`。recover 之后，那一层就是**正常返回**
+    /// （它的调用者继续往下跑），所以展开必须在「每帧之后」重新判断一次状态。
+    fn unwind_one(&mut self) -> Result<(), Halt> {
+        let Some(frame) = self.frames.last() else {
+            self.unwinding = false;
+            return Ok(());
+        };
+        // 逆序跑本帧的 defer
+        let defers: Vec<Value> = frame.deferred.iter().rev().cloned().collect();
+        for fv in defers {
+            self.run_defer(fv)?;
+        }
+        // 结果槽没人写（这一帧没正常返回）⇒ 调用方那几格补零，
+        // 免得它读到 `None`（Go 里 recover 之后函数返回的是它的零值/命名值）。
+        let ret_to = self
+            .frames
+            .last()
+            .map_or_else(Vec::new, |f| f.ret_to.clone());
+        self.frames.pop();
+        if let Some(caller) = self.frames.last_mut() {
+            for d in ret_to {
+                let ty = self.m.funcs[caller.func]
+                    .value_types
+                    .get(d.index())
+                    .copied()
+                    .unwrap_or_else(|| TypeId::from_index(0));
+                caller.values[d.index()] = Some(zero_of(self.tt, ty));
+            }
+        }
+        if self.panic.is_none() {
+            // 被 recover 掉了：停止展开，调用者从下一跳继续
+            self.unwinding = false;
+        }
+        if self.frames.is_empty() {
+            self.unwinding = false;
+            if let Some(p) = self.panic.take() {
+                return Err(Halt::Panic(p.val));
+            }
+        }
+        Ok(())
+    }
+
+    /// 跑一条 defer：**挂起**当前的 panic，正常调那个 funcval。
+    ///
+    /// 挂起是必须的：被 defer 调用的函数是正常执行的，它内部不该看到「正在 panic」
+    /// —— 否则 defer 里调任何函数都会立刻被中断（native 侧 `rt_deferrun` 同款）。
+    fn run_defer(&mut self, fv: Value) -> Result<(), Halt> {
+        let saved = self.panic.take();
+        self.saved = saved.clone();
+        let saved_unw = std::mem::replace(&mut self.unwinding, false);
+        self.defer_depth += 1;
+        let depth = self.frames.len();
+        let r = (|| -> Result<(), Halt> {
+            let Value::Func(cl) = fv else {
+                return Err(Halt::Runtime(
+                    "defer 的操作数不是函数值（构建 bug）".to_string(),
+                ));
+            };
+            let idx = index_of(self.m, cl.func)
+                .ok_or_else(|| Halt::Runtime(format!("defer 的目标 func#{} 不存在", cl.func.0)))?;
+            self.push_frame(idx, &[], Vec::new(), Some(cl))?;
+            self.drive_to(depth)
+        })();
+        self.defer_depth -= 1;
+        self.unwinding = saved_unw;
+        match r {
+            Ok(()) => {
+                // defer 里没起新 panic ⇒ 把挂起的放回去（recover 过就放回 None）
+                if self.panic.is_none() {
+                    self.panic = self.saved.take();
+                } else {
+                    self.saved = None;
+                }
+                Ok(())
+            }
+            Err(Halt::Panic(v)) => {
+                // defer 里起的新 panic **取代**旧的
+                self.panic = Some(PanicState {
+                    val: v,
+                    ty: TypeId::from_index(0),
+                });
+                Ok(())
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -518,6 +669,14 @@ impl Exec<'_> {
                 self.write(*dst, Value::Ptr(cell));
                 Ok(None)
             }
+            // 登记 defer（`M9/Phase 5`）：把 funcval 挂到本帧的链上。
+            Instr::Defer { fv } => {
+                let v = self.read(*fv)?;
+                if let Some(f) = self.frames.last_mut() {
+                    f.deferred.push(v);
+                }
+                Ok(None)
+            }
             Instr::AddrOf { dst, root } => {
                 let c = self.root_cell(*root)?;
                 self.write(*dst, Value::Ptr(c));
@@ -655,6 +814,25 @@ impl Exec<'_> {
             CalleeRef::Runtime(f) => {
                 use rgoc_ssa::ir::RuntimeFn as R;
                 match f {
+                    // `recover()`（`M9/Phase 5`）：只有在「被 defer 调用的函数」里、
+                    // 且确实有挂起的 panic 时才有效（Go 规范）。
+                    R::Recover => {
+                        if let Some(d) = dsts.first().copied() {
+                            let ty = self.m.funcs[fi].value_types[d.index()];
+                            let v = if self.defer_depth > 0 {
+                                match self.saved.take() {
+                                    Some(p) => Value::Iface {
+                                        typ: Some(p.ty),
+                                        data: Box::new(p.val),
+                                    },
+                                    None => zero_of(self.tt, ty),
+                                }
+                            } else {
+                                zero_of(self.tt, ty)
+                            };
+                            self.write(d, v);
+                        }
+                    }
                     R::MapMake => {
                         let d = dsts[0];
                         let m = Value::Map(std::rc::Rc::new(std::cell::RefCell::new(
@@ -875,6 +1053,17 @@ impl Exec<'_> {
             CalleeRef::Indirect(v) => {
                 let f = self.read(v)?;
                 let Value::Func(cl) = f else {
+                    // **nil funcval** ⇒ 可恢复的 panic（`closure4.go` / `defernil.go`）
+                    if matches!(f, Value::Nil(_)) {
+                        self.panic = Some(PanicState {
+                            val: Value::Str(std::rc::Rc::from(
+                                "runtime error: invalid memory address or nil pointer dereference",
+                            )),
+                            ty: TypeId::from_index(0),
+                        });
+                        self.unwinding = true;
+                        return Ok(None);
+                    }
                     return Err(Halt::Runtime(
                         "间接调用：被调方不是函数值（构建 bug）".to_string(),
                     ));

@@ -261,6 +261,17 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
             }
             Ok(())
         }
+        // `defer`：操作数必须是 `func()` 类型（签名面不需要更多判据）。
+        Instr::Defer { fv } => {
+            let ft = need(f, *fv)?;
+            if !matches!(
+                tt.type_of(rgoc_types::underlying(tt, ft)),
+                rgoc_types::typ::Type::Signature(_)
+            ) {
+                return Err(format!("defer 的操作数类型 {ft:?} 不是函数类型"));
+            }
+            Ok(())
+        }
         Instr::AddrOf { .. }
         | Instr::Field { .. }
         | Instr::Index { .. }

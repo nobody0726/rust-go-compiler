@@ -53,6 +53,9 @@ fn keep(i: &Instr, used: &BTreeSet<ValueId>) -> bool {
     match i {
         // 写内存：永远留（它的 mem 令牌没人用是常态，不是死代码）
         Instr::Store { .. } => true,
+        // `defer` 的**唯一效果就是登记**：它不定义值，`fv` 也可能没人再读
+        // （登记完就只剩运行期的链）。删掉它就等于把 defer 变没了。
+        Instr::Defer { .. } => true,
         // 类型断言：单值形态**会 panic**（失败即 `rt_panic_assert`），
         // comma-ok 形态的 `ok` 也是一个可观察的结果 ⇒ 两个 dst 都没人用才删。
         Instr::TypeAssert { dst, ok, .. } => {
@@ -95,6 +98,8 @@ fn dst_of(i: &Instr) -> Option<ValueId> {
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => *dst,
         Instr::MakeClosure { dst, .. } => *dst,
         Instr::TypeAssert { dst, .. } => *dst,
+        // `defer` 没有 dst（`keep` 已经保证它永远活着）
+        Instr::Defer { .. } => return None,
         // `Call` 由调用方特判（多结果），走到这里说明有人漏了
         Instr::Call { .. } => return None,
     })

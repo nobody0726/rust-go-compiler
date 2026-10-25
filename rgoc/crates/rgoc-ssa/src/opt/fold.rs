@@ -91,6 +91,9 @@ fn dst_of(i: &Instr) -> ValueId {
         // 断言的主结果（`ok` 不进 fold：它没有可折叠的运算）
         Instr::TypeAssert { dst, .. } => *dst,
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => *dst,
+        // `defer` 没有 dst。`try_fold` 永远不会折它，所以这个返回值没人用 ——
+        // 给 `fv` 只是为了让 match 穷尽。
+        Instr::Defer { fv } => *fv,
         Instr::MakeClosure { dst, .. } => *dst,
         Instr::Const { dst, .. }
         | Instr::Copy { dst, .. }

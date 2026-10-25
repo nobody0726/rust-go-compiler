@@ -769,6 +769,8 @@ fn def_block(f: &SsaFunc, v: ValueId) -> BlockId {
                 | Instr::Load { dst, .. }
                 | Instr::Store { dst, .. } => Some(*dst),
                 Instr::TypeAssert { dst, .. } => Some(*dst),
+                // `defer` 没有 dst（`M9/Phase 5`）
+                Instr::Defer { .. } => None,
                 Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => Some(*dst),
                 Instr::MakeClosure { dst, .. } => Some(*dst),
                 Instr::Call { dsts, .. } => {
@@ -1841,6 +1843,8 @@ fn def_instr(f: &SsaFunc, v: ValueId) -> Option<&Instr> {
         | Instr::Make { dst, .. }
         | Instr::Store { dst, .. } => *dst == v,
         Instr::Call { dsts, .. } => dsts.contains(&v),
+        // `defer` 不定义值（`M9/Phase 5`）
+        Instr::Defer { .. } => false,
     })
 }
 

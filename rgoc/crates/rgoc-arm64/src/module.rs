@@ -31,15 +31,16 @@ use crate::isel;
 pub enum CompileError {
     /// M7 明确不支持的面。
     Cg(CgCode),
-    /// 某个值的类型没有运行期布局。
-    Frame(FrameError),
+    /// 某个值的类型没有运行期布局（第二个字段是**哪个函数** —— 只有 `ValueId`
+    /// 定位不到，同一个号在几十个函数里都出现过）。
+    Frame(FrameError, String),
 }
 
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Cg(c) => write!(f, "{c}"),
-            Self::Frame(e) => write!(f, "{e}"),
+            Self::Frame(e, func) => write!(f, "函数 {func}：{e}"),
         }
     }
 }
@@ -97,7 +98,8 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
 
     // ③ 逐函数。
     for f in &m.funcs {
-        let fr = frame::layout_with(f, tt, &siblings).map_err(CompileError::Frame)?;
+        let fr = frame::layout_with(f, tt, &siblings)
+            .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
     }
 
@@ -125,6 +127,16 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     if let Some(main) = m.main {
         asm.ins(&format!("bl fn{}", main.0));
     }
+    // `main` 返回后：**没有**未恢复的 panic 才 exit 0。
+    //
+    // `rt_panic_*` 只置状态（好让 defer 有机会 `recover`），所以「打一行 +
+    // 退出码 2」这条 `C9` §4.5 的契约落在这里 —— 全局唯一一处退出点。
+    asm.ins("bl rt_panicking");
+    asm.ins("cbz x0, .Lexit0");
+    asm.ins("bl rt_print_panic");
+    asm.ins("mov x0, #2");
+    asm.ins("bl rt_exit");
+    asm.label(".Lexit0");
     asm.ins("mov x0, #0");
     asm.ins("bl rt_exit");
 
@@ -681,7 +693,8 @@ pub fn frame_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
     for f in &m.funcs {
-        let fr = frame::layout_with(f, tt, &siblings).map_err(CompileError::Frame)?;
+        let fr = frame::layout_with(f, tt, &siblings)
+            .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         let cfg = rgoc_ssa::cfg::Cfg::build(f);
         let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
         out.push_str(&frame::render_frame_map(f, &fr, &lv));

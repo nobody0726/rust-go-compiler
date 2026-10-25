@@ -130,6 +130,7 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Store { dst, .. } => vec![*dst],
         Instr::Call { dsts, .. } => dsts.clone(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
+        Instr::Defer { .. } => Vec::new(),
         // 捕获是**操作数**不是定义（它们在 `uses` 里）
         Instr::MakeClosure { dst, .. } => vec![*dst],
         Instr::TypeAssert { dst, ok, .. } => {
@@ -251,6 +252,7 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
         Instr::Un { x, .. } | Instr::Convert { x, .. } => out.push(*x),
         Instr::TypeAssert { x, .. } => out.push(*x),
         Instr::FuncAddr { .. } | Instr::CapturePtr { .. } => {}
+        Instr::Defer { fv } => out.push(*fv),
         Instr::MakeClosure { captures, .. } => out.extend(captures.iter().copied()),
         Instr::Field { base, .. } => out.push(*base),
         Instr::Index { base, i, .. } => {

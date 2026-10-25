@@ -208,7 +208,7 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
             });
         }
         // 没有运行期布局的类型走到后端 = 上游漏了收敛，是**内部**失败 ⇒ 2。
-        Err(e @ rgoc_arm64::module::CompileError::Frame(_)) => {
+        Err(e @ rgoc_arm64::module::CompileError::Frame(..)) => {
             return Err(format!("帧布局失败：{e}"));
         }
     };

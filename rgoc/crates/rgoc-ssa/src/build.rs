@@ -414,10 +414,20 @@ fn unsup_block(tt: &TypeTable, b: &HirBlock) -> Option<(SsaCode, String)> {
 
 fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
     match s {
-        Stmt::Defer { .. } => Some((
-            SsaCode::Defer,
-            "defer（延迟调用链是运行期结构，不是 SSA 值）".to_string(),
-        )),
+        // `defer` 在 M9/Phase 5a 支持**无实参**的形态（`defer func(){}()` /
+        // `defer nilf()`）：登记一个 funcval 就够。带实参的要先把实参打包成闭包
+        // （Phase 5b），那之前照旧拒。
+        Stmt::Defer { call } => match &call.kind {
+            ExprKind::Call {
+                callee: Callee::Value(v),
+                args,
+                ..
+            } if args.is_empty() => unsup_expr(tt, v),
+            _ => Some((
+                SsaCode::Defer,
+                "defer（带实参 / 方法 / 内建的延迟调用，Phase 5b 未做）".to_string(),
+            )),
+        },
         // M8 把这三条从 HIR 的拒绝面放进了**解释器**；SSA 侧仍拒（`SSA-UNSUPPORTED-CHAN`）。
         // 这不是「忘了实现」，是 M6 的 IR 没有「等待」这个概念（`C4` 的 memory 模型里
         // 没有阻塞点）—— 归 M11。
@@ -567,10 +577,7 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             }
 
             Callee::Builtin(k) => match k {
-                BuiltinKind::Recover => Some((
-                    SsaCode::Defer,
-                    "recover（与 defer 同属延迟调用面）".to_string(),
-                )),
+                // `recover()` 在 M9/Phase 5 支持了（走 `rt_recover`）
                 BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
                 _ => args.iter().find_map(|a| unsup_expr(tt, a)),
             },
@@ -596,7 +603,7 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
         },
         ExprKind::New(t) => face_kind(tt, *t).map(|code| (code, "`new` 的元素类型".to_string())),
         ExprKind::Builtin { kind, args, .. } => match kind {
-            BuiltinKind::Recover => Some((SsaCode::Defer, "recover".to_string())),
+            // `recover()` 走 `rt_recover`（M9/Phase 5）
             BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
             _ => args.iter().find_map(|a| unsup_expr(tt, a)),
         },
@@ -2655,6 +2662,13 @@ impl Fb<'_> {
         if matches!(kind, BuiltinKind::Delete) {
             self.map_call(RuntimeFn::MapDel, avs, Vec::new());
             return Vec::new();
+        }
+        // `recover()`（M9/Phase 5）：走 runtime —— 「当前帧是不是被 defer 调用的」
+        // 与「有没有挂起的 panic」只有运行期知道。
+        if matches!(kind, BuiltinKind::Recover) {
+            let dst = self.new_value(e.typ);
+            self.map_call(RuntimeFn::Recover, Vec::new(), vec![dst]);
+            return vec![dst];
         }
         let n = builtin_results(kind);
         let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![e.typ] };
@@ -5422,6 +5436,20 @@ impl Fb<'_> {
                     self.do_goto(&name);
                 }
             },
+            // `defer`（`M9/Phase 5a`）：只支持 `defer <funcval>()`（无实参）。
+            // 形状由 `unsup_stmt` 保证 —— 走到这里的其它形态是构建 bug。
+            Stmt::Defer { call } => {
+                if let ExprKind::Call {
+                    callee: Callee::Value(v),
+                    args,
+                    ..
+                } = &call.kind
+                    && args.is_empty()
+                {
+                    let fv = self.expr(v);
+                    self.emit(Instr::Defer { fv });
+                }
+            }
             other => todo!(
                 "M6/Task 24–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)

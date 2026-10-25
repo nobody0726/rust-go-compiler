@@ -405,6 +405,8 @@ impl Instr {
             | Instr::Store { dst, .. } => vec![*dst],
             Instr::Call { dsts, .. } => dsts.clone(),
             Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
+            // `defer` 不定义任何值
+            Instr::Defer { .. } => Vec::new(),
             // 捕获是**操作数**不是定义（它们在 `uses` 里）
             Instr::MakeClosure { dst, .. } => vec![*dst],
             // `ok` 也是这条指令**定义**的值（`V1` 要求每个值有定义点）
@@ -466,6 +468,7 @@ impl Instr {
             Instr::TypeAssert { x, .. } => out.push(*x),
             // `FuncAddr` 只读**符号**，不读值（`func` 是重定位，不是操作数）
             Instr::FuncAddr { .. } => {}
+            Instr::Defer { fv } => out.push(*fv),
             // `CapturePtr` 读的是隐式 ctx（不是 `Instr` 的操作数）
             Instr::CapturePtr { .. } => {}
             Instr::MakeClosure { captures, .. } => out.extend(captures.iter().copied()),
@@ -546,16 +549,24 @@ pub enum RuntimeFn {
     MapDel,
     /// `rt_map_iter(m, idx, kout, vout) -> u64`（0 = 结束）
     MapIter,
+    /// `rt_recover(out)` —— 写 16 字节接口到 `out`（`M9/Phase 5`）。
+    ///
+    /// # 为什么是 runtime 而不是内建
+    ///
+    /// `recover()` 要看「当前帧是不是被 defer 调用的」+「有没有挂起的 panic」，
+    /// 两件事都只有运行期知道。IR 里它就是一个普通的值调用。
+    Recover,
 }
 
 impl RuntimeFn {
     /// 全部（顺序进 `dump` 与守卫测试）。
-    pub const ALL: [RuntimeFn; 5] = [
+    pub const ALL: [RuntimeFn; 6] = [
         RuntimeFn::MapMake,
         RuntimeFn::MapGet,
         RuntimeFn::MapSet,
         RuntimeFn::MapDel,
         RuntimeFn::MapIter,
+        RuntimeFn::Recover,
     ];
 
     /// `rt.c` 里的符号名（**唯一来源**）。
@@ -567,6 +578,7 @@ impl RuntimeFn {
             RuntimeFn::MapSet => "rt_map_set",
             RuntimeFn::MapDel => "rt_map_del",
             RuntimeFn::MapIter => "rt_map_iter",
+            RuntimeFn::Recover => "rt_recover",
         }
     }
 
@@ -579,6 +591,7 @@ impl RuntimeFn {
             RuntimeFn::MapSet => "map_set",
             RuntimeFn::MapDel => "map_del",
             RuntimeFn::MapIter => "map_iter",
+            RuntimeFn::Recover => "recover",
         }
     }
 }
@@ -837,6 +850,21 @@ pub enum Instr {
         /// 第几个捕获（== `SsaFunc::captured` 的下标）。
         index: u32,
     },
+    /// 登记一条 **defer**（`M9/Phase 5`）。
+    ///
+    /// 只存 **funcval**：`defer f(args...)` 的实参由 build 打包进一个闭包
+    /// （`defer` 的实参在**登记时**求值 —— Go 规范），所以运行期不需要知道任何
+    /// ABI 布局，`rt_deferrun` 只做「调一个 funcval」。
+    ///
+    /// # 为什么不是 `Instr::Call`
+    ///
+    /// `Call` 会在**当前位置**执行；`Defer` 只在**帧退出时**执行。两者在控制流上
+    /// 完全无关，用同一条件表示就得再加一个「什么时候执行」的位 —— 而那个位
+    /// 只有两个取值。
+    Defer {
+        /// 被登记的 funcval（`func()` 类型）。
+        fv: ValueId,
+    },
     /// 类型断言（`x.(T)` / `x.(J)`，`M9/Task 33`）。
     ///
     /// # 两种形态
@@ -910,6 +938,7 @@ pub fn kind_of_instr(i: &Instr) -> &'static str {
         Instr::Store { .. } => "store",
         Instr::Call { .. } => "call",
         Instr::FuncAddr { .. } => "funcaddr",
+        Instr::Defer { .. } => "defer",
         Instr::MakeClosure { .. } => "closure",
         Instr::CapturePtr { .. } => "capture",
         Instr::TypeAssert { .. } => "assert",

@@ -260,7 +260,32 @@ pub fn func(
         }
         term(&cx, blk, asm)?;
     }
+    // panic 出口（`M9/Phase 5`）：跑本帧的 defer，然后**带着 panic 状态**返回。
+    // 调用方在自己的调用点之后查 `rt_panicking()`，非 0 就跳它自己的出口 ——
+    // 这就是「返回码传播」，不需要 `.framemap` 也能正确展开。
+    //
+    // 返回值不装：走到这里的帧结果没有意义（调用方看到状态非 0 就不会用它们）。
+    asm.label(&panic_label(&cx));
+    asm.ins("mov x0, x29");
+    asm.ins("bl rt_deferrun");
+    epilogue(fr, asm);
     Ok(())
+}
+
+/// 本帧的 panic 出口标签。用 `src`（就是函数符号的后缀）—— 天然唯一。
+fn panic_label(cx: &Ctx<'_>) -> String {
+    format!(".Lpanic_{}", cx.f.src.0)
+}
+
+/// 调用点之后的 panic 检查（`M9/Phase 5`）。
+///
+/// 每个可能 panic 的地方（用户调用、`rt_panic_*` 检查点）之后都要来一发：
+/// 没有它，panic 就只是「置了个状态然后继续跑」，症状是**静默算错**。
+fn check_panic(cx: &Ctx<'_>, asm: &mut Asm) {
+    // `cbnz` 直接跳出口 —— 不要再造一个「跳过」标签：同一个函数里有多处检查，
+    // 那种标签会重复定义（GNU as 报 `symbol already defined`）。
+    asm.ins("bl rt_panicking");
+    asm.ins(&format!("cbnz x0, {}", panic_label(cx)));
 }
 
 /// 序言：`stp` 保存 `fp`/`lr`，`mov fp, sp`，`sub sp`，取址槽清零。
@@ -427,6 +452,13 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         Instr::FuncAddr { dst, func } => {
             load_addr(asm, "x0", &crate::module::fv_symbol(*func));
             st_x(asm, "x0", cx.slot(*dst).off);
+        }
+        // 登记 defer（`M9/Phase 5`）：`rt_defer_push(fp, fv)`。
+        // `fp` 用 `x29` —— 本帧的帧指针，`rt_deferrun` 按它配对。
+        Instr::Defer { fv } => {
+            asm.ins("mov x0, x29");
+            ld_x(asm, "x1", cx.slot(*fv).off);
+            asm.ins("bl rt_defer_push");
         }
         // 捕获指针（`M9/Task 38`）：`dst = [ctx + 8 + 8*i]`（funcval 的第 i 个
         // 捕获槽，首字是 `fn`）。
@@ -1168,6 +1200,7 @@ fn retag_iface(cx: &Ctx<'_>, dst: ValueId, x: ValueId, to: TypeId, asm: &mut Asm
     let ok = format!(".Lretag{}", asm.fresh_label());
     asm.ins(&format!("cbnz x0, {ok}"));
     asm.ins("bl rt_panic_assert");
+    check_panic(cx, asm);
     asm.label(&ok);
     st_x(asm, "x0", d.off);
 }
@@ -1224,6 +1257,7 @@ fn type_assert(
     match ok {
         None => {
             asm.ins("bl rt_panic_assert");
+            check_panic(cx, asm);
             asm.ins(&format!("b {done}"));
         }
         Some(o) => {
@@ -1278,6 +1312,7 @@ fn finish_assert(cx: &Ctx<'_>, ok: Option<ValueId>, asm: &mut Asm, reg: &str) {
             let good = format!(".Lass_nz{}", asm.fresh_label());
             asm.ins(&format!("cbnz {reg}, {good}"));
             asm.ins("bl rt_panic_assert");
+            check_panic(cx, asm);
             asm.label(&good);
         }
     }
@@ -1555,6 +1590,7 @@ fn index(cx: &Ctx<'_>, dst: ValueId, base: ValueId, i: ValueId, asm: &mut Asm) {
         asm.ins("mov x0, x11");
         asm.ins("mov x1, x12");
         asm.ins("bl rt_panic_bounds");
+        check_panic(cx, asm);
         asm.label(&ok);
     }
     load_imm(asm, "x12", i64::from(esz));
@@ -1719,6 +1755,15 @@ fn zero_slot(asm: &mut Asm, off: i32, size: u32) {
 /// 直接 `addr` 就行。
 fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], asm: &mut Asm) {
     match f {
+        // `recover()`（`M9/Phase 5`）：写 16 字节接口到出参槽。
+        RuntimeFn::Recover => {
+            let Some(d) = dsts.first() else { return };
+            let sd = cx.slot(*d);
+            zero_slot(asm, sd.off, sd.size);
+            addr(asm, sd.off);
+            asm.ins("mov x0, x9");
+            asm.ins("bl rt_recover");
+        }
         RuntimeFn::MapMake => {
             let Some(d) = dsts.first() else { return };
             let t = cx.ty(*d);
@@ -2170,9 +2215,16 @@ fn call(
             let fv = cx.slot(*v);
             pass_args_ctx(cx, None, args, asm);
             ld_x(asm, "x0", fv.off);
+            // **nil funcval** ⇒ 可恢复的 panic（`closure4.go` / `defernil.go`）。
+            // 不检查就是「`ldr` 读地址 0」→ SIGSEGV，`recover` 救不回来。
+            asm.ins("cbnz x0, 1f");
+            asm.ins("bl rt_panic_nil");
+            asm.ins(&format!("b {}", panic_label(cx)));
+            asm.ins("1:");
             asm.ins("ldr x16, [x0]");
             asm.ins("blr x16");
             take_results(cx, dsts, asm);
+            check_panic(cx, asm);
             Ok(())
         }
     }
@@ -2681,12 +2733,20 @@ fn term(cx: &Ctx<'_>, blk: &Block, asm: &mut Asm) -> Result<(), CgCode> {
             ));
         }
         Term::Return(vals) => {
+            // 先跑本帧的 defer，再取返回值（`M9/Phase 5`）：
+            // ① defer 可能改**命名结果槽** —— 所以必须在 `return_values` **之前**；
+            // ② `rt_deferrun` 是 C 调用，会打掉 `x0..x18` 与 `v0..v7` ——
+            //    所以必须在**之后**才往寄存器里装返回值。
+            asm.ins("mov x0, x29");
+            asm.ins("bl rt_deferrun");
             return_values(cx, vals, asm);
             epilogue(cx.fr, asm);
         }
         Term::Panic(v) => {
+            // 只**置状态**，不退出：`defer` 里可能 `recover`（`M9/Phase 5`）。
+            // 退出由 `main` 的收尾做（`module.rs` 的 `_start`）。
             panic_value(cx, *v, asm);
-            asm.ins("brk #1");
+            asm.ins(&format!("b {}", panic_label(cx)));
         }
         Term::Unreachable => {
             asm.ins("brk #1");

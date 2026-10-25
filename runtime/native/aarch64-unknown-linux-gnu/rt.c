@@ -70,7 +70,42 @@ void rt_exit(i64 code) {
 }
 
 /* 短写必须循环（`C5` §2.3 的已知缺口，这里补上）。 */
+void *rt_arena_alloc(u64 size, u64 align);
+/* `panic_set` / `rt_equal` 的定义在文件后半，但前面（`rt_panic_assert` /
+ * `rt_iface_eq`）就要用 —— C99 不允许隐式声明，必须前向。 */
+static void panic_set(const char *p, u64 n);
+
+/* 捕获模式（`M9/Phase 5`）：`panic` 的文本要**先攒起来**再存成状态，
+ * 而不是直接写出去 —— 因为 `recover()` 可能把它救回来，那就不该有输出。
+ *
+ * 拦在 `write_all` 这一层而不是给每个 `rt_panic_*` 各写一套格式化：
+ * 那 9 个函数的文本格式各不相同（整数 / 字符串 / 浮点 / 复数 / 越界 / 断言），
+ * 但它们**都**经过 `write_all`。一处拦截，九处受益。 */
+static i64 g_capturing;
+static char *g_cap_buf;
+static u64 g_cap_len;
+static u64 g_cap_cap;
+
 static void write_all(i64 fd, const char *p, u64 n) {
+    if (g_capturing) {
+        if (g_cap_len + n > g_cap_cap) {
+            u64 nc = g_cap_cap == 0 ? 64 : g_cap_cap;
+            while (nc < g_cap_len + n) {
+                nc *= 2;
+            }
+            char *nb = rt_arena_alloc(nc, 8);
+            for (u64 i = 0; i < g_cap_len; i++) {
+                nb[i] = g_cap_buf[i];
+            }
+            g_cap_buf = nb;
+            g_cap_cap = nc;
+        }
+        for (u64 i = 0; i < n; i++) {
+            g_cap_buf[g_cap_len + i] = p[i];
+        }
+        g_cap_len += n;
+        return;
+    }
     while (n > 0) {
         i64 w = sys3(SYS_write, fd, (i64)p, (i64)n);
         if (w <= 0) {
@@ -314,6 +349,9 @@ typedef struct {
 } TypeDesc;
 
 _Static_assert(sizeof(TypeDesc) == 40, "TypeDesc 必须是 40 字节（C5 §10）");
+
+/* 值相等（定义在文件后半；`rt_iface_eq` 在它之前就要用）。 */
+int rt_equal(const TypeDesc *d, const void *a, const void *b);
 _Static_assert(__builtin_offsetof(TypeDesc, gcdata) == 16, "gcdata 在 +16");
 _Static_assert(__builtin_offsetof(TypeDesc, elem) == 24, "elem 在 +24");
 _Static_assert(__builtin_offsetof(TypeDesc, methods) == 32, "methods 在 +32");
@@ -488,13 +526,12 @@ int rt_iface_eq(u64 a0, u64 a1, u64 b0, u64 b1, i64 eface) {
  * 名字不在 `TypeDesc` 里（`U-M9-04`，归 M12）。这里只给前缀 + `failed`，
  * 记在 `G-M9-03`。D 腿的语料不该走到这里（走到就是真 bug）。 */
 void rt_panic_assert(void) {
-    const char *m = "panic: interface conversion: failed\n";
+    const char *m = "interface conversion: failed";
     u64 n = 0;
     while (m[n] != 0) {
         n++;
     }
-    write_all(FD_STDERR, m, n);
-    rt_exit(2);
+    panic_set(m, n);
 }
 
 /* 前向声明：`rt_map_set` 要用它，而它的定义在 panic 那一节（文件后半）。 */
@@ -1110,15 +1147,158 @@ void rt_print_i64(i64 v) {
     write_all(FD_STDOUT, buf, n);
 }
 
-/* ── panic（`C9` §4.5：一行到 stderr + 退出码 2）── */
+/* ════════════════════════════════════════════════════════════════════
+ * defer / panic / recover（`M9/Phase 5`，`R-9-18`）
+ *
+ * # 三条设计约束（都是「不做」比「做」重要）
+ *
+ * 1. **不 unwind**：`.framemap` 不在 ELF 里，栈上哪一格是指针**运行期不知道**，
+ *    所以不能用 `longjmp` 跳过帧（那样漏扫根，后续 GC 会看到悬垂指针）。
+ *    改成**返回码传播**：`rt_panic` 只置状态就返回，每个调用点之后查一次
+ *    `rt_panicking()`，非 0 就跳本帧的 panic 出口（跑 defer 再 `ret`）。
+ * 2. **defer 只存 funcval**：`defer f(args...)` 的实参由 build 打包进一个闭包，
+ *    所以运行期不需要知道任何 ABI 布局 —— `rt_deferrun` 只做「调一个 funcval」。
+ * 3. **跑 defer 期间挂起 panic**：被 defer 调用的函数是**正常执行**的（它也会
+ *    return），所以它内部的 `rt_panicking` 检查必须是 0。挂起 + 跑完恢复。
+ * ════════════════════════════════════════════════════════════════════ */
 
-static void panic_prefix(void) { write_all(FD_STDERR, "panic: ", 7); }
+/* 一条已登记的 defer。`fp` 是登记时那个帧的 `x29`（`rt_deferrun` 按它配对）。 */
+typedef struct DeferRec {
+    struct DeferRec *next;
+    void *fp;
+    void *fv;
+} DeferRec;
+
+static DeferRec *g_defer_top;
+
+/* 当前 panic 的**文本**（已拷进堆：展开期间源帧会消失）。 */
+static i64 g_panicking;
+static char *g_p_text;
+static u64 g_p_len;
+
+/* 跑 defer 时被**挂起**的那个 panic（`recover()` 取的就是它）。 */
+static i64 g_saved_panicking;
+static char *g_saved_text;
+static u64 g_saved_len;
+static i64 g_in_defer;
+
+/* `recover()` 返回的接口用这个 desc（`string`，16 字节）。
+ * M9 没有 reflect（`U-M9-04`），所以 `recover()` 的返回值只有「非 nil」与
+ * 「按 `C9` §4.3 打印」两个可观察面 —— 给一个 string 接口两件事都成立。 */
+static const TypeDesc g_panic_str_desc = {16, 8, 0x9e3779b9u, 6, 1, 0, 0, 0, 0};
+
+void rt_defer_push(void *fp, void *fv) {
+    DeferRec *r = rt_arena_alloc(sizeof(DeferRec), 8);
+    r->next = g_defer_top;
+    r->fp = fp;
+    r->fv = fv;
+    g_defer_top = r;
+}
+
+/* 把文本拷进堆再记状态。`p` 可能是帧上的临时缓冲，展开期间就没了。 */
+static void panic_set(const char *p, u64 n) {
+    char *t = rt_arena_alloc(n + 1, 8);
+    for (u64 i = 0; i < n; i++) {
+        t[i] = p[i];
+    }
+    t[n] = 0;
+    g_p_text = t;
+    g_p_len = n;
+    g_panicking = 1;
+}
+
+i64 rt_panicking(void) { return g_panicking; }
+
+/* 调一个 funcval：`{ fn, caps... }` 的首字是代码地址。 */
+static void call_funcval(void *fv) {
+    void (*fn)(void *) = (void (*)(void *))((void **)fv)[0];
+    fn(fv);
+}
+
+/* 帧 `fp` 的 defer 全部逆序跑掉。
+ *
+ * `recover()` 看的是 `g_saved_*`：同一时刻「正在传播的 panic」只有一个，而
+ * defer 里新起的 panic 要**取代**它 —— 所以正在传播的那个搬进 `g_saved_*`。 */
+void rt_deferrun(void *fp) {
+    while (g_defer_top != 0 && g_defer_top->fp == fp) {
+        DeferRec *r = g_defer_top;
+        g_defer_top = r->next;
+        g_saved_panicking = g_panicking;
+        g_saved_text = g_p_text;
+        g_saved_len = g_p_len;
+        g_panicking = 0;
+        g_p_text = 0;
+        g_p_len = 0;
+        g_in_defer = 1;
+        if (r->fv == 0) {
+            /* `defer nilf()`：Go 在**调用时**才 panic（不是登记时，`defernil.go`
+             * 整份文件钉的就是这件事）。文本与解释器的 `RtError::NilDeref` 一致。 */
+            const char *m =
+                "runtime error: invalid memory address or nil pointer dereference";
+            u64 n = 0;
+            while (m[n] != 0) {
+                n++;
+            }
+            panic_set(m, n);
+        } else {
+            call_funcval(r->fv);
+        }
+        g_in_defer = 0;
+        if (!g_panicking) {
+            /* 没有新 panic ⇒ 把挂起的那个放回去（`recover` 过就放回 0） */
+            g_panicking = g_saved_panicking;
+            g_p_text = g_saved_text;
+            g_p_len = g_saved_len;
+        }
+    }
+}
+
+/* `recover()`：写 16 字节接口到 `out`。 */
+void rt_recover(void *out) {
+    if (g_in_defer && g_saved_panicking) {
+        void *box = rt_arena_alloc(16, 8);
+        *(char **)box = g_saved_text;
+        *(u64 *)((char *)box + 8) = g_saved_len;
+        *(const void **)out = (const void *)&g_panic_str_desc;
+        *(void **)((char *)out + 8) = box;
+        g_saved_panicking = 0;
+        g_saved_text = 0;
+        g_saved_len = 0;
+        return;
+    }
+    *(const void **)out = 0;
+    *(void **)((char *)out + 8) = 0;
+}
+
+/* 没有人 recover 的 panic：`main` 的收尾调它（`C9` §4.5：一行到 stderr + 退出 2）。 */
+void rt_print_panic(void) {
+    write_all(FD_STDERR, "panic: ", 7);
+    if (g_p_len > 0) {
+        write_all(FD_STDERR, g_p_text, g_p_len);
+    }
+    write_all(FD_STDERR, "\n", 1);
+}
+
+/* ── panic 的九个入口（`C9` §4.5）──
+ *
+ * 它们**只置状态**，不退出：退出由 `main` 的收尾做（那样 `recover` 才有机会）。
+ * 文本走「捕获」而不是直接写出去 —— 被 recover 掉就不该有输出。 */
+
+/* 开始捕获：前缀 `panic: ` **不进**捕获（`rt_print_panic` 自己加）。 */
+static void panic_prefix(void) {
+    g_capturing = 1;
+    g_cap_len = 0;
+}
+
+static void panic_commit(void) {
+    g_capturing = 0;
+    panic_set(g_cap_buf == 0 ? "" : g_cap_buf, g_cap_len);
+}
 
 void rt_panic_str(const char *p, u64 n) {
     panic_prefix();
     write_all(FD_STDERR, p, n);
-    write_all(FD_STDERR, "\n", 1);
-    rt_exit(2);
+    panic_commit();
 }
 
 void rt_panic_i64(i64 v) {
@@ -1132,30 +1312,27 @@ void rt_panic_i64(i64 v) {
     }
     panic_prefix();
     write_all(FD_STDERR, buf, n);
-    write_all(FD_STDERR, "\n", 1);
-    rt_exit(2);
+    panic_commit();
 }
 
 /* 三个检查点的出口（`M7-design.md` §3.9）。文案与 Go 的对应 panic 一致。 */
 void rt_panic_div_zero(void) {
-    const char *m = "panic: runtime error: integer divide by zero\n";
+    const char *m = "runtime error: integer divide by zero";
     u64 n = 0;
     while (m[n] != 0) {
         n++;
     }
-    write_all(FD_STDERR, m, n);
-    rt_exit(2);
+    panic_set(m, n);
 }
 
 void rt_panic_nil(void) {
     const char *m =
-        "panic: runtime error: invalid memory address or nil pointer dereference\n";
+        "runtime error: invalid memory address or nil pointer dereference";
     u64 n = 0;
     while (m[n] != 0) {
         n++;
     }
-    write_all(FD_STDERR, m, n);
-    rt_exit(2);
+    panic_set(m, n);
 }
 
 /* 切片表达式的越界：`panic: runtime error: slice bounds out of range [k:v] with capacity c`
@@ -1169,7 +1346,8 @@ void rt_panic_nil(void) {
  *
  * `kind`：0 = string、1 = array、2 = slice。 */
 void rt_panic_slice_bounds(u64 val, u64 max, u64 kind) {
-    const char *a = "panic: runtime error: slice bounds out of range [";
+    panic_prefix();
+    const char *a = "runtime error: slice bounds out of range [";
     u64 k = 0;
     while (a[k] != 0) {
         k++;
@@ -1221,19 +1399,17 @@ void rt_panic_slice_bounds(u64 val, u64 max, u64 kind) {
         }
     }
     write_all(FD_STDERR, buf, len);
-    write_all(FD_STDERR, "\n", 1);
-    rt_exit(2);
+    panic_commit();
 }
 
 /* 写 nil map：`panic: assignment to entry in nil map`（文本与解释器一致）。 */
 void rt_panic_nilmap(void) {
-    const char *m = "panic: assignment to entry in nil map\n";
+    const char *m = "assignment to entry in nil map";
     u64 n = 0;
     while (m[n] != 0) {
         n++;
     }
-    write_all(FD_STDERR, m, n);
-    rt_exit(2);
+    panic_set(m, n);
 }
 
 /* 越界：`panic: runtime error: index out of range [i] with length n`
@@ -1244,7 +1420,8 @@ void rt_panic_nilmap(void) {
  * 打印数字自己拼（不用 `fmt_u64`）：那个函数定义在下面，而这里要一个
  * 「只往 stderr 写、不碰 stdout」的版本 —— 越界时 stdout 必须保持原样。 */
 void rt_panic_bounds(u64 i, u64 n) {
-    const char *a = "panic: runtime error: index out of range [";
+    panic_prefix();
+    const char *a = "runtime error: index out of range [";
     u64 k = 0;
     while (a[k] != 0) {
         k++;
@@ -1289,9 +1466,7 @@ void rt_panic_bounds(u64 i, u64 n) {
         }
     }
     write_all(FD_STDERR, buf, len);
-    const char *c = "\n";
-    write_all(FD_STDERR, c, 1);
-    rt_exit(2);
+    panic_commit();
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1772,17 +1947,13 @@ void rt_print_complex64(float re, float im) {
  * 直接把槽里的位模式当整数打（`rt_panic_i64`）会打出 `1107296256` 这种
  * 「看起来像个大整数」的东西 —— 静默错，而且很容易被当成真值。 */
 void rt_panic_f64(double v, i64 is32) {
-    write_all(FD_STDERR, "panic: ", 7);
-    g_out_fd = FD_STDERR;
+    panic_prefix();
     rt_print_f64(v, is32);
-    write_all(FD_STDERR, "\n", 1);
-    rt_exit(2);
+    panic_commit();
 }
 
 void rt_panic_complex(double re, double im) {
-    write_all(FD_STDERR, "panic: ", 7);
-    g_out_fd = FD_STDERR;
+    panic_prefix();
     rt_print_complex(re, im);
-    write_all(FD_STDERR, "\n", 1);
-    rt_exit(2);
+    panic_commit();
 }
