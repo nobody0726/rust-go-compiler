@@ -1918,7 +1918,10 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             }
         };
         match elem {
-            Some(e) => Operand::value(Some(e)),
+            // 官方 `expr.go:150`（`case token.ARROW`）：`x.mode_ = commaok`。
+            // 不是 `value` —— `v, ok := <-c` 的双值判定就看这一位
+            // （`stmt.rs::assign_rhs` 的 `want == 2` 分支）。
+            Some(e) => Operand::comma_ok(e),
             None => {
                 let (kind, desc) = {
                     let tt = self.tt();

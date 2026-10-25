@@ -22,8 +22,9 @@
 use std::collections::BTreeMap;
 
 use rgoc_ast::{
-    AssignOp, BlockStmt, CallExpr, CaseClause, CompositeLit, Decl, DeclStmt, Expr as AExpr,
-    ForStmt, FuncDecl, IfStmt, Name, Op, RangeClause, SimpleStmt, Stmt as AStmt, SwitchStmt,
+    AssignOp, BlockStmt, CallExpr, CaseClause, CommClause, CompositeLit, Decl, DeclStmt,
+    Expr as AExpr, ForStmt, FuncDecl, IfStmt, Name, Op, RangeClause, SelectStmt, SimpleStmt,
+    Stmt as AStmt, SwitchStmt,
 };
 use rgoc_check::Session;
 use rgoc_check::env::Env;
@@ -37,7 +38,7 @@ use crate::diag::{HirReject, RejectKind};
 use crate::types::{
     BinOp, Block, BranchKind, BuiltinKind, Callee, Capture, Case, Composite, CompositeItem,
     ConstVal, Expr, ExprKind, Func, FuncId, Global, GlobalId, InitGroup, MakeKind, MethodRef,
-    Place, Program, RangeKind, SlotId, Stmt, TypeCase, UnOp,
+    Place, Program, RangeKind, SelectClause, SelectKind, SlotId, Stmt, TypeCase, UnOp,
 };
 
 /// `_` 的槽占位（永远不会被读写）。
@@ -935,19 +936,167 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
             }
             AStmt::Call(c) => {
-                if c.tok == rgoc_ast::CallTok::Go {
-                    self.reject(c.pos, RejectKind::Go, "go 语句不在 M5 面（U-M5-05）");
-                    return None;
-                }
+                // `go f(...)`（M8/Task 11）：`call` 里的被调者与全部实参在
+                // **当前** goroutine 求值（`STM-14`），所以这里与 `defer`
+                // 走同一个 lowering，只在语句种类上分开。
                 let call = self.lower_expr(&c.call);
+                if c.tok == rgoc_ast::CallTok::Go {
+                    return Some(Stmt::Go { call });
+                }
                 Some(Stmt::Defer { call })
             }
             AStmt::Send(s) => Some(self.lower_send(s)),
-            AStmt::Select(s) => {
-                self.reject(s.pos, RejectKind::Select, "select 不在 M5 面（U-M5-05）");
+            AStmt::Select(s) => Some(self.lower_select(s)),
+        }
+    }
+
+    /// `select { ... }`（M8/Task 12）。
+    ///
+    /// **子句顺序就是源码顺序**，一个都不许重排：`D-M8-3` 规定多就绪时取
+    /// 源码顺序的第一个（`seed = 0`），而「哪个是第一个」只由这里的
+    /// `Vec` 顺序决定。按种类分组、按就绪度排序之类的「优化」会直接改语义。
+    fn lower_select(&mut self, s: &SelectStmt) -> Stmt {
+        let mut clauses = Vec::with_capacity(s.clauses.len());
+        for c in &s.clauses {
+            // 每个子句一层作用域：`case v := <-c:` 的 `v` 只在它自己的体内可见。
+            self.push_scope();
+            let clause = self.lower_comm(c);
+            self.pop_scope();
+            if let Some(clause) = clause {
+                clauses.push(clause);
+            }
+        }
+        Stmt::Select { clauses }
+    }
+
+    /// 一个 `case` / `default` 子句（`AST-49` → `SelectClause`）。
+    ///
+    /// 三种形态的判据是**语句形状**，不是类型：
+    ///
+    /// | `comm` | 形态 |
+    /// |---|---|
+    /// | `None` | `default` |
+    /// | `SimpleStmt::Send` | `case ch <- v:` |
+    /// | `SimpleStmt::Expr`（`<-c`） | `case <-c:`（丢弃值） |
+    /// | `SimpleStmt::Assign`（右侧 `<-c`） | `case v[, ok] := <-c:` |
+    fn lower_comm(&mut self, c: &CommClause) -> Option<SelectClause> {
+        let Some(comm) = &c.comm else {
+            return Some(SelectClause {
+                kind: SelectKind::Default,
+                chan: None,
+                recv_targets: Vec::new(),
+                send_value: None,
+                body: self.lower_case_body(&c.body),
+            });
+        };
+        match comm {
+            SimpleStmt::Send(s) => {
+                // 与 `Stmt::Send` 同一条求值顺序：chan 先、value 后。
+                let chan = self.lower_expr(&s.chan);
+                let value = self.lower_expr(&s.value);
+                Some(SelectClause {
+                    kind: SelectKind::Send,
+                    chan: Some(chan),
+                    recv_targets: Vec::new(),
+                    send_value: Some(value),
+                    body: self.lower_case_body(&c.body),
+                })
+            }
+            SimpleStmt::Expr(e) => {
+                let chan = self.comm_chan(&e.x)?;
+                Some(SelectClause {
+                    kind: SelectKind::Recv,
+                    chan: Some(chan),
+                    recv_targets: Vec::new(),
+                    send_value: None,
+                    body: self.lower_case_body(&c.body),
+                })
+            }
+            SimpleStmt::Assign(a) => {
+                let Some(rhs0) = a.rhs.first() else {
+                    self.reject(c.pos, RejectKind::MissingType, "select 子句右侧为空");
+                    return None;
+                };
+                let chan = self.comm_chan(rhs0)?;
+                // ⚠️ 顺序：**先声明目标，再 lower 子句体**。子句体里对 `v` 的
+                // 引用要靠 lowering 的作用域解析（`check_env` 就是从它建的），
+                // 反过来做会得到「名字 v 无法在 lowering 期解析」。
+                let elem = self.chan_elem(&chan);
+                let ok_ty = self.s.tt.add_basic(BasicId::Bool);
+                let recv_targets = a
+                    .lhs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| {
+                        let t = if i == 0 { elem } else { ok_ty };
+                        self.comm_target(l, t)
+                    })
+                    .collect();
+                Some(SelectClause {
+                    kind: SelectKind::Recv,
+                    chan: Some(chan),
+                    recv_targets,
+                    send_value: None,
+                    body: self.lower_case_body(&c.body),
+                })
+            }
+            // `SimpleStmt::Empty` / `Range` 在 select 的 comm 位是语法错误
+            // （检查面已报），这里不产出子句。
+            SimpleStmt::Empty | SimpleStmt::Range(_) => {
+                self.reject(c.pos, RejectKind::MissingType, "select 子句不是通信操作");
                 None
             }
         }
+    }
+
+    /// 通道的元素类型（拿不到就 `invalid`，检查面已报过）。
+    fn chan_elem(&mut self, chan: &Expr) -> TypeId {
+        let elem = {
+            let tt = &*self.s.tt;
+            match tt.type_of(underlying(tt, chan.typ)) {
+                Type::Chan { elem, .. } => Some(*elem),
+                _ => None,
+            }
+        };
+        elem.unwrap_or_else(|| self.s.tt.invalid())
+    }
+
+    /// 从 `<-c` 里取出通道表达式（剥掉括号）。
+    ///
+    /// 返回 `None` ⇒ 这不是一个接收操作（检查面已报「select case must be
+    /// send or receive operation」），调用方据此丢弃该子句。
+    fn comm_chan(&mut self, e: &AExpr) -> Option<Expr> {
+        match e {
+            AExpr::Paren(p) => self.comm_chan(&p.x),
+            AExpr::Unary(o) if o.op == Op::Arrow => Some(self.lower_expr(&o.x)),
+            _ => {
+                self.reject(
+                    e.start_pos(),
+                    RejectKind::MissingType,
+                    "select 子句不是接收操作",
+                );
+                None
+            }
+        }
+    }
+
+    /// select 接收目标：`:=` 形态要先在 lowering 的作用域里登记（与
+    /// [`Self::lower_assign`] 的 define 分支同源），否则子句体里对它的引用
+    /// 解析不到。
+    fn comm_target(&mut self, e: &AExpr, typ: TypeId) -> Place {
+        let AExpr::Name(n) = e else {
+            // `case a[i] = <-c:` 这类：左值已存在，直接按左值解析。
+            return self.lower_place(e);
+        };
+        if n.value == "_" {
+            return Place::Slot(DISCARD_SLOT);
+        }
+        if let Some(local) = self.resolve(&n.value) {
+            return Place::Slot(local.slot);
+        }
+        let typ = self.default_type(typ);
+        let (slot, _new) = self.declare_reuse(&n.value, typ);
+        Place::Slot(slot)
     }
 
     fn result_types_of_current(&self) -> Vec<TypeId> {
@@ -1096,7 +1245,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
     fn mark_comma_ok(&mut self, rhs: &mut [Expr]) {
         let Some(e) = rhs.first_mut() else { return };
         match &mut e.kind {
-            ExprKind::Index { comma_ok, .. } | ExprKind::TypeAssert { comma_ok, .. } => {
+            ExprKind::Index { comma_ok, .. }
+            | ExprKind::TypeAssert { comma_ok, .. }
+            | ExprKind::Recv { comma_ok, .. } => {
                 *comma_ok = true;
             }
             _ => {}
@@ -1773,16 +1924,24 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                     let x = self.lower_expr(&o.x);
                     return Expr::new(ExprKind::Deref(Box::new(x)), typ);
                 }
+                // `<-ch`（M8/Task 10）：`comma_ok` 由 `mark_comma_ok` 在
+                // 「右侧唯一项、左侧两项」的位置上置位（与 map 索引同源）。
+                if o.op == Op::Arrow {
+                    let ch = self.lower_expr(&o.x);
+                    return Expr::new(
+                        ExprKind::Recv {
+                            ch: Box::new(ch),
+                            comma_ok: false,
+                        },
+                        typ,
+                    );
+                }
                 let x = self.lower_expr(&o.x);
                 let op = match o.op {
                     Op::Sub => UnOp::Neg,
                     Op::Add => UnOp::Pos,
                     Op::Not => UnOp::Not,
                     Op::Xor => UnOp::BitNot,
-                    Op::Arrow => {
-                        self.reject(o.pos, RejectKind::Chan, "接收操作不在 M5 面（U-M5-05）");
-                        UnOp::Pos
-                    }
                     _ => UnOp::Pos,
                 };
                 Expr::new(ExprKind::Unary { op, x: Box::new(x) }, typ)

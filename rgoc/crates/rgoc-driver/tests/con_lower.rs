@@ -276,13 +276,13 @@ func main() {
 	case v, ok := <-a:
 		println(v, ok)
 	case b <- 1:
-	case default:
+	default:
 	}
 }
 "#,
     );
-    has(&d, "Select clauses=2");
-    has(&d, "Select clauses=3");
+    has(&d, "Select\tclauses=2");
+    has(&d, "Select\tclauses=3");
     has(&d, "#0 recv targets=0");
     has(&d, "#1 recv targets=1");
     has(&d, "#0 recv targets=2");
