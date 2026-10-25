@@ -2185,9 +2185,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 _ => MakeKind::Map,
             }
         };
-        if kind == MakeKind::Chan {
-            self.reject(c.pos, RejectKind::Chan, "make(chan) 不在 M5 面（U-M5-05）");
-        }
         let args: Vec<Expr> = c.args.iter().skip(1).map(|a| self.lower_expr(a)).collect();
         Expr::new(ExprKind::Make { kind, args }, target)
     }

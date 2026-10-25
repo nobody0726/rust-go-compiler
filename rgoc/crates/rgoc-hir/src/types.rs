@@ -552,6 +552,12 @@ pub enum ExprKind {
         /// 形态。
         kind: MakeKind,
         /// 实参（长度 / 容量）。
+        ///
+        /// | `kind` | `args` |
+        /// |---|---|
+        /// | `Slice` | `[len]` 或 `[len, cap]` |
+        /// | `Map` | `[hint]` 或空 |
+        /// | `Chan` | `[cap]` 或空（空 = 无缓冲，`C11` §3.1） |
         args: Vec<Expr>,
     },
     /// `new(T)` —— 分配一个零值 `Cell`，结果是 `*T`。
