@@ -159,6 +159,106 @@ fn array_len(tt: &TypeTable, len: Option<rgoc_const::consts::ConstId>) -> Option
     }
 }
 
+/// 每个 8 字节字的「是否含 Go 指针」位图（M9/Task 2，`T-META-04`）。
+///
+/// # 语义
+///
+/// 返回 `Vec<bool>`，第 `i` 项对应字节区间 `[8*i, 8*i+8)`：
+/// `true` ⇒ 这个字里有一个需要 GC 追踪的指针。长度 = `ceil(size/8)`，
+/// 零大小类型 ⇒ 空 `Vec`（**不是** `vec![false]`）。
+///
+/// # 为什么「接口的字 0」也算 `true`
+///
+/// `iface` / `eface` 是 `{元数据指针, data}`。字 0 指向 `ITab` / `TypeDesc` ——
+/// 它**不在 Go 堆上**，但 M10 扫到它时要经它找到字 1 的 desc，所以位图必须
+/// 把它标成「这里有个需要特殊处理的指针」。扫描器不能把它当普通对象去追。
+///
+/// # 返回 `None`
+///
+/// 与 [`layout`] 完全一致（泛型 / `Tuple` / `[...]T` / `Invalid`）——
+/// 没有尺寸就没有「几个字」可言。
+///
+/// # 一条隐含不变量
+///
+/// 「含指针的聚合，其 size 与含指针字段的偏移都是 8 的倍数」。这不是巧合：
+/// 指针的 align 是 8 ⇒ 含指针的类型的 align ≥ 8 ⇒ 它占的字节数是 8 的倍数，
+/// 它作为字段时的偏移也是 8 的倍数。位图按字索引因此不会「劈开」一个指针。
+/// 真出现了说明布局算错了（`debug_assert` 会在调试构建里当场炸）。
+#[must_use]
+pub fn ptr_mask(tt: &TypeTable, t: TypeId) -> Option<Vec<bool>> {
+    ptr_mask_at(tt, t, 0)
+}
+
+fn ptr_mask_at(tt: &TypeTable, t: TypeId, depth: u32) -> Option<Vec<bool>> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let l = layout_at(tt, t, depth)?;
+    let mut out = vec![false; (l.size as usize).div_ceil(8)];
+    match tt.type_of(t) {
+        Type::Basic(b) => {
+            if matches!(
+                b,
+                BasicId::String | BasicId::UntypedString | BasicId::UnsafePointer
+            ) {
+                out[0] = true;
+            }
+        }
+        // 具名类型看本体；别名看右边。**不给它们单开一支** ——
+        // 否则 `type P *int` 与 `*int` 会得到两个不同的位图。
+        Type::Named(id) => return ptr_mask_at(tt, tt.named_underlying(*id), depth + 1),
+        Type::Alias(id) => return ptr_mask_at(tt, tt.alias_rhs(*id), depth + 1),
+        // 单字引用：指针 / map / chan / 函数值。
+        Type::Pointer(_) | Type::Map { .. } | Type::Chan { .. } | Type::Signature(_) => {
+            out[0] = true;
+        }
+        Type::Slice(_) => out[0] = true,
+        Type::Interface(_) => {
+            out[0] = true;
+            out[1] = true;
+        }
+        Type::Array { len, elem } => {
+            let n = array_len(tt, *len)? as usize;
+            if n == 0 {
+                return Some(Vec::new());
+            }
+            let em = ptr_mask_at(tt, *elem, depth + 1)?;
+            if !em.iter().any(|b| *b) {
+                return Some(out);
+            }
+            let esize = layout_at(tt, *elem, depth + 1)?.size as usize;
+            debug_assert_eq!(esize % 8, 0, "含指针的元素 size 必须是 8 的倍数");
+            let stride = esize / 8;
+            for i in 0..n {
+                for (j, bit) in em.iter().enumerate() {
+                    if *bit {
+                        out[i * stride + j] = true;
+                    }
+                }
+            }
+        }
+        Type::Struct(id) => {
+            let offs = field_offsets(tt, *id)?;
+            let def = tt.struct_def(*id);
+            for (f, off) in def.fields.iter().zip(&offs) {
+                let fm = ptr_mask_at(tt, f.typ, depth + 1)?;
+                if !fm.iter().any(|b| *b) {
+                    continue;
+                }
+                let off = *off as usize;
+                debug_assert_eq!(off % 8, 0, "含指针的字段必须 8 字节对齐");
+                for (j, bit) in fm.iter().enumerate() {
+                    if *bit {
+                        out[off / 8 + j] = true;
+                    }
+                }
+            }
+        }
+        Type::Tuple(_) | Type::TypeParam(_) | Type::Union(_) | Type::Invalid => return None,
+    }
+    Some(out)
+}
+
 /// 类型 `t` 是数组时的元素个数（剥命名/别名）；不是数组 ⇒ `None`。
 ///
 /// # 为什么放在这里
