@@ -57,18 +57,24 @@ fn build(name: &str, src: &str) -> (u8, String, PathBuf) {
 }
 
 #[test]
-fn u_m7_01_切片面报码并退出1() {
-    // `[]int` 复合字面量 + 下标写：`U-M7-01` 的最小入口。
-    let src =
-        "package main\n\nfunc main() {\n\ts := []int{1, 2, 3}\n\ts[0] = 9\n\tprintln(s[0])\n}\n";
+fn u_m7_01_切片面已经放行() {
+    // # 这条判据在 M9/Phase 1 换过面（`R-9-4`）
+    //
+    // M7 时 `U-M7-01` 说「`[]T` 全集不支持」，判据是「报 `CG-UNSUPPORTED-SLICE`
+    // 并退出 1」。M9 把切片真的实现了（`make` / `Index` / `Slice` / `append` /
+    // 字面量 / 越界检查），所以现在它必须**构建成功且跑对**。
+    //
+    // 反过来的守卫（「这条码不许再出现」）在 `native_slice.rs` 的
+    // `t_m9_15_slice_码不许再出现`。两条一起才完整：一条说「现在能跑」，
+    // 一条说「旧码不许复活」。
+    let src = "package main\n\nfunc main() {\n\ts := []int{1, 2, 3}\n\ts[0] = 9\n\tprintln(s[0], len(s))\n}\n";
     let (exit, stderr, exe) = build("slice_probe", src);
-    assert_eq!(exit, 1, "静态拒绝必须是 1（不是 2）。stderr={stderr}");
-    assert!(
-        stderr.contains("CG-UNSUPPORTED-SLICE"),
-        "拒绝原因必须是码表里的码，实际：{stderr}"
-    );
-    // 「失败不吞」：拒绝了就不能留下产物（否则 `run-native.sh` 会去跑一个半成品）。
-    assert!(!exe.exists(), "拒绝时不该留下 ELF：{}", exe.display());
+    assert_eq!(exit, 0, "切片现在必须构建成功，stderr={stderr}");
+    let run = std::process::Command::new(&exe)
+        .output()
+        .expect("应能启动产物");
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "9 3\n");
 }
 
 #[test]

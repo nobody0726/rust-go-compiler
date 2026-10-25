@@ -362,6 +362,115 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
     return p;
 }
 
+/* ── 切片（M9/Task 11；`C9` 的 `{ptr,len,cap}` 三字）── */
+
+/* 与 `isel` 的槽布局**逐字对齐**：字 0 = ptr、字 1 = len、字 2 = cap。
+ * 三处（这里、`isel` 的 `slice` 系列、`C5` §10）必须同形。 */
+typedef struct {
+    void *ptr;
+    u64 len;
+    u64 cap;
+} Slice;
+
+/* `make([]T, len[, cap])`。
+ *
+ * # 三条约定
+ *
+ * 1. **`len == 0 && cap == 0` ⇒ `ptr = NULL`**（Go 的 nil slice 与空 slice
+ *    在 `== nil` 上不同，但都 `len == 0`）。这里给的是 `cap == 0` 的那一支：
+ *    不分配。
+ * 2. **零大小元素**（`[]struct{}`）：不分配，`ptr = rt_zerobase`，`len/cap` 照记。
+ *    Go 也这么做（`zerobase`），而且这样 `s[0]` 取地址不会崩。
+ * 3. **底层数组没有对象头**（`rt_arena_alloc` 而不是 `rt_alloc`）：它的形状是
+ *    `cap * elem->size` 字节的**元素数组**，不是一个 `T`。M9 不记账；M10 的
+ *    扫描器要靠「元素 desc + 元素个数」扫它（Go 用 span 的 `elemtype`），
+ *    那条契约在 M10 定 —— 记在 `G-M9-01`。
+ */
+void rt_makeslice(Slice *out, const TypeDesc *elem, u64 len, u64 cap) {
+    if (cap < len) {
+        /* Go 在这里 panic `makeslice: cap out of range`；M9 先按 len 处理 ——
+         * 检查器已拦常量情形，运行期情形归 Phase 5 的 panic 机制。 */
+        cap = len;
+    }
+    out->len = len;
+    out->cap = cap;
+    if (cap == 0) {
+        out->ptr = 0;
+        return;
+    }
+    if (elem->size == 0) {
+        out->ptr = rt_zerobase;
+        return;
+    }
+    u64 bytes = cap * (u64)elem->size;
+    /* 对齐取元素的对齐（`[]int16` 的底层数组必须是 2 对齐的）——
+     * 这里用 8 是保守的：M9 的元素最大对齐就是 8。 */
+    out->ptr = rt_arena_alloc(bytes, 8);
+}
+
+/* 扩容：cap 够就原地，不够就新分配 + 拷。
+ *
+ * # 增长策略
+ *
+ * `max(2*cap, newlen)`。Go 的实际策略更复杂（小于 256 时 2 倍、之后 1.25 倍），
+ * 但**cap 的具体值不是可观测语义** —— 程序只能看到「cap >= len」。所以这里
+ * 用最简单的 2 倍；`T-SLICE-05` 断言的是「扩容后 `u` 不受影响」而不是某个数。
+ *
+ * ⚠️ 但 `cap` 在**测试里**是可观测的（`println(cap(t))`）：所以 fixture 的期望值
+ * 必须按 2 倍算 —— `t := make([]int,2,2); t = append(t,9)` ⇒ cap 4。
+ */
+static Slice slice_grow(void *ptr, u64 len, u64 cap, const TypeDesc *elem, u64 extra) {
+    Slice out;
+    u64 newlen = len + extra;
+    if (newlen <= cap) {
+        out.ptr = ptr;
+        out.len = newlen;
+        out.cap = cap;
+        return out;
+    }
+    u64 newcap = cap * 2;
+    if (newcap < newlen) {
+        newcap = newlen;
+    }
+    u64 esz = (u64)elem->size;
+    void *np;
+    if (esz == 0) {
+        /* 零大小元素：没有底层数组可言（`[]struct{}` 的 append 永远不分配）。 */
+        np = rt_zerobase;
+    } else {
+        np = rt_arena_alloc(newcap * esz, 8);
+        if (ptr != 0 && len != 0) {
+            rt_memcpy(np, ptr, len * esz);
+        }
+    }
+    out.ptr = np;
+    out.len = newlen;
+    out.cap = newcap;
+    return out;
+}
+
+/* `append(s, v)`：`val` 是那个元素的**地址**（多字元素按 `esz` 整块拷）。 */
+void rt_append_one(Slice *out, void *ptr, u64 len, u64 cap, const TypeDesc *elem,
+                   const void *val) {
+    Slice s = slice_grow(ptr, len, cap, elem, 1);
+    u64 esz = (u64)elem->size;
+    if (esz != 0) {
+        rt_memcpy((u8 *)s.ptr + len * esz, val, esz);
+    }
+    *out = s;
+}
+
+/* `append(s, xs...)`：把 `extra` 个元素从 `src` 拷过来。 */
+void rt_append_dots(Slice *out, void *ptr, u64 len, u64 cap, const TypeDesc *elem,
+                    u64 extra, const void *src) {
+    Slice s = slice_grow(ptr, len, cap, elem, extra);
+    u64 esz = (u64)elem->size;
+    if (esz != 0 && extra != 0) {
+        rt_memcpy((u8 *)s.ptr + len * esz, src, extra * esz);
+    }
+    *out = s;
+}
+
 /* ── 字符串（`C9` §4.3：`string` = `(ptr, len)`，比较按字节）── */
 
 /* `(ptr, len)` 的 16 字节聚合。AAPCS64 下**按两个 `x` 寄存器**传参与返回
@@ -370,6 +479,74 @@ typedef struct {
     const char *p;
     u64 n;
 } rstr;
+
+/* `string([]byte)` / `string([]rune)`（M9/Task 13；`RT-CMP-02` 的边界）。
+ *
+ * 两者都是**拷贝**（Go 规定转换出来的字符串不与原切片共享存储）：
+ * `s := string(b); b[0] = 'X'` 之后 `s` 不变。
+ */
+rstr rt_bytes2str(const u8 *p, u64 n) {
+    rstr out;
+    if (n == 0) {
+        out.p = "";
+        out.n = 0;
+        return out;
+    }
+    char *q = (char *)rt_arena_alloc(n, 1);
+    rt_memcpy(q, p, n);
+    out.p = q;
+    out.n = n;
+    return out;
+}
+
+/* 单个码点按 UTF-8 编码进 `buf`，返回字节数（与 `rt_i64_to_str` 同一套规则：
+ * 越界 / 代理区 ⇒ U+FFFD）。 */
+static u64 utf8_put(u8 *buf, u32 r) {
+    if (r > 0x10FFFF || (r >= 0xD800 && r <= 0xDFFF)) {
+        buf[0] = 0xEF;
+        buf[1] = 0xBF;
+        buf[2] = 0xBD;
+        return 3;
+    }
+    if (r < 0x80) {
+        buf[0] = (u8)r;
+        return 1;
+    }
+    if (r < 0x800) {
+        buf[0] = (u8)(0xC0 | (r >> 6));
+        buf[1] = (u8)(0x80 | (r & 0x3F));
+        return 2;
+    }
+    if (r < 0x10000) {
+        buf[0] = (u8)(0xE0 | (r >> 12));
+        buf[1] = (u8)(0x80 | ((r >> 6) & 0x3F));
+        buf[2] = (u8)(0x80 | (r & 0x3F));
+        return 3;
+    }
+    buf[0] = (u8)(0xF0 | (r >> 18));
+    buf[1] = (u8)(0x80 | ((r >> 12) & 0x3F));
+    buf[2] = (u8)(0x80 | ((r >> 6) & 0x3F));
+    buf[3] = (u8)(0x80 | (r & 0x3F));
+    return 4;
+}
+
+rstr rt_runes2utf8(const u32 *p, u64 n) {
+    rstr out;
+    if (n == 0) {
+        out.p = "";
+        out.n = 0;
+        return out;
+    }
+    u8 *buf = (u8 *)rt_arena_alloc(n * 4, 1);
+    u64 k = 0;
+    for (u64 i = 0; i < n; i++) {
+        k += utf8_put(buf + k, p[i]);
+    }
+    out.p = (const char *)buf;
+    out.n = k;
+    return out;
+}
+
 
 /* `a + b`：结果落在 arena 里（M7 没有 GC，只 bump）。 */
 rstr rt_strcat(rstr a, rstr b) {
@@ -546,6 +723,131 @@ void rt_panic_nil(void) {
         n++;
     }
     write_all(FD_STDERR, m, n);
+    rt_exit(2);
+}
+
+/* 切片表达式的越界：`panic: runtime error: slice bounds out of range [k:v] with capacity c`
+ *
+ * # ⚠️ 这里的文本与**官方**不一致（与解释器一致）
+ *
+ * 官方 Go 打的是 `[:9]`（只写越界的那个界），而解释器打的是 `[slice:9]`
+ * （`what` 是 `string` / `array` / `slice`）。M9 选择**跟解释器**：
+ * `D` 腿（native vs 解释器）要逐字节比，两边不一致就永远红。
+ * 解释器那侧改文本是 M5 的待办（记在 `G-M9-02`），改完这里跟着改一行。
+ *
+ * `kind`：0 = string、1 = array、2 = slice。 */
+void rt_panic_slice_bounds(u64 val, u64 max, u64 kind) {
+    const char *a = "panic: runtime error: slice bounds out of range [";
+    u64 k = 0;
+    while (a[k] != 0) {
+        k++;
+    }
+    write_all(FD_STDERR, a, k);
+    const char *w = (kind == 0) ? "string" : (kind == 1) ? "array" : "slice";
+    u64 wn = 0;
+    while (w[wn] != 0) {
+        wn++;
+    }
+    write_all(FD_STDERR, w, wn);
+    write_all(FD_STDERR, ":", 1);
+    char buf[20];
+    u64 len = 0;
+    if (val == 0) {
+        buf[len++] = '0';
+    } else {
+        char tmp[20];
+        u64 t = 0;
+        u64 v = val;
+        while (v > 0) {
+            tmp[t++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (t > 0) {
+            buf[len++] = tmp[--t];
+        }
+    }
+    write_all(FD_STDERR, buf, len);
+    const char *b = "] with capacity ";
+    k = 0;
+    while (b[k] != 0) {
+        k++;
+    }
+    write_all(FD_STDERR, b, k);
+    len = 0;
+    if (max == 0) {
+        buf[len++] = '0';
+    } else {
+        char tmp[20];
+        u64 t = 0;
+        u64 v = max;
+        while (v > 0) {
+            tmp[t++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (t > 0) {
+            buf[len++] = tmp[--t];
+        }
+    }
+    write_all(FD_STDERR, buf, len);
+    write_all(FD_STDERR, "\n", 1);
+    rt_exit(2);
+}
+
+/* 越界：`panic: runtime error: index out of range [i] with length n`
+ *
+ * 文本与解释器**逐字节一致**（`C9` §4.5 / `rgoc-interp/src/ops.rs`）——
+ * 这是 `D` 腿（native vs 解释器）能对上的前提。
+ *
+ * 打印数字自己拼（不用 `fmt_u64`）：那个函数定义在下面，而这里要一个
+ * 「只往 stderr 写、不碰 stdout」的版本 —— 越界时 stdout 必须保持原样。 */
+void rt_panic_bounds(u64 i, u64 n) {
+    const char *a = "panic: runtime error: index out of range [";
+    u64 k = 0;
+    while (a[k] != 0) {
+        k++;
+    }
+    write_all(FD_STDERR, a, k);
+    char buf[20];
+    u64 len = 0;
+    if (i == 0) {
+        buf[len++] = '0';
+    } else {
+        char tmp[20];
+        u64 t = 0;
+        u64 v = i;
+        while (v > 0) {
+            tmp[t++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (t > 0) {
+            buf[len++] = tmp[--t];
+        }
+    }
+    write_all(FD_STDERR, buf, len);
+    const char *b = "] with length ";
+    k = 0;
+    while (b[k] != 0) {
+        k++;
+    }
+    write_all(FD_STDERR, b, k);
+    len = 0;
+    if (n == 0) {
+        buf[len++] = '0';
+    } else {
+        char tmp[20];
+        u64 t = 0;
+        u64 v = n;
+        while (v > 0) {
+            tmp[t++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        while (t > 0) {
+            buf[len++] = tmp[--t];
+        }
+    }
+    write_all(FD_STDERR, buf, len);
+    const char *c = "\n";
+    write_all(FD_STDERR, c, 1);
     rt_exit(2);
 }
 

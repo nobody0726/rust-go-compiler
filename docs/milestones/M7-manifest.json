@@ -36,12 +36,12 @@
       "note": "39 个全部：构建成功 + 退出码 0 + stdout 与官方 .exp 逐字节一致"
     },
     "rejected": {
-      "file": "tools/run-oracle/native-rejected.txt",
+      "file": "tools/run-oracle/native-rejected-m7.txt",
       "count": 7,
       "codes": {
         "CG-UNSUPPORTED-SLICE": 7
       },
-      "note": "7 个全是切片面（U-M7-01）；设计稿 Q2 原说保 4 个有输出的语料，实际 3 个（ken/string.go 用字符串切片）"
+      "note": "7 个全是切片面（U-M7-01）；设计稿 Q2 原说保 4 个有输出的语料，实际 3 个（ken/string.go 用字符串切片）。**M9 起读的是快照** `native-rejected-m7.txt`：活的 `native-rejected.txt` 已被 M9/Phase 1 改写（0 行，切片实现了）。本清单记的是 M7 收口时的历史事实，判据必须对着快照算才自洽（R-9-4）。"
     },
     "output_split": {
       "with_output": 3,
@@ -286,6 +286,14 @@
       "closed_at": "2026-10-25",
       "fix": "docs/milestones/M7-report.md（交付 A/B 合一）；docs/milestones/GAP-01.md 追加「M7 节」",
       "evidence": "本 manifest 由 manifest_m7.rs 对账，其中一条断言要求 done=true 时报告文件存在"
+    }
+  ],
+  "retired_codes": [
+    {
+      "code": "CG-UNSUPPORTED-SLICE",
+      "retired_by": "M9",
+      "revision": "R-9-4",
+      "why": "M9/Phase 1 把 []T 真的实现了（make / Index / Slice / append / 字面量 / 越界检查），码与它的判据一起下线。本清单的 unsupported 条目保留 M7 收口时的原样 —— 那是历史事实，不是现状。"
     }
   ]
 }

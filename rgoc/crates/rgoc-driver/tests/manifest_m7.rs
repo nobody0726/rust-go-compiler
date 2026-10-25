@@ -111,8 +111,21 @@ fn reconcile(m: &Value) -> Vec<String> {
 
     // ③ 数字必须能从清单算出来
     let measured = &m["measured"];
-    let rejected = line_list("tools/run-oracle/native-rejected.txt");
-    let input = line_list("tools/run-oracle/native-input.txt");
+    // 清单路径**从 manifest 读**，不写死。
+    //
+    // 为什么：M9/Phase 1 之后活的 `native-rejected.txt` 已经不是 M7 那份
+    // （切片实现了，0 行）。本测试要验的是「M7 的自报数字与 M7 的清单自洽」，
+    // 所以路径必须由 manifest 自己给（它现在指向 `native-rejected-m7.txt` 快照）。
+    // 写死路径的后果是「历史清单被后来的里程碑改写 ⇒ 冻结数字变成假错」。
+    let list_of = |key: &str, fallback: &str| -> Vec<String> {
+        let rel = m["corpus_lists"][key]["file"]
+            .as_str()
+            .unwrap_or(fallback)
+            .to_string();
+        line_list(&rel)
+    };
+    let rejected = list_of("rejected", "tools/run-oracle/native-rejected.txt");
+    let input = list_of("input", "tools/run-oracle/native-input.txt");
     let m_rejected: BTreeSet<String> = rejected
         .iter()
         .filter_map(|l| l.split('\t').next())
@@ -139,10 +152,10 @@ fn reconcile(m: &Value) -> Vec<String> {
     if m["corpus_lists"]["supported"]["count"].as_u64()
         != Some(input.len() as u64 - m_rejected.len() as u64)
     {
-        errs.push("corpus_lists.supported.count 与 native-input − native-rejected 不一致".into());
+        errs.push("corpus_lists.supported.count 与 input − rejected 不一致".into());
     }
     if m["corpus_lists"]["rejected"]["count"].as_u64() != Some(m_rejected.len() as u64) {
-        errs.push("corpus_lists.rejected.count 与 native-rejected.txt 不一致".into());
+        errs.push("corpus_lists.rejected.count 与 rejected 清单不一致".into());
     }
 
     // ⑤ 白名单 4 条，id 唯一，码要么是 CgCode 要么是运行期 panic 文案
@@ -150,10 +163,29 @@ fn reconcile(m: &Value) -> Vec<String> {
     if unsup.len() != 4 {
         errs.push(format!("unsupported 应有 4 条，实际 {}", unsup.len()));
     }
-    let cg: BTreeSet<&str> = rgoc_arm64::diag::CgCode::ALL
+    // 码集合 = **当前** `CgCode::ALL` ∪ `retired_codes`。
+    //
+    // 为什么要有第二项：M7 的 `unsupported` 记的是**M7 收口时**的事实
+    // （`CG-UNSUPPORTED-SLICE` 当时真的在拒切片）。M9 把切片实现了、码也下线了
+    // —— 那时这条冻结记录里的码就不再属于 `ALL`。**不能**因此删掉 M7 的记录
+    // （那是改历史），也不能让它变成一条「不在码表里」的假错。
+    // 所以：manifest 里显式记 `retired_codes`（谁、哪条修订、为什么），
+    // 判据接受「在 ALL 里」或「在 retired 里」。
+    let mut cg: BTreeSet<&str> = rgoc_arm64::diag::CgCode::ALL
         .iter()
         .map(|c| c.as_str())
         .collect();
+    if let Some(retired) = m["retired_codes"].as_array() {
+        for r in retired {
+            if let Some(code) = r["code"].as_str() {
+                assert!(
+                    r["revision"].as_str().is_some_and(|s| !s.is_empty()),
+                    "retired 的码 {code} 必须记是哪条修订下线的"
+                );
+                cg.insert(code);
+            }
+        }
+    }
     for u in unsup {
         let code = u["code"].as_str().unwrap_or("");
         if code.starts_with("CG-") && !cg.contains(code) {

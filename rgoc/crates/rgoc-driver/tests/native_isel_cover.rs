@@ -194,11 +194,13 @@ fn nat2_panic_终止符() {
 }
 
 #[test]
-fn nat2_切片走拒绝面而不是_变体分支() {
-    // 14 个 `Instr` 里只有 `Slice` 是「有变体、有分支、但永远到不了」——
-    // 它在 `func_has_slice` 那一层就被拒了。所以它的判据是**码 + 退出码**，
-    // 不是「指令选择对不对」。
-    let src = "package main\n\nfunc main() {\n\ts := []int{1}\n\tprintln(s[0])\n}\n";
+fn nat2_切片变体真的被选择() {
+    // # 这条判据在 M9/Phase 1 换过面（`R-9-4`）
+    //
+    // M7 时 `Instr::Slice` 是「有变体、有分支、但永远到不了」的那一个
+    // （`func_has_slice` 整函数级拒绝），所以判据是「码 + 退出码」。
+    // M9 起它真的被选择，判据改成「构建成功 + 跑对 + 汇编里出现取址运算」。
+    let src = "package main\n\nfunc main() {\n\ts := []int{1, 2, 3}\n\tt := s[1:]\n\tprintln(len(t), cap(t), t[0])\n}\n";
     let dir = scratch();
     let go = dir.join("slice_variant.go");
     std::fs::write(&go, src).expect("写 fixture 失败");
@@ -211,10 +213,14 @@ fn nat2_切片走拒绝面而不是_变体分支() {
         lang: None,
     };
     let out = build_cmd::run_build(&b).expect("build 不该返回 Err");
-    assert_eq!(out.exit, 1);
-    assert!(
-        out.stderr.contains("CG-UNSUPPORTED-SLICE"),
-        "{}",
-        out.stderr
+    assert_eq!(out.exit, 0, "切片现在必须构建成功：{}", out.stderr);
+    let run = std::process::Command::new(dir.join("slice_variant"))
+        .output()
+        .expect("应能启动产物");
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "2 2 2\n",
+        "s[1:] 的 len=2 cap=2（cap = cap(s) - lo），首元素是 2"
     );
 }

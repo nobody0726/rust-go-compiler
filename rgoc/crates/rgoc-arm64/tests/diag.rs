@@ -7,9 +7,12 @@
 use rgoc_arm64::diag::CgCode;
 
 #[test]
-fn 全部码恰好三条且顺序是字典序() {
+fn 全部码恰好两条且顺序是字典序() {
     // 写死条数：新增变体而不更新 `ALL` ⇒ 这里红（与 `SsaCode` 的计数测试同款）。
-    assert_eq!(CgCode::ALL.len(), 3);
+    //
+    // M9/Phase 1 起是 **2** 条：`CG-UNSUPPORTED-SLICE` 下线了（切片真的被选择）。
+    // 那条码连同它的判据一起删 —— 留一条永远不产出的码比删掉更糟。
+    assert_eq!(CgCode::ALL.len(), 2);
     let mut sorted = CgCode::ALL;
     sorted.sort();
     assert_eq!(sorted, CgCode::ALL, "ALL 必须是字典序");

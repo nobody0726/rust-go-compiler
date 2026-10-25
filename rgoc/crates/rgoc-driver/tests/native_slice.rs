@@ -71,20 +71,19 @@ fn t_nat_40_冻结的分母对得上() {
         .filter_map(|l| l.split('\t').next())
         .map(ToString::to_string)
         .collect();
-    assert_eq!(m.len(), 7, "M' 冻结为 7");
+    assert_eq!(m.len(), 0, "M' 在 M9/Phase 1 冻结为 0（切片已实现）");
     assert!(
         m.is_subset(&n),
         "M' 里出现了不在 N 里的路径：{:?}",
         m.difference(&n).collect::<Vec<_>>()
     );
-    assert_eq!(n.len() - m.len(), 39, "N' 冻结为 39");
+    assert_eq!(n.len() - m.len(), 46, "N' 冻结为 46（M7 的 39 + 切片的 7）");
 }
 
 #[test]
 fn t_nat_40_拒绝原因必须是码表里的码() {
     let all: BTreeSet<&str> = CgCode::ALL.iter().map(|c| c.as_str()).collect();
     let rows = line_list("tools/run-oracle/native-rejected.txt");
-    assert_eq!(rows.len(), 7, "M' 每行都要有码，不许只有路径");
     for row in &rows {
         let cols: Vec<&str> = row.split('\t').collect();
         assert!(cols.len() >= 3, "行格式应为 <路径>\\t<码>\\t<原因>：{row}");
@@ -95,6 +94,48 @@ fn t_nat_40_拒绝原因必须是码表里的码() {
             CgCode::ALL.len()
         );
     }
+}
+
+/// `CG-UNSUPPORTED-SLICE` 已下线（M9/Task 15）：源码里扫不到它。
+///
+/// 沿 M8 的「五条码不许再出现」做法：**留一条永远不产出的码**比删掉更糟 ——
+/// 它会让人以为「切片还是不支持」，而实际是「这条码没人发了」。
+/// 扫的是 `crates/`（**不含** `tests/`：负向断言本身要能写这条字符串）。
+#[test]
+fn t_m9_15_slice_码不许再出现() {
+    let root = repo_root().join("rgoc/crates");
+    let mut hits = Vec::new();
+    fn scan(dir: &Path, hits: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if p.file_name().and_then(|n| n.to_str()) == Some("tests") {
+                    continue;
+                }
+                scan(&p, hits);
+            } else if p.extension().and_then(|x| x.to_str()) == Some("rs") {
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                // 只看**代码行**：注释里提到这条码是合法的（比如 diag.rs 的
+                // 「它为什么下线了」）。判据要抓的是「还有人会产出它」——
+                // 也就是非注释行里的字符串。
+                let in_code = text.lines().any(|l| {
+                    !l.trim_start().starts_with("//") && l.contains("CG-UNSUPPORTED-SLICE")
+                });
+                if in_code {
+                    hits.push(p.clone());
+                }
+            }
+        }
+    }
+    scan(&root, &mut hits);
+    assert!(
+        hits.is_empty(),
+        "`CG-UNSUPPORTED-SLICE` 已下线（M9/Task 15），但仍在这些文件里出现：{hits:?}"
+    );
+    assert_eq!(CgCode::ALL.len(), 2, "CgCode::ALL 应为 2 条");
 }
 
 #[test]
@@ -113,8 +154,10 @@ fn t_nat_40_有输出的语料三个在_n_prime_一个在_m_prime() {
     for p in ok {
         assert!(!rejected.contains(p), "{p} 有输出，必须在 N' 里");
     }
+    // M9/Phase 1 起切片支持了 ⇒ `ken/string` 也在 `N'`（设计稿当年想保的 4 个，
+    // 到 M9 才真的保住）。
     assert!(
-        rejected.contains("go_source_code/test/ken/string.go"),
-        "ken/string 用字符串切片，必须在 M' 里（设计稿说保 4 个，实际只能保 3 个）"
+        !rejected.contains("go_source_code/test/ken/string.go"),
+        "ken/string 的字符串切片已支持，必须在 N' 里"
     );
 }

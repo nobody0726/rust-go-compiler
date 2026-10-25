@@ -116,7 +116,18 @@ fn basic_of(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
 
 /// `add x9, x29, #off`
 fn addr(asm: &mut Asm, off: i32) {
-    asm.ins(&format!("add {ADDR}, x29, #{off}"));
+    // AArch64 的 `add` 立即数只有 12 位（±4095）。帧大于 4 KiB 时
+    // （`var a [1024]int` 就 8 KiB）直接发 `add x9, x29, #-8048` 汇编不过 ——
+    // 这是 M7 的既有局限，M9 的切片/数组语料一撞就现形（`ken/convert.go`）。
+    //
+    // 大偏移走「先把偏移装进 x9，再 add x9, x29, x9」：多两条指令，
+    // 但把「帧不能超过 4 KiB」这条**隐形上限**彻底去掉。
+    if (-4095..=4095).contains(&off) {
+        asm.ins(&format!("add {ADDR}, x29, #{off}"));
+    } else {
+        load_imm(asm, ADDR, i64::from(off));
+        asm.ins(&format!("add {ADDR}, x29, {ADDR}"));
+    }
 }
 
 /// 读一个字到 `x` 寄存器。
@@ -201,14 +212,8 @@ pub fn func(
     siblings: &std::collections::BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
     asm: &mut Asm,
 ) -> Result<(), CgCode> {
-    // `U-M7-01`：整个函数的类型面一旦碰到切片就拒，**在发第一条指令之前**。
-    //
-    // 位置很关键：如果先发指令再拒，模块级发射器可能已经把半截函数写进 `.s`
-    // （`func` 返回 `Err` 时 `module.rs` 只在末尾统一处理），产物里就会留下
-    // 一个「看起来有、实际不完整」的符号。
-    if func_has_slice(f, tt) {
-        return Err(CgCode::Slice);
-    }
+    // M9/Task 11 起切片真的被选择（`make`/`Index`/`Slice`/`append`），
+    // 所以 M7 的「整个函数一碰到切片就拒」（`U-M7-01`）在这里下线了。
     let cx = Ctx {
         f,
         fr,
@@ -317,10 +322,18 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
         match loc {
             ArgLoc::X { reg, n } => match class {
                 // 聚合：从寄存器里拿到**指针**，把内容拷进本帧的槽（值语义）。
+                //
+                // ⚠️ 顺序不能反：源指针可能在 `x0`（第 0 个形参就是聚合时），
+                // 而 `addr` 之后 `mov x0, x9` 会把 `x0` 覆盖掉。先取源、再设目的。
+                //
+                // 反了会变成 `memcpy(dst, dst, size)` —— 拷的是本帧未初始化的槽。
+                // 症状：`len(s)`/`cap(s)` 是垃圾（切片形参），或者一索引就段错误
+                // （垃圾 ptr）。而 `string` 形参**不**受影响（它是 `Int` 类、走
+                // 两个字），所以 M7 的语料全绿也没抓到。
                 SlotClass::Agg => {
                     addr(asm, s.off);
-                    asm.ins("mov x0, x9");
                     asm.ins(&format!("mov x1, x{reg}"));
+                    asm.ins("mov x0, x9");
                     load_imm(asm, "x2", i64::from(s.size));
                     asm.ins("bl rt_memcpy");
                 }
@@ -402,8 +415,16 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
             len: None,
             cap: None,
         } if is_pointer_ty(cx.tt, *typ) => new_alloc(cx, *dst, *typ, asm),
-        // `[]T` 全套归 M9b（`U-M7-01`）。
-        Instr::Slice { .. } | Instr::Make { .. } => return Err(CgCode::Slice),
+        // `make([]T, len[, cap])`（M9/Task 11）。
+        Instr::Make { dst, typ, len, cap } => makeslice(cx, *dst, *typ, *len, *cap, asm),
+        // `s[lo:hi:max]`（M9/Task 13）。
+        Instr::Slice {
+            dst,
+            base,
+            lo,
+            hi,
+            max,
+        } => slice_expr(cx, *dst, *base, *lo, *hi, *max, asm),
         Instr::Composite { dst, typ, items } => composite(cx, *dst, *typ, items, asm),
         Instr::Load {
             dst, addr: a, typ, ..
@@ -423,6 +444,23 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
 /// `const`：整数装立即数、浮点/复数走 `.rodata`、字符串写 `(ptr, len)`。
 fn konst(cx: &Ctx<'_>, dst: ValueId, c: &ConstVal, typ: TypeId, asm: &mut Asm) {
     let s = cx.slot(dst);
+    // 聚合槽先整体清零（M9/Task 13 抓到的既有 bug）。
+    //
+    // `build.rs` 用 `Const Int(0)` 表示**任意类型**的零值（`R-20-1`）——
+    // 包括 `struct{X,Y,Z int}` 这种 24 字节的聚合。而下面各分支只写一个字：
+    // 聚合的其余字节留着槽里的旧内容，于是「零值」变成了垃圾。
+    //
+    // 症状很隐蔽：`[]T1{{X: f(), Z: f()}}` 里 Y 的零值来自这条常量，
+    // 而它只被 memcpy 走 —— 打印出来是 1（上一条指令留在槽里的值）。
+    if s.size > 8 {
+        // 用 `rt_memset` 而不是逐字 `str xzr, [x9, #k*8]`：后者的立即数上限是
+        // 4095，`[8192]int` 这类聚合会汇编不过（`ken/convert.go` 就是这条）。
+        addr(asm, s.off);
+        asm.ins("mov x0, x9");
+        asm.ins("mov x1, xzr");
+        load_imm(asm, "x2", i64::from(s.size));
+        asm.ins("bl rt_memset");
+    }
     match c {
         ConstVal::Bool(b) => {
             load_imm(asm, "x10", i64::from(*b));
@@ -959,6 +997,27 @@ fn convert(cx: &Ctx<'_>, dst: ValueId, x: ValueId, typ: TypeId, asm: &mut Asm) {
     // `(Int, Int)` 分支会原样搬 8 字节 —— 于是「字符串」的 `ptr` 是个小整数、
     // `len` 是上一个值的残留。实测 `probe3.go`：`println(string(53))` 打空行，
     // `"x" + s` 拿一个巨大的 `len` 去分配 ⇒ `panic: out of arena`。
+    // `string([]byte)` / `string([]rune)`（M9/Task 13）。
+    //
+    // 必须在 `string(int)` 那条**之前**：切片的 `SlotClass` 是 `Agg`
+    // （24 字节），落不到 `Int` 分支，但顺序上把它放前面更省心。
+    if is_string_ty(cx.tt, typ)
+        && let Some(elem) = slice_elem(cx.tt, from)
+    {
+        {
+            let esz = rgoc_types::layout::layout(cx.tt, elem).map_or(1, |l| l.size);
+            ld_x(asm, "x0", s.off);
+            ld_x(asm, "x1", s.off + 8);
+            if esz == 1 {
+                asm.ins("bl rt_bytes2str");
+            } else {
+                asm.ins("bl rt_runes2utf8");
+            }
+            st_x(asm, "x0", d.off);
+            st_x(asm, "x1", d.off + 8);
+            return;
+        }
+    }
     if is_string_ty(cx.tt, typ) && !is_string_ty(cx.tt, from) && from_class == SlotClass::Int {
         ld_x(asm, "x0", s.off);
         asm.ins("bl rt_i64_to_str");
@@ -1125,6 +1184,14 @@ fn field_offset_of(tt: &TypeTable, ptr_ty: TypeId, index: usize) -> u32 {
             Type::Pointer(e) => cur = *e,
             Type::Named(id) => cur = tt.named_underlying(*id),
             Type::Alias(id) => cur = tt.alias_rhs(*id),
+            // `Index` 的 dst 类型沿用**底座**类型（`build.rs` 的 `new_value(t)`），
+            // 所以 `s[0].X` 里 `field` 的 base 类型是 `[]T1` 而不是 `*T1`。
+            // 而 `Index` 的语义就是「元素地址」⇒ 剥掉容器这层拿元素类型。
+            //
+            // 不剥的症状：`[]T1{{X:1,Y:2,Z:3}}[0].Y` 读出 `X`（偏移恒 0），
+            // 而 `X` 与 `.Z` 都对 —— 只有中间那个字段错，极难看出规律。
+            Type::Slice(e) => cur = *e,
+            Type::Array { elem, .. } => cur = *elem,
             Type::Struct(sid) => return field_offset(tt, *sid, index).unwrap_or(0),
             _ => return 0,
         }
@@ -1135,12 +1202,70 @@ fn field_offset_of(tt: &TypeTable, ptr_ty: TypeId, index: usize) -> u32 {
 /// `base[i]`：基址 + `i * elem_size`。
 fn index(cx: &Ctx<'_>, dst: ValueId, base: ValueId, i: ValueId, asm: &mut Asm) {
     let (d, b, iv) = (cx.slot(dst), cx.slot(base), cx.slot(i));
-    let esz = elem_size_of(cx.tt, cx.ty(base));
+    let bt = cx.ty(base);
+    let esz = elem_size_of(cx.tt, bt);
     ld_x(asm, "x10", b.off);
     ld_x(asm, "x11", iv.off);
+    // 越界检查（M9/Task 14）：`i >= len` ⇒ panic。
+    //
+    // 下标按**无符号**比：负数下标（`i` 是有符号的）会变成一个巨大的无符号数，
+    // 于是同一条 `b.hs` 就把它抓了 —— 不需要第二条「i < 0」的分支。
+    //
+    // 长度的来源按底座类型分三种：切片/字符串是头里的字 1，数组是长度常量。
+    let len_src = if is_string_ty(cx.tt, bt) || slice_elem(cx.tt, bt).is_some() {
+        Some(LenSrc::Word(8))
+    } else {
+        array_len_of_base(cx.tt, bt).map(|n| LenSrc::Const(i64::from(n)))
+    };
+    if let Some(src) = len_src {
+        match src {
+            LenSrc::Word(off) => ld_x(asm, "x12", b.off + off),
+            LenSrc::Const(n) => load_imm(asm, "x12", n),
+        }
+        let ok = format!(".Lidx_ok{}", asm.fresh_label());
+        asm.ins("cmp x11, x12");
+        asm.ins(&format!("b.lo {ok}"));
+        asm.ins("mov x0, x11");
+        asm.ins("mov x1, x12");
+        asm.ins("bl rt_panic_bounds");
+        asm.label(&ok);
+    }
     load_imm(asm, "x12", i64::from(esz));
     asm.ins("madd x10, x11, x12, x10");
     st_x(asm, "x10", d.off);
+}
+
+/// 底座是数组时的长度（`[n]T` **或** `*[n]T`）。
+///
+/// # 为什么必须剥一层指针
+///
+/// `a[1:3]` 里的 `a` 若是个**全局/局部数组**，SSA 给底座的是 `AddrOf(a)`，
+/// 其类型是 `*[10]byte` —— 直接 `array_len_of` 会返回 `None`（它不是数组），
+/// 于是「hi 缺省」那一支去读底座槽的第二个字（那是地址的高位），
+/// 长度变成垃圾。`ken/slicearray.go` 的 `by = bx[0:]` 就是这条。
+fn array_len_of_base(tt: &TypeTable, t: TypeId) -> Option<u32> {
+    use rgoc_types::typ::Type;
+    if let Some(n) = rgoc_types::layout::array_len_of(tt, t) {
+        return Some(n);
+    }
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Pointer(e) => return rgoc_types::layout::array_len_of(tt, *e),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// 越界检查里「长度从哪来」。
+enum LenSrc {
+    /// 底座槽里第 `off` 个字节处的字（切片/字符串的 len）。
+    Word(i32),
+    /// 常量（数组长度）。
+    Const(i64),
 }
 
 /// 元素宽度（字节）。
@@ -1161,6 +1286,12 @@ fn elem_size_of(tt: &TypeTable, ptr_ty: TypeId) -> u32 {
                 return 1;
             }
             Type::Array { elem, .. } => return layout(tt, *elem).map_or(8, |l| l.size.max(1)),
+            // `[]T` 的步长是 `sizeof(T)`（M9/Task 13 抓到的既有 bug）。
+            //
+            // 落到 `_ => 8` 的症状：`[]byte` 的 `b[1]` 读到 `b[8]`。
+            // 而 `b[0]` 永远是对的（偏移 0）—— 所以「只测第一个元素」的判据
+            // 抓不到它。`ken/slicearray.go` 的 `by[i-lb]` 就是这条。
+            Type::Slice(elem) => return layout(tt, *elem).map_or(1, |l| l.size.max(1)),
             _ => return 8,
         }
     }
@@ -1178,65 +1309,6 @@ fn is_string_ty(tt: &TypeTable, t: TypeId) -> bool {
     )
 }
 
-/// 类型里是否**含**切片（`U-M7-01` 的完整边界）。
-///
-/// # 为什么要在类型层扫，而不是逐个指令判
-///
-/// `[]T` 能出现在很多地方：`make`、切片表达式、复合字面量、函数返回值、形参、
-/// 结构体字段、数组元素。逐条指令判会漏 —— 实测 `escape3.go` 就是
-/// `v := []T1{{X: f(), Z: f()}}`：`Instr::Composite` 的 `typ` 是切片，
-/// 而 `composite()` 按「数组/结构体」去算偏移，第 0 项被写到切片头的
-/// **数据指针**位置上，于是 `v[0].Y` 落在野地址上 ⇒ `Segmentation fault`。
-///
-/// 一个类型层的扫法把「完整边界」变成一处判据，加新指令也不用回来补。
-fn has_slice(tt: &TypeTable, t: TypeId) -> bool {
-    fn go(tt: &TypeTable, t: TypeId, depth: u32) -> bool {
-        use rgoc_types::typ::Type;
-        if depth > 64 {
-            return false;
-        }
-        match tt.type_of(t) {
-            Type::Slice(_) => true,
-            Type::Pointer(e) => go(tt, *e, depth + 1),
-            Type::Array { elem, .. } => go(tt, *elem, depth + 1),
-            Type::Named(id) => go(tt, tt.named_underlying(*id), depth + 1),
-            Type::Alias(id) => go(tt, tt.alias_rhs(*id), depth + 1),
-            Type::Struct(sid) => tt
-                .struct_def(*sid)
-                .fields
-                .iter()
-                .any(|f| go(tt, f.typ, depth + 1)),
-            Type::Tuple(tid) => tt
-                .tuple_def(*tid)
-                .vars
-                .iter()
-                .any(|(_, v)| go(tt, *v, depth + 1)),
-            Type::Signature(sid) => {
-                let sig = tt.signature_def(*sid);
-                sig.recv.is_some_and(|r| go(tt, r, depth + 1))
-                    || go(tt, sig.params, depth + 1)
-                    || go(tt, sig.results, depth + 1)
-            }
-            _ => false,
-        }
-    }
-    go(tt, t, 0)
-}
-
-/// 一个函数里是否碰到切片面：值类型、取址槽类型、以及 `Slice`/`Make` 指令。
-fn func_has_slice(f: &SsaFunc, tt: &TypeTable) -> bool {
-    f.value_types.iter().any(|t| has_slice(tt, *t))
-        || f.slot_types.iter().any(|(_, t)| has_slice(tt, *t))
-        || f.blocks.iter().any(|b| {
-            b.instrs.iter().any(|i| match i {
-                Instr::Slice { .. } => true,
-                Instr::Make { typ, .. } => has_slice(tt, *typ),
-                Instr::Composite { typ, .. } => has_slice(tt, *typ),
-                _ => false,
-            })
-        })
-}
-
 /// 类型是不是指针（剥命名/别名后看 `Type::Pointer`）。
 fn is_pointer_ty(tt: &TypeTable, t: TypeId) -> bool {
     use rgoc_types::typ::Type;
@@ -1250,6 +1322,129 @@ fn is_pointer_ty(tt: &TypeTable, t: TypeId) -> bool {
         }
     }
     false
+}
+
+/// `[]T` 的元素类型（剥命名/别名）；不是切片 ⇒ `None`。
+fn slice_elem(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Slice(e) => return Some(*e),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `make([]T, len[, cap])` ⇒ `rt_makeslice(&dst, elem_desc, len, cap)`。
+///
+/// # `cap` 缺省就是 `len`
+///
+/// `build.rs` 对 `make([]T, n)` 只给 `len`（`cap` 是 `None`）—— 规范里
+/// 「省略 cap ⇒ cap == len」。这里就地补上，**不**回头改 IR：
+/// 「`None` 是什么意思」在 IR 层已经有约定（`new(T)` 也是两个 `None`），
+/// 再给它一个含义会让同一个形状有两种解释。
+fn makeslice(
+    cx: &Ctx<'_>,
+    dst: ValueId,
+    typ: TypeId,
+    len: Option<ValueId>,
+    cap: Option<ValueId>,
+    asm: &mut Asm,
+) {
+    let d = cx.slot(dst);
+    let elem = slice_elem(cx.tt, typ).unwrap_or(typ);
+    let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, elem));
+    addr(asm, d.off);
+    asm.ins("mov x0, x9");
+    load_addr(asm, "x1", &desc);
+    match len {
+        Some(v) => ld_x(asm, "x2", cx.slot(v).off),
+        None => load_imm(asm, "x2", 0),
+    }
+    match cap {
+        Some(v) => ld_x(asm, "x3", cx.slot(v).off),
+        // 省略 cap ⇒ cap = len（`x2` 已经是 len）。
+        None => asm.ins("mov x3, x2"),
+    }
+    asm.ins("bl rt_makeslice");
+}
+
+/// `s[lo:hi]` / `s[lo:hi:max]` ⇒ 新三字头（M9/Task 13）。
+///
+/// # 底座有两种形状
+///
+/// * **切片**：底座槽里就是 `{ptr,len,cap}`，字 0 是数据指针
+/// * **数组**（`a[1:3]`）：底座是**地址**（`AddrOf`），字 0 不是数据指针
+/// * **字符串**（`s[1:3]`）：两字 `{ptr,len}`，结果是**字符串**（不是切片）
+///
+/// 三者都「从字 0 取基址」，但 `cap` 的算法不同 —— 数组没有 cap 字段，
+/// 它的 cap 是**长度常量**。
+fn slice_expr(
+    cx: &Ctx<'_>,
+    dst: ValueId,
+    base: ValueId,
+    lo: Option<ValueId>,
+    hi: Option<ValueId>,
+    max: Option<ValueId>,
+    asm: &mut Asm,
+) {
+    let d = cx.slot(dst);
+    let b = cx.slot(base);
+    let bt = cx.ty(base);
+    let is_string = is_string_ty(cx.tt, bt);
+    let arr_len = array_len_of_base(cx.tt, bt);
+    let esz = elem_size_of(cx.tt, bt);
+
+    // x10 = 基址（数据指针）
+    ld_x(asm, "x10", b.off);
+    // x11 = lo（缺省 0）
+    match lo {
+        Some(v) => ld_x(asm, "x11", cx.slot(v).off),
+        None => load_imm(asm, "x11", 0),
+    }
+    // x12 = hi（缺省 = len）
+    match hi {
+        Some(v) => ld_x(asm, "x12", cx.slot(v).off),
+        None => {
+            if let Some(n) = arr_len {
+                load_imm(asm, "x12", i64::from(n));
+            } else {
+                ld_x(asm, "x12", b.off + 8);
+            }
+        }
+    }
+    // 数据指针 += lo * esz
+    load_imm(asm, "x13", i64::from(esz));
+    asm.ins("madd x10, x11, x13, x10");
+    // len = hi - lo
+    asm.ins("sub x14, x12, x11");
+    st_x(asm, "x10", d.off);
+    st_x(asm, "x14", d.off + 8);
+    if is_string {
+        // 字符串只有两字：没有 cap 要写。
+        return;
+    }
+    // cap = max - lo（给了 max）；否则 cap(s) - lo；数组则是 len(arr) - lo
+    match max {
+        Some(v) => {
+            ld_x(asm, "x15", cx.slot(v).off);
+            asm.ins("sub x15, x15, x11");
+        }
+        None => {
+            if let Some(n) = arr_len {
+                load_imm(asm, "x15", i64::from(n));
+                asm.ins("sub x15, x15, x11");
+            } else {
+                ld_x(asm, "x15", b.off + 16);
+                asm.ins("sub x15, x15, x11");
+            }
+        }
+    }
+    st_x(asm, "x15", d.off + 16);
 }
 
 /// `new(T)`：`rt_arena_alloc(size_of(*T), align)`，结果存进槽。
@@ -1295,6 +1490,39 @@ fn new_alloc(cx: &Ctx<'_>, dst: ValueId, ptr_ty: TypeId, asm: &mut Asm) {
 /// 复合字面量：先清零，再按元素落位。
 fn composite(cx: &Ctx<'_>, dst: ValueId, typ: TypeId, items: &[ValueId], asm: &mut Asm) {
     let d = cx.slot(dst);
+    // `[]T{...}`：先 `make` 出底层数组，再逐元素写进去（M9/Task 13）。
+    //
+    // 与数组/结构体**完全不同**：后两者的元素就长在值里，而切片的元素在
+    // 另一个对象上 —— 所以这里不能「清零 dst 再按偏移写」。
+    if let Some(elem) = slice_elem(cx.tt, typ) {
+        let n = items.len();
+        let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, elem));
+        let esz = rgoc_types::layout::layout(cx.tt, elem).map_or(8, |l| l.size);
+        addr(asm, d.off);
+        asm.ins("mov x0, x9");
+        load_addr(asm, "x1", &desc);
+        load_imm(asm, "x2", i64::try_from(n).unwrap_or(0));
+        asm.ins("mov x3, x2");
+        asm.ins("bl rt_makeslice");
+        // 逐元素：dst.ptr + i*esz
+        for (k, item) in items.iter().enumerate() {
+            let s = cx.slot(*item);
+            ld_x(asm, "x10", d.off);
+            load_imm(asm, "x12", i64::try_from(k).unwrap_or(0) * i64::from(esz));
+            asm.ins("add x10, x10, x12");
+            if s.size <= 8 {
+                ld_x(asm, "x11", s.off);
+                asm.ins("str x11, [x10]");
+            } else {
+                asm.ins("mov x0, x10");
+                addr(asm, s.off);
+                asm.ins("mov x1, x9");
+                load_imm(asm, "x2", i64::from(s.size));
+                asm.ins("bl rt_memcpy");
+            }
+        }
+        return;
+    }
     // 清零（`Composite` 的语义是「没写的元素为零值」）。
     let words = d.size.div_ceil(8);
     addr(asm, d.off);
@@ -1403,11 +1631,11 @@ fn call(
     dsts: &[ValueId],
     callee: &CalleeRef,
     args: &[ValueId],
-    _dots: bool,
+    dots: bool,
     asm: &mut Asm,
 ) -> Result<(), CgCode> {
     match callee {
-        CalleeRef::Builtin(b) => builtin(cx, *b, args, dsts, asm),
+        CalleeRef::Builtin(b) => builtin(cx, *b, args, dsts, dots, asm),
         CalleeRef::Func(fid) => {
             pass_args(cx, Some(*fid), args, asm);
             asm.ins(&format!("bl {}", cx.tt_fn_name(*fid)));
@@ -1587,6 +1815,7 @@ fn builtin(
     b: BuiltinKind,
     args: &[ValueId],
     dsts: &[ValueId],
+    dots: bool,
     asm: &mut Asm,
 ) -> Result<(), CgCode> {
     match b {
@@ -1610,7 +1839,7 @@ fn builtin(
             Ok(())
         }
         // `len` / `cap`：字符串读第二个字；数组是**常量**（长度在类型里）。
-        // 切片/映射/通道在 `func_has_slice` 那一层就拒了，走不到这里。
+        // `copy`/`delete`/`clear`/`close`/`recover` 在 M6 的拒绝面里，走不到这里。
         BuiltinKind::Len | BuiltinKind::Cap => {
             let (Some(a), Some(d)) = (args.first(), dsts.first()) else {
                 return Ok(());
@@ -1623,6 +1852,12 @@ fn builtin(
             } else if let Some(n) = rgoc_types::layout::array_len_of(cx.tt, t) {
                 let sd = cx.slot(*d);
                 load_imm(asm, "x10", i64::from(n));
+                st_x(asm, "x10", sd.off);
+            } else if slice_elem(cx.tt, t).is_some() {
+                // 切片头：字 1 = len、字 2 = cap（M9/Task 11）。
+                let (sa, sd) = (cx.slot(*a), cx.slot(*d));
+                let off = if b == BuiltinKind::Cap { 16 } else { 8 };
+                ld_x(asm, "x10", sa.off + off);
                 st_x(asm, "x10", sd.off);
             }
             Ok(())
@@ -1707,7 +1942,61 @@ fn builtin(
             }
             Ok(())
         }
-        // 其余内建（`append`/`copy`/`delete`/`clear`/`close`/`recover`）在 M6 的
+        // `append(s, v)` / `append(s, xs...)`（M9/Task 12）。
+        //
+        // 两个入口而不是一个：`append(s, v)` 要把**一个元素的值**写进去
+        // （`val` 是它的地址，多字元素按 esz 整块拷），`append(s, xs...)` 要
+        // 从另一个切片拷 `extra` 个。合成一个入口就得在 isel 里拼
+        // 「源地址 + 元素个数」两个不同形状的实参，而那段寄存器调度
+        // 在 `.s` 上完全看不出来 —— 分成两个 C 函数，语义各写在 C 里。
+        BuiltinKind::Append => {
+            let (Some(d), Some(src)) = (dsts.first(), args.first()) else {
+                return Ok(());
+            };
+            let st = cx.ty(*src);
+            let Some(elem) = slice_elem(cx.tt, st) else {
+                return Ok(());
+            };
+            let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, elem));
+            let (sd, ss) = (cx.slot(*d), cx.slot(*src));
+            addr(asm, sd.off);
+            asm.ins("mov x0, x9");
+            ld_x(asm, "x1", ss.off);
+            ld_x(asm, "x2", ss.off + 8);
+            ld_x(asm, "x3", ss.off + 16);
+            load_addr(asm, "x4", &desc);
+            if dots {
+                // x5 = extra（= len(xs)）、x6 = xs.ptr
+                let Some(xs) = args.get(1) else {
+                    return Ok(());
+                };
+                let sx = cx.slot(*xs);
+                ld_x(asm, "x5", sx.off + 8);
+                ld_x(asm, "x6", sx.off);
+                asm.ins("bl rt_append_dots");
+            } else {
+                // 多个元素（`append(s, 1, 2, 3)`）**不是**一次调用能做的：
+                // 展开成逐个 `rt_append_one`。`dots == false && args.len() > 2`
+                // 就是这种形态。
+                for (k, v) in args.iter().skip(1).enumerate() {
+                    if k > 0 {
+                        // 第二趟起：从**新头**重新读（len/cap 都变了）
+                        addr(asm, sd.off);
+                        asm.ins("mov x0, x9");
+                        ld_x(asm, "x1", sd.off);
+                        ld_x(asm, "x2", sd.off + 8);
+                        ld_x(asm, "x3", sd.off + 16);
+                        load_addr(asm, "x4", &desc);
+                    }
+                    let sv = cx.slot(*v);
+                    addr(asm, sv.off);
+                    asm.ins("mov x5, x9");
+                    asm.ins("bl rt_append_one");
+                }
+            }
+            Ok(())
+        }
+        // 其余内建（`copy`/`delete`/`clear`/`close`/`recover`）在 M6 的
         // 拒绝面里，走不到这里；真走到了说明上游漏判 —— 宁可少发也不发错。
         _ => Ok(()),
     }
