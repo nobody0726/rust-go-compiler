@@ -1365,6 +1365,28 @@ fn map_make(cx: &Ctx<'_>, dst: ValueId, typ: TypeId, asm: &mut Asm) {
     st_x(asm, "x0", d.off);
 }
 
+/// 把一个槽清成零（`size` 字节）。
+///
+/// # 为什么 runtime 的出参槽必须先清零
+///
+/// `rt_map_get` / `rt_map_iter` 只写 `val_size` 字节 —— 而 SSA 的槽按**8 字节**
+/// 一格（`byte` 的槽也是 8 字节）。不清零的话高 7 字节留着上一条指令的垃圾，
+/// 而读这个槽的人（`println` / `int` 转换）读的是**整字**。
+///
+/// 实测：`map[int]byte` 的 `for k := range m { v := m[k] }` 里
+/// `v` 打印出 `281474823995395` 这种数字（`ken/range.go`）。
+fn zero_slot(asm: &mut Asm, off: i32, size: u32) {
+    if size <= 8 {
+        st_x(asm, "xzr", off);
+    } else {
+        addr(asm, off);
+        asm.ins("mov x0, x9");
+        asm.ins("mov x1, xzr");
+        load_imm(asm, "x2", i64::from(size));
+        asm.ins("bl rt_memset");
+    }
+}
+
 /// 运行期助手（`rt_*`）的调用序列（M9/Phase 2）。
 ///
 /// # 为什么每个变体单独写
@@ -1390,6 +1412,8 @@ fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], 
                 return;
             };
             let (sm, sk, sv) = (cx.slot(*m), cx.slot(*k), cx.slot(*v));
+            // 出参槽先清零（窄值的槽是 8 字节，runtime 只写 val_size 字节）。
+            zero_slot(asm, sv.off, sv.size);
             ld_x(asm, "x0", sm.off);
             addr(asm, sk.off);
             asm.ins("mov x1, x9");
@@ -1434,6 +1458,9 @@ fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], 
             };
             let (sm, si) = (cx.slot(*m), cx.slot(*idx));
             let (sk, sv, sn) = (cx.slot(*kd), cx.slot(*vd), cx.slot(*nd));
+            // 同上：`map[int]byte` 的值只有 1 字节，槽有 8 字节。
+            zero_slot(asm, sk.off, sk.size);
+            zero_slot(asm, sv.off, sv.size);
             ld_x(asm, "x0", sm.off);
             ld_x(asm, "x1", si.off);
             addr(asm, sk.off);

@@ -991,6 +991,13 @@ fn eval_make(
         }
         // `new(T)`：分配一个零值并返回它的地址
         Type::Pointer(inner) => Ok(Value::Ptr(cell(zero_of(tt, *inner)))),
+        // `make(map[K]V)`（M9/Task 19）：建图的是 `Instr::Make`（不是 runtime 调用），
+        // 所以解释器这条也要认。空 map —— 容量提示不影响语义。
+        Type::Map { .. } => Ok(Value::Map(std::rc::Rc::new(std::cell::RefCell::new(
+            crate::value::MapObj {
+                entries: Vec::new(),
+            },
+        )))),
         other => Err(Halt::Runtime(format!(
             "`make` 的类型既不是 slice 也不是指针：{other:?}"
         ))),
