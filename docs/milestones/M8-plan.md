@@ -288,27 +288,30 @@ Test `rgoc-driver/tests/con_single.rs`
 
 **Interfaces:**
 - Consumes: Task 6 的 `ChanObj`
+- Produces: `Value::Chan(Rc<RefCell<ChanObj>>)`（**R3**：原计划放 T16，但本 Task 的测试要造通道，
+  绕不开 `make`）；`MakeKind::Chan` 的执行
 - Produces: `G::exec_go(&mut self, sh, call)`：**同步**执行（先跑完再继续）；`G::exec_send` / `G::exec_recv`
   的**非阻塞路径**（buf 有空 / buf 有值 / closed）
 
 - [ ] 先写会红的测试：`go f()` 之后 f 的打印出现在下一句之前（同步语义）；`cap=2` 的通道发两个收两个顺序正确
+- [ ] 加 `Value::Chan`（`deep_copy` 对它是共享引用，不是拷贝通道）
 - [ ] 实现三条路径；**阻塞路径先 `todo!("Task 20")`**（此时不许有任何 fixture 能触发阻塞）
 - [ ] Commit：`feat(interp): 单 goroutine 的 go/chan 语义（Task 15）`
 
 **Verify:** `… cargo test -p rgoc-driver --test con_single`（≥4）
 
-### Task 16: `make`/`close`/`len`/`cap` 的解释执行
+### Task 16: `close`/`len`/`cap`/`print` 的解释执行
 
-**Files:** Modify `interp.rs`（`MakeKind::Chan` / `BuiltinKind::Close` / `Len`/`Cap` 的 chan 分支），
+**Files:** Modify `interp.rs`（`BuiltinKind::Close` / `Len`/`Cap` 的 chan 分支）、`value.rs`（`print`），
 Test `con_single.rs`
 
 **Interfaces:**
-- Produces: `Value::Chan(Rc<RefCell<ChanObj>>)`（新变体，加进 `value.rs` 的 `deep_copy`/`print`）
-- Produces: `print` 一个 chan ⇒ `0xc000000000` 占位（`C9` §4.3 的指针口径）
+- Consumes: Task 15 的 `Value::Chan`
+- Produces: `Close` / `Len` / `Cap` 的 chan 分支；`print(c)` ⇒ `0xc000000000` 占位（`C9` §4.3 的指针口径）
 
 - [ ] 先写会红的测试：`len`/`cap` 四个组合；`print(c)` 的字节；`close` 后 `len` 不变、`cap` 不变
-- [ ] 加 `Value::Chan`；`deep_copy` 对它是**共享**（不是拷贝通道本身，只拷引用）
-- [ ] Commit：`feat(interp): 通道值与三个内建（Task 16）`
+- [ ] 加 `print` 的 chan 分支（`R3`：`Value::Chan` 已在 T15 落地）
+- [ ] Commit：`feat(interp): close/len/cap/print（Task 16）`
 
 **Verify:** `… cargo test -p rgoc-driver --test con_single`（≥4）
 
@@ -321,7 +324,8 @@ Test `con_single.rs`
 **Files:** Modify `interp.rs`（`Task` 加变体、`step_eval` 分派），Test `con_run.rs`
 
 **Interfaces:**
-- Produces: `Task::Recv { ch: ValueId 等价物, comma_ok: bool, waiter: Option<Rc<RefCell<Waiter>>> }`
+- Produces: `Task::Recv { typ: TypeId, comma_ok: bool, waiter: Option<Rc<RefCell<Waiter>>> }`
+  （**R1**：通道值走值栈 —— 先 `Task::Eval(ch)` 再 `Task::Recv`，与 `Task::Index` 同构）
 
 - [ ] 先写会红的测试：`<-c`（非阻塞路径）走 `Task::Recv` 后值栈恰好压一个值；`comma_ok` 时压两个
 - [ ] 实现 `Task::Recv` 的「就绪即提交」分支（`done == false` 时**不许**动值栈）
@@ -334,7 +338,8 @@ Test `con_single.rs`
 **Files:** 同上
 
 **Interfaces:**
-- Produces: `Task::Send { ch, value: Value, waiter: Option<…> }`
+- Produces: `Task::Send { typ: TypeId, waiter: Option<Rc<RefCell<Waiter>>> }`
+  （**R1**：通道值与发送值都在值栈上）
 
 - [ ] 先写会红的测试：发送语句在非阻塞路径下不压值、不留垃圾到值栈（发送后值栈深度回到语句前）
 - [ ] 实现；`Stmt::Send` 改成「求值 chan + value → 压 `Task::Send` → 由它提交」（这样阻塞时任务留在栈上）
@@ -386,6 +391,8 @@ Test `con_single.rs`
 
 - [ ] 先写会红的测试 `T-CON-17/18/19/20/21`（两条 close 的 panic 要在**自己**的 G 里）
 - [ ] 实现：closed 上 send ⇒ 唤醒后 panic；double close / close(nil) ⇒ 立刻 panic
+- [ ] **同时实现 `RangeKind::Chan` 的执行**（**R4**：原计划没有 Task 认领它）——
+      `range` 就是「反复 `Task::Recv` 直到 `ok == false`」，`T-CON-18` 靠它
 - [ ] Commit：`feat(interp): close 三态（Task 22，T-CON-17..21）`
 
 **Verify:** `… cargo test -p rgoc-driver --test con_chan`（≥5）
@@ -405,7 +412,9 @@ Test `con_single.rs`
 **Files:** Modify `sched.rs`（`spawn`）、`interp.rs`（`Stmt::Go` 改成入队）
 
 **Interfaces:**
-- Produces: `Shared::spawn(&mut self, call) -> Gid`：新建 `G`（**直接把调用压成它的帧**）、入队尾、`next_g += 1`
+- Produces: `Shared::spawn(&mut self, callee: Callee, recv: Option<Value>, args: Vec<Value>,
+  results: Vec<SlotId>) -> Gid`（**R5**：实参必须由**旧** G 求值完再传进来 —— `STM-14`；
+  新 G 的帧由这些已求值的实参直接建）
 
 - [ ] 先写会红的测试 `T-CON-01/02`（创建顺序 + 实参在旧 G 求值）
 - [ ] 实现：`go f()` → 在**当前** G 求值 `f` 与实参 → 用求出的值建新 G 的栈帧

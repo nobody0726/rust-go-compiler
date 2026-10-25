@@ -425,8 +425,8 @@ pub enum ExprKind { /* …原有… */ Recv { ch: Box<Expr>, comma_ok: bool } }
 pub struct SelectClause {
     pub kind: SelectKind,       // Send | Recv | Default
     pub chan: Option<Expr>,     // Recv/Send 必有；Default 为 None
-    pub recv_target: Option<Place>,   // case v := <-c  /  case v, ok := <-c
-    pub recv_comma_ok: bool,
+    pub recv_targets: Vec<Place>,   // 0=丢弃 / 1=case v := <-c / 2=case v, ok := <-c
+                                    // （`R2`：`Option<Place>` 表达不了两个目标）
     pub send_value: Option<Expr>,
     pub body: Block,
 }
