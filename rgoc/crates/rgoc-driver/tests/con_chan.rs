@@ -72,11 +72,18 @@ fn t_con_02_实参在旧_goroutine_求值() {
 package main
 
 func g() int { println("g"); return 1 }
-func f(n int) { println("f", n) }
+func f(n int, done chan bool) {
+	println("f", n)
+	done <- true
+}
 
 func main() {
-	go f(g())
+	// main 在 `<-done` 上等：否则它一返回，整个进程就结束了
+	// （`D-M8-8`，Task 40），`f` 根本没机会跑。
+	done := make(chan bool)
+	go f(g(), done)
 	println("main")
+	<-done
 }
 "#,
     );
@@ -91,12 +98,17 @@ fn t_con_02_go_不切走当前_goroutine() {
         r#"
 package main
 
-func f() { println("f") }
+func f(done chan bool) {
+	println("f")
+	done <- true
+}
 
 func main() {
-	go f()
+	done := make(chan bool)
+	go f(done)
 	println("main-1")
 	println("main-2")
+	<-done
 }
 "#,
     );

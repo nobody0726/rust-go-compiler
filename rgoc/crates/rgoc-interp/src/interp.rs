@@ -764,6 +764,12 @@ impl<'a> Shared<'a> {
                     }
                 }
             }
+            // `main` 一返回就**整个程序结束**，队列里的 G 全部丢弃
+            // （`D-M8-8` / `C11` §2.3）。不等它们、也不跑它们的 defer ——
+            // 由 `T-CON-36/40` 判（无限打印的 G 必须没有机会跑）。
+            if self.main_done() {
+                return;
+            }
         }
 
         // 队列空了。两种可能：
@@ -4932,23 +4938,26 @@ mod sched_tests {
     }
 
     #[test]
-    fn drive_把队列里每个_goroutine_都跑到退出并回收() {
+    fn drive_main_返回时丢弃其余_goroutine() {
+        // Task 40（`D-M8-8`）：`main`（下标 0）一结束就**整个程序结束**。
+        // 这条判据的前身是「把队列里每个 goroutine 都跑到退出」—— 那个前提
+        // 在 Task 40 之后不成立了：队列里的第二个 G 根本没有机会跑。
         let (prog, tt) = empty_prog();
         let mut sh = shared(&prog, &tt);
-        for id in 0..3usize {
-            sh.gs.push(Some(idle(TopPhase::Done)));
-            sh.runq.push_back(id);
-        }
+        sh.gs.push(Some(idle(TopPhase::Done))); // main
+        sh.gs.push(Some(idle(TopPhase::Done))); // 别人
+        sh.runq.push_back(0);
+        sh.runq.push_back(1);
         sh.drive();
 
-        assert!(sh.runq.is_empty(), "队列必须被抽干");
+        assert!(sh.gs[0].is_none(), "main 必须被回收");
         assert!(
-            sh.gs.iter().all(Option::is_none),
-            "三个都跑完了，槽位必须全部回收"
+            sh.gs[1].is_some(),
+            "main 返回时直接 return，别的 G 不被回收也不跑"
         );
         assert_eq!(
-            sh.steps, 3,
-            "每个假 goroutine 恰好推进一次（`one_step` 的第一件事就是 +1）"
+            sh.steps, 1,
+            "只有 main 推进了一次（`one_step` 的第一件事就是 +1）"
         );
         assert!(sh.halted.is_none(), "没有预算超限也没有 panic");
     }
