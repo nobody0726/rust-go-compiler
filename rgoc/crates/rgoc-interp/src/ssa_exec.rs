@@ -57,6 +57,24 @@ use crate::interp::{
 use crate::ops::{self, RtError};
 use crate::print;
 use crate::value::{Cell, NilKind, Value, cell, zero_of};
+/// 方法接收者要的是**地址**还是**值**。
+///
+/// 判据与 `rgoc-arm64::abi::slot_of` 的 `SlotClass` 同口径：指针与「超过一个字」
+/// 的聚合按地址传（本后端的聚合按指针传参，`C5` §6.1），其余标量按值传。
+///
+/// # 为什么求值器也要判这个
+///
+/// 方法体的第 0 个形参在 IR 里的用法是固定的：`p.a` 就是 `Field(p, ..)`，
+/// 而 `Field` 只认地址。所以「形参槽里装的是什么」不能靠猜 —— 装错了就是
+/// `panic: 地址不是指针`（`R-9-13`）。
+fn recv_wants_addr(tt: &TypeTable, t: TypeId) -> bool {
+    let u = rgoc_types::underlying(tt, rgoc_types::unalias(tt, t));
+    if matches!(tt.type_of(u), rgoc_types::typ::Type::Pointer(_)) {
+        return true;
+    }
+    rgoc_types::layout::layout(tt, t).is_none_or(|l| l.size > 8)
+}
+
 /// 是不是接口类型（剥具名 / 别名）。
 fn is_iface_ty(tt: &TypeTable, t: TypeId) -> bool {
     use rgoc_types::typ::Type;
@@ -720,15 +738,49 @@ impl Exec<'_> {
                     .ok_or_else(|| {
                         Halt::Runtime(format!("类型 t{} 没有方法 {name}（构建 bug）", dt.index()))
                     })?;
-                // 沿嵌入链把接收者取到位（与 `resolve_method` 的 hops 同源）
-                let mut rv = data;
+                // 沿嵌入链把接收者**按地址**走到位（与 `resolve_method` 的 hops 同源）。
+                //
+                // # 为什么必须走地址而不是走值（`R-9-13`）
+                //
+                // 方法体里的 `p.a` 是 `Instr::Field`，而 `Field` 的底座**必须是地址**
+                // （`as_ptr` 只认 `Value::Ptr`）。按值下降时 `field_of` 会 deref 成
+                // `Value::Struct`，于是 `i.test2()`（动态类型 `*S`，`test2` 声明在
+                // `*Sub` 上，中间隔着内嵌的 `Sub` 值字段）把**结构体值**当接收者传
+                // 进去 —— `panic: 地址不是指针`（`ken/embed.go`，`G-M9-04`）。
+                //
+                // 与 `rgoc-arm64::recv_steps` 同口径：`via_ptr` 的跳是「取那个指针
+                // 字段的值」，其余是「取那个字段的地址」；末尾再按接收者类型决定
+                // 要不要把值读出来。
+                let mut addr = match data {
+                    // 指针动态类型：`data` 就是那个指针
+                    Value::Ptr(c) => c,
+                    // 值动态类型：`data` 是值本身 ⇒ 落一个格子拿地址
+                    other => cell(other),
+                };
                 for h in &hops {
-                    rv = crate::interp::field_of(&rv, h.index).ok_or_else(|| {
-                        Halt::Runtime(format!("嵌入链下降失败（字段 {}）", h.index))
-                    })?;
+                    let f = field_cell(&addr, h.index)?;
+                    addr = if h.via_ptr {
+                        let p = f.borrow().clone();
+                        self.as_ptr(&p)?
+                    } else {
+                        f
+                    };
                 }
                 let idx = index_of(self.m, fid)
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的方法 func#{}", fid.0)))?;
+                // 接收者要值还是地址：指针与「超过一个字」的聚合要地址（本后端的
+                // 聚合按指针传参，`C5` §6.1），其余标量要值。
+                let rv = match self.m.funcs[idx].params.first() {
+                    Some(p0) => {
+                        let rt = self.m.funcs[idx].value_types[p0.index()];
+                        if recv_wants_addr(self.tt, rt) {
+                            Value::Ptr(addr)
+                        } else {
+                            addr.borrow().clone()
+                        }
+                    }
+                    None => Value::Ptr(addr),
+                };
                 let mut all = Vec::with_capacity(avals.len() + 1);
                 all.push(rv);
                 all.extend(avals);
