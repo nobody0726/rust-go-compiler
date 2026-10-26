@@ -54,6 +54,21 @@ pub fn fixture_root() -> PathBuf {
 ///   因为「没跑起来」不是「跑出来的结果」
 /// - 产物路径缺失
 pub fn build_and_run(name: &str, src: &str) -> Result<Outcome, String> {
+    build_and_run_env(name, src, &[])
+}
+
+/// 同 [`build_and_run`]，但给产物**加环境变量**（M10：GC 的三个开关）。
+///
+/// # 为什么环境变量在**运行**这一侧加，而不是编译侧
+///
+/// `RGOC_GC` / `RGOC_GC_STRESS` / `RGOC_GC_STATS` 是**运行期**开关（`C12` §5.1）——
+/// 同一个产物要在三种态下跑出同样的字节（`T-CORP-05`）。在编译侧加就变成
+/// 「编译三次」，测的就不是同一份二进制了。
+///
+/// # Errors
+///
+/// 同 [`build_and_run`]。
+pub fn build_and_run_env(name: &str, src: &str, env: &[(&str, &str)]) -> Result<Outcome, String> {
     let dir = fixture_root().join(name);
     std::fs::create_dir_all(&dir).map_err(|e| format!("建 {} 失败：{e}", dir.display()))?;
     let go = dir.join("main.go");
@@ -87,7 +102,11 @@ pub fn build_and_run(name: &str, src: &str) -> Result<Outcome, String> {
         )
     })?;
 
-    let run = Command::new(&artifact)
+    let mut command = Command::new(&artifact);
+    for (k, v) in env {
+        command.env(k, v);
+    }
+    let run = command
         .output()
         .map_err(|e| format!("运行 {} 失败：{e}", artifact.display()))?;
 

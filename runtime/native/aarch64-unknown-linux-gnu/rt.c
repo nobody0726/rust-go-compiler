@@ -229,6 +229,35 @@ u64 rt_heap_limit(void) { return heap_limit; }
  *
  * 读不到就用缺省（256 MiB）。**不**因为「读不到」而报错 —— 那会让
  * 「直接跑产物」变成一件需要额外配置的事。 */
+/* ── GC 的四个运行期开关与统计量（M10/Task 3，`C12` §5）──
+ *
+ * # 为什么这些是**运行期**环境变量而不是编译期常量
+ *
+ * `T-CORP-05` 要求**同一个产物**在 `off` / `on` / `stress` 三种态下跑出同样的
+ * 字节。编译期开关会让「三态一致」变成「三个二进制各自一致」—— 那测不出
+ * 「GC 没改语义」，只测出「三次编译都没崩」。
+ *
+ * # `gc_on` / `gc_stress` / `gc_threshold` 在 Phase 1 之前没有消费点
+ *
+ * Phase 0 只立「统计行」这个观测面；`rt_gc()` 与 `gc_alloc()` 在 Phase 1 才出现。
+ * 解析先做是因为**环境变量的名字与语义是契约**（`C12` §5.1），越早钉越好。
+ */
+static u64 gc_on = 1;                            /* 0 = 关（与 M9 等价） */
+static u64 gc_stress;                            /* 1 = 每次分配前先收 */
+static u64 gc_stats;                             /* 1 = 退出时打一行 */
+static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
+
+/* 统计量（`C12` §5.2 的 11 个字段）。Phase 0 全是 0，逐 Task 填实。 */
+static u64 gc_collections;   /* 收了几次 */
+static u64 gc_allocs;        /* 分配了几次 */
+static u64 gc_frees;         /* 回收了几块 */
+static u64 gc_live_bytes;    /* 上次清扫后的存活块字节（含 16 字节头） */
+static u64 gc_alloc_bytes;   /* 累计分配的 data 字节（不含头） */
+static u64 gc_kind_count[5]; /* object / array / closure / raw / mapslots */
+static u64 gc_bad_sp;        /* sp_idx >= n_sp 的次数（必须 0） */
+static u64 gc_bad_ptr;       /* 堆内指针解析不到块首的次数（必须 0） */
+static u64 gc_bad_desc;      /* 块头 desc 非法的次数（必须 0） */
+
 static int starts_with(const char *s, const char *p) {
     u64 i = 0;
     while (p[i] != 0) {
@@ -263,6 +292,19 @@ void rt_init(u64 sp) {
             if (v >= 4096) {
                 heap_limit = v;
             }
+        } else if (starts_with(e, "RGOC_GC=")) {
+            /* `0` = 关；其余（含 `1`、空值）都是开。注意它**不是**
+             * `RGOC_GC_STRESS=` 的前缀匹配 —— 第 8 个字符是 `_` 不是 `=`。 */
+            if (e[8] == '0' && e[9] == 0) {
+                gc_on = 0;
+            }
+        } else if (starts_with(e, "RGOC_GC_STRESS=")) {
+            gc_stress = parse_u64(e + 15) != 0;
+        } else if (starts_with(e, "RGOC_GC_STATS=")) {
+            gc_stats = parse_u64(e + 14) != 0;
+        } else if (starts_with(e, "RGOC_GC_THRESHOLD=")) {
+            /* `0` 有意义（= 每次分配失败都收），所以不设下限。 */
+            gc_threshold = parse_u64(e + 18);
         }
     }
 }
@@ -2049,3 +2091,104 @@ void rt_panic_complex(double re, double im) {
     rt_print_complex(re, im);
     panic_commit();
 }
+
+/* ════════════════════════════════════════════════════════════════════
+ * GC 统计行（M10/Task 3，`C12` §5.2）
+ * ════════════════════════════════════════════════════════════════════ */
+
+/* 往 `b` 追加一个字符串 / 十进制数，返回新的长度。
+ *
+ * 不用 `snprintf`：freestanding 没有 libc（`-nostdlib`）。也不用
+ * `rt_print_*`：那些写 **stdout**，而统计行的唯一去向是 stderr（`D-M10-15`）。 */
+static u64 sb_str(char *b, u64 n, const char *s) {
+    while (*s != 0) {
+        b[n++] = *s++;
+    }
+    return n;
+}
+
+static u64 sb_u64(char *b, u64 n, u64 v) {
+    char t[20];
+    u64 k = 0;
+    if (v == 0) {
+        b[n++] = '0';
+        return n;
+    }
+    while (v > 0) {
+        t[k++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (k > 0) {
+        b[n++] = t[--k];
+    }
+    return n;
+}
+
+static u64 chunk_count(void) {
+    u64 n = 0;
+    for (Chunk *c = heap; c != 0; c = c->next) {
+        n++;
+    }
+    return n;
+}
+
+/* 退出前打**一行**统计（`C12` §5.2 冻结的键序与语法）。
+ *
+ * # 谁调用它
+ *
+ * **生成的 `_start`**（`rgoc-arm64::module` 在 `main` 返回之后、判 panic 之前插
+ * 一条 `bl rt_gc_stats_line`），不是 libc 的 `atexit` —— freestanding 没有
+ * `atexit`，而「自己造一个」要在 `_start` 里维护函数指针表，为一行日志不值得。
+ *
+ * # 为什么 `gc_stats == 0` 时一个字节都不打
+ *
+ * 统计行进的是 stderr，而 `C9` §4.1 的合并流只看 stdout —— 但「不设就不打」
+ * 仍然是契约（`C12` §5.2）：否则 `RGOC_GC_STATS` 就不是开关，而是
+ * 「一直开着」的噪声源。
+ */
+void rt_gc_stats_line(void) {
+    if (gc_stats == 0) {
+        return;
+    }
+    char b[512];
+    u64 n = 0;
+    n = sb_str(b, n, "gc: collections=");
+    n = sb_u64(b, n, gc_collections);
+    n = sb_str(b, n, " allocs=");
+    n = sb_u64(b, n, gc_allocs);
+    n = sb_str(b, n, " frees=");
+    n = sb_u64(b, n, gc_frees);
+    n = sb_str(b, n, " live=");
+    n = sb_u64(b, n, gc_live_bytes);
+    n = sb_str(b, n, " heap=");
+    n = sb_u64(b, n, heap_committed);
+    n = sb_str(b, n, " chunks=");
+    n = sb_u64(b, n, chunk_count());
+    /* `rss` 在 M10c（Task 34）之前恒 0 —— 字段必须出现，值可以是 0。 */
+    n = sb_str(b, n, " rss=");
+    n = sb_u64(b, n, 0);
+    n = sb_str(b, n, " kinds=");
+    for (u64 i = 0; i < 5; i++) {
+        if (i != 0) {
+            b[n++] = ',';
+        }
+        n = sb_u64(b, n, gc_kind_count[i]);
+    }
+    n = sb_str(b, n, " bad_sp=");
+    n = sb_u64(b, n, gc_bad_sp);
+    n = sb_str(b, n, " bad_ptr=");
+    n = sb_u64(b, n, gc_bad_ptr);
+    n = sb_str(b, n, " bad_desc=");
+    n = sb_u64(b, n, gc_bad_desc);
+    b[n++] = '\n';
+    write_all(FD_STDERR, b, n);
+}
+
+/* 探针（`C12` §5.4）：测试只读统计行，但这几个在调试时能直接看。 */
+u64 rt_gc_collections(void) { return gc_collections; }
+u64 rt_gc_live_bytes(void) { return gc_live_bytes; }
+u64 rt_gc_alloc_bytes(void) { return gc_alloc_bytes; }
+u64 rt_gc_bad_sp(void) { return gc_bad_sp; }
+u64 rt_gc_bad_ptr(void) { return gc_bad_ptr; }
+u64 rt_gc_bad_desc(void) { return gc_bad_desc; }
+

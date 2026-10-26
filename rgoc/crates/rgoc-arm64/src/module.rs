@@ -139,6 +139,11 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     //
     // `rt_panic_*` 只置状态（好让 defer 有机会 `recover`），所以「打一行 +
     // 退出码 2」这条 `C9` §4.5 的契约落在这里 —— 全局唯一一处退出点。
+    //
+    // `bl rt_gc_stats_line` 在它**之前**：统计行是「退出时打」（`C12` §5.2），
+    // 而这里就是全程序唯一的退出点 —— 正常退出与 panic 退出都经过它。
+    // `RGOC_GC_STATS` 没设时该函数立即返回，一个字节都不打。
+    asm.ins("bl rt_gc_stats_line");
     asm.ins("bl rt_panicking");
     asm.ins("cbz x0, .Lexit0");
     asm.ins("bl rt_print_panic");
