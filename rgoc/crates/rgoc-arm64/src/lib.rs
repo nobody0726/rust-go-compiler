@@ -28,6 +28,7 @@ pub mod abi;
 pub mod diag;
 pub mod emit;
 pub mod frame;
+pub mod hchan;
 pub mod isel;
 pub mod module;
 pub mod parallel_copy;
