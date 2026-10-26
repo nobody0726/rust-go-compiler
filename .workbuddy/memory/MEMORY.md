@@ -9,11 +9,15 @@
 - commit 纪律（2026-10-15 授权）：阶段收口即 commit + push（按交付块分 commit）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore；`tools/ast-oracle` vendor 入库
 
 ## 当前状态（2026-10-25）
-- **M7/M8 已收口**；**M9 进行中**：Phase 0（M9a）+ 1（slice）+ 2（map）+ 3/3b（iface + type switch）已收口。
-  下一阶段 = **Phase 4（funcval，语料 57 → 65）**
-- **M9 语料现态**：native **ok=57 / skip=12 / bad=0**（69 个入选）；三方差分 **57 绿 / 12 跳过 / 0 红**；
-  `cargo test --workspace` **2159 passed 0 failed**；`rgoc-meta`（新 crate）+ desc/方法表/ITab 发射 +
-  `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
+- **M7/M8 已收口**；**M9 进行中**：Phase 0/1/2/3/3b/4a/4b 已收口；**5a（defer+panic+recover）代码通但未收口**。
+  下一阶段 = **5b（defer 带实参 → method/print）→ 5c（可恢复 nil 解引用 → nilptr2）→ 4c（方法值 → method5）**
+- **M9 语料现态**：native **ok=65 / skip=3 / bad=1**（69 个入选）；`cargo test --workspace`
+  **2151 passed / 8 failed**（全是分母/终止符/recover 判据，**故意不重冻结**）；
+  `rgoc-meta`（新 crate）+ desc/方法表/ITab 发射 + `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
+- ⚠️ **panic 用「返回码传播」不 unwind**（`.framemap` 不在 ELF 里 ⇒ `longjmp` 会漏扫根）：
+  `rt_panic_*` 只置状态，每个调用/断言/越界点之后 `bl rt_panicking; cbnz x0, <本帧出口>`；
+  出口 = 跑 defer + `ret`。**跑 defer 期间必须挂起 panic**（被 defer 调用的函数是正常执行的）
+- ⚠️ **`check_panic` 用 `cbnz` 直接跳**，别造「跳过」标签（同函数多处检查会重复定义符号）
 - ⚠️ **SSA 拒绝面三次重冻结 46/23 → 50/19 → 56/13 → 57/12**（`R-9-8`/`R-9-12`/`R-9-14`）。
   剩下 12 条全是 **FUNC-VALUE 8 + DEFER 4** ⇒ Phase 4 是 **+8**、Phase 5 是 **+4**（计划写 +7/+3）。
   按码分类的清单只告诉你「第一条拒绝是什么」，不告诉你「这个文件只剩这一条」

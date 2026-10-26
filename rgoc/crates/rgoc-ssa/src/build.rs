@@ -53,6 +53,8 @@ pub struct BuildOutcome {
 /// 一起长大，所以这里要 `&mut`。
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
+    DEFER_WRAPPERS.with(|w| w.borrow_mut().clear());
+    DEFER_SEQ.with(|c| c.set(0));
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
     let effs = crate::effect::summarize(program, tt);
     let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
@@ -105,6 +107,14 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
     for f in &mut funcs {
         f.ctx_abi = !f.captured.is_empty() || value_funcs.contains(&f.src);
     }
+
+    // `defer` 的包装函数（`M9/Phase 5b`）：建图期间收集，这里并进 `funcs`。
+    // 顺序无所谓 —— `siblings` / `index_of` 都按 `src` 查。
+    DEFER_WRAPPERS.with(|w| {
+        let mut v = w.borrow_mut();
+        funcs.append(&mut v);
+    });
+    DEFER_SEQ.with(|c| c.set(0));
 
     let methods = collect_methods(program, tt);
     let itabs = collect_itabs(&funcs, &methods, tt);
@@ -414,19 +424,19 @@ fn unsup_block(tt: &TypeTable, b: &HirBlock) -> Option<(SsaCode, String)> {
 
 fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
     match s {
-        // `defer` 在 M9/Phase 5a 支持**无实参**的形态（`defer func(){}()` /
-        // `defer nilf()`）：登记一个 funcval 就够。带实参的要先把实参打包成闭包
-        // （Phase 5b），那之前照旧拒。
+        // `defer` 在 M9/Phase 5b 支持全部形态（实参打包进合成的包装函数）。
+        // 只剩两个内建不行：`delete` 走 runtime 的 map 助手、`recover` 只能在
+        // defer 的**函数体里**调（`defer recover()` 本身没意义）。
         Stmt::Defer { call } => match &call.kind {
-            ExprKind::Call {
-                callee: Callee::Value(v),
-                args,
+            ExprKind::Builtin {
+                kind: BuiltinKind::Delete | BuiltinKind::Recover,
                 ..
-            } if args.is_empty() => unsup_expr(tt, v),
-            _ => Some((
+            } => Some((
                 SsaCode::Defer,
-                "defer（带实参 / 方法 / 内建的延迟调用，Phase 5b 未做）".to_string(),
+                "`defer delete/recover`（前者走 runtime 的 map 助手，后者只在 defer 体里有意义）"
+                    .to_string(),
             )),
+            _ => unsup_expr(tt, call),
         },
         // M8 把这三条从 HIR 的拒绝面放进了**解释器**；SSA 侧仍拒（`SSA-UNSUPPORTED-CHAN`）。
         // 这不是「忘了实现」，是 M6 的 IR 没有「等待」这个概念（`C4` 的 memory 模型里
@@ -1144,6 +1154,178 @@ fn is_aggregate(tt: &TypeTable, t: TypeId) -> bool {
     )
 }
 
+thread_local! {
+    /// `defer` 的**包装函数**（`M9/Phase 5b`）。
+    ///
+    /// `defer f(a, b)` 的实参在**登记时**求值，所以运行期不能只知道 funcval ——
+    /// 得有一个「闭包体」把这些值读回来再调 `f`。那个体是合成的 `SsaFunc`
+    /// （捕获 = 每个实参的盒子）。
+    ///
+    /// 用 thread_local 而不是加参数：`build_func` 的签名已经很长，而这里只需要
+    /// 「收集 → `build()` 收尾时 append」。
+    static DEFER_WRAPPERS: std::cell::RefCell<Vec<SsaFunc>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// 已发出去的包装函数个数（用来编唯一的 `FuncId`）。
+    static DEFER_SEQ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// `defer` 包装函数里要重建的那个被调方（`M9/Phase 5b`）。
+///
+/// 数字是**捕获下标**：被调方自己的操作数（接收者 / funcval / 接口值）和实参
+/// 一样活在**登记那一帧**，所以也得捕获进来。
+enum DeferCallee {
+    /// 直接调具名函数。
+    Func(FuncId),
+    /// 内建（`println` / `print` / `len` …）。
+    Builtin(BuiltinKind),
+    /// 方法调用；`recv` 是接收者的捕获下标。
+    Method { func: FuncId, recv: usize },
+    /// 间接调用；`fv` 是 funcval 的捕获下标。
+    Indirect { fv: usize },
+    /// 接口派发；`recv` 是接口值的捕获下标。
+    Iface { slot: u32, recv: usize },
+}
+
+/// 合成一个 `defer` 的**包装函数**，返回它的 `FuncId`。
+///
+/// # 它长什么样
+///
+/// ```text
+/// fn defer#k(ctx) {                 // ctx = funcval，捕获是实参盒子
+///     v0 = const 0 : *u8            // mem 令牌（只读，不需要真根）
+///     a0 = capture#0 ; v1 = load v0 heap a0 : T0
+///     a1 = capture#1 ; v2 = load v0 heap a1 : T1
+///     r0 = call f(v1, v2)
+///     return r0
+/// }
+/// ```
+///
+/// # 为什么捕获的是「盒子」而不是实参本身
+///
+/// Go 规定 `defer` 的实参在**登记时**求值（`defer println(x); x = 2` 打的是旧值）。
+/// 而本后端的捕获一律是**指针**（`R-9-15` 的按引用语义），所以登记点必须为每个
+/// 实参分配一个**新盒子**再把值放进去 —— 见 `Fb::box_value`。
+fn synth_defer_wrapper(
+    tt: &mut TypeTable,
+    callee: DeferCallee,
+    caps: &[(ValueId, TypeId)],
+    rtypes: &[TypeId],
+    dots: bool,
+    eff: Effect,
+    sig: Option<(FuncId, Sig)>,
+) -> FuncId {
+    let seq = DEFER_SEQ.with(|c| {
+        let n = c.get();
+        c.set(n + 1);
+        n
+    });
+    // 合成 id：`SYNTHETIC_FUNC`（`u32::MAX`）留给包初始化，这里从 `MAX-1` 往下发。
+    let id = FuncId(u32::MAX - 1 - seq);
+
+    let mut vt: Vec<TypeId> = Vec::new();
+    let mut instrs: Vec<Instr> = Vec::new();
+    let mut captured: Vec<rgoc_hir::Capture> = Vec::new();
+    let mut slot_types: BTreeMap<SlotId, TypeId> = BTreeMap::new();
+
+    let u8t = tt.add_basic(rgoc_types::BasicId::Uint8);
+    let memt = tt.add_pointer(u8t);
+    let mem = ValueId(0);
+    vt.push(memt);
+    instrs.push(Instr::Const {
+        dst: mem,
+        c: rgoc_hir::types::ConstVal::Int(0),
+        typ: memt,
+    });
+
+    let mut vals: Vec<ValueId> = Vec::new();
+    for (i, (_, t)) in caps.iter().enumerate() {
+        let pt = tt.add_pointer(*t);
+        let addr = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+        vt.push(pt);
+        instrs.push(Instr::CapturePtr {
+            dst: addr,
+            index: u32::try_from(i).expect("捕获下标超出 u32"),
+        });
+        let v = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+        vt.push(*t);
+        instrs.push(Instr::Load {
+            dst: v,
+            mem,
+            root: RootId(0),
+            addr,
+            typ: *t,
+        });
+        vals.push(v);
+        let sid = SlotId(u32::try_from(i).expect("槽号超出 u32"));
+        captured.push(rgoc_hir::Capture {
+            outer_slot: sid,
+            slot: sid,
+        });
+        slot_types.insert(sid, *t);
+    }
+
+    // 实参 = 前 `n_args` 个捕获；被调方的操作数（若有）在它们之后
+    let n_args = match &callee {
+        DeferCallee::Func(_) | DeferCallee::Builtin(_) => caps.len(),
+        _ => caps.len().saturating_sub(1),
+    };
+    let args: Vec<ValueId> = vals.iter().take(n_args).copied().collect();
+    let cref = match callee {
+        DeferCallee::Func(fid) => CalleeRef::Func(fid),
+        DeferCallee::Builtin(k) => CalleeRef::Builtin(k),
+        DeferCallee::Method { func, recv } => CalleeRef::Method {
+            recv: vals[recv],
+            func,
+        },
+        DeferCallee::Indirect { fv } => CalleeRef::Indirect(vals[fv]),
+        DeferCallee::Iface { slot, recv } => CalleeRef::Iface {
+            recv: vals[recv],
+            slot,
+        },
+    };
+
+    let mut dsts: Vec<ValueId> = Vec::new();
+    for t in rtypes {
+        let d = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+        vt.push(*t);
+        dsts.push(d);
+    }
+    instrs.push(Instr::Call {
+        dsts: dsts.clone(),
+        callee: cref,
+        args,
+        dots,
+        effect: eff,
+    });
+
+    let mut call_sigs: BTreeMap<FuncId, Sig> = BTreeMap::new();
+    if let Some((fid, sg)) = sig {
+        call_sigs.insert(fid, sg);
+    }
+
+    let f = SsaFunc {
+        src: id,
+        name: format!("defer#{seq}"),
+        params: Vec::new(),
+        blocks: vec![Block {
+            params: Vec::new(),
+            instrs,
+            term: Term::Return(dsts),
+        }],
+        entry: BlockId(0),
+        roots: vec![Root::Heap],
+        slot_root: BTreeMap::new(),
+        slot_types,
+        value_types: vt,
+        call_sigs,
+        captured,
+        // 有捕获 ⇒ 走 ctx ABI（`x0` = funcval）
+        ctx_abi: true,
+    };
+    DEFER_WRAPPERS.with(|w| w.borrow_mut().push(f));
+    id
+}
+
 /// 一个**函数类型**（不是 `FuncId`）的签名视图。
 ///
 /// 间接调用（`Callee::Value`）没有静态被调方，只能读函数值的静态类型；
@@ -1810,6 +1992,25 @@ struct Fb<'a> {
     /// 预扫描一次（与 `Scanned` 同为独立小 pass）就能把「有没有人跳进来」
     /// 变成静态事实，而不是「到目前为止有没有」。
     goto_targets: BTreeSet<String>,
+}
+
+/// 一次调用的**零件**（`M9/Phase 5b`）：被调方、实参、结果类型、`dots`、
+/// 副作用、要记进 `call_sigs` 的签名。
+///
+/// 抽出来的唯一理由是 `defer`：它要「实参现在求值、`Call` 以后执行」。
+struct CallParts {
+    /// 被调方。
+    callee: CalleeRef,
+    /// 实参（已按签名对齐、变参已打包）。
+    args: Vec<ValueId>,
+    /// 结果类型。
+    rtypes: Vec<TypeId>,
+    /// 末参带 `...`。
+    dots: bool,
+    /// 副作用摘要。
+    eff: Effect,
+    /// 要记进 `call_sigs` 的 `(被调方, 签名)`（`V5` 查它）。
+    sig: Option<(FuncId, Sig)>,
 }
 
 impl Fb<'_> {
@@ -2705,34 +2906,89 @@ impl Fb<'_> {
         spread: u8,
         dots: bool,
     ) -> Vec<ValueId> {
+        // 内建里有几个**不是**普通调用（`delete` 走 runtime、`recover` 走
+        // runtime）—— 它们不能进 defer 的包装函数，所以先在这一层分掉。
+        if let Callee::Builtin(k) = callee
+            && matches!(k, BuiltinKind::Delete | BuiltinKind::Recover)
+        {
+            return self.emit_builtin(e, *k, args, dots);
+        }
+        let p = self.call_parts(e, callee, args, spread, dots);
+        if let Some((fid, sig)) = p.sig {
+            self.call_sigs.insert(fid, sig);
+        }
+        self.emit_call(p.callee, p.args, &p.rtypes, p.dots, p.eff)
+    }
+
+    /// 一次调用的**零件**（不发 `Call`）。
+    ///
+    /// # 为什么要把「算零件」抽出来
+    ///
+    /// `defer` 需要**同一个**调用但不在当前位置执行：实参照常在这里求值
+    /// （Go 规范：defer 的实参在**登记时**求值），而 `Call` 指令要放进合成的
+    /// 包装函数里。抽出来之后两条路共用一个「怎么算实参」的实现 —— 复制一份必然漂。
+    fn call_parts(
+        &mut self,
+        e: &Expr,
+        callee: &Callee,
+        args: &[Expr],
+        spread: u8,
+        dots: bool,
+    ) -> CallParts {
         match callee {
             Callee::Func(fid) => {
                 let (rtypes, sig, vty) = self.sig_of(*fid, false);
-                self.call_sigs.insert(*fid, sig);
                 let avs = self.eval_args(args, spread);
                 let avs = self.pack_variadic(avs, &sig, vty, dots);
                 let eff = crate::effect::to_effect(&self.effs[fid.index()]);
-                self.emit_call(CalleeRef::Func(*fid), avs, &rtypes, dots, eff)
+                CallParts {
+                    callee: CalleeRef::Func(*fid),
+                    args: avs,
+                    rtypes,
+                    dots,
+                    eff,
+                    sig: Some((*fid, sig)),
+                }
             }
             Callee::Method { recv, func } => {
                 let (rtypes, sig, vty) = self.sig_of(*func, true);
-                self.call_sigs.insert(*func, sig);
                 let rv = self.expr(recv);
                 let avs = self.eval_args(args, spread);
                 let avs = self.pack_variadic(avs, &sig, vty, dots);
                 let eff = crate::effect::to_effect(&self.effs[func.index()]);
-                self.emit_call(
-                    CalleeRef::Method {
+                // `call_sigs` 一律记**完整**签名（含接收者）。同一个函数既可能被
+                // 直接调用（`(*T).M(x)` —— 接收者是第 0 个实参）又被方法调用
+                // （`t.M(x)` —— 接收者单列），两种口径共用一个键就会互相覆盖
+                // （实测 `method.go`：V5 报「给了 1 个，签名要 0」）。
+                // `V5` 知道方法调用的接收者单列，所以它按 `args + 1` 比。
+                let full = self.sig_of(*func, false).1;
+                CallParts {
+                    callee: CalleeRef::Method {
                         recv: rv,
                         func: *func,
                     },
-                    avs,
-                    &rtypes,
-                    false,
+                    args: avs,
+                    rtypes,
+                    // 方法的接收者是**独立字段**，不是 `dots` 的位
+                    dots: false,
                     eff,
-                )
+                    sig: Some((*func, full)),
+                }
             }
-            Callee::Builtin(k) => self.emit_builtin(e, *k, args, dots),
+            Callee::Builtin(k) => {
+                let avs = self.eval_args(args, spread);
+                let n = builtin_results(*k);
+                let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![e.typ] };
+                let eff = crate::effect::to_effect(&crate::effect::builtin_summary(*k));
+                CallParts {
+                    callee: CalleeRef::Builtin(*k),
+                    args: avs,
+                    rtypes,
+                    dots,
+                    eff,
+                    sig: None,
+                }
+            }
             Callee::Value(v) => {
                 let fv = self.expr(v);
                 let mut avs = self.eval_args(args, spread);
@@ -2786,7 +3042,14 @@ impl Fb<'_> {
                     // 被调方可能是任何函数（包括会 print 的）
                     prints: true,
                 };
-                self.emit_call(CalleeRef::Indirect(fv), avs, &rtypes, false, eff)
+                CallParts {
+                    callee: CalleeRef::Indirect(fv),
+                    args: avs,
+                    rtypes,
+                    dots: false,
+                    eff,
+                    sig: None,
+                }
             }
             // 接口方法调用（`M9/Task 32`）：槽号 = 方法名在 `iface_methods` 序里的下标。
             //
@@ -2836,16 +3099,17 @@ impl Fb<'_> {
                     may_call_back: true,
                     prints: true,
                 };
-                self.emit_call(
-                    CalleeRef::Iface {
+                CallParts {
+                    callee: CalleeRef::Iface {
                         recv: rv,
                         slot: slot as u32,
                     },
-                    avs,
-                    &rtypes,
-                    false,
+                    args: avs,
+                    rtypes,
+                    dots: false,
                     eff,
-                )
+                    sig: None,
+                }
             }
         }
     }
@@ -5436,25 +5700,114 @@ impl Fb<'_> {
                     self.do_goto(&name);
                 }
             },
-            // `defer`（`M9/Phase 5a`）：只支持 `defer <funcval>()`（无实参）。
-            // 形状由 `unsup_stmt` 保证 —— 走到这里的其它形态是构建 bug。
-            Stmt::Defer { call } => {
-                if let ExprKind::Call {
-                    callee: Callee::Value(v),
-                    args,
-                    ..
-                } = &call.kind
-                    && args.is_empty()
-                {
-                    let fv = self.expr(v);
-                    self.emit(Instr::Defer { fv });
-                }
-            }
+            // `defer`（`M9/Phase 5b`）：实参**现在**求值、装进盒子，
+            // 调用体放进合成的包装函数（见 `synth_defer_wrapper`）。
+            Stmt::Defer { call } => self.stmt_defer(call),
             other => todo!(
                 "M6/Task 24–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)
             ),
         }
+    }
+
+    /// `defer <call>` 的下降（`M9/Phase 5b`）。
+    ///
+    /// 三步：**求值实参**（现在）→ **装盒子** → **造闭包并登记**。
+    fn stmt_defer(&mut self, call: &Expr) {
+        let (dc, args, rtypes, dots, eff, sig) = match &call.kind {
+            ExprKind::Call {
+                callee,
+                args,
+                variadic,
+                spread,
+            } => {
+                let p = self.call_parts(call, callee, args, *spread, *variadic);
+                let n = p.args.len();
+                let (dc, extra) = match p.callee {
+                    CalleeRef::Func(fid) => (DeferCallee::Func(fid), None),
+                    CalleeRef::Builtin(k) => (DeferCallee::Builtin(k), None),
+                    CalleeRef::Method { recv, func } => {
+                        (DeferCallee::Method { func, recv: n }, Some(recv))
+                    }
+                    CalleeRef::Indirect(fv) => (DeferCallee::Indirect { fv: n }, Some(fv)),
+                    CalleeRef::Iface { recv, slot } => {
+                        (DeferCallee::Iface { slot, recv: n }, Some(recv))
+                    }
+                    // `Runtime` 是构建期就展开的助手，不会出现在 defer 里
+                    CalleeRef::Runtime(_) => return,
+                };
+                let mut av = p.args;
+                if let Some(x) = extra {
+                    av.push(x);
+                }
+                (dc, av, p.rtypes, p.dots, p.eff, p.sig)
+            }
+            ExprKind::Builtin {
+                kind,
+                args,
+                variadic,
+            } => {
+                let av = self.eval_args(args, 0);
+                let n = builtin_results(*kind);
+                let rtypes: Vec<TypeId> = if n == 0 { Vec::new() } else { vec![call.typ] };
+                let eff = crate::effect::to_effect(&crate::effect::builtin_summary(*kind));
+                (
+                    DeferCallee::Builtin(*kind),
+                    av,
+                    rtypes,
+                    *variadic,
+                    eff,
+                    None,
+                )
+            }
+            _ => return,
+        };
+        // 实参（与被调方的操作数）逐个装盒子
+        let mut caps: Vec<(ValueId, TypeId)> = Vec::with_capacity(args.len());
+        for a in args {
+            let t = self.values[a.index()];
+            let b = self.box_value(a, t);
+            caps.push((b, t));
+        }
+        let wid = synth_defer_wrapper(self.tt, dc, &caps, &rtypes, dots, eff, sig);
+        // `func()` 的静态类型：`MakeClosure` 的 dst 必须是签名类型（`V3` 查它）
+        let tup = self.tt.add_tuple(Vec::new());
+        let sid = self.tt.add_signature(None, tup, tup, false);
+        let fty = self.tt.signature_def(sid).self_ty;
+        let fv = self.new_value(fty);
+        self.emit(Instr::MakeClosure {
+            dst: fv,
+            func: wid,
+            captures: caps.iter().map(|(v, _)| *v).collect(),
+        });
+        self.emit(Instr::Defer { fv });
+    }
+
+    /// 把一个值装进**新分配的**堆盒子，返回它的地址（`M9/Phase 5b`）。
+    ///
+    /// 用「长度 1 的 slice」当盒子：`Composite` 已经会 `rt_makeslice`，`Index`
+    /// 给出元素地址 —— 两条现成指令，不需要新的 IR。
+    ///
+    /// **每次调用都新分配**：循环里登记 N 次 `defer` 就有 N 份互不干扰的副本
+    /// （Go 的 `for i := 0; i < 3; i++ { defer println(i) }` 打 `2 1 0` 靠的就是它）。
+    fn box_value(&mut self, v: ValueId, t: TypeId) -> ValueId {
+        let slice_ty = self.tt.add_slice(t);
+        let comp = self.new_value(slice_ty);
+        self.emit(Instr::Composite {
+            dst: comp,
+            typ: slice_ty,
+            items: vec![v],
+        });
+        let it = self.int_ty();
+        let zero = self.const_int(0, it);
+        let pt = self.tt.add_pointer(t);
+        let boxed = self.new_value(pt);
+        self.emit(Instr::Index {
+            dst: boxed,
+            base: comp,
+            i: zero,
+        });
+        boxed
     }
 
     /// 一个 place 的**值**类型（不是地址类型）。

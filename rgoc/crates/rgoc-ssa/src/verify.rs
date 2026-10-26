@@ -609,10 +609,13 @@ fn check_v5(f: &SsaFunc) -> Result<(), VerifyError> {
                     ),
                 ));
             }
+            // 方法调用的**接收者单列**（`CalleeRef::Method.recv`），所以比的时候
+            // 要把它算回实参里 —— `call_sigs` 记的是完整签名（含接收者）。
+            let given = args.len() + usize::from(matches!(callee, CalleeRef::Method { .. }));
             let ok = if sig.variadic {
-                args.len() + 1 >= sig.params
+                given + 1 >= sig.params
             } else {
-                args.len() == sig.params
+                given == sig.params
             };
             if !ok {
                 return Err(err(
