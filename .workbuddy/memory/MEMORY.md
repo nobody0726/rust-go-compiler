@@ -12,53 +12,44 @@
   **直连**就通（`gh api` 也通）。别急着改用 gh api 手工搬对象
 - commit 纪律：阶段收口即 commit + push（按交付块分）；`.superpowers/` 已 gitignore（台账不入库）
 
-## 当前状态（2026-10-26）
-- **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**（M9 尾巴已清：`open_gaps` 0 / `closed_gaps` 4）
-- **M10（精确 STW GC）进行中**：三件套已出并拍板（块头 16 B / 逐位点 `sp_idx` / map 进托管堆）。
-  **Phase 0 收口**（Task 1–5）+ **Phase 1 收口**（Task 6–19：托管堆 / 位图 / 16 字节块头 /
-  三种分配入口 / free list / 标记 / 清扫 / `rt_gc` 只扫全局根）。
-  读数 **230 suite / 2213 passed / 0 failed / 2 ignored**；语料 **off/on 各 69/0/0**；
-  变异 **9/9 全红**。下一步 = **Phase 2**（Task 20–32：`Liveness` 前移 → 帧记录链 →
-  扫帧链 → defer/panic/map/闭包/数组五类根 → 精确性 → stress 69/0/0）
-- M9 终态读数：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**）；2184 passed
+## 当前状态（2026-10-27）
+- **M0–M3 完成；M4/M5 部分兑现；M6–M10 全部收口**
+- **M10（精确 STW GC）已收口**：九条门禁 `GC-1..GC-9` 9/9；契约 `C12` 定稿。
+  读数 **235 suite / 2234 passed / 0 failed / 2 ignored**；语料
+  **off / on / stress 各 69/0/0**（`on` 态真的收垃圾）；变异 **20/20 全红**；
+  长跑 100 MB ⇒ `live=1040B` / `heap=17MB` / `chunks=1` / `rss=2772KB`。
+  账在 `docs/milestones/M10-manifest.json`（`manifest_m10.rs` 对账，含
+  「长跑读数必须能复现」），复盘在 `M10-report.md`
+- 下一步 = **M11**（native 并发：goroutine / 栈 / 调度 / select / 定时器）。
+  ⚠️ 进 M11 前必须查清 `G-M10-06`（live-in 位图为什么会让四个语料坏掉）
+- M9 终态：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（拒绝面为空）
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
-## M10 硬约束（先记住再动手）
-- 托管堆与 arena 分离（`rt_arena_alloc` 只留不含堆指针的结构）
-- 块头 **16 B** `{desc|flags, n|kind}`；数组/闭包要元素个数
-- 根走**帧记录链 + 逐位点**：每帧 24 B `{prev, fi, sp_idx}`，链头 `g_frames`。**函数级并集位图 = 保守扫描**
-- **没有寄存器根**（每值一槽的推论）；**不移动**（内部指针无 forwarding）
-- 内部指针回块首：chunk 16 MiB 对齐（`p >> 24`）+ 起始位图（1 位/8 B）+ 页摘要（1 位/4 KiB）
-- ⚠️ **`rt_alloc` 返回 data（块首 + 8）**（`R-10-1`）：返回块首会让字段 0 压对象头、`need_zero` 漏首字
-- 根协议源头：`Safepoint.ptr_words` 来自 `rgoc_types::layout::ptr_mask`（与 `TypeDesc.gcdata` 同函数）；
-  回边 safepoint 用 `dom::DomTree` 判「目标支配本块」
-- `STACK-MAP v1`：`sp b<block>:<idx> off=<字下标> live=<n> ptrs=<hex>`；bit i ↔ `fp - frame_size + 8i`
-- **统计行语法冻结**（`C12` §5.2，12 字段）：`gc: collections= allocs= frees= live= heap= chunks= rss= kinds=<5 个逗号> bad_sp= bad_ptr= bad_desc= mode=<on|off|stress>`。
-  全字段**总是出现**（`R-10-2`）；`mode` 是 `R-10-3` 追加的**装置判据**
-- ⚠️ **判据没牙的三个层次**（M10 Phase 1 踩全了）：① 被测代码**没执行**
-  （`R-10-4` DCE 删 `Make`；`R-10-11` 函数级 effect 摘要说 `new`/`make` 纯 ⇒
-  整个 `churn()` 调用被删）；② 执行了但**没可观察效果**（`R-10-12`：块被回收
-  ≠ 块被复用）；③ **形状不对**（first-fit 装不进 ⇒ 跳过那块）。
-  **三者都只能靠变异实测发现**，读代码看不出来
-- ⚠️ **`R-10-9` 块大小必须自证**（`+8` 的 bit35..63 = `blk>>4`）：不能按
-  `kind+n+desc` 算 —— 非法 desc 时算不出，sweep 会走到块中间
-- ⚠️ **`R-10-12` free list 必须排在 bump 之前**，否则复用形同虚设
-- ⚠️ **`R-10-10` `RGOC_GC_STRESS` 是间隔不是开关**：`=1` 每次收（O(n²)，
-  1e5 次分配的语料跑不完），语料用 `=64`
-- ⚠️ **`R-10-4`：DCE 不许删 `Instr::Make`**（`new`/`make` 有分配副作用）。
-  修之前 `gc1.go` 的 1e5 次 `new([100]byte)` 在 `--opt=all` 下被全删（`heap=0`）
-  ⇒ **stress 态退化成空跑**。CSE 早就正确排除了 `Make`，只有 DCE 漏了
-- ⚠️ **`mapslots` 块自带 `{kdesc,vdesc}` 头**（`R-10-1`）：扫它不必回头找 `MapObj`
-- ⚠️ **`gcdata`/`ptrdata` 一致性**：`ptrdata > 0 ⇒ gcdata 非 null`。已知违反点
-  `g_panic_str_desc`（Task 24 要改）
-- ⚠️ **`CHUNK_HDR`(64) ≠ `BLK_HDR`(16)**：`bump` 起点是 **64**。写成 16 会让第一个块
-  覆盖自己的 chunk 头（`meta_bm` 变 0）⇒ 第一次分配正常、**第二次**段错误。
-  `_Static_assert(sizeof(Chunk) == CHUNK_HDR)` 钉住
-- ⚠️ **arena 分配也带 16 字节块头**（kind = `K_ARENA` = 5，永不回收/不扫）：
-  不给头的话 sweep 按位图走会把它当空闲塞进 free list，复用就覆盖 itab（`R-10-6`）
-- ⚠️ **`array` 的 `n` 用 cap 不是 len**（`R-10-7`）：`s = s[:cap]` 之后的元素可写指针
-- ⚠️ **字符串字面量拼接会被编译期折叠**（`g := "a"+"b"` 不调 `rt_strcat`）——
-  要测 raw 分配必须放进函数（形参折不了）
+## M10 硬约束（改 GC 前必读）
+- **`C12` §4 是地基**：八类根 / 帧记录 `{prev, fi, sp_idx}` 三个字 / 位序
+  `bit i ↔ fp - frame_size + 8i` / `sp_off` 是**字下标**不是位偏移
+- ⚠️ **`is_safepoint` 是穷尽匹配**（不留 `_ => false`）：新增 `Instr` 变体会
+  编译失败 —— 那是故意的。漏一条 = 那个分配点没有位点 = 扫到错的字。
+  **M10 里漏了四次**（`Make` / `MakeClosure`+`Convert`+`Bin` / `Composite`）
+- ⚠️ **起始位图的语义是「这里有一个块头」，不区分活块与空闲块**：
+  `free_push` 要 `bm_set`、sweep 里已空闲的块要 `bm_clear`。漏了 ⇒ 假块首 ⇒
+  拿旧 desc 扫垃圾 ⇒ 段错误（`ken/simpswitch.go`）
+- ⚠️ **`gc_alloc` 在 stress 下分配前跑 GC** ⇒「已分配但还没发布」的块看不见。
+  两条出路：`gc_pin`（中间还要再分配一次，如 `map_new`）/
+  `gc_pause`（一次分配 + 立即发布，如 `rt_alloc_escaped`）
+- ⚠️ **位图是 live-out 的保守超集，不是精确 live-in**（`R-10-21`）：真 live-in
+  会让 `defernil`/`print`/`nilptr2`/`method5` 全坏，机制待查（`G-M10-06`）。
+  代价是「扫到已死指针」是常态 ⇒ `bad_ptr` 只计真错
+- ⚠️ **`bad_ptr` 的口径**：只计「解析不到块首」与「块头非法」。别把
+  「指向已回收的块」加回去 —— 那会让探针恒非 0、然后没人看
+- ⚠️ **逃逸槽必须进托管堆**（`rt_alloc_escaped`）：M9 放 arena ⇒ 闭包捕获
+  `&槽` 时槽里的指针没有根（最小复现打印 204 而不是 42）
+- ⚠️ **`MapObj.count` 必须留在 `+0`**：`len(m)` 是 `ldr [m]`（没调
+  `rt_map_len`）；`slots` 在 `+40`，gcdata 用 bit5
+- ⚠️ **自动触发看 `gc_since` 不看 `heap_committed`**（后者一跳 16 MiB）：
+  `next = max(gc_threshold, gc_live_bytes*2)`
+- **`arena` 保留面 6 条**，`gc_arena.rs::t_gc_11` 按源码片段正反向查；
+  新增 `rt_arena_alloc` 调用点必须同时改表
 
 ## 跨阶段硬事实（会反复踩）
 - ⚠️ **「变异绿」两种成因**：① 判据缺形态；② **探针打错靶**（用例集不走那段代码）。先分辨再改
