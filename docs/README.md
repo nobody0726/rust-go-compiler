@@ -71,6 +71,9 @@
 | M9 | [`milestones/M9-plan.md`](./milestones/M9-plan.md) | **怎么干 M9** —— **Task 1–74**（八个 Phase：内存 → 切片 → map → 接口 → 函数值 → 异常 → 根协议 → channel 契约 → 收口） | ✅ **Task 1–74 全部执行**（2026-10-26） |
 | M9 | [`milestones/M9-manifest.json`](./milestones/M9-manifest.json) | **机器可读事实** —— gate `MEM-1..SCH-1`（**10/10 pass**）、`N'`=69 / `M'`=0、白名单 10 条、`open_gaps` **0** 条 + `closed_gaps` 4 条、`measured` 29 项；由 `manifest_m9.rs` 对账（16 种合成反例） | ✅ **已填实**（2026-10-26；`phase_summary.done = true`） |
 | M9 | [`milestones/M9-report.md`](./milestones/M9-report.md) | **交付报告** —— 69/0/0 的读数、语料 39→69 的逐段表、真错六类（按「为什么先前没抓到」分类）、`U-M9-10` 的语义级拒绝、返回码传播的体积实测（0.49%）、白名单 10 条、冻结与不承诺 | ✅ **已收口**（2026-10-26） |
+| M10 | [`milestones/M10-design.md`](./milestones/M10-design.md) | **怎么建 M10** —— 决策 `D-M10-1..15`（托管堆 / 16 字节块头 / 16 MiB 对齐 chunk / 起始位图 / 帧记录链 / 四种 kind / 不移动）、事实基线 `F1..F14`、九条门禁 `GC-1..GC-9`、白名单 8 条 | 🟡 **草案**（2026-10-26，§2.4 三件事待拍板） |
+| M10 | [`milestones/M10-tests.md`](./milestones/M10-tests.md) | **怎么验 M10** —— `T-HDR`/`T-HEAP`/`T-ROOT`/`T-PREC`/`T-GC` 各族判据、**三态语料**（off / on / stress）、12 条变异、五条不变式 | 🟡 **草案**（随设计一起冻结） |
+| M10 | [`milestones/M10-plan.md`](./milestones/M10-plan.md) | **怎么干 M10** —— **Task 1–45**（Phase 0 契约 → 1 托管堆 → 2 根协议 → 3 自动/长跑 → 4 收口） | 🟡 **待开工** |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
@@ -148,7 +151,7 @@
 
 | 目录 | 来源 | 用途 | 当前内容 |
 |---|---|---|---|
-| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **11 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3 正式〔M5，M8 增 §6 六节点〕/ **C4 正式**〔M6/Task 51，M8 增 §9 不改的理由；M9 增 §10 IR 扩展面〕/ **C5 正式**〔M7/Task 1；M9 增 §8.4 STACK-MAP + §11 对象元数据布局〕/ **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 正式**〔M5/Task 9；M8 增死锁/panic/map 快照；M9 增 §6.1 out of memory〕/ **C10 已冻结**〔M6/Task 51〕/ **C11 已定稿**〔M8/Task 64；M9 增 §7 native 侧 hchan 的镜像〕） |
+| `docs/contracts/` | 03 §2、§1.3 | 跨阶段接口与版本化契约 | ✅ **11 份已产出**（**C1 完整**〔M1 升级、M2 增 §2.3〕/ **C2 完整初稿** / C3 正式〔M5，M8 增 §6 六节点〕/ **C4 正式**〔M6/Task 51，M8 增 §9 不改的理由；M9 增 §10 IR 扩展面〕/ **C5 正式**〔M7/Task 1；M9 增 §8.4 STACK-MAP + §11 对象元数据布局〕/ **C6 已冻结**〔M2/T-AP21〕/ **C7 已冻结**〔M3/Task 1〕/ **C8 已冻结**〔M4/Task 1〕/ **C9 正式**〔M5/Task 9；M8 增死锁/panic/map 快照；M9 增 §6.1 out of memory〕/ **C10 已冻结**〔M6/Task 51〕/ **C11 已定稿**〔M8/Task 64；M9 增 §7 native 侧 hchan 的镜像〕、**C12 草案**〔M10/Task 1：堆形状与 GC 根协议〕） |
 | `docs/milestones/` | 03 §6.2 | 每阶段 `<阶段ID>-{design,tests,plan}.md` 与机器可读 manifest | ✅ **M0 四件套 + M1–M5 三件套 + M6 五件套 + M7 五件套 + M8 五件套全部就位**（M0 `E1–E10` / M1 `L1–L7` / M2 `A1–A8` / M3 `TY-1–TY-8` 门禁全过；M4 `CH-1..9` = 6 pass / 1 partial / 2 fail；M5 `EX-1..9` = 5 pass / 4 partial；**M6 `SSA-1..9` = 9/9 pass**，缺口见 `M6-report.md` §5）<br>🟡 **M5 的 `M5-report.md` 与 `C9` 于收口期补写**（2026-10-23，见 `M5-report.md` §5 偏离登记）<br>✅ **M6 / M7 均已收口**（M6 `SSA-1..9` 9/9、M7 `NAT-1..9` 9/9）<br>✅ **M8 已收口**（2026-10-25：`CON-1..9` 9/9 pass；语料 `N'`=7 / `M'`=12；并发的语义在本里程碑冻结）<br>✅ **M9 已收口**（2026-10-26：`MEM-1..SCH-1` 10/10 pass；native 语料 **69/0/0**、`--via=ssa` 69/0/0；根协议与 channel 契约在本里程碑冻结；收口后清完四个尾巴 `G-M9-01/04/05/06` ⇒ `open_gaps` 空） |
 
 **每阶段开工前置**（03 §6.2）——三样齐备才能进入该阶段：

@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10）→ **M10** 🟡（**设计完成、待拍板**，2026-10-26：`D-M10-1..15` / `GC-1..GC-9` / Task 1–45） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6–M9 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial / M6 SSA-1..9 = 9/9 / M7 NAT-1..9 = 9/9 / M8 CON-1..9 = 9/9 / M9 MEM-1..SCH-1 = 10/10）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-meta` → `rgoc-ssa` → `rgoc-interp` → `rgoc-arm64` → `rgoc-driver`** **十三条**正式 crate（另 `rgoc-harness` 是测试装置、`xtask` 是构建脚本、`rgoc-hir-spike`/`rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 2184 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M9` 九份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **13 条**正式 crate（M7 加 `rgoc-arm64`、M9 加 `rgoc-meta`），workspace **2184 条测试全绿**。
@@ -42,6 +42,12 @@
 **验收**：native 语料 **69/0/0**（M7 是 39）；三方差分 `--run` 69 绿、`--via=ssa` 69 绿（**拒绝面为空**，`SsaCode` 6 → 5）；`STACK-MAP` 与 `.rodata` 的 `RtFuncInfo` **逐字节对账**；`hchan` 布局从 `C11` §7 的**表**读、三操作与 M8 的 `ChanObj` **逐格差分**（168 次）；workspace **2184 passed / 0 failed**；变异脚本 4 条全红、笔记 10 条里 7 红 3 绿（3 条绿是判据缺口，记 `G-M9-04..06`）。**白名单 10 条**（`U-M9-01..10`），其中 `U-M9-10`（interior pointer）是**语义级拒绝**。新契约节：`C4` §10 / `C5` §8.4+§11 / `C9` §6.1 / `C11` §7。
 
 **收口后清掉的四个尾巴**（`closed_gaps` 4/4，`open_gaps` 现为空）：`G-M9-01` 是 `rgoc-check::expr::type_expr` 不认 `unsafe.Pointer` 这个限定名（「类型表达式 → `TypeId`」有两份实现，装载面认、检查面吞）⇒ 补 `Expr::Selector` 臂 + `unsafe_ptr.rs`（`R-9-41`）；`G-M9-04/05/06` 是三条**判据缺形态**（map 探测链 / 多捕获闭包 / panic 后调用方还有输出）⇒ 补 `T-MAP-10`、`t_func_05`、`t_exc_04`，三条变异随之从绿转红。变异现在 **12/12 全红**（脚本 8 条 + notes 4 条）。
+
+**M10（精确 STW GC）设计与计划已出**（2026-10-26，**未开工**）：`M10-design.md` / `M10-tests.md` / `M10-plan.md` 三件套齐备。要点：**单线程、精确到字、不移动**的 mark-sweep；托管堆与运行时 arena 分离（`D-M10-1`），**块头 8 → 16 字节**（`{desc|flags, n|kind}`，数组/闭包要「元素个数」），chunk **16 MiB 对齐**（`p >> 24` O(1) 判堆指针），**起始位图 + 页摘要**解析内部指针（`s[2:]` / `&a[i]`），根走**帧记录链**（每帧 24 字节 `{prev, fi, sp_idx}`，链头 `g_frames`，**逐位点**而非函数级并集 —— 否则是保守扫描），**没有寄存器根**（「每个值一个栈槽」的推论，写成守卫）。九条门禁 `GC-1..GC-9`，最强的一条是**三态语料**：`RGOC_GC=0` / 缺省 / `RGOC_GC_STRESS=1` 三态各 69/0/0。
+
+设计期已发现并修掉一个 M9 的真 bug（`R-10-1`）：**`rt_alloc` 返回块首而非 data** ⇒ 对象头从未真正生效（`new(S)` 读字段 0 得到 desc 指针）。判据 `mem_alloc::new_出来的对象读字段_0_是零`，变异实证红。
+
+**待拍板三件事**（`M10-design.md` §2.4）：① 块头 16 字节 vs 侧表；② 逐位点帧记录 vs 函数级并集；③ map 存储进托管堆 vs 留在 arena（不回收）。
 
 
 **执行期修掉的既有 bug**：`select` 子句里的无标签 `break` 会穿透到外层 `for`（官方 `33`、我们算出 `1`）—— `select` 不在 body 栈上，子句体是唯一能拦 break 的东西；修法是 `Body::Seq` 加 `breakable` 字段。
