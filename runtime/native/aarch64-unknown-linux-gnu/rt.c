@@ -167,18 +167,116 @@ i64 rt_memcmp(const void *a, const void *b, u64 n) {
  * 折中：`turing.go` 这种几千次分配的程序只 mmap 一次，而空程序也只 mmap
  * 一次（惰性：第一次分配才 mmap）。
  */
-#define CHUNK_MIN (16UL * 1024UL * 1024UL)
+#define CHUNK_SHIFT 24UL
+#define CHUNK_MIN (1UL << CHUNK_SHIFT) /* 16 MiB：`p >> 24` 就是 chunk id */
 #define HEAP_LIMIT_DEFAULT (256UL * 1024UL * 1024UL)
 
+/* 块头 16 字节（`D-M10-2` / `C5` §11.1）：`{header, n|kind}` 两行。 */
+#define BLK_HDR 16UL
+#define BLK_MIN 16UL /* 空闲块也有头 */
+
+/* ⚠️ **Chunk 头 64 字节**，与块头**不是一回事**。`bump` 从 `CHUNK_HDR` 起 ——
+ * 写成 `BLK_HDR`（16）会让第一个块覆盖自己的 chunk 头（`size`/`bump`/
+ * `free_head`/`meta_bm` 全被写坏，症状是第二次分配时 `meta_bm == 0` 段错误）。
+ * 实测踩过：`off=16`、`bm=0`。 */
+#define CHUNK_HDR 64UL
+
+/* `header` 的 tag 位（活块）。desc 8 对齐 ⇒ 低 3 位恒 0。 */
+#define HDR_FREE 1UL   /* 空闲块（此时 bit32..63 = 本块总字节数） */
+#define HDR_MARK 2UL   /* 已标记 */
+#define HDR_RAW 4UL    /* 不扫描（与 kind==K_RAW 同一件事的快速编码） */
+#define HDR_DESC(h) ((const void *)((h) & ~7UL))
+
+/* `+8` 的 kind（占高 32 位）。`K_ARENA` 是「永不回收、不扫描」的运行时结构。 */
+enum { K_OBJECT = 0, K_ARRAY = 1, K_CLOSURE = 2, K_RAW = 3, K_MAPSLOTS = 4, K_ARENA = 5 };
+
+/* 一个 chunk（`C12` §1.1）。**正好 64 字节**，在数据区**之内**（前 64 字节）。
+ *
+ * `base` 16 MiB 对齐 ⇒ 任意堆内地址 `p` 的 `p >> 24` 就是本 chunk 的 id
+ * （`data` 容量 >= 16 MiB，多段 chunk 每段各登记一次）。
+ */
 typedef struct Chunk {
     struct Chunk *next;
-    u64 size; /* data 容量（不含本头） */
-    u64 used; /* bump 到哪了 */
+    u64 base;      /* 16 MiB 对齐的数据区起点（含本头） */
+    u64 size;      /* 数据区总容量（>= 16 MiB，16 MiB 的倍数） */
+    u64 bump;      /* 下一个未分配偏移（相对 base），从 CHUNK_HDR 起 */
+    u64 free_head; /* 空闲链头（相对 base 的偏移；0 = 无） */
+    u8 *meta_bm;   /* 起始位图：1 位 / 8 字节（16 MiB ⇒ 256 KiB） */
+    u8 *meta_sum;  /* 页摘要：1 位 / 4 KiB（16 MiB ⇒ 512 B） */
+    u64 live_bytes;
 } Chunk;
 
+_Static_assert(sizeof(Chunk) == CHUNK_HDR, "Chunk 头必须是 64 字节（C12 §1.1）");
+
 static Chunk *heap;
-static u64 heap_committed; /* 已 mmap 的字节（含头），上限按它算 */
+static u64 heap_committed; /* 已 mmap 的字节（含头与元数据），上限按它算 */
 static u64 heap_limit = HEAP_LIMIT_DEFAULT;
+
+/* 定义在本节之后（`rt_fatal_oom` 要用 `write_all`，而 `chunk_tab_put` 要用它）。 */
+static void rt_fatal_oom(u64 limit);
+
+/* `p >> 24` → Chunk 的 64 槽开放寻址表（`C12` §1.1）。
+ *
+ * # 为什么不用「遍历链」
+ *
+ * `mark_ptr` 对**每一个**根与每一个子指针都要先问「在堆里吗」。遍历链是
+ * O(chunks)，而标记的总次数是 O(活对象数) —— 两者相乘。哈希表是 O(1)，
+ * 而 64 槽足够（64 × 16 MiB = 1 GiB > 缺省上限 256 MiB）。
+ */
+typedef struct {
+    u64 id;
+    Chunk *c;
+} ChunkSlot;
+
+#define CHUNK_SLOTS 64UL
+static ChunkSlot chunk_tab[CHUNK_SLOTS];
+
+static u64 chunk_hash(u64 id) { return (id * 0x9E3779B97F4A7C15UL) >> 58; }
+
+static void chunk_tab_put(u64 id, Chunk *c) {
+    u64 h = chunk_hash(id);
+    for (u64 i = 0; i < CHUNK_SLOTS; i++) {
+        u64 k = (h + i) & (CHUNK_SLOTS - 1);
+        if (chunk_tab[k].c == 0 || chunk_tab[k].id == id) {
+            chunk_tab[k].id = id;
+            chunk_tab[k].c = c;
+            return;
+        }
+    }
+    /* 64 槽全满：64 × 16 MiB = 1 GiB，而缺省上限是 256 MiB ⇒ 撞到这里说明
+     * 有人把 `RGOC_HEAP_MAX` 调到 1 GiB 以上。当 OOM 处理（而不是静默漏登记，
+     * 那会让 `mark_ptr` 认不出堆指针 ⇒ 活对象被回收 ⇒ 段错误）。 */
+    rt_fatal_oom(heap_limit);
+}
+
+static Chunk *chunk_by_id(u64 id) {
+    u64 h = chunk_hash(id);
+    for (u64 i = 0; i < CHUNK_SLOTS; i++) {
+        u64 k = (h + i) & (CHUNK_SLOTS - 1);
+        if (chunk_tab[k].c == 0) {
+            return 0;
+        }
+        if (chunk_tab[k].id == id) {
+            return chunk_tab[k].c;
+        }
+    }
+    return 0;
+}
+
+/* 这个地址在托管堆里吗？（`C12` §4.1 的 `mark_ptr` 第一步）
+ *
+ * 返回所在 chunk（`p` 可能指向块中部），不在堆里返回 0。 */
+static Chunk *chunk_of(const void *p) {
+    u64 a = (u64)p;
+    Chunk *c = chunk_by_id(a >> CHUNK_SHIFT);
+    if (c == 0) {
+        return 0;
+    }
+    if (a < c->base + CHUNK_HDR || a >= c->base + c->size) {
+        return 0;
+    }
+    return c;
+}
 
 /* 打印 `runtime error: out of memory (heap limit N bytes)` 并退出 2。
  *
@@ -309,30 +407,194 @@ void rt_init(u64 sp) {
     }
 }
 
-/* mmap 一个新 chunk 挂到链头。`need` 是「至少要能装下的 data 字节」。 */
+/* mmap 一个新 chunk 挂到链头。`need` 是「至少要能装下的 data 字节」。
+ *
+ * # 三条与 M9 不同的地方（`C12` §1.1）
+ *
+ * ① **16 MiB 对齐**：`mmap(size + 16 MiB)` 再把前缀 `munmap` 掉。这样
+ *    `p >> 24` 就是 chunk id，`mark_ptr` 判「在堆里吗」是 O(1)。
+ * ② **块头 64 字节在数据区之内**，`bump` 从 64 起 —— 所以 `base` 到
+ *    `base+64` 不是块，`chunk_of` 要排除这一段。
+ * ③ **旁挂两张元数据表**（起始位图 + 页摘要），一次 mmap 两块。
+ */
+static u64 rt_align_up(u64 v, u64 a) { return (v + a - 1) & ~(a - 1); }
+
 void rt_grow(u64 need) {
-    u64 cap = CHUNK_MIN;
-    if (need > cap) {
-        cap = need;
+    /* 单段 16 MiB 装不下 ⇒ 按 16 MiB 的倍数扩（多段各登记一次 id）。 */
+    u64 size = CHUNK_MIN;
+    if (need + CHUNK_HDR > size) {
+        size = rt_align_up(need + BLK_HDR, CHUNK_MIN);
     }
-    /* 向上取整到 4 KiB（mmap 会自己取整，但 `heap_committed` 要对得上）。 */
-    cap = (cap + 4095UL) & ~4095UL;
-    u64 total = cap + sizeof(Chunk);
+    u64 bm_size = size / 64;    /* 1 位 / 8 字节 */
+    u64 sum_size = size / 32768; /* 1 位 / 4 KiB */
+    u64 total = size + bm_size + sum_size;
     if (heap_committed + total > heap_limit) {
         rt_fatal_oom(heap_limit);
     }
-    i64 r = sys6(SYS_mmap, 0, (i64)total, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+
+    /* 主区：多要一个 chunk 的余量用于对齐，前缀与后缀都还掉。 */
+    i64 r = sys6(SYS_mmap, 0, (i64)(size + CHUNK_MIN), PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
     if (r < 0) {
-        /* mmap 失败（ENOMEM 等）：按上限超限处理 —— 对调用方是同一件事：
-         * 「要不到内存」。文本带上限，因为那是用户能调的那个数。 */
         rt_fatal_oom(heap_limit);
     }
-    Chunk *c = (Chunk *)r;
+    u64 base = rt_align_up((u64)r, CHUNK_MIN);
+    if (base > (u64)r) {
+        sys3(SYS_munmap, r, (i64)(base - (u64)r), 0);
+    }
+    /* 后缀：`base + size` 到 `r + size + 16 MiB` 都是多余的虚拟空间。 */
+    u64 tail = (u64)r + size + CHUNK_MIN - (base + size);
+    if (tail > 0) {
+        sys3(SYS_munmap, (i64)(base + size), (i64)tail, 0);
+    }
+
+    /* 元数据：位图在前、页摘要在后（一次 mmap，两段紧邻）。 */
+    i64 m = sys6(SYS_mmap, 0, (i64)(bm_size + sum_size), PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    if (m < 0) {
+        sys3(SYS_munmap, (i64)base, (i64)size, 0);
+        rt_fatal_oom(heap_limit);
+    }
+
+    Chunk *c = (Chunk *)base;
     c->next = heap;
-    c->size = cap;
-    c->used = 0;
+    c->base = base;
+    c->size = size;
+    c->bump = CHUNK_HDR;
+    c->free_head = 0;
+    c->meta_bm = (u8 *)m;
+    c->meta_sum = (u8 *)m + bm_size;
+    c->live_bytes = 0;
     heap = c;
     heap_committed += total;
+
+    /* 每段一个 id（`size` 是 16 MiB 的倍数 ⇒ 段数 = size >> 24）。 */
+    for (u64 id = base >> CHUNK_SHIFT; id <= (base + size - 1) >> CHUNK_SHIFT; id++) {
+        chunk_tab_put(id, c);
+    }
+}
+
+/* ── 起始位图与页摘要（`C12` §3）── */
+
+/* 位下标一律用**相对 base 的字节偏移**：`off` 的位在 `bm[off >> 6]` 的
+ * `(off >> 3) & 7` 位，覆盖 `[base+off, base+off+8)`。 */
+static void bm_set(Chunk *c, u64 off) { c->meta_bm[off >> 6] |= (u8)(1u << ((off >> 3) & 7)); }
+static void bm_clear(Chunk *c, u64 off) { c->meta_bm[off >> 6] &= (u8)~(1u << ((off >> 3) & 7)); }
+static int bm_test(Chunk *c, u64 off) { return (c->meta_bm[off >> 6] >> ((off >> 3) & 7)) & 1; }
+
+static void sum_set(Chunk *c, u64 page) { c->meta_sum[page >> 3] |= (u8)(1u << (page & 7)); }
+static void sum_clear(Chunk *c, u64 page) { c->meta_sum[page >> 3] &= (u8)~(1u << (page & 7)); }
+static int sum_test(Chunk *c, u64 page) { return (c->meta_sum[page >> 3] >> (page & 7)) & 1; }
+
+/* 从一个**可能是内部**的地址回到块首（`C12` §3.3 / §3.4）。
+ *
+ * # 为什么不能只看「本页有没有起点」
+ *
+ * 本页**有**起点但都 `> p` 时，`p` 的块起点在更早的页（一个 1 MiB 数组
+ * 的第 3 个字节：起点在页首，而本页还有**下一个块**的起点 > p）。
+ * 漏了这条退化，症状是「`&s[3]` 返回 null，而 `&s[len-1]` 碰巧对」。
+ */
+static u8 *resolve_block(Chunk *c, u64 a) {
+    if (a < c->base + CHUNK_HDR || a >= c->base + c->size) {
+        return 0;
+    }
+    u64 off = a - c->base;
+    u64 page = off >> 12;
+
+    /* ① 本页内向下扫（从 p 所在的字起）。 */
+    if (sum_test(c, page)) {
+        u64 w = off & ~7UL;
+        u64 lo = page << 12;
+        while (w >= lo) {
+            if (bm_test(c, w)) {
+                return (u8 *)(c->base + w);
+            }
+            if (w < 8) {
+                break;
+            }
+            w -= 8;
+        }
+    }
+    /* ② 退化：往前找最近的有起点的页，从该页最后一个字向下扫。 */
+    for (u64 q = page; q > 0; q--) {
+        u64 pq = q - 1;
+        if (!sum_test(c, pq)) {
+            continue;
+        }
+        u64 w = ((pq + 1) << 12) - 8;
+        u64 lo = pq << 12;
+        while (w >= lo) {
+            if (bm_test(c, w)) {
+                return (u8 *)(c->base + w);
+            }
+            if (w < 8) {
+                break;
+            }
+            w -= 8;
+        }
+    }
+    return 0;
+}
+
+/* ── 托管分配（`C12` §1.3 / §2）── */
+
+/* 从当前 bump 切一块 `blk` 字节，置起始位与页摘要，返回块首。 */
+static u8 *bump_take(Chunk *c, u64 blk) {
+    u64 off = c->bump;
+    c->bump = off + blk;
+    bm_set(c, off);
+    sum_set(c, off >> 12);
+    return (u8 *)(c->base + off);
+}
+
+/* 核心分配：`need` 是 data 字节数。
+ *
+ * # 为什么 `need_zero` 不在参数里
+ *
+ * Go 的零值语义要求 `new(T)` 一定是零 —— 而**复用的块**里躺着上一条命的
+ * 数据。所以清零不是可选项，是必做项（`C12` §1.3）。`rt_alloc` 保留
+ * `need_zero` 形参只为 ABI 稳定（`C5` §11.1），实现里恒清零。
+ *
+ * # `K_ARENA` 为什么也走这里
+ *
+ * arena 的结构（itab / DeferRec / 输出缓冲）与 Go 对象**同一个 chunk 链**
+ * （省一套记账），但 kind = `K_ARENA` ⇒ 清扫跳过、扫描跳过。若不给它们
+ * 块头，清扫按位图走时会把它们当成「空闲」并塞进 free list —— 之后被
+ * `gc_alloc` 复用就覆盖了 itab。
+ */
+static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
+    u64 blk = rt_align_up(BLK_HDR + need, 16);
+    if (blk < BLK_MIN) {
+        blk = BLK_MIN;
+    }
+
+    u8 *p = 0;
+    for (Chunk *c = heap; c != 0; c = c->next) {
+        if (c->bump + blk <= c->size) {
+            p = bump_take(c, blk);
+            break;
+        }
+    }
+    if (p == 0) {
+        rt_grow(blk);
+        p = bump_take(heap, blk);
+    }
+
+    /* 块头两行（`C12` §2.1）。`desc` 8 对齐 ⇒ 低 3 位本来就是 0。 */
+    u64 h = (u64)desc;
+    if (kind == K_RAW || kind == K_ARENA) {
+        h |= HDR_RAW;
+    }
+    *(u64 *)p = h;
+    *(u64 *)(p + 8) = n | ((u64)kind << 32);
+
+    /* 清零整块 data（含尾部 padding）：复用的块里躺着上一条命的数据。 */
+    rt_memset(p + BLK_HDR, 0, blk - BLK_HDR);
+
+    gc_allocs++;
+    if (kind < 5) {
+        gc_kind_count[kind]++;
+    }
+    gc_alloc_bytes += need;
+    return p + BLK_HDR;
 }
 
 /* ── 超大帧的存储（`M9/Phase 5c`，`R-9-22`）──
@@ -375,30 +637,27 @@ void rt_stack_frame_free(void *p, u64 n) {
  * 「同一个地址」只能有一处来源 —— 两边各自定义就变成两个地址了。 */
 extern u8 rt_zerobase[];
 
+/* arena 分配（`C12` §6）：**永不回收、不扫描**的运行时结构。
+ *
+ * # M10 起它也带 16 字节块头
+ *
+ * 原因不是「想要头」，而是**清扫必须能跳过它**：sweep 按起始位图走，
+ * 位图没标记的地方就是空闲 —— 而 arena 的结构如果不在位图里，就会被当成
+ * 空闲块塞进 free list，之后被 `gc_alloc` 复用就覆盖了 itab / DeferRec。
+ * 给了头 + `K_ARENA` 之后，sweep 见到 kind==5 直接跳过。
+ *
+ * # `align` 参数为什么不用
+ *
+ * 块大小恒 16 的倍数、`base` 16 MiB 对齐 ⇒ `data` 恒 16 对齐，任何
+ * `align <= 16` 都满足。保留形参只为不改调用点（`C12` §6 的守卫按调用点
+ * 扫源码，改签名会连带改那张表）。
+ */
 void *rt_arena_alloc(u64 size, u64 align) {
+    (void)align;
     if (size == 0) {
         return rt_zerobase;
     }
-    if (align == 0) {
-        align = 8;
-    }
-    for (;;) {
-        Chunk *c = heap;
-        if (c != 0) {
-            u64 p = (c->used + align - 1) & ~(align - 1);
-            if (p + size <= c->size) {
-                c->used = p + size;
-                void *r = (void *)((u8 *)(c + 1) + p);
-                /* 保留 M7 的语义：**这块内存一定是零**。
-                 * mmap 给的就是零页，所以这条 memset 目前是冗余的 ——
-                 * 但它是「arena 的内存是零」这条契约的**唯一**执行点，
-                 * 而 M10 一旦开始复用对象，冗余就消失了。 */
-                rt_memset(r, 0, size);
-                return r;
-            }
-        }
-        rt_grow(size + align);
-    }
+    return gc_alloc(size, K_ARENA, 0, size);
 }
 
 /* ── 类型元数据与统一分配入口（M9/Task 6）── */
@@ -443,14 +702,18 @@ static u64 rt_align_bad;
 
 u64 rt_probe_align(void) { return rt_align_bad; }
 
-/* 统一分配入口：`[+0 desc][+8 data...]`（`M9-design.md` §3.2）。
+/* 统一分配入口：`[+0 header][+8 n|kind][+16 data...]`（`C5` §11.1 / `C12` §2）。
  *
- * `need_zero` 由**编译期**按 `needs_zero(类型)` 传入（含指针或含浮点 ⇒ 1）。
- * 现在它看起来多余（arena 拿到的都是新页，本来就是零），但 M10 的 GC 一旦
- * 开始复用对象，它就变成「不清零就会把上一条命的指针交给 GC」的唯一防线。
- * 所以现在**不**省掉这个参数 —— 省掉之后加回来要改所有调用点。
+ * # `need_zero` 现在是**无用形参**
+ *
+ * M9 的注释预言过「M10 开始复用对象时它是唯一防线」—— 而现在它连防线都
+ * 不是了：`gc_alloc` **恒清零** data（复用的块里躺着上一条命的数据，
+ * 而 Go 的零值语义要求 `new(T)` 一定是零）。所以 `need_zero` 保留只为
+ * ABI 稳定（`isel` 照旧按 `needs_zero(类型)` 传，`mem_alloc.rs` 的实参判据
+ * 仍然成立），实现里不看它。记 `R-10-5`。
  */
 void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
+    (void)need_zero;
     u64 size = desc->size;
     if (size == 0) {
         /* 零大小对象：所有实例共享 `rt_zerobase`（`zerosize.go` 要求
@@ -458,7 +721,7 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
          * 那块内存是**所有**零大小类型共用的，写谁的 desc 都是错的。 */
         return rt_zerobase;
     }
-    u8 *p = (u8 *)rt_arena_alloc(size + 8, 8);
+    u8 *p = (u8 *)gc_alloc(size, K_OBJECT, desc, 0);
     if (((u64)p & 7UL) != 0) {
         rt_align_bad++;
         const char *m = "panic: misaligned allocation\n";
@@ -469,13 +732,9 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
         write_all(FD_STDERR, m, n);
         rt_exit(2);
     }
-    *(const TypeDesc **)p = desc;
-    if (need_zero != 0) {
-        rt_memset(p + 8, 0, size);
-    }
-    /* 返回 **data**（`p + 8`），不是块首：Go 侧的指针必须指到值上，
+    /* 返回 **data**（块首 + 16），不是块首：Go 侧的指针必须指到值上，
      * 否则字段偏移 0 会与对象头重叠（`M9` 的 `D-M9-1` 从没真正生效）。 */
-    return p + 8;
+    return p;
 }
 
 /* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
