@@ -370,7 +370,7 @@ for i in 0..sp_words:
 
 ### 5.2 统计行（**语法冻结**）
 
-一行，`\n` 结尾，字段顺序固定，**所有字段总是出现**（`rss` 在 M10c 之前恒 0）：
+一行，`\n` 结尾，字段顺序固定，**所有字段总是出现**：
 
 ```text
 gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> kinds=<o>,<a>,<c>,<r>,<m> bad_sp=<n> bad_ptr=<n> bad_desc=<n> mode=<on|off|stress>
@@ -379,6 +379,8 @@ gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> ki
 - 前缀 `gc: `（含空格），字段间单个空格，键值间 `=`，无空格。
 - `kinds` 是**五个**逗号分隔的十进制计数，顺序 `object,array,closure,raw,mapslots`。
 - `bad_*` 三个**总是出现**（不是「非 0 才追加」）。
+- `rss` 是**峰值** RSS（KB），`getrusage(RUSAGE_SELF).ru_maxrss`（偏移 32，
+  Linux aarch64）。取不到就是 0 —— 字段必须出现，值可以是 0。
 - `mode` 是**解析后的**生效态：`RGOC_GC=0` ⇒ `off`（即使同时设了 `STRESS`）；
   否则 `RGOC_GC_STRESS=1` ⇒ `stress`；否则 `on`。
 
@@ -401,9 +403,22 @@ gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> ki
 ### 5.3 自动触发
 
 ```text
-gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
-  ⇒ rt_gc()；重试一次；仍失败 ⇒ OOM
+每次 gc_alloc（分配**之前**）：
+  gc_since += need
+  next = max(gc_threshold, gc_live_bytes * 2)
+  gc_since >= next  ⇒  rt_gc()
 ```
+
+⚠️ **推翻 `M10-plan.md` Task 33 的初稿口径**（「分配失败且 `heap_committed >
+threshold` ⇒ 收一次再重试」）。那条**永远不会触发**：chunk 是 16 MiB，而语料里
+的程序分配量都在 16 MiB 以内 ⇒ bump 永远够 ⇒ 自动态退化成关态，`off` 与 `on`
+两态**逐字节相同**而没人发现。记 `R-10-25`。
+
+现在的口径看 **`gc_since`（上次 GC 之后分配的数据字节）**，不看 mmap 量：
+`heap_committed` 一跳就是 16 MiB，粒度太粗。阈值随存活集自适应
+（`gc_live_bytes * 2`）—— 堆越大收得越少，与 Go 的 `GOGC=100` 同形。
+
+- **`gc_pause > 0` ⇒ 不触发**（GC 期间、以及 `rt_alloc_escaped` 的发布窗口）。
 
 - **`RGOC_GC=0` ⇒ `rt_gc()` 立即返回** ⇒ 第 4 步等于直接 OOM。
 - **`RGOC_GC_STRESS=<n>` ⇒ 每 n 次分配前先收**（此时阈值不起作用）。

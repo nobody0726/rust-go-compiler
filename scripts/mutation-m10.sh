@@ -26,7 +26,7 @@
 # 4. **锚点也要核**：替换不命中就是 MISS（M9 踩过：签名写错、替换没命中、
 #    测试照绿）。
 #
-# # 这里 19 条
+# # 这里 20 条
 #
 # | 变异 | 期望红的判据 |
 # |---|---|
@@ -49,6 +49,7 @@
 # | `M-M10-17` `sp_idx` 恒 0 | `t_root_10` |
 # | `M-M10-18` 整帧保守扫描 | `t_prec_01` |
 # | `M-M10-19` 帧位序反 | `t_root_09` |
+# | `M-M10-20` 自动触发永不触发 | `t_gc_01` |
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -290,6 +291,16 @@ probe "M-M10-19 帧位序反" "$RT" \
   '            u8 *base = fp - fi->frame_size;' \
   '            u8 *base = fp - 8;' \
   -p rgoc-driver --test gc_stack t_root_09
+
+# ── M-M10-20：自动触发永不触发 ────────────────────────────────────────
+# 计划初稿的触发条件（「分配失败才收」）在 16 MiB chunk 下**永远不会满足**
+# ⇒ 自动态退化成关态，`off` 与 `on` 逐字节相同而没人发现。
+probe "M-M10-20 自动触发永不触发" "$RT" \
+  '    if (gc_since >= next) {
+        rt_gc();
+    }' \
+  '    (void)next;' \
+  -p rgoc-driver --test gc_longrun t_gc_01
 
 echo "=== mutation-m10: RED $pass / 失手 $fail"
 printf '%s\n' "$report"

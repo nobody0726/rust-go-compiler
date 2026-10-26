@@ -30,6 +30,7 @@ typedef unsigned char u8;
 #define SYS_exit_group 94
 #define SYS_munmap 215
 #define SYS_mmap 222
+#define SYS_getrusage 165
 
 /* mmap 的两个常量（`asm-generic/mman-common.h` 的值，不是猜的）。 */
 #define PROT_READ_WRITE 3
@@ -385,6 +386,8 @@ static u64 gc_stress;                            /* 1 = 每次分配前先收 */
 static u64 gc_pause;
 static u64 gc_stats;                             /* 1 = 退出时打一行 */
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
+/* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
+static u64 gc_since;
 
 /* 统计量（`C12` §5.2 的 11 个字段）。Phase 0 全是 0，逐 Task 填实。 */
 static u64 gc_collections;   /* 收了几次 */
@@ -667,6 +670,44 @@ static u8 *free_take(Chunk *c, u64 *blk) {
  * stress 钩子用。 */
 void rt_gc(void);
 
+/* 自动触发（`C12` §5.3，`T-GC-01`）。
+ *
+ * # 策略：**上次存活量 × 2**，但不低于 `gc_threshold`
+ *
+ * ```text
+ * next = max(gc_threshold, gc_live_bytes * 2)
+ * gc_since >= next  ⇒  rt_gc()
+ * ```
+ *
+ * # 为什么不是「分配失败才收」
+ *
+ * 计划初稿写的是「分配失败且 `heap_committed > threshold` ⇒ 收一次再重试」。
+ * 那条**永远不会触发**：chunk 是 16 MiB，而语料里的程序分配量都在 16 MiB
+ * 以内 —— bump 永远够，于是「自动触发」形同虚设，`on` 态退化成 `off` 态。
+ * `T-GC-01`（`RGOC_GC_THRESHOLD=65536` + 1 MiB 分配 ⇒ `collections >= 1`）
+ * 就是为了把这条钉住。
+ *
+ * # 为什么看 `gc_since` 而不是 `heap_committed`
+ *
+ * `heap_committed` 是 **mmap 量**，一跳就是 16 MiB，粒度太粗；`gc_since` 是
+ * 真实分配量，能反映「垃圾涨得多快」。
+ *
+ * `gc_live_bytes` 由 `sweep` 在每次 GC 末尾写（上次清扫后的存活字节）——
+ * 于是阈值随存活集自适应：堆越大，收得越少（与 Go 的 `GOGC=100` 同形）。
+ */
+static void gc_maybe(void) {
+    if (gc_pause != 0 || gc_on == 0) {
+        return;
+    }
+    u64 next = gc_live_bytes * 2;
+    if (next < gc_threshold) {
+        next = gc_threshold;
+    }
+    if (gc_since >= next) {
+        rt_gc();
+    }
+}
+
 /* 核心分配：`need` 是 data 字节数。
  *
  * # 为什么 `need_zero` 不在参数里
@@ -687,6 +728,9 @@ static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
     if (blk < BLK_MIN) {
         blk = BLK_MIN;
     }
+
+    gc_since += need;
+    gc_maybe();
 
     /* stress：每 `gc_stress` 次分配先收一次（`C12` §5.1 / `R-10-10`）。
      *
@@ -1332,10 +1376,14 @@ void rt_gc(void) {
     if (gc_on == 0) {
         return;
     }
+    /* GC 期间不再触发（`H5`：标记与清扫里不许分配）。 */
+    gc_pause++;
     gc_collections++;
     mark_roots();
     drain();
     sweep();
+    gc_since = 0;
+    gc_pause--;
 }
 
 /* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
@@ -3063,6 +3111,35 @@ static u64 chunk_count(void) {
  * 仍然是契约（`C12` §5.2）：否则 `RGOC_GC_STATS` 就不是开关，而是
  * 「一直开着」的噪声源。
  */
+/* 峰值 RSS（KB），`getrusage(RUSAGE_SELF).ru_maxrss`（`T-GC-09`）。
+ *
+ * # 为什么是「峰值」而不是「当前」
+ *
+ * `ru_maxrss` 是**峰值**。判据要的正是峰值：`heap` 是 mmap 量，而真正占物理
+ * 内存的是「碰过的页」。一个只分配不写的程序 `heap` 很大而 RSS 很小 ——
+ * 两个数一起看才知道有没有真的把内存用起来。
+ *
+ * # 布局（Linux aarch64）
+ *
+ * ```text
+ * struct rusage { timeval ru_utime(16); timeval ru_stime(16); long ru_maxrss; ... }
+ * ```
+ * 所以 `ru_maxrss` 在偏移 **32**（第 4 个 `u64`）。内核给的是 **KB**。
+ *
+ * 取不到就返回 0（字段必须出现，值可以是 0 —— `R-10-2`）。
+ */
+static u64 rss_kb(void) {
+    u64 buf[18];
+    for (u64 i = 0; i < 18; i++) {
+        buf[i] = 0;
+    }
+    i64 r = sys3(SYS_getrusage, 0 /* RUSAGE_SELF */, (i64)buf, 0);
+    if (r < 0) {
+        return 0;
+    }
+    return buf[4];
+}
+
 void rt_gc_stats_line(void) {
     if (gc_stats == 0) {
         return;
@@ -3081,9 +3158,8 @@ void rt_gc_stats_line(void) {
     n = sb_u64(b, n, heap_committed);
     n = sb_str(b, n, " chunks=");
     n = sb_u64(b, n, chunk_count());
-    /* `rss` 在 M10c（Task 34）之前恒 0 —— 字段必须出现，值可以是 0。 */
     n = sb_str(b, n, " rss=");
-    n = sb_u64(b, n, 0);
+    n = sb_u64(b, n, rss_kb());
     n = sb_str(b, n, " kinds=");
     for (u64 i = 0; i < 5; i++) {
         if (i != 0) {
