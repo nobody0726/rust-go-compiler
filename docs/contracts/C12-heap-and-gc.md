@@ -294,17 +294,26 @@ for i in 0..sp_words:
 一行，`\n` 结尾，字段顺序固定，**所有字段总是出现**（`rss` 在 M10c 之前恒 0）：
 
 ```text
-gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> kinds=<o>,<a>,<c>,<r>,<m> bad_sp=<n> bad_ptr=<n> bad_desc=<n>
+gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> kinds=<o>,<a>,<c>,<r>,<m> bad_sp=<n> bad_ptr=<n> bad_desc=<n> mode=<on|off|stress>
 ```
 
 - 前缀 `gc: `（含空格），字段间单个空格，键值间 `=`，无空格。
 - `kinds` 是**五个**逗号分隔的十进制计数，顺序 `object,array,closure,raw,mapslots`。
 - `bad_*` 三个**总是出现**（不是「非 0 才追加」）。
+- `mode` 是**解析后的**生效态：`RGOC_GC=0` ⇒ `off`（即使同时设了 `STRESS`）；
+  否则 `RGOC_GC_STRESS=1` ⇒ `stress`；否则 `on`。
 
 > ⚠️ **推翻 `M10-plan.md` Task 4 Step 2 的初稿口径**（「`bad_*` 只在非 0 时追加」）。
 > 理由：「不出现」与「=0」是两件事，判据要写两遍；总是出现让
 > `bad_sp=0 bad_ptr=0 bad_desc=0` 成为**一条**断言，而且 diff 更稳。
 > 记 `R-10-2`。
+>
+> ⚠️ **`mode` 是 Task 5 追加的**（`R-10-3`）。理由：Phase 0 的三态**必然等价**
+> （`rt_gc()` 还不存在），所以「三态跑出同样的字节」这件事在 Phase 0 里
+> **不携带信息** —— 如果 `run-native.sh --gc=` 的分支写错了（比如 `stress`
+> 分支漏了变量），三态照样一致。`mode` 让「环境变量真的生效」变成可观测的，
+> 于是 `T-CORP-00` 能断言「三个态确实是三个态」。它是**装置判据**，不是
+> 实现判据 —— 而装置说谎比实现有 bug 难查得多。
 
 **写入点**：由**生成的 `main` 出口**调用 `rt_gc_stats_line()`（`module.rs` 在
 `main` 的 `ret` 之前插一条 `bl`），**不**依赖 libc 的 `atexit`（freestanding 没有）。

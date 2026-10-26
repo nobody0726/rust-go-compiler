@@ -2180,6 +2180,23 @@ void rt_gc_stats_line(void) {
     n = sb_u64(b, n, gc_bad_ptr);
     n = sb_str(b, n, " bad_desc=");
     n = sb_u64(b, n, gc_bad_desc);
+    /* `mode` 是**解析后**的生效态（`C12` §5.2 / `R-10-3`）。
+     *
+     * # 为什么它必须在行里
+     *
+     * Phase 0 的三态**必然等价**（`rt_gc()` 还不存在），所以「三态跑出同样的
+     * 字节」在 Phase 0 里不携带信息 —— 装置写错了也看不出来。`mode` 让
+     * 「环境变量真的生效」变成可观测的：三态各打自己的名字，写错立刻红。
+     *
+     * 优先级：`RGOC_GC=0` 最高（关了就是关了），其次 `STRESS`，最后 `on`。 */
+    n = sb_str(b, n, " mode=");
+    if (gc_on == 0) {
+        n = sb_str(b, n, "off");
+    } else if (gc_stress != 0) {
+        n = sb_str(b, n, "stress");
+    } else {
+        n = sb_str(b, n, "on");
+    }
     b[n++] = '\n';
     write_all(FD_STDERR, b, n);
 }

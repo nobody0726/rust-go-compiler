@@ -24,8 +24,8 @@ use support::native_harness::build_and_run_env;
 
 const HI: &str = "package main\n\nfunc main() { println(\"hi\") }\n";
 
-/// `C12` §5.2 冻结的键序（`kinds` 是复合值，单列）。
-const KEYS: [&str; 11] = [
+/// `C12` §5.2 冻结的键序（`kinds` 是复合值、`mode` 是枚举，单列）。
+const KEYS: [&str; 12] = [
     "collections",
     "allocs",
     "frees",
@@ -37,6 +37,7 @@ const KEYS: [&str; 11] = [
     "bad_sp",
     "bad_ptr",
     "bad_desc",
+    "mode",
 ];
 
 /// 把 `gc: k=v k=v …` 拆成**保序**的 `(key, value)` 表。
@@ -78,7 +79,7 @@ fn t_gc_02_统计行只进_stderr_且字段齐全() {
     let got: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(got, KEYS, "字段顺序是 `C12` §5.2 冻结的契约");
 
-    // 所有值都是十进制（`kinds` 是五个逗号分隔的十进制）
+    // 值域：`kinds` 是五个十进制、`mode` 是三选一、其余是十进制
     for (k, v) in &fields {
         if k == "kinds" {
             let parts: Vec<&str> = v.split(',').collect();
@@ -89,6 +90,11 @@ fn t_gc_02_统计行只进_stderr_且字段齐全() {
                     "kinds 的每一项都要是十进制，实际：{p}"
                 );
             }
+        } else if k == "mode" {
+            assert!(
+                matches!(v.as_str(), "off" | "on" | "stress"),
+                "mode 只认 off|on|stress，实际：{v}"
+            );
         } else {
             assert!(v.parse::<u64>().is_ok(), "`{k}` 的值要是十进制，实际：{v}");
         }

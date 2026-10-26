@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 
 use super::native_harness::{Outcome, build_and_run_env};
 
-/// `C12` §5.2 的 11 个字段，按冻结顺序。
-pub const KEYS: [&str; 11] = [
+/// `C12` §5.2 的 12 个字段，按冻结顺序。
+pub const KEYS: [&str; 12] = [
     "collections",
     "allocs",
     "frees",
@@ -30,7 +30,36 @@ pub const KEYS: [&str; 11] = [
     "bad_sp",
     "bad_ptr",
     "bad_desc",
+    "mode",
 ];
+
+/// 解析后的 GC 生效态（`C12` §5.2 的 `mode`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GcMode {
+    /// `RGOC_GC=0` —— 与 M9 等价的对照。
+    Off,
+    /// 缺省：自动触发。
+    #[default]
+    On,
+    /// `RGOC_GC_STRESS=1` —— 每次分配前先收。
+    Stress,
+}
+
+impl GcMode {
+    /// # Errors
+    ///
+    /// 不是 `off` / `on` / `stress` 之一。
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "off" => Ok(Self::Off),
+            "on" => Ok(Self::On),
+            "stress" => Ok(Self::Stress),
+            _ => Err(format!(
+                "`mode` 只认 off|on|stress，实际：`{s}`（C12 §5.2）"
+            )),
+        }
+    }
+}
 
 /// 一次 GC 统计的读数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,6 +76,7 @@ pub struct Stats {
     pub bad_sp: u64,
     pub bad_ptr: u64,
     pub bad_desc: u64,
+    pub mode: GcMode,
 }
 
 impl Stats {
@@ -136,6 +166,7 @@ pub fn parse_stats(stderr: &str) -> Result<Option<Stats>, String> {
         bad_sp: num("bad_sp")?,
         bad_ptr: num("bad_ptr")?,
         bad_desc: num("bad_desc")?,
+        mode: GcMode::parse(map.get("mode").copied().unwrap_or_default())?,
     }))
 }
 

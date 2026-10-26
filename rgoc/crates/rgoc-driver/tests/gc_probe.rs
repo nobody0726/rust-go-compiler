@@ -15,11 +15,11 @@
 
 mod support;
 
-use support::gc_probe::{KEYS, parse_stats, run_with_env};
+use support::gc_probe::{GcMode, KEYS, parse_stats, run_with_env};
 use support::native_harness::build_and_run_env;
 
 /// 一条合法统计行（与 `rt_gc_stats_line` 的输出逐字节同形）。
-const GOOD: &str = "gc: collections=3 allocs=10 frees=7 live=256 heap=16777344 chunks=1 rss=0 kinds=2,3,1,4,0 bad_sp=0 bad_ptr=0 bad_desc=0";
+const GOOD: &str = "gc: collections=3 allocs=10 frees=7 live=256 heap=16777344 chunks=1 rss=0 kinds=2,3,1,4,0 bad_sp=0 bad_ptr=0 bad_desc=0 mode=on";
 
 #[test]
 fn t_gc_probe_01_编译失败必须报错() {
@@ -46,6 +46,7 @@ fn t_gc_probe_02_解析器接受合法行() {
     assert_eq!(s.chunks, 1);
     assert_eq!(s.rss, 0);
     assert_eq!(s.kinds, [2, 3, 1, 4, 0]);
+    assert_eq!(s.mode, GcMode::On);
     s.assert_clean().expect("三个 bad_* 都是 0");
 }
 
@@ -125,7 +126,21 @@ fn t_gc_probe_06_keys_与契约一致() {
     // 把 `C12` §5.2 的键序抄一份在这里**是刻意的**：解析器用的是同一份常量，
     // 所以这条只证明「常量没被悄悄改」。真正的对账在 `gc_stats::t_gc_02`
     // （它拿运行期的行去比 `KEYS`）。
-    assert_eq!(KEYS.len(), 11);
+    assert_eq!(KEYS.len(), 12);
     assert_eq!(KEYS[0], "collections");
     assert_eq!(KEYS[10], "bad_desc");
+    assert_eq!(KEYS[11], "mode");
+}
+
+#[test]
+fn t_gc_probe_08_mode_只认三个值() {
+    for (s, want) in [
+        ("off", GcMode::Off),
+        ("on", GcMode::On),
+        ("stress", GcMode::Stress),
+    ] {
+        assert_eq!(GcMode::parse(s).expect("合法值"), want);
+    }
+    let e = GcMode::parse("half").expect_err("非法值必须报错");
+    assert!(e.contains("off|on|stress"), "实际：{e}");
 }

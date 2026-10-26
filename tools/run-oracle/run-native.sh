@@ -11,6 +11,13 @@
 #
 #   --list        每个文件打一行 OK/SKIP/BAD，并汇总（默认也打）
 #   --filter PAT  只跑路径含 PAT 的行
+#   --gc=MODE     MODE = off | on | stress（M10：GC 三态，`C12` §5.1）
+#
+#   `--gc=off`    ⇒ 产物以 `RGOC_GC=0` 跑（与 M9 等价的对照）
+#   `--gc=on`     ⇒ 不额外设变量（缺省值就是开）
+#   `--gc=stress` ⇒ `RGOC_GC_STRESS=1`（每次分配前先收，最能把漏扫的根逼出来）
+#
+#   三态必须跑**同一个产物**：环境变量在运行侧加，所以构建只做一次。
 #
 # 退出码：0 = 全绿（每个文件要么 OK 要么 SKIP）；1 = 有 BAD。
 #
@@ -39,16 +46,39 @@ OUT="${RGOC_NATIVE_OUT:-$ROOT/.superpowers/m7-native}"
 LIST=""
 CORPUS="$ROOT"
 FILTER=""
+GC_MODE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) ;;
     --filter) shift; FILTER="${1:-}" ;;
-    -h|--help) sed -n '2,32p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    --gc=*) GC_MODE="${1#--gc=}" ;;
+    -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) if [ -z "$LIST" ]; then LIST="$1"; else CORPUS="$1"; fi ;;
   esac
   shift
 done
+
+case "$GC_MODE" in
+  ""|off|on|stress) ;;
+  *)
+    echo "run-native.sh: --gc 只认 off|on|stress，实际：$GC_MODE" >&2
+    exit 2
+    ;;
+esac
+
+# 跑产物时按 GC 态加环境变量。
+#
+# ⚠️ 不写成 `env RGOC_GC=0 timeout 20 …` 的数组拼接：空数组在 `set -u` 下的
+# 展开要写 `${arr[@]+"${arr[@]}"}`，那种写法读起来比 switch 更难对。三条分支
+# 直白一点，而且「哪个态设了哪个变量」一眼能看见。
+run_prog() {
+  case "$GC_MODE" in
+    off) RGOC_GC=0 timeout 20 "$1" ;;
+    stress) RGOC_GC_STRESS=1 timeout 20 "$1" ;;
+    *) timeout 20 "$1" ;;
+  esac
+}
 
 # 缺省清单 = M6 冻结的 69 个入选语料（M9/Task 10）。
 #
@@ -107,7 +137,7 @@ while IFS= read -r rel; do
     continue
   fi
 
-  timeout 20 "$exe" >"$OUT/$slug.out" 2>"$OUT/$slug.err"
+  run_prog "$exe" >"$OUT/$slug.out" 2>"$OUT/$slug.err"
   rc=$?
   if [ "$rc" -ne 0 ]; then
     bad=$((bad + 1))
@@ -137,7 +167,10 @@ while IFS= read -r rel; do
 done < "$LIST"
 
 total=$((ok + skip + bad))
-echo "=== native: 有输出 $out_ok/$out_all + 空输出 $empty_ok/$empty_all（合计 ok=$ok skip=$skip bad=$bad / $total）"
+# GC 态只作为行尾标注：`=== native:` 前缀是既有脚本/文档在用的锚点，不改它。
+GCTAG=""
+[ -n "$GC_MODE" ] && GCTAG=" gc=$GC_MODE"
+echo "=== native: 有输出 $out_ok/$out_all + 空输出 $empty_ok/$empty_all（合计 ok=$ok skip=$skip bad=$bad / $total）$GCTAG"
 [ -n "$skiplist" ] && echo "SKIP (M'):$skiplist"
 [ -n "$badlist" ] && echo "BAD:$badlist"
 [ "$bad" -eq 0 ]
