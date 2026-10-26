@@ -547,14 +547,14 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
             captures,
         } => {
             let d = cx.slot(*dst);
-            let total = 8 + 8 * captures.len();
-            load_imm(asm, "x0", i64::try_from(total).unwrap_or(i64::MAX));
-            load_imm(asm, "x1", 8);
-            asm.ins("bl rt_arena_alloc");
+            // M10 起闭包进**托管堆**（`C12` §2.2 的 `closure` kind）：GC 要按
+            // 「n 个捕获字」扫它，而 `rt_arena_alloc` 的块没有 kind。
+            // `rt_alloc_closure` 负责写 `fn`（data 的第 0 个字），这里只填捕获。
+            load_addr(asm, "x0", &fn_sym(*func));
+            load_imm(asm, "x1", i64::try_from(captures.len()).unwrap_or(i64::MAX));
+            asm.ins("bl rt_alloc_closure");
             st_x(asm, "x0", d.off);
             ld_x(asm, "x10", d.off);
-            load_addr(asm, "x11", &fn_sym(*func));
-            asm.ins("str x11, [x10]");
             for (i, c) in captures.iter().enumerate() {
                 let s = cx.slot(*c);
                 ld_x(asm, "x11", s.off);

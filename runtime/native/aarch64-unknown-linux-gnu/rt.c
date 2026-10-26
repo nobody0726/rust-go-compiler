@@ -737,6 +737,32 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
     return p;
 }
 
+/* ── 三种托管分配入口（`C12` §2.2 / `D-M10-13`）──
+ *
+ * 每种都带自己的 kind，因为 GC 扫它们的方式不同：
+ * `array` 按元素 desc 扫 n 个元素、`closure` 扫 n 个捕获字、`raw` 不扫。
+ */
+
+/* 数组：`elem` 是**元素** desc（`[]T` 的 `elem`），`cap` 是容量。
+ *
+ * 用 `cap` 而不是 `len` 作 `n`：`len` 之外的元素在 Go 里是「未初始化但可写」
+ * 的槽，里面可能有上一条命的指针（复用块）。`gc_alloc` 已经清零了，所以
+ * 按 `cap` 扫是**安全且完整**的；按 `len` 扫则会让 `s = s[:cap]` 之后的
+ * 元素变成「GC 看不见的指针」。 */
+void *rt_alloc_array(const TypeDesc *elem, u64 cap) {
+    return gc_alloc((u64)elem->size * cap, K_ARRAY, elem, cap);
+}
+
+/* 裸字节：字符串本体 / `[]byte` 的底层存储。**不扫描**（里面没有指针）。 */
+void *rt_alloc_raw(u64 bytes) { return gc_alloc(bytes, K_RAW, 0, bytes); }
+
+/* 闭包：`{fn, cap0, cap1…}`。返回 data（`fn` 已写好），isel 只负责填捕获。 */
+void *rt_alloc_closure(const void *fn, u64 ncaps) {
+    void **p = gc_alloc(8 + 8 * ncaps, K_CLOSURE, 0, ncaps);
+    p[0] = (void *)fn;
+    return p;
+}
+
 /* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
 
 /* `MethodTable` / `MethodEntry` 的内存布局（`C5` §10 冻结）。
@@ -1208,10 +1234,9 @@ void rt_makeslice(Slice *out, const TypeDesc *elem, u64 len, u64 cap) {
         out->ptr = rt_zerobase;
         return;
     }
-    u64 bytes = cap * (u64)elem->size;
-    /* 对齐取元素的对齐（`[]int16` 的底层数组必须是 2 对齐的）——
-     * 这里用 8 是保守的：M9 的元素最大对齐就是 8。 */
-    out->ptr = rt_arena_alloc(bytes, 8);
+    /* 走托管入口（`C12` §2.2）：GC 靠「元素 desc + 元素个数」扫它。
+     * 块 16 对齐 ⇒ 任何 `align <= 16` 的元素都满足。 */
+    out->ptr = rt_alloc_array(elem, cap);
 }
 
 /* 扩容：cap 够就原地，不够就新分配 + 拷。
@@ -1244,7 +1269,7 @@ static Slice slice_grow(void *ptr, u64 len, u64 cap, const TypeDesc *elem, u64 e
         /* 零大小元素：没有底层数组可言（`[]struct{}` 的 append 永远不分配）。 */
         np = rt_zerobase;
     } else {
-        np = rt_arena_alloc(newcap * esz, 8);
+        np = rt_alloc_array(elem, newcap);
         if (ptr != 0 && len != 0) {
             rt_memcpy(np, ptr, len * esz);
         }
@@ -1298,7 +1323,7 @@ rstr rt_bytes2str(const u8 *p, u64 n) {
         out.n = 0;
         return out;
     }
-    char *q = (char *)rt_arena_alloc(n, 1);
+    char *q = (char *)rt_alloc_raw(n);
     rt_memcpy(q, p, n);
     out.p = q;
     out.n = n;
@@ -1343,7 +1368,7 @@ rstr rt_runes2utf8(const u32 *p, u64 n) {
         out.n = 0;
         return out;
     }
-    u8 *buf = (u8 *)rt_arena_alloc(n * 4, 1);
+    u8 *buf = (u8 *)rt_alloc_raw(n * 4);
     u64 k = 0;
     for (u64 i = 0; i < n; i++) {
         k += utf8_put(buf + k, p[i]);
@@ -1354,11 +1379,11 @@ rstr rt_runes2utf8(const u32 *p, u64 n) {
 }
 
 
-/* `a + b`：结果落在 arena 里（M7 没有 GC，只 bump）。 */
+/* `a + b`：结果落在托管堆的 `raw` 块里（`C12` §2.2 —— 里面没有指针，不扫）。 */
 rstr rt_strcat(rstr a, rstr b) {
     u64 n = a.n + b.n;
     /* 空结果也要有**可用的地址**（Go 允许 `len(s)==0` 时取 `&s[0]`）。 */
-    char *p = (char *)rt_arena_alloc(n == 0 ? 1 : n, 1);
+    char *p = (char *)rt_alloc_raw(n == 0 ? 1 : n);
     for (u64 i = 0; i < a.n; i++) {
         p[i] = a.p[i];
     }
@@ -1396,9 +1421,9 @@ i64 rt_strcmp(rstr a, rstr b) {
  * 三条容易漏的规则：
  * - 负数、`> 0x10FFFF`、以及代理区 `0xD800..0xDFFF` 一律给 `U+FFFD`（不是截断）；
  * - `U+FFFD` 是 3 字节 `EF BF BD`；
- * - 结果落在 arena 里，**即使 1 字节**也要有稳定地址（`&s[0]` 合法）。 */
+ * - 结果落在托管堆（`raw` 块），**即使 1 字节**也要有稳定地址（`&s[0]` 合法）。 */
 rstr rt_i64_to_str(i64 v) {
-    char *p = (char *)rt_arena_alloc(4, 1);
+    char *p = (char *)rt_alloc_raw(4);
     u64 n;
     if (v < 0 || v > 0x10FFFF || (v >= 0xD800 && v <= 0xDFFF)) {
         p[0] = (char)0xEF;

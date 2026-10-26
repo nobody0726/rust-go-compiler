@@ -135,3 +135,45 @@ fn t_heap_04_统计行可解析且自检干净() {
         .expect("必须有统计行");
     s.assert_clean().expect("自检计数器");
 }
+
+/// 四种 kind 都必须出现（`T-HDR-03`，`C12` §2.2）。
+///
+/// # 为什么用 `kinds` 计数而不是「跑得对」
+///
+/// 「跑得对」只证明**分配发生了**，不证明「走的是带 kind 的入口」。如果
+/// `make([]int,3)` 仍然走 `rt_arena_alloc`（无块头），程序照样跑对，
+/// 而 GC 扫不到它 —— 那正是 Phase 2 会踩的雷。
+///
+/// # 为什么现在只断言四种
+///
+/// `mapslots`（kind 4）的切换在 Task 25（map 托管化）。这里断言
+/// `o/a/c/r` 各 >= 1、`m == 0` —— **`m == 0` 是有信息的**：它钉住「现在还没
+/// 切 map」，Task 25 会把这一位翻成 >= 1。
+#[test]
+fn t_hdr_03_四种_kind_都出现() {
+    // ⚠️ `g := a + b` 里的两个字面量会被**编译期折叠**成 "abcd"（不调
+    // `rt_strcat`），所以拼接必须放进函数 —— 那里的操作数是形参，折不了。
+    let src = r#"package main
+
+func cat(x, y string) string { return x + y }
+
+func main() {
+	p := new(int)
+	*p = 1
+	s := make([]int, 3)
+	s[0] = 2
+	f := func() int { return *p }
+	g := cat("ab", "cd")
+	println(*p + s[0] + f() + len(g))
+}
+"#;
+    let (out, s) = run_with_env("gc_heap_kinds", src, &[]).expect("编译 + 运行不该失败");
+    assert_eq!(out.stdout, "8\n", "程序本身要跑对");
+    let [o, a, c, r, m] = s.kinds;
+    assert!(o >= 1, "object（new）没出现：{:?}", s.kinds);
+    assert!(a >= 1, "array（make）没出现：{:?}", s.kinds);
+    assert!(c >= 1, "closure 没出现：{:?}", s.kinds);
+    assert!(r >= 1, "raw（字符串拼接）没出现：{:?}", s.kinds);
+    assert_eq!(m, 0, "mapslots 还没切（Task 25 才切）：{:?}", s.kinds);
+    s.assert_clean().expect("自检计数器");
+}
