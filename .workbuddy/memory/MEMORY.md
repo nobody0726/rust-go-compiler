@@ -8,20 +8,32 @@
 - git 身份 `nobody0726` / `102368194+nobody0726@users.noreply.github.com`；见到 `wangf <yhome@…local>` 即丢失，`git config --global` 重设
 - commit 纪律（2026-10-15 授权）：阶段收口即 commit + push（按交付块分 commit）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore；`tools/ast-oracle` vendor 入库
 
-## 当前状态（2026-10-25）
-- **M7/M8 已收口**；**M9 进行中**：Phase 0/1/2/3/3b/4a/4b 已收口；**5a（defer+panic+recover）代码通但未收口**。
-  下一阶段 = **5c 收尾（值接收者解引用拷贝 + invalid 类型 + nil 打印）→ 4c（方法值 → method5）**
-- **M9 语料现态**：native **ok=65 / skip=1 / bad=3**（`method` / `nilptr2` / `print`）；
-  `cargo test --workspace` **2150 passed / 9 failed**（全是分母/终止符/defer+recover 判据，
-  **故意不重冻结**）；三个 bad 的精确病因见当日日志（值接收者解引用拷贝 / invalid 类型 / nil 打印格式）
-  `rgoc-meta`（新 crate）+ desc/方法表/ITab 发射 + `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
+## 当前状态（2026-10-26）
+- **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**。M9 收口后清了四个尾巴
+  （`open_gaps` **0** / `closed_gaps` 4），路线图下一个是 **M10（精确 STW GC）**
+- **读数（M9 终态）**：native 语料 **69/0/0**；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**，
+  `SsaCode` 5 条：CHAN/DEFER/GENERIC/MAP/RANGE-STR 里只有 4 条还在守）；`run-chan` 7/12/0；
+  `cargo test --workspace` **225 suite / 2184 passed / 0 failed / 1 ignored**；变异 **12/12 全红**
+- ⚠️ **「变异绿」有两种成因，先分辨再动手**：① 判据缺形态（补判据）；② **探针打错靶**
+  （指向了不执行那段代码的用例集）。M9 各出现两次以上：`M-M9-03` 打 `obj_slice`（那是 native
+  通路，被变异的 `append_value` 不在上面）、`M-M9-07` 打 `native_corpus_run`（语料里 panic 之后
+  调用方本来就走出口，而 `nat2_panic_终止符` 早就红）。**别急着写「判据没牙」**
+- ⚠️ **「记一笔 open_gap」不等于收口**：M9 三条绿各记了一条就收工，回头补判据三条全红
+- ⚠️ **变异脚本恢复源码后必须 `touch`**：`mv` 从 `.m9bak` 恢复会保留备份的 mtime（早于变异），
+  而变异期间编出的 `.rlib` 更新 ⇒ cargo 认为源码没变，紧接着的全量测试跑**变异版**
+  （症状：单跑某测试绿、全量却红，且红在报 `V3` 之类的旧错）
+- ⚠️ **「类型表达式 → `TypeId`」有两份实现**：`rgoc-load::typeexpr::resolve_type`（填 `Decl`）
+  与 `rgoc-check::expr::type_expr`（HIR 签名 / 局部）。**改一处要改两处** ——
+  `unsafe.Pointer` 就只在前者被认，导致「声明位置有真类型、函数签名里是 `invalid`」（`R-9-41`）
+- ⚠️ **map 探测链的判据必须构造哈希碰撞**：自然分布的键摊得太开，删一个留 `empty` 也查得到
+  邻居；`rt_hash` 是 FNV-1a（整数按 8 字节小端），`cap=8` 时 `0` 与 `8` 同桶（都是 5）
 - ⚠️ **panic 用「返回码传播」不 unwind**（`.framemap` 不在 ELF 里 ⇒ `longjmp` 会漏扫根）：
   `rt_panic_*` 只置状态，每个调用/断言/越界点之后 `bl rt_panicking; cbnz x0, <本帧出口>`；
   出口 = 跑 defer + `ret`。**跑 defer 期间必须挂起 panic**（被 defer 调用的函数是正常执行的）
 - ⚠️ **`check_panic` 用 `cbnz` 直接跳**，别造「跳过」标签（同函数多处检查会重复定义符号）
-- ⚠️ **SSA 拒绝面三次重冻结 46/23 → 50/19 → 56/13 → 57/12**（`R-9-8`/`R-9-12`/`R-9-14`）。
-  剩下 12 条全是 **FUNC-VALUE 8 + DEFER 4** ⇒ Phase 4 是 **+8**、Phase 5 是 **+4**（计划写 +7/+3）。
-  按码分类的清单只告诉你「第一条拒绝是什么」，不告诉你「这个文件只剩这一条」
+- ⚠️ **SSA 分母七次重冻结 46/23 → … → 68/1 → 69/0**（`R-9-8/12/14/15/16/26/30`）。
+  **拒绝面现在为空**（`ssa-rejected.txt` 只有表头），但「没有拒绝面」≠「什么都能编译」：
+  `SsaCode` 还留 4 条（CHAN/DEFER/GENERIC/RANGE-STR），只是这 69 个语料用不到
 - ⚠️ **码会整条下线**：`MAP`/`IFACE-DYN`/`RANGE-FUNC` 都已没有生产者，`SsaCode::ALL` 8 → 7。
   下线要在 manifest 记 `retired_codes`（code/retired_by/revision/why），并把判据反转成
   「能建图 + 该码不出现」—— **不留永远不产出的码**
@@ -34,7 +46,7 @@
   就要写 `re_frozen`；历史里程碑的自报数字对着**快照**算（`native-input-m7.txt` / `native-rejected-m7.txt`）
 - ⚠️ **每次 `in-container.sh` 是新容器**：上一步 build 的 `/tmp/x` 下一步就没了（像莫名 rc=127）。
   产物落仓库内目录
-- **M0–M3 完成**；**M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
+- **M4 部分兑现**（`CH-1..9` = 6 pass / 1 partial / 2 fail）；**M5 部分兑现**（`EX-1..9` = 5 pass / 4 partial）
 - **M6 已收口（2026-10-24，Task 1–53）**：九条门禁 9/9 pass；语料 **N=46 / M=23**；
   `--via=hir` == `--via=ssa` 46/46；`--opt=all` == `none` 46/46；`SSA-LIVE v1` 可被只读文本的桩消费；
   **176 suite / 1859 passed**；66 条变异全红。下一阶段 = **M7（native 代码生成）**
