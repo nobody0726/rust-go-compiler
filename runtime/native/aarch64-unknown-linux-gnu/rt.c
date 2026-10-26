@@ -545,6 +545,79 @@ static u8 *bump_take(Chunk *c, u64 blk) {
     return (u8 *)(c->base + off);
 }
 
+/* ── 块大小与 free list（`C12` §2.1 / §1.3）──
+ *
+ * # 为什么块大小必须能从**块头**读出来
+ *
+ * 一开始想按 `kind + n + desc` 算（`object` 用 `desc->size`、`array` 用
+ * `elem->size * n` …）。但那样 `desc` 非法（`bad_desc`）时就算不出大小 ——
+ * 而 sweep 是按地址顺序走的，算错一步就会**走到块中间**、把中间当块首，
+ * 之后整条链都错位。契约里说「宁可泄漏也不误扫」，所以大小必须是**自证的**。
+ *
+ * 于是 `+8` 的高 29 位放 `blk >> 4`（块大小恒 16 的倍数，最大 16 MiB ⇒
+ * 只需 20 位）。代价是 `n` 与 `kind` 各让出一点位宽，都够用。
+ */
+#define NK_N(nk) ((nk) & 0xFFFFFFFFUL)
+#define NK_KIND(nk) (((nk) >> 32) & 7UL)
+#define NK_BLK(nk) ((((nk) >> 35) & 0x1FFFFFFFUL) << 4)
+#define NK_MAKE(n, kind, blk) ((n) | ((u64)(kind) << 32) | (((blk) >> 4) << 35))
+
+/* 块的总字节数（活块看 `+8`，空闲块看 `header` 的 bit32..63）。 */
+static u64 blk_size_of(u64 h, u64 nk) {
+    if (h & HDR_FREE) {
+        return h >> 32;
+    }
+    return NK_BLK(nk);
+}
+
+/* 把一个 `[off, off+len)` 区间做成空闲块并链进本 chunk 的 free list。
+ *
+ * 空闲块的形状与活块**不同**：`header = HDR_FREE | (len << 32)`、`+8 = next`
+ * （相对 base 的偏移，0 = 链尾）。所以任何读块头的地方都要先看 bit0。 */
+static void free_push(Chunk *c, u64 off, u64 len) {
+    u8 *blk = (u8 *)(c->base + off);
+    *(u64 *)blk = HDR_FREE | (len << 32);
+    *(u64 *)(blk + 8) = c->free_head;
+    c->free_head = off;
+}
+
+/* first-fit 取一块，`*blk` 是**请求**大小、返回时是**实际**大小。
+ *
+ * 余量 >= 32 才切分：切出比 `BLK_MIN` 更小的尾巴等于制造一块永远用不上的
+ * 碎片（它连一个块头都装不下）。 */
+static u8 *free_take(Chunk *c, u64 *blk) {
+    u64 *prev = &c->free_head;
+    while (*prev != 0) {
+        u64 off = *prev;
+        u8 *b = (u8 *)(c->base + off);
+        u64 len = *(u64 *)b >> 32;
+        if (len >= *blk) {
+            u64 rest = len - *blk;
+            if (rest >= BLK_MIN + BLK_HDR) {
+                u64 noff = off + *blk;
+                u8 *nb = (u8 *)(c->base + noff);
+                *(u64 *)nb = HDR_FREE | (rest << 32);
+                *(u64 *)(nb + 8) = *(u64 *)(b + 8);
+                *prev = noff;
+                bm_set(c, noff);
+                sum_set(c, noff >> 12);
+            } else {
+                *prev = *(u64 *)(b + 8);
+                *blk = len;
+            }
+            bm_set(c, off);
+            sum_set(c, off >> 12);
+            return b;
+        }
+        prev = (u64 *)(b + 8);
+    }
+    return 0;
+}
+
+/* `rt_gc` 定义在文件后半（要用 `TypeDesc`），这里先声明给 `gc_alloc` 的
+ * stress 钩子用。 */
+void rt_gc(void);
+
 /* 核心分配：`need` 是 data 字节数。
  *
  * # 为什么 `need_zero` 不在参数里
@@ -566,11 +639,30 @@ static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
         blk = BLK_MIN;
     }
 
+    /* stress：每 `gc_stress` 次分配先收一次（`C12` §5.1 / `R-10-10`）。
+     *
+     * ⚠️ `gc_stress` 是**间隔**不是开关：`=1` 是「每次分配都收」，代价
+     * O(n²) —— `gc1.go` 的 1e5 次分配 × 平均 17 万块 = 1.7e10 次块扫描，
+     * 语料里跑不完。所以小 fixture 用 `=1`（最强证据），语料用 `=64`。 */
+    if (gc_stress != 0 && gc_on != 0 && (gc_allocs % gc_stress) == 0) {
+        rt_gc();
+    }
+
     u8 *p = 0;
     for (Chunk *c = heap; c != 0; c = c->next) {
         if (c->bump + blk <= c->size) {
             p = bump_take(c, blk);
             break;
+        }
+    }
+    /* bump 不够 ⇒ free list（复用）。这一步就是「M10 的堆只增不减」变成
+     * 「会复用」的地方 —— `T-HEAP-04` 钉它。 */
+    if (p == 0) {
+        for (Chunk *c = heap; c != 0; c = c->next) {
+            p = free_take(c, &blk);
+            if (p != 0) {
+                break;
+            }
         }
     }
     if (p == 0) {
@@ -584,7 +676,7 @@ static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
         h |= HDR_RAW;
     }
     *(u64 *)p = h;
-    *(u64 *)(p + 8) = n | ((u64)kind << 32);
+    *(u64 *)(p + 8) = NK_MAKE(n, kind, blk);
 
     /* 清零整块 data（含尾部 padding）：复用的块里躺着上一条命的数据。 */
     rt_memset(p + BLK_HDR, 0, blk - BLK_HDR);
@@ -761,6 +853,253 @@ void *rt_alloc_closure(const void *fn, u64 ncaps) {
     void **p = gc_alloc(8 + 8 * ncaps, K_CLOSURE, 0, ncaps);
     p[0] = (void *)fn;
     return p;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * 标记 / 清扫 / `rt_gc`（M10/Task 11–13，`C12` §3.5–§3.6）
+ * ════════════════════════════════════════════════════════════════════ */
+
+/* 全局根表（由 `.s` 发）：`rt_globals[i] = {desc, addr}`。
+ * 零大小全局**不在表里**（它们没有可扫的字，`module.rs::emit_global_roots`）。 */
+typedef struct {
+    const void *desc;
+    u8 *addr;
+} GlobalRoot;
+
+extern GlobalRoot rt_globals[];
+extern u64 rt_nglobals;
+
+/* 标记栈（worklist）。
+ *
+ * # 为什么用 mmap 而不是 `gc_alloc`
+ *
+ * `H5`：**GC 期间不分配**。标记栈如果走 `gc_alloc`，它的 stress 钩子会在
+ * 标记中途再触发一次 `rt_gc`（递归），而那次 GC 看到的是「标记了一半」的
+ * 堆 —— 会把还没标记到的活对象当死的收掉。
+ *
+ * # 为什么不用递归
+ *
+ * 深链（1e5 个节点的链表）会爆栈，而 M10 的帧已经很紧。
+ */
+static void **gc_wl;
+static u64 gc_wl_len;
+static u64 gc_wl_cap;
+
+static void wl_grow(void) {
+    u64 ncap = gc_wl_cap == 0 ? 65536 : gc_wl_cap * 2;
+    i64 r = sys6(SYS_mmap, 0, (i64)(ncap * 8), PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    if (r < 0) {
+        rt_fatal_oom(heap_limit);
+    }
+    if (gc_wl != 0) {
+        rt_memcpy((void *)r, gc_wl, gc_wl_len * 8);
+        sys3(SYS_munmap, (i64)gc_wl, (i64)(gc_wl_cap * 8), 0);
+    }
+    gc_wl = (void **)r;
+    gc_wl_cap = ncap;
+}
+
+static void wl_push(void *p) {
+    if (p == 0) {
+        return;
+    }
+    if (gc_wl_len == gc_wl_cap) {
+        wl_grow();
+    }
+    gc_wl[gc_wl_len++] = p;
+}
+
+/* 标记一个**可能**是堆指针的值（`C12` §4.1）。
+ *
+ * 第一步永远是「在堆里吗」—— `chunk_of` 返回 0 就立刻返回。**这一步是全部
+ * rodata / 栈地址 / 代码地址被忽略的唯一机制**：没有它，`desc` 指针会被当成
+ * 对象、`mark_ptr` 会把 `.rodata` 里的字节当块头读。
+ */
+static void mark_ptr(void *p) {
+    if (p == 0) {
+        return;
+    }
+    Chunk *c = chunk_of(p);
+    if (c == 0) {
+        return;
+    }
+    u8 *blk = resolve_block(c, (u64)p);
+    if (blk == 0) {
+        /* 在 chunk 范围内却解析不到块首 ⇒ 起始位图漏置位（`C12` §3.4）。
+         * 忽略它（宁可泄漏），但计数器非 0 时测试会红。 */
+        gc_bad_ptr++;
+        return;
+    }
+    u64 h = *(u64 *)blk;
+    if (h & (HDR_FREE | HDR_MARK)) {
+        if (h & HDR_FREE) {
+            /* 指向空闲块：说明有人拿着已回收的指针（漏扫的根）。 */
+            gc_bad_ptr++;
+        }
+        return;
+    }
+    *(u64 *)blk = h | HDR_MARK;
+    wl_push(blk);
+}
+
+/* 按 `gcdata` 扫一段：`data[0, ptrdata)` 里每 8 字节 1 位（bit i ↔ 第 i 个字）。
+ *
+ * ⚠️ `ptrdata > 0` 而 `gcdata == 0` 是**非法 desc**（`C12` §2.3）：这时按 raw
+ * 处理（不扫）并记 `bad_desc`。宁可泄漏也不误扫 —— 误扫会把一个整数当地址。 */
+static void mark_words(const u8 *data, const TypeDesc *d) {
+    if (d == 0 || d->ptrdata == 0) {
+        return;
+    }
+    if (d->gcdata == 0) {
+        gc_bad_desc++;
+        return;
+    }
+    for (u64 w = 0; w * 8 < (u64)d->ptrdata; w++) {
+        if (d->gcdata[w >> 3] & (u8)(1u << (w & 7))) {
+            void *q;
+            rt_memcpy(&q, data + w * 8, 8);
+            mark_ptr(q);
+        }
+    }
+}
+
+/* 扫一个块的内容，把里面的指针压进 worklist（`C12` §2.2 的五种 kind）。 */
+static void scan_block(u8 *blk) {
+    u64 h = *(u64 *)blk;
+    u64 nk = *(u64 *)(blk + 8);
+    u64 kind = NK_KIND(nk);
+    u64 n = NK_N(nk);
+    u8 *data = blk + BLK_HDR;
+    if (kind == K_RAW || kind == K_ARENA) {
+        return;
+    }
+    switch (kind) {
+    case K_OBJECT:
+        mark_words(data, (const TypeDesc *)HDR_DESC(h));
+        break;
+    case K_ARRAY: {
+        const TypeDesc *e = (const TypeDesc *)HDR_DESC(h);
+        if (e == 0 || e->ptrdata == 0) {
+            if (e == 0) {
+                gc_bad_desc++;
+            }
+            break;
+        }
+        u64 esz = (u64)e->size;
+        for (u64 k = 0; k < n; k++) {
+            mark_words(data + k * esz, e);
+        }
+        break;
+    }
+    case K_CLOSURE:
+        /* 字 0 是代码地址（不扫），字 1..n 是捕获（全是指针）。 */
+        for (u64 k = 1; k <= n; k++) {
+            void *q;
+            rt_memcpy(&q, data + k * 8, 8);
+            mark_ptr(q);
+        }
+        break;
+    default:
+        /* `K_MAPSLOTS`：Task 25 接（`MapObj` + slots 托管化）。 */
+        break;
+    }
+}
+
+static void drain(void) {
+    while (gc_wl_len > 0) {
+        u8 *blk = (u8 *)gc_wl[--gc_wl_len];
+        scan_block(blk);
+    }
+}
+
+/* Phase 1 只扫**全局**根（`C12` §4.1 的第 2 类）。栈根在 Phase 2。 */
+static void mark_roots(void) {
+    for (u64 i = 0; i < rt_nglobals; i++) {
+        const TypeDesc *d = (const TypeDesc *)rt_globals[i].desc;
+        u8 *a = rt_globals[i].addr;
+        if (d == 0 || a == 0) {
+            continue;
+        }
+        mark_words(a, d);
+    }
+}
+
+/* 清扫（`C12` §3.5）。
+ *
+ * # 为什么按地址顺序走一遍就够了
+ *
+ * 死块在地址上是**连续**的（相邻的死块天然合并成 run），所以只要「碰到活块
+ * 就把攒着的 run flush 进 free list」，合并就自动完成了 —— 不需要额外的
+ * 合并算法。走错的唯一可能是**块大小算错**，而大小是从块头读的（自证）。
+ */
+static void sweep(void) {
+    u64 total_live = 0;
+    for (Chunk *c = heap; c != 0; c = c->next) {
+        c->free_head = 0;
+        u64 off = CHUNK_HDR;
+        u64 run_off = 0;
+        u64 run_len = 0;
+        u64 live = 0;
+        while (off < c->bump) {
+            u8 *blk = (u8 *)(c->base + off);
+            u64 h = *(u64 *)blk;
+            u64 nk = *(u64 *)(blk + 8);
+            u64 sz = blk_size_of(h, nk);
+            if (sz < BLK_MIN || off + sz > c->bump) {
+                /* 块头坏了：**停在这里**而不是继续走。继续走只会在错的
+                 * 偏移上读到垃圾，把更多活块当死块收掉。 */
+                gc_bad_desc++;
+                break;
+            }
+            if (h & HDR_FREE) {
+                if (run_len == 0) {
+                    run_off = off;
+                }
+                run_len += sz;
+            } else if (h & HDR_MARK) {
+                if (run_len > 0) {
+                    free_push(c, run_off, run_len);
+                    run_len = 0;
+                }
+                *(u64 *)blk = h & ~HDR_MARK;
+                live += sz;
+            } else if (NK_KIND(nk) == K_ARENA) {
+                /* arena 块永不回收（`R-10-6`）。 */
+                if (run_len > 0) {
+                    free_push(c, run_off, run_len);
+                    run_len = 0;
+                }
+                live += sz;
+            } else {
+                if (run_len == 0) {
+                    run_off = off;
+                }
+                run_len += sz;
+                bm_clear(c, off);
+                gc_frees++;
+            }
+            off += sz;
+        }
+        if (run_len > 0) {
+            free_push(c, run_off, run_len);
+        }
+        c->live_bytes = live;
+        total_live += live;
+    }
+    gc_live_bytes = total_live;
+}
+
+/* 一次完整的 STW 收集。**只在分配点同步跑**（`F10`：单线程、无抢占）。
+ *
+ * `RGOC_GC=0` 时立即返回 —— 那是「与 M9 等价」的对照态（`T-CORP-05`）。 */
+void rt_gc(void) {
+    if (gc_on == 0) {
+        return;
+    }
+    gc_collections++;
+    mark_roots();
+    drain();
+    sweep();
 }
 
 /* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
