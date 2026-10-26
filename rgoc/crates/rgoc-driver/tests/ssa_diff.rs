@@ -98,8 +98,11 @@ fn t_ssa_32_两条通路在入选集上逐字节一致() {
         bad.len(),
         bad.join("\n\n")
     );
-    // 分母：63 跑通 + 6 被拒 == 69（`R-6-1` 冻结，M9/Phase 2 重冻结 `R-9-8`）
+    // 分母：68 跑通 + 1 被拒 == 69（`R-6-1` 冻结；M9/Phase 5c 重冻结 `R-9-26`）
     assert_eq!(compared + skipped, rows.len(), "不许静默跳过");
-    assert_eq!(compared, 63, "可建图的入选文件应恰为 63 个");
-    assert_eq!(skipped, 6, "被拒的入选文件应恰为 6 个");
+    assert_eq!(compared, 68, "可建图的入选文件应恰为 68 个");
+    assert_eq!(
+        skipped, 1,
+        "被拒的入选文件应恰为 1 个（M9/Phase 5c 重冻结 `R-9-26`）"
+    );
 }

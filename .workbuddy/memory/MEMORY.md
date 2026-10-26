@@ -10,9 +10,10 @@
 
 ## 当前状态（2026-10-25）
 - **M7/M8 已收口**；**M9 进行中**：Phase 0/1/2/3/3b/4a/4b 已收口；**5a（defer+panic+recover）代码通但未收口**。
-  下一阶段 = **5b（defer 带实参 → method/print）→ 5c（可恢复 nil 解引用 → nilptr2）→ 4c（方法值 → method5）**
-- **M9 语料现态**：native **ok=65 / skip=3 / bad=1**（69 个入选）；`cargo test --workspace`
-  **2151 passed / 8 failed**（全是分母/终止符/recover 判据，**故意不重冻结**）；
+  下一阶段 = **5c 收尾（值接收者解引用拷贝 + invalid 类型 + nil 打印）→ 4c（方法值 → method5）**
+- **M9 语料现态**：native **ok=65 / skip=1 / bad=3**（`method` / `nilptr2` / `print`）；
+  `cargo test --workspace` **2150 passed / 9 failed**（全是分母/终止符/defer+recover 判据，
+  **故意不重冻结**）；三个 bad 的精确病因见当日日志（值接收者解引用拷贝 / invalid 类型 / nil 打印格式）
   `rgoc-meta`（新 crate）+ desc/方法表/ITab 发射 + `rt.c` chunk 堆（mmap，`RGOC_HEAP_MAX` 缺省 256 MiB）
 - ⚠️ **panic 用「返回码传播」不 unwind**（`.framemap` 不在 ELF 里 ⇒ `longjmp` 会漏扫根）：
   `rt_panic_*` 只置状态，每个调用/断言/越界点之后 `bl rt_panicking; cbnz x0, <本帧出口>`；

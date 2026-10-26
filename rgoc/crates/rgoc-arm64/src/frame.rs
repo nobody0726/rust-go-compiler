@@ -98,6 +98,28 @@ impl Frame {
         self.frame_size.saturating_sub(16)
     }
 
+    /// 栈上帧的上限：超过它就把整帧放到 mmap 的存储里（`R-9-22`）。
+    ///
+    /// 1 MiB 的取法：正常的语料帧最大 ~10 KiB（`ken/convert.go` 的 9936），
+    /// 而 1 MiB 离 Linux 的 8 MiB 栈上限有 8 倍余量 —— 既不会误伤常规函数，
+    /// 也不会让「帧接近栈上限」的临界值蒙混过关。
+    pub const STACK_FRAME_LIMIT: u32 = 1 << 20;
+
+    /// 本帧是否要放到**栈外**（mmap 一块零页当帧底）。
+    ///
+    /// 判据是「整帧放不进一个安全的栈」：`nilptr2.go` 的 `[128<<20]byte`
+    /// 逐字拷贝要 128 MiB 帧，而 `ulimit -s` 是 8 MiB。
+    #[must_use]
+    pub fn off_stack(&self) -> bool {
+        self.sub_sp_imm() > Self::STACK_FRAME_LIMIT
+    }
+
+    /// 栈外帧那块存储的字节数（`fp` 指到它的**尾部减 16**）。
+    #[must_use]
+    pub fn off_stack_bytes(&self) -> u32 {
+        self.sub_sp_imm()
+    }
+
     /// 某个值槽的偏移（测试与 `FRAME-MAP` 用）。
     #[must_use]
     pub fn off_of(&self, v: ValueId) -> Option<i32> {

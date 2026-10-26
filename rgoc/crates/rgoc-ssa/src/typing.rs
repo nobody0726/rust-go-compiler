@@ -272,6 +272,20 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
             }
             Ok(())
         }
+        // 空指针检查（`M9/Phase 5c`）：操作数必须是**指针**。
+        //
+        // 判它是为了让「查一个 `int` 值是不是空」这种写错在 `verify` 就露头 ——
+        // 后端那条 `cbnz` 对非指针同样"能跑"，会静默通过。
+        Instr::NilCheck { addr } => {
+            let at = need(f, *addr)?;
+            if !matches!(
+                tt.type_of(rgoc_types::underlying(tt, at)),
+                rgoc_types::typ::Type::Pointer(_)
+            ) {
+                return Err(format!("nil-check 的操作数类型 {at:?} 不是指针"));
+            }
+            Ok(())
+        }
         Instr::AddrOf { .. }
         | Instr::Field { .. }
         | Instr::Index { .. }

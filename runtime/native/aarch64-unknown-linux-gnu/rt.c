@@ -28,6 +28,7 @@ typedef unsigned char u8;
 
 #define SYS_write 64
 #define SYS_exit_group 94
+#define SYS_munmap 215
 #define SYS_mmap 222
 
 /* mmap 的两个常量（`asm-generic/mman-common.h` 的值，不是猜的）。 */
@@ -290,6 +291,39 @@ void rt_grow(u64 need) {
     c->used = 0;
     heap = c;
     heap_committed += total;
+}
+
+/* ── 超大帧的存储（`M9/Phase 5c`，`R-9-22`）──
+ *
+ * # 为什么帧需要「不在栈上」这一档
+ *
+ * 帧是**定长**的（`C5` §7）：序言一条 `sub sp, sp, #frame_size` 就把它整块要下来。
+ * 只要帧比栈上限大（Linux 缺省 `ulimit -s` 是 8 MiB），第一条落在帧底部的
+ * 访存就 SIGSEGV —— 而 Go 那边栈是**动态增长**的，同样的程序只是慢一点。
+ *
+ * 实测语料 `nilptr2.go`：`use(*bigstructp)` 里 `BigStruct` 有 `[128<<20]byte`，
+ * 逐字拷进本帧后帧是 128 MiB。它不是「实现得不够快」，是**这台机器的栈装不下**。
+ *
+ * 所以超过 `STACK_FRAME_LIMIT` 的帧改成从 mmap 拿一块零页当帧底，`fp` 指到
+ * 「块尾 - 16」（保存区那 16 字节在**栈上**，不在这块里）。槽偏移的算法一个字
+ * 都没变 —— 它们本来就是「相对 `fp` 的负数」。
+ *
+ * 用 mmap 而不是 `rt_arena_alloc`：arena 是**不回收**的堆，循环里调一个超大帧
+ * 函数会一路吃光 `RGOC_HEAP_MAX`；这里成对 mmap/munmap，调用结束就还。
+ */
+void *rt_stack_frame_alloc(u64 n) {
+    u64 pages = (n + 4095UL) & ~4095UL;
+    i64 r = sys6(SYS_mmap, 0, (i64)pages, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    if (r < 0) {
+        rt_fatal_oom(pages);
+    }
+    /* mmap 给的是零页 ⇒ 帧的零值语义（`C5` §7.2）天然满足，不必再 memset */
+    return (void *)r;
+}
+
+void rt_stack_frame_free(void *p, u64 n) {
+    u64 pages = (n + 4095UL) & ~4095UL;
+    sys3(SYS_munmap, (i64)p, (i64)pages, 0);
 }
 
 /* 零大小对象的固定地址（`zerosize.go` 要求 `new([0]int)` 两次相等）。
@@ -1146,6 +1180,62 @@ void rt_print_i64(i64 v) {
     }
     write_all(FD_STDOUT, buf, n);
 }
+
+/* ── 指针 / 接口 / 切片 / map 的打印（`M9/Phase 5c`）──
+ *
+ * 格式表来自 `C9` §5（与 `rgoc-interp::print` 同一张表，`R-9-23`）：
+ *
+ * | 值 | 文本 |
+ * |---|---|
+ * | `nil` 指针 / `nil` map | `0x0` |
+ * | `nil` 接口 | `(0x0,0x0)` |
+ * | `nil` 切片 | `[0/0]0x0` |
+ * | 非 nil | 真实地址（官方也不可复现，只求「形状对」）|
+ *
+ * # 为什么非 nil 也照实打
+ *
+ * 求值器打的是**占位** `0xc000000000`（它没有真地址）。native 有真地址，
+ * 照实打比造一个假常量更诚实 —— 而这类行本来就不可能逐字节对撞（`print.go`
+ * 只钉了 4 个 `nil` 形状）。
+ */
+static void put_hex(u64 v) {
+    static const char d[] = "0123456789abcdef";
+    if (v == 0) {
+        write_all(FD_STDOUT, "0x0", 3);
+        return;
+    }
+    char buf[18];
+    u64 n = 0;
+    while (v > 0) {
+        buf[n++] = d[v & 0xF];
+        v >>= 4;
+    }
+    write_all(FD_STDOUT, "0x", 2);
+    while (n > 0) {
+        n--;
+        write_all(FD_STDOUT, &buf[n], 1);
+    }
+}
+
+void rt_print_ptr(u64 p) { put_hex(p); }
+
+void rt_print_iface(u64 tab, u64 data) {
+    write_all(FD_STDOUT, "(", 1);
+    put_hex(tab);
+    write_all(FD_STDOUT, ",", 1);
+    put_hex(data);
+    write_all(FD_STDOUT, ")", 1);
+}
+
+void rt_print_slice(u64 p, u64 len, u64 cap) {
+    write_all(FD_STDOUT, "[", 1);
+    rt_print_u64(len);
+    write_all(FD_STDOUT, "/", 1);
+    rt_print_u64(cap);
+    write_all(FD_STDOUT, "]", 1);
+    put_hex(p);
+}
+
 
 /* ════════════════════════════════════════════════════════════════════
  * defer / panic / recover（`M9/Phase 5`，`R-9-18`）

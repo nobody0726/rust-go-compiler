@@ -407,6 +407,8 @@ impl Instr {
             Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
             // `defer` 不定义任何值
             Instr::Defer { .. } => Vec::new(),
+            // 空指针检查只读地址，不产值
+            Instr::NilCheck { .. } => Vec::new(),
             // 捕获是**操作数**不是定义（它们在 `uses` 里）
             Instr::MakeClosure { dst, .. } => vec![*dst],
             // `ok` 也是这条指令**定义**的值（`V1` 要求每个值有定义点）
@@ -469,6 +471,7 @@ impl Instr {
             // `FuncAddr` 只读**符号**，不读值（`func` 是重定位，不是操作数）
             Instr::FuncAddr { .. } => {}
             Instr::Defer { fv } => out.push(*fv),
+            Instr::NilCheck { addr } => out.push(*addr),
             // `CapturePtr` 读的是隐式 ctx（不是 `Instr` 的操作数）
             Instr::CapturePtr { .. } => {}
             Instr::MakeClosure { captures, .. } => out.extend(captures.iter().copied()),
@@ -889,6 +892,27 @@ pub enum Instr {
         /// 目标类型（具体类型或接口）。
         typ: TypeId,
     },
+    /// 空指针检查：`addr == nil` ⇒ **可恢复的 panic**（`M9/Phase 5c`）。
+    ///
+    /// # 为什么需要一条没有结果的指令
+    ///
+    /// Go 里「取一个 place 的地址」可以**不读内存**却仍然 panic：
+    /// `&*p`（`p == nil`）和 `&p.f`（`p == nil`）都不产生 `Load`，可它们
+    /// 在 Go 里都是运行时错误。IR 里 `&*p` 更是连指令都没有 —— 它就是
+    /// `p` 这个指针值本身（`build.rs::place_addr_root(Place::Deref)`），
+    /// 于是「这里要检查空指针」在图上**无处可写**。
+    ///
+    /// 加这条指令而不是让后端在 `Field`/`Index` 里各自加检查：后端各写一份
+    /// 必然分叉（`R-9-13` 的教训），而这条检查是**语义**，不是 ABI 细节。
+    ///
+    /// # 它没有 dst
+    ///
+    /// 检查不改任何值，只在失败时离开本帧 ⇒ 不需要结果，也就不能用「没人用
+    /// 就删」的 DCE 规则（`opt::dce` 把它列进「永不删」）。
+    NilCheck {
+        /// 被检查的地址。
+        addr: ValueId,
+    },
 }
 
 /// 终止符。**边上的实参挂在终止符上**（`V7` 的比对面）。
@@ -939,6 +963,7 @@ pub fn kind_of_instr(i: &Instr) -> &'static str {
         Instr::Call { .. } => "call",
         Instr::FuncAddr { .. } => "funcaddr",
         Instr::Defer { .. } => "defer",
+        Instr::NilCheck { .. } => "nil-check",
         Instr::MakeClosure { .. } => "closure",
         Instr::CapturePtr { .. } => "capture",
         Instr::TypeAssert { .. } => "assert",

@@ -61,12 +61,21 @@ fn t_nat_40_冻结的分母对得上() {
         .into_iter()
         .collect();
 
-    // `native-input.txt` 就是 `N` 的快照（`run-native.sh` 的输入）。
-    assert_eq!(input, n, "native-input.txt 与「入选 − M6 拒绝」不一致");
+    // `native-input.txt` 是 **M7 的输入快照**（46 → 63），不是 `N` 的实时镜像。
+    //
+    // 判据从「相等」放宽成「子集」是 `R-9-26` 的必然结果：M9/Phase 5c 之后
+    // 拒绝面只剩 `method5.go`，`N` 涨到 68，而 `native-input.txt` 作为**历史
+    // 快照**不该跟着改（改了就等于把「M7 当时跑的是哪 63 个」抹掉）。它只需要
+    // 满足「快照里的每个文件今天仍然在 N 里」—— 即拒绝面没有倒退。
+    assert!(
+        input.is_subset(&n),
+        "native-input.txt 里有文件今天不在 N 里：{:?}",
+        input.difference(&n).collect::<Vec<_>>()
+    );
     assert_eq!(
         n.len(),
-        63,
-        "N 侧应为 63（46 → map +4 → iface +6 → typeswitch +1 → funcval +3 → closure +3）"
+        68,
+        "N 侧应为 68（46 → map +4 → iface +6 → typeswitch +1 → funcval +3 → closure +3 → defer/panic +5）"
     );
 
     // `M'` 的路径集合。
@@ -83,8 +92,8 @@ fn t_nat_40_冻结的分母对得上() {
     );
     assert_eq!(
         n.len() - m.len(),
-        63,
-        "N' 冻结为 63（39 + 切片 7 + map 4 + iface 6 + typeswitch 1 + funcval 3 + closure 3）"
+        68,
+        "N' 冻结为 68（39 + 切片 7 + map 4 + iface 6 + typeswitch 1 + funcval 3 + closure 3 + defer 5）"
     );
 }
 

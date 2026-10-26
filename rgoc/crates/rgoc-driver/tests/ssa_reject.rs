@@ -93,19 +93,61 @@ fn t_ssa_33_闭包() {
 
 #[test]
 fn t_ssa_33_defer() {
-    assert_rejected(
+    // M9/Phase 5b 之前：`defer` 一律被拒（`SSA-UNSUPPORTED-DEFER`）。现在实参
+    // 打包进合成的包装函数（`synth_defer_wrapper`）⇒ 普通形态能建图，判据
+    // **反转**成「能建图 + 那个词不出现」。
+    //
+    // ⚠️ 码**没有**整条下线：`defer delete/recover` 仍是拒绝面（见下一条）。
+    // 「没下线」和「没实现」是两件事，判据必须分开写 —— 合成一条就等于给
+    // 留着的死分支盖章。
+    let p = fixture(
         "defer",
         "package main\n\nfunc main() {\n\tdefer println(1)\n\tprintln(2)\n}\n",
+    );
+    let out = run(&p);
+    assert_eq!(
+        out.exit, 0,
+        "普通 defer 已在 M9/Phase 5b 支持，该退出码 0；stderr = {:?}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("SSA-UNSUPPORTED-DEFER"),
+        "普通 defer 不该再被拒：{:?}",
+        out.stderr
+    );
+}
+
+#[test]
+fn t_ssa_33_defer_内建仍拒() {
+    // `SsaCode::Defer` 今天的**唯一**生产者：`defer` 的两个内建形态。
+    // `delete` 走的是 runtime 的 map 助手（延迟调用要自己造一个 funcval，
+    // 而 `rt_map_del` 的签名不是 `func()`）；`defer recover()` 只会把
+    // `recover()` 当场求值再延迟一个空操作 —— 没有实现的必要。
+    assert_rejected(
+        "defer-delete",
+        "package main\n\nfunc main() {\n\tm := map[string]int{}\n\tdefer delete(m, \"a\")\n}\n",
         SsaCode::Defer,
     );
 }
 
 #[test]
 fn t_ssa_33_recover() {
-    assert_rejected(
+    // M9/Phase 5a 之前 `recover()` 被拒（与 defer 共用那个码）。recover 实现了
+    // （`CalleeRef::Runtime(Recover)` + 帧上的 defer 链）⇒ 判据反转成「能建图」。
+    let p = fixture(
         "recover",
         "package main\n\nfunc f() any {\n\treturn recover()\n}\n\nfunc main() {}\n",
-        SsaCode::Defer,
+    );
+    let out = run(&p);
+    assert_eq!(
+        out.exit, 0,
+        "recover 已在 M9/Phase 5a 支持，该退出码 0；stderr = {:?}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("SSA-UNSUPPORTED-DEFER"),
+        "recover 不该再被拒：{:?}",
+        out.stderr
     );
 }
 

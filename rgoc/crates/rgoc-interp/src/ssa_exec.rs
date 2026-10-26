@@ -515,6 +515,43 @@ impl Exec<'_> {
         }
     }
 
+    /// 解引用一个地址值；**nil ⇒ 可恢复的 panic**（`R-9-25`）。
+    ///
+    /// 返回 `Ok(None)` 表示「已经登记了 panic，本条指令到此为止」——
+    /// 主循环看到 `unwinding` 就会转去跑 defer，与 native 的
+    /// `bl rt_panic_nil; b <本帧出口>` 同一条路。
+    ///
+    /// # 为什么不能沿用 `Halt::Runtime`
+    ///
+    /// `Halt` 是「整个程序停在这里」，`defer` 跑不了、`recover()` 也接不住。
+    /// 而 Go 的空指针解引用是**普通 panic**：`method.go` / `nilptr2.go` 两个
+    /// 语料整份都在指望 `defer func(){ recover() }` 能把它吞掉。
+    /// native 侧、解释器侧必须是同一条语义（`R-9-13` 的教训）。
+    fn deref_or_panic(&mut self, v: &Value) -> Result<Option<Cell>, Halt> {
+        match v {
+            Value::Ptr(c) => Ok(Some(c.clone())),
+            Value::Nil(_) => {
+                self.nil_panic();
+                Ok(None)
+            }
+            other => Err(Halt::Runtime(format!(
+                "地址不是指针：{}",
+                print::format_operand(other, self.tt, TypeId::from_index(0))
+            ))),
+        }
+    }
+
+    /// 登记一次「nil 解引用」panic（文本与 native 的 `rt_panic_nil` 逐字节相同）。
+    fn nil_panic(&mut self) {
+        self.panic = Some(PanicState {
+            val: Value::Str(std::rc::Rc::from(RtError::NilDeref.message())),
+            // `ty` 只用在 `recover()` 包接口上（`print` 打接口不看它）；
+            // 与 nil funcval 那条同口径（`TypeId(0)` = invalid）。
+            ty: TypeId::from_index(0),
+        });
+        self.unwinding = true;
+    }
+
     /// 执行当前块的当前指令，返回「要追加到输出流」的文本（`print` 家族用）。
     fn step_instr(&mut self) -> Result<Option<String>, Halt> {
         let m = self.m;
@@ -677,6 +714,16 @@ impl Exec<'_> {
                 }
                 Ok(None)
             }
+            // 空指针检查（`M9/Phase 5c`）：与 `Load` 的 nil 分支同一条判据 ——
+            // 「地址是 `Ptr` 才算过」，否则报 nil 解引用。放在 `Load` 之外是为了
+            // 覆盖**不读内存**的取址（`&*p` / `&p.f`）。
+            Instr::NilCheck { addr } => {
+                let p = self.read(*addr)?;
+                if self.deref_or_panic(&p)?.is_none() {
+                    return Ok(None);
+                }
+                Ok(None)
+            }
             Instr::AddrOf { dst, root } => {
                 let c = self.root_cell(*root)?;
                 self.write(*dst, Value::Ptr(c));
@@ -684,13 +731,21 @@ impl Exec<'_> {
             }
             Instr::Field { dst, base, index } => {
                 let p = self.read(*base)?;
-                let c = self.as_ptr(&p)?;
+                let Some(c) = self.deref_or_panic(&p)? else {
+                    return Ok(None);
+                };
                 let f = field_cell(&c, *index)?;
                 self.write(*dst, Value::Ptr(f));
                 Ok(None)
             }
             Instr::Index { dst, base, i } => {
                 let b = self.read(*base)?;
+                // 空切片 / 空指针底座：`index_cell` 的 `bounds(0)` 会报越界，
+                // 但那**不是** Go 的错因（`nilSlice[0]` 是 nil 解引用）。
+                if matches!(b, Value::Nil(_)) {
+                    self.nil_panic();
+                    return Ok(None);
+                }
                 let idx = self.read(*i)?;
                 let c = index_cell(&b, idx.as_int().unwrap_or(0), tt)?;
                 self.write(*dst, Value::Ptr(c));
@@ -741,7 +796,9 @@ impl Exec<'_> {
             }
             Instr::Load { dst, addr, .. } => {
                 let p = self.read(*addr)?;
-                let c = self.as_ptr(&p)?;
+                let Some(c) = self.deref_or_panic(&p)? else {
+                    return Ok(None);
+                };
                 // 读出来的是**拷贝**：Go 的赋值/取值都是值语义，
                 // 共享只发生在指针/切片/map 这些引用型值上（它们 clone 后仍共享）。
                 let v = c.borrow().deep_copy();
@@ -757,7 +814,9 @@ impl Exec<'_> {
             } => {
                 let p = self.read(*addr)?;
                 let v = self.read(*val)?;
-                let c = self.as_ptr(&p)?;
+                let Some(c) = self.deref_or_panic(&p)? else {
+                    return Ok(None);
+                };
                 *c.borrow_mut() = v.deep_copy();
                 // `Store` 产出的「新 mem」只是**静态**定序用的令牌，运行期原样传递
                 let tok = self.read(*mem)?;
@@ -1015,7 +1074,8 @@ impl Exec<'_> {
                                 nil_recv = true;
                                 break;
                             }
-                            return Err(Halt::Runtime(RtError::NilDeref.message()));
+                            self.nil_panic();
+                            return Ok(None);
                         }
                         addr = self.as_ptr(&p)?;
                     } else {

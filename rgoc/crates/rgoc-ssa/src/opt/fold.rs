@@ -94,6 +94,8 @@ fn dst_of(i: &Instr) -> ValueId {
         // `defer` 没有 dst。`try_fold` 永远不会折它，所以这个返回值没人用 ——
         // 给 `fv` 只是为了让 match 穷尽。
         Instr::Defer { fv } => *fv,
+        // 同上：`nil-check` 没有 dst，`try_fold` 也不折它
+        Instr::NilCheck { addr } => *addr,
         Instr::MakeClosure { dst, .. } => *dst,
         Instr::Const { dst, .. }
         | Instr::Copy { dst, .. }

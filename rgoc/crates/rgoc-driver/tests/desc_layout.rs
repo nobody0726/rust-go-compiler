@@ -57,6 +57,25 @@ struct Raw {
 
 fn parse(asm: &str) -> BTreeMap<String, Raw> {
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    // 标签之后**连续的** `.byte` 行都是这块数据（`emit::rodata_bytes` 每 16 字节
+    // 一行）。只读第一行会把长位图截断成 16 字节 —— 而 16 字节恰好是「多数位图
+    // 一行就装完」的长度，于是在 `nilptr2.go` 的 `BigStruct`（2 MiB 位图）之前
+    // 一直看不出来：产物 16 字节 vs 期望 2 MiB，报的却是「gcdata 不一致」。
+    let byte_run = |from: usize| -> Vec<u8> {
+        let mut out: Vec<u8> = Vec::new();
+        let mut i = from;
+        while i < lines.len() {
+            let Some(rest) = lines[i].strip_prefix(".byte ") else {
+                break;
+            };
+            out.extend(
+                rest.split(',')
+                    .map(|s| s.trim().parse::<u8>().expect("字节")),
+            );
+            i += 1;
+        }
+        out
+    };
     // 位图
     let mut bitmaps: BTreeMap<String, Vec<u8>> = BTreeMap::new();
     for i in 0..lines.len().saturating_sub(1) {
@@ -66,13 +85,8 @@ fn parse(asm: &str) -> BTreeMap<String, Raw> {
         if !label.starts_with(".L") {
             continue;
         }
-        if let Some(rest) = lines[i + 1].strip_prefix(".byte ") {
-            bitmaps.insert(
-                label.to_string(),
-                rest.split(',')
-                    .map(|s| s.trim().parse().expect("字节"))
-                    .collect(),
-            );
+        if lines[i + 1].starts_with(".byte ") {
+            bitmaps.insert(label.to_string(), byte_run(i + 1));
         }
     }
     let mut out = BTreeMap::new();
@@ -83,13 +97,10 @@ fn parse(asm: &str) -> BTreeMap<String, Raw> {
         if !sym.starts_with("__desc_") {
             continue;
         }
-        let Some(rest) = lines[i + 1].strip_prefix(".byte ") else {
+        if !lines[i + 1].starts_with(".byte ") {
             continue;
-        };
-        let header: Vec<u8> = rest
-            .split(',')
-            .map(|s| s.trim().parse().expect("字节"))
-            .collect();
+        }
+        let header: Vec<u8> = byte_run(i + 1);
         let quad = |k: usize| -> Option<String> {
             let v = lines[i + k].strip_prefix(".quad ")?.trim();
             if v == "0" { None } else { Some(v.to_string()) }

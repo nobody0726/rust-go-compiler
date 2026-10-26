@@ -292,6 +292,22 @@ fn check_panic(cx: &Ctx<'_>, asm: &mut Asm) {
 fn prologue(fr: &Frame, asm: &mut Asm) {
     asm.ins("stp x29, x30, [sp, #-16]!");
     asm.ins("mov x29, sp");
+    // —— 超大帧（`R-9-22`）：整块存储走 mmap ——
+    //
+    // `frame_size` 是定长的，`ulimit -s` 却是 8 MiB ⇒ 帧比栈大时第一条落在
+    // 帧底部的访存就 SIGSEGV（`nilptr2.go` 的 `use(*bigstructp)`，128 MiB）。
+    // 这里只换「帧底从哪来」：`fp` 指到块尾减 16，所有「相对 `fp` 的负偏移」
+    // 一个字都不用改。栈上只留 `stp` 那 16 字节与 outgoing 区。
+    if fr.off_stack() {
+        reserve_outgoing(fr, asm);
+        load_imm(asm, "x0", i64::from(fr.off_stack_bytes()));
+        asm.ins("bl rt_stack_frame_alloc");
+        load_imm(asm, "x1", i64::from(fr.off_stack_bytes()));
+        asm.ins("add x29, x0, x1");
+        // mmap 给的是零页 ⇒ 取址槽的零值语义已经满足，不必再 `zero_init`
+        // （那会为 128 MiB 帧生成 1600 万条 `str`）。
+        return;
+    }
     let imm = fr.sub_sp_imm();
     if imm > 0 {
         // ⚠️ `add/sub` 的立即数是 12 位（0..4095）。大帧必须走寄存器 ——
@@ -306,8 +322,42 @@ fn prologue(fr: &Frame, asm: &mut Asm) {
     fr.zero_init(asm);
 }
 
+/// 给 outgoing（栈实参）区腾地方（栈外帧用：帧底不在 `sp` 上）。
+fn reserve_outgoing(fr: &Frame, asm: &mut Asm) {
+    if fr.outgoing > 0 {
+        if fr.outgoing <= 4095 {
+            asm.ins(&format!("sub sp, sp, #{}", fr.outgoing));
+        } else {
+            load_imm(asm, "x10", i64::from(fr.outgoing));
+            asm.ins("sub sp, sp, x10");
+        }
+    }
+}
+
+/// 收回 outgoing 区（与 [`reserve_outgoing`] 成对）。
+fn release_outgoing(fr: &Frame, asm: &mut Asm) {
+    if fr.outgoing > 0 {
+        if fr.outgoing <= 4095 {
+            asm.ins(&format!("add sp, sp, #{}", fr.outgoing));
+        } else {
+            load_imm(asm, "x10", i64::from(fr.outgoing));
+            asm.ins("add sp, sp, x10");
+        }
+    }
+}
+
 /// 尾声：`add sp`、`ldp` 恢复、`ret`。
 fn epilogue(fr: &Frame, asm: &mut Asm) {
+    if fr.off_stack() {
+        // 先还那块 mmap（`fp` 还在，块首 = `fp - bytes`）
+        load_imm(asm, "x1", i64::from(fr.off_stack_bytes()));
+        asm.ins("sub x0, x29, x1");
+        asm.ins("bl rt_stack_frame_free");
+        release_outgoing(fr, asm);
+        asm.ins("ldp x29, x30, [sp], #16");
+        asm.ins("ret");
+        return;
+    }
     let imm = fr.sub_sp_imm();
     if imm > 0 {
         if imm <= 4095 {
@@ -503,6 +553,12 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
             }
         }
         Instr::TypeAssert { dst, ok, x, typ } => type_assert(cx, *dst, *ok, *x, *typ, asm),
+        // 空指针检查（`M9/Phase 5c`）：`addr == nil` ⇒ 可恢复的 panic。
+        Instr::NilCheck { addr } => {
+            let a = cx.slot(*addr);
+            ld_x(asm, "x10", a.off);
+            check_nil_reg(cx, "x10", asm);
+        }
         Instr::AddrOf { dst, root } => addr_of(cx, *dst, root, asm),
         Instr::Field { dst, base, index } => field(cx, *dst, *base, *index, asm),
         Instr::Index { dst, base, i } => index(cx, *dst, *base, *i, asm),
@@ -1530,8 +1586,22 @@ fn field(cx: &Ctx<'_>, dst: ValueId, base: ValueId, index: usize, asm: &mut Asm)
     let b = cx.slot(base);
     let off = field_offset_of(cx.tt, cx.ty(base), index);
     ld_x(asm, "x10", b.off);
+    // 空指针底座（`M9/Phase 5c`）：`p.f` / `&p.f` 在 `p == nil` 时是 panic。
+    // 偏移 0 的字段以前靠 `Load`/`Store` 顺带撞上，偏移非 0 的就直接读野地址
+    // （`nilptr2.go` 的 `structp.j`）。
+    check_nil_reg(cx, "x10", asm);
     if off != 0 {
-        asm.ins(&format!("add x10, x10, #{off}"));
+        // ⚠️ `add` 的立即数只有 12 位（±4095）。字段偏移可以**远**超它：
+        // `BigStruct{ x [128<<20]byte; l []byte }` 里 `l` 的偏移是 134217760
+        // （`nilptr2.go`）⇒ 直接把偏移塞进立即数，clang 报
+        // `expected compatible register, symbol or integer in range [0, 4095]`。
+        // 大偏移先装进 `x11` 再加（与 `addr` 的帧偏移同一套处理）。
+        if off <= 4095 {
+            asm.ins(&format!("add x10, x10, #{off}"));
+        } else {
+            load_imm(asm, "x11", i64::from(off));
+            asm.ins("add x10, x10, x11");
+        }
     }
     st_x(asm, "x10", d.off);
 }
@@ -1594,6 +1664,10 @@ fn index(cx: &Ctx<'_>, dst: ValueId, base: ValueId, i: ValueId, asm: &mut Asm) {
         asm.label(&ok);
     }
     load_imm(asm, "x12", i64::from(esz));
+    // 空指针底座（`M9/Phase 5c`）：`p[i]` 在 `p == nil` 时是 panic。
+    // 放在越界检查**之后**：空切片 / 空串的 data 本来就是 0，而那种情形
+    // 已经被 `i >= len(=0)` 抓住（先比后加，顺序不能反）。
+    check_nil_reg(cx, "x10", asm);
     asm.ins("madd x10, x11, x12, x10");
     st_x(asm, "x10", d.off);
 }
@@ -2180,6 +2254,10 @@ fn call(
             }
             asm.ins(&format!("bl {}", cx.tt_fn_name(*fid)));
             take_results(cx, dsts, asm);
+            // 直接调用也要查 panic 状态（`R-9-24`）：`f(3)` 里 `panic` 之后
+            // `f` 是**正常返回**的（只置状态），不查的话调用方接着往下跑 ——
+            // 实测 `nat2_panic_终止符`：`println("unreachable")` 真的打了出来。
+            check_panic(cx, asm);
             Ok(())
         }
         CalleeRef::Method { recv, func } => {
@@ -2195,6 +2273,8 @@ fn call(
             pass_args(cx, Some(*func), &all, asm);
             asm.ins(&format!("bl {}", cx.tt_fn_name(*func)));
             take_results(cx, dsts, asm);
+            // 与 `CalleeRef::Func` 同一条：方法体也可能 panic（`R-9-24`）
+            check_panic(cx, asm);
             Ok(())
         }
         // 接口方法调用（`M9/Task 32`）：`fn = tab.fn[slot]`，第 0 个实参是 `data`。
@@ -2644,6 +2724,30 @@ fn builtin(
 fn print_value(cx: &Ctx<'_>, v: ValueId, asm: &mut Asm) {
     let s = cx.slot(v);
     let t = cx.ty(v);
+    // 引用型先按**类型**分派（`M9/Phase 5c`）：接口 / map / 切片都是多字值，
+    // 落到下面按 class 分的分支会被当成 `string` 或干脆什么都不打 ——
+    // 实测 `print.go`：`println(nilIface)` 打空行、`println(nilSlice)` 打空行、
+    // `println(nilMap)` 打成 `0`。
+    if is_iface_ty(cx.tt, t) {
+        // 接口 = `{tab, data}`（`C5` §6.2）
+        ld_x(asm, "x0", s.off);
+        ld_x(asm, "x1", s.off + 8);
+        asm.ins("bl rt_print_iface");
+        return;
+    }
+    if slice_elem(cx.tt, t).is_some() {
+        // 切片 = `{ptr, len, cap}`
+        ld_x(asm, "x0", s.off);
+        ld_x(asm, "x1", s.off + 8);
+        ld_x(asm, "x2", s.off + 16);
+        asm.ins("bl rt_print_slice");
+        return;
+    }
+    if map_kv(cx.tt, t).is_some() || is_pointer_ty(cx.tt, t) {
+        ld_x(asm, "x0", s.off);
+        asm.ins("bl rt_print_ptr");
+        return;
+    }
     match cx.class(v) {
         SlotClass::Float => {
             if cx.is_f32(t) {

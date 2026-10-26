@@ -51,7 +51,10 @@
    v<k> = <op> <operands> : t<id>
    ```
    `<op>` 取 `Instr` 变体名的 **kebab-case**（`const` / `copy` / `bin` / `un` / `convert` /
-   `addr-of` / `field` / `index` / `slice` / `composite` / `make` / `load` / `store` / `call`）。
+   `addr-of` / `field` / `index` / `slice` / `composite` / `make` / `load` / `store` / `call` /
+   M9 起追加的 `funcaddr` / `closure` / `capture` / `defer` / `assert` / `nil-check`）。
+   **没有结果的指令不写 `v<k> = `**（`defer v3`、`nil-check v3`）—— 与 `store` 不同的是
+   它们连令牌都不产出，写个空箭头会让「这一行定义了什么」变得含混。
    操作数按 IR 字段顺序用单空格分隔；`dsts` 多于一个时写 `v1,v2 = call ...`。
    **可选操作数缺省写 `_`**（`slice` 的 `lo/hi/max`、`make` 的 `cap`）——不是省略、不是空串，
    这样「第几个操作数是什么」只靠位置就能数，不必看上下文。
@@ -177,3 +180,4 @@ block b3 params=[] preds=[b0] succs=[]
 | 2026-10-24 | **定稿**（M6/Task 51）：§3.2 的示例按**实现回填**三处 —— ① `succs=[b1,b2]` → `[b2,b1]`（`succs` 保终止符顺序，示例自己写反了）；② `v1 = const nil : t2` → `const 0 : t2`（`ConstVal` 没有 `Nil`）；③ `v3 = const 0 : t1` → `: t2`（mem 令牌的类型是根的地址类型）。`T-SSA-46` 的 golden 改成**从本文档读**，三处一次全被抓出 | 文档驱动 golden（`dump.rs::c10_block`）；`R-51-1` |
 | 2026-10-25 | **M8 不改**：并发的六个 HIR 节点在 SSA 侧仍走拒绝面（`SSA-UNSUPPORTED-CHAN` / `-FUNC-VALUE`），dump 的行语法、编号顺序、禁止项一字未改。`SsaCode::RangeFunc` 的删除不影响本契约（它是**拒绝码**，不是 dump 语法） | `M8-tests.md` §10 的判据边界；`C4` §9 |
 | 2026-10-23 | **`R-16-1`**：规则 3 补两处 —— ① `load`/`store` 的第一个操作数是 **mem 令牌**（`V6` 的比对面；不写它 dump 里就看不见 mem 链）；② 可选操作数缺省写 `_`。§3.2 示例随之加一个 mem 种子值（`values` 4→5）。另明确 **`Effect` 不进 dump**（它是 pass 的输入，不是指令操作数） | `M6-plan.md` Task 16 实现期发现骨架漏了 mem 字段；`T-SSA-46` 的 golden 对账 |
+| 2026-10-26 | **M9 补登记**（规则 3）：操作数表加上 M9 已经产出的 6 个 op（`funcaddr` / `closure` / `capture` / `defer` / `assert` / `nil-check`），并写明**无结果的指令不写 `v<k> = `**。原因：M9 的 6 个 op 是逐个追加进实现的，规则 3 的操作数表一直停在 M6 的 14 个 —— 表比实现少，`nil-check` 这种「新形状」（没有 dst）就没有契约可依 | `M9/Phase 5c`：`&*p` 的 nil 检查在 IR 里无处可写（`R-9-21`）；`iri_shape` / `dump` 两侧的穷尽 `match` 是编译期判据 |

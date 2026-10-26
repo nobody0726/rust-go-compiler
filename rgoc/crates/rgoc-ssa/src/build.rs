@@ -2461,6 +2461,10 @@ impl Fb<'_> {
             }
             Place::Deref(e) => {
                 let addr = self.expr(e);
+                // `&*p` / `*p = v` 的地址就是 `p` 的值 —— **不读内存**，可 Go 在
+                // `p == nil` 时照样 panic（`nilptr2.go` 的 `&*intp`）。这里没有
+                // `Load` 可以挂检查，所以显式发一条 `NilCheck`（`M9/Phase 5c`）。
+                self.emit(Instr::NilCheck { addr });
                 let root = self.ptr_hint(addr);
                 (addr, root)
             }

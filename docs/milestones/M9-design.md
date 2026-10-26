@@ -332,6 +332,19 @@ Defer { call: Box<Instr> },                                   // 必须是 Call�
   既有 golden **一字不动**。这是 `R-51-1` 的教训：C10 的示例是文档驱动 golden 的源头，
   改一个字就要重跑一遍全量对账。
 
+**执行期的偏差（Phase 3 起，收口时补记）**：上面三行是**计划**，实际追加了六条 ——
+`TypeAssert`（Phase 3）、`CapturePtr`（Phase 4b）、`NilCheck`（Phase 5c）也在其中，
+且 `Defer` 的实现是 `Defer { fv: ValueId }`（延迟调用的实参在**登记时**就打包进一个
+合成的包装函数，`synth_defer_wrapper`），不是 `Defer { call: Box<Instr> }`。
+
+| 变体 | 加进来的阶段 | 为什么不能复用既有 |
+|---|---|---|
+| `TypeAssert` | Phase 3 | comma-ok 形态有**两个**结果，`Convert` 只有一个；失败要么 panic 要么写 `ok` |
+| `CapturePtr` | Phase 4b | 捕获是**按引用**的（`R-9-15`）：闭包要先从 funcval 里取出指向外层变量的指针 |
+| `NilCheck` | Phase 5c（`R-9-21`） | `&*p` / `&p.f` **不读内存**却在 nil 上 panic，IR 里连指令都没有 ⇒ 这个「可能 panic 的点」无处可写 |
+
+`C10` 的 §3 操作数表也按实现补登了这六条（见其变更记录 2026-10-26 行）。
+
 ### 3.6 slice（`D-M9-7`）
 
 | 动作 | 落法 |

@@ -1,795 +1,795 @@
 {
-  "stage": "M6",
-  "name": "SSA、verifier 与精简优化（顺序语义的 IR 基线）",
-  "generated_at": "2026-10-23T00:00:00Z",
-  "filled_at": "2026-10-24T00:00:00Z",
-  "fill_task": "M6-plan.md Task 50（按 M6-tests.md §7 的映射逐字段填实；由 rgoc-driver/tests/manifest_m6.rs 对账，三类谎必须被拦）",
-  "status": "已填实（九条门禁全 pass；open_gaps 列残余 6 条，均为 M7–M9 的已知边界）",
-  "scope": "HIR→SSA（块/值/块参数）+ 九条 verifier 不变式 + 诊断求值器三方差分 + 三 pass 与块内 CSE + 值级活跃性与 SSA-LIVE v1 协议；验收 = 手写 IR 两向（甲 14）+ 构建（乙 16）+ 三方差分（丙 7）+ 装置（丁 9）+ 变异（反 8）+ 协议（戊 5）+ passes（己 5）",
-  "docs": {
-    "design": "docs/milestones/M6-design.md（D-M6-1..16 / F1–F14 / §11 变更记录）",
-    "tests": "docs/milestones/M6-tests.md（64 个 T-SSA-*；§6 切片已冻结 N=46 / M=23，`R-6-1`；修订表 20 条）",
-    "plan": "docs/milestones/M6-plan.md（Task 1–53；进度台账 .superpowers/sdd/M6-plan/progress.md，不入库）",
-    "report": "docs/milestones/M6-report.md（交付 B；Task 52）",
-    "contracts": [
-      "docs/contracts/C4-ssa.md（Task 51 已升正式：§7 五项需求逐条兑现 + §8 差距表关闭）",
-      "docs/contracts/C10-ssa-dump.md（Task 51 已定稿：§3.2 示例按实现回填三处，golden 改为从文档读）",
-      "docs/contracts/C9-values-and-output.md（Task 51 补 §7.5「SSA 共用同一 Value 与合并流」）"
-    ]
-  },
-  "crates": [
-    "rgoc/crates/rgoc-ssa（新：ir/build/cfg/dom/verify/typing/effect/opt/dump/live/diag）",
-    "rgoc/crates/rgoc-interp（加 ssa_exec 模块；convert/slice_value/append_value 提 pub(crate) 共用）",
-    "rgoc/crates/rgoc-driver（ssa 子命令 + run --via={hir,ssa} + --opt）",
-    "tools/run-oracle（ssa-classify.sh / ssa-rejected.txt 23 行 / run-collide.sh --ssa）",
-    "rgoc/crates/rgoc-ssa/src/diag.rs（SsaCode 9 码，crate-local；DiagCode 保持 103）",
-    "scripts/mutation-m6-notes.md（新；累计 66 条探针，M1–M65 + M67）"
-  ],
-  "corpus_lists": {
-    "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
-    "candidate": {
-      "file": "tools/run-oracle/run-selected.txt",
-      "count": 69,
-      "note": "沿用 M5 的入选清单（已冻结）"
-    },
-    "buildable": {
-      "count": 63,
-      "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "能建图且 verifier 通过的个数 N；63 个**全部**与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3 → 闭包 +3（Phase 4b）。"
-    },
-    "rejected": {
-      "file": "tools/run-oracle/ssa-rejected.txt",
-      "count": 6,
-      "frozen_by": "M6-plan Task 39（R-6-1）",
-      "note": "拒绝 M；FUNC-VALUE 1（方法值）/ DEFER 5；N+M=69。"
-    },
-    "re_frozen": {
-      "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）+ 4b（闭包）",
-      "when": "2026-10-25",
-      "why": "map / iface / type switch / 无捕获函数值 / 闭包依次从「宿主面」变成「已实现」，拒绝面五次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6。",
-      "delta": "N 46 → 63（+17）/ M 23 → 6（−17）；N + M 仍等于 69"
-    }
-  },
-  "gate": {
-    "SSA-1": {
-      "name": "IR 形状与 dump",
-      "status": "pass",
-      "definition": "变体穷尽 + dump 确定 + C10 冻结",
-      "test_ids": [
-        "T-SSA-01",
-        "T-SSA-13",
-        "T-SSA-14",
-        "T-SSA-46"
-      ],
-      "evidence": "T-SSA-01/13/14/46 全绿：dump 三次逐字节相同（dump.rs 7 条）、C10 示例 golden 逐字节（t_ssa_46_与_c10_示例逐字节一致）、C10 定稿（Task 51）"
-    },
-    "SSA-2": {
-      "name": "verifier 有牙",
-      "status": "pass",
-      "definition": "反例全拒 9/9 + 合法图全过 10/10 + 可定位",
-      "test_ids": [
-        "T-SSA-02",
-        "T-SSA-03",
-        "T-SSA-04",
-        "T-SSA-05",
-        "T-SSA-06",
-        "T-SSA-07",
-        "T-SSA-08",
-        "T-SSA-09",
-        "T-SSA-10",
-        "T-SSA-11",
-        "T-SSA-12"
-      ],
-      "evidence": "verify_negative 32 条（V1–V9 每族至少一条手写 IR 反例，全部被拒且带 block/idx）+ verify_positive 16 条（合法图全过，反向证明 verifier 不是一律拒）"
-    },
-    "SSA-3": {
-      "name": "HIR→SSA 构建",
-      "status": "pass",
-      "definition": "控制流/多值/调用/复合/指针/取址各一组",
-      "test_ids": [
-        "T-SSA-15",
-        "T-SSA-16",
-        "T-SSA-17",
-        "T-SSA-18",
-        "T-SSA-19",
-        "T-SSA-20",
-        "T-SSA-21",
-        "T-SSA-22",
-        "T-SSA-23",
-        "T-SSA-24",
-        "T-SSA-25",
-        "T-SSA-26",
-        "T-SSA-27",
-        "T-SSA-28",
-        "T-SSA-29",
-        "T-SSA-30"
-      ],
-      "evidence": "ssa_build.rs 76 条：直线/if/for/switch/goto/多返回值/直连/复合字面量/指针写穿/提升正反/变参/方法调用各一组"
-    },
-    "SSA-4": {
-      "name": "三方差分",
-      "status": "pass",
-      "definition": "N 上 HIR = SSA = go run",
-      "test_ids": [
-        "T-SSA-31",
-        "T-SSA-32",
-        "T-SSA-34",
-        "T-SSA-35",
-        "T-SSA-36",
-        "T-SSA-37"
-      ],
-      "evidence": "run-collide.sh --ssa --three-way ⇒ 69 = 绿 46 / 跳过 23 / 红 0；ssa_corpus_run：46 个 N 与官方 .out 逐字节；ssa_diff：46 个 hir == ssa 逐字节"
-    },
-    "SSA-5": {
-      "name": "pass 语义保持",
-      "status": "pass",
-      "definition": "每 pass 两路一致 + 每 pass 后 verifier 绿",
-      "test_ids": [
-        "T-SSA-60",
-        "T-SSA-61",
-        "T-SSA-62",
-        "T-SSA-63",
-        "T-SSA-64"
-      ],
-      "evidence": "opt_equiv：46 个 N 上 --opt=all == --opt=none 逐字节；opt::run 每 pass 后 verify（SSA-5 硬要求）；opt_config/fold/dce/copy/cse 共 32 条"
-    },
-    "SSA-6": {
-      "name": "memory 模型",
-      "status": "pass",
-      "definition": "同根保序 / 异根不串 / 堆根全序 / 全局跨函数",
-      "test_ids": [
-        "T-SSA-07",
-        "T-SSA-25",
-        "T-SSA-36",
-        "T-SSA-49"
-      ],
-      "evidence": "V6 反例（verify_negative）+ 写穿同根保序（ssa_build 写穿之后读同一个槽走同一条_mem_链）+ 全局跨函数（ssa_run 全局变量与初始化顺序）+ 切片共享底层数组 + 数组元素写"
-    },
-    "SSA-7": {
-      "name": "不支持面",
-      "status": "pass",
-      "definition": "9 条各一码：6 条直接 fixture（码 + 退出码 1）+ 3 条够不着的守卫测试（R-31-2）",
-      "test_ids": [
-        "T-SSA-33",
-        "T-SSA-38"
-      ],
-      "evidence": "9 码：6 条直接 fixture（码 + 退出码 1）+ 3 条守卫（R-31-2，本前端够不着）；ssa_reject.rs 12 条；DiagCode 仍 103（category 测试）"
-    },
-    "SSA-8": {
-      "name": "活跃性与协议",
-      "status": "pass",
-      "definition": "值级活跃正确（含回边）+ 协议自描述 + 消费方桩",
-      "test_ids": [
-        "T-SSA-55",
-        "T-SSA-56",
-        "T-SSA-57",
-        "T-SSA-58",
-        "T-SSA-59"
-      ],
-      "evidence": "live.rs 6 条（直线/分支/循环手算对照 + 协议自洽 + 根闭包 + 确定性）；live_consumer：46 文件 / 140 函数 / 678 safepoint / 48 个有存活指针"
-    },
-    "SSA-9": {
-      "name": "回归与收口",
-      "status": "pass",
-      "definition": "四条 cargo + 五条自检 + M5 零回归 + 文档；构建预算（T-SSA-41）**未实现**，由 G-M6-01 点名",
-      "test_ids": [
-        "T-SSA-41",
-        "T-SSA-42",
-        "T-SSA-43",
-        "T-SSA-44",
-        "T-SSA-45"
-      ],
-      "evidence": "四条 cargo 全 0（fmt/check/clippy/test）；176 suite / 1858 passed / 0 failed / 1 ignored（≥ M5 的 1608）；M5 语料 69/69；corpus-manifest.sha256 15618/15618 OK"
-    }
-  },
-  "test_ids": [
-    {
-      "id": "T-SSA-01",
-      "name": "指令/终止符穷尽",
-      "gate": "SSA-1",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-02",
-      "name": "V1 单一定义",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-03",
-      "name": "V2 支配",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-04",
-      "name": "V3 类型一致",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-05",
-      "name": "V4 CFG 互逆",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-06",
-      "name": "V5 调用结果数",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-07",
-      "name": "V6 mem 支配与同块序",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-08",
-      "name": "V7 块参数计数",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-09",
-      "name": "V8 可达性",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-10",
-      "name": "V9 取址即建根",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-11",
-      "name": "合法图全过",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-12",
-      "name": "拒绝可定位",
-      "gate": "SSA-2",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-13",
-      "name": "dump 确定性",
-      "gate": "SSA-1",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-14",
-      "name": "C10 格式符合",
-      "gate": "SSA-1",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-15",
-      "name": "直线函数",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-16",
-      "name": "if/else 汇合",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-17",
-      "name": "for 三形态",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-18",
-      "name": "switch",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-19",
-      "name": "goto 与 labeled",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-20",
-      "name": "多返回值接收",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-21",
-      "name": "return f() 直连",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-22",
-      "name": "g(f()) 实参直连",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-23",
-      "name": "调用与 effect",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-24",
-      "name": "复合字面量",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-25",
-      "name": "指针与写穿",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-26",
-      "name": "slot 提升正例",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-27",
-      "name": "slot 提升反例",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-28",
-      "name": "并行拷贝",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-29",
-      "name": "变参调用",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-30",
-      "name": "静态方法调用",
-      "gate": "SSA-3",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-31",
-      "name": "切片分类两向",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-32",
-      "name": "三方差分",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-33",
-      "name": "拒绝面每行有 fixture",
-      "gate": "SSA-7",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-34",
-      "name": "纯函数/输出",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-35",
-      "name": "循环与数组",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-36",
-      "name": "指针写穿语料",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-37",
-      "name": "复合字面量语料",
-      "gate": "SSA-4",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-38",
-      "name": "ssa --dump/--verify 通道",
-      "gate": "SSA-7",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-39",
-      "name": "run 默认行为不变",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-40",
-      "name": "步数上限",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-41",
-      "name": "构建预算",
-      "gate": "（装置/支撑）",
-      "verdict": "missing",
-      "note": "构建预算（1e5 指令）**未实现**：设计稿有判据、计划里没有对应 Task；见 G-M6-01"
-    },
-    {
-      "id": "T-SSA-42",
-      "name": "四条 cargo + 五条自检",
-      "gate": "SSA-9",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-43",
-      "name": "M5 切片零回归",
-      "gate": "SSA-9",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-44",
-      "name": "manifest 对账",
-      "gate": "SSA-9",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-45",
-      "name": "语料只读",
-      "gate": "SSA-9",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-46",
-      "name": "dump 契约自洽",
-      "gate": "SSA-1",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-47",
-      "name": "变异：删 V7 计数检查",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-48",
-      "name": "变异：支配短路",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-49",
-      "name": "变异：Store 不串 mem",
-      "gate": "SSA-6",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-50",
-      "name": "变异：调用只取第一个结果",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-51",
-      "name": "变异：CSE 跨块",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-52",
-      "name": "变异：块参数顺序赋值",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-53",
-      "name": "变异：分类器算进能建图",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-54",
-      "name": "变异：dump 哈希序",
-      "gate": "（装置/支撑）",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-55",
-      "name": "值级活跃性",
-      "gate": "SSA-8",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-56",
-      "name": "SSA-LIVE v1 字段自洽",
-      "gate": "SSA-8",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-57",
-      "name": "消费方桩",
-      "gate": "SSA-8",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-58",
-      "name": "派生指针保守策略",
-      "gate": "SSA-8",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-59",
-      "name": "协议确定性",
-      "gate": "SSA-8",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-60",
-      "name": "fold 语义保持",
-      "gate": "SSA-5",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-61",
-      "name": "dce 语义保持",
-      "gate": "SSA-5",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-62",
-      "name": "copy 语义保持",
-      "gate": "SSA-5",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-63",
-      "name": "cse 块内语义保持",
-      "gate": "SSA-5",
-      "verdict": "pass"
-    },
-    {
-      "id": "T-SSA-64",
-      "name": "A/B 与 verifier",
-      "gate": "SSA-5",
-      "verdict": "pass"
-    }
-  ],
-  "unsupported": [
-    {
-      "id": "U-M6-01",
-      "item": "闭包（捕获跨帧写）",
-      "why": "Func.captured 非空 ⇒ 帧槽与外层 Cell 别名，SSA 的值唯一定义不成立",
-      "positive_evidence": "T-SSA-33 的闭包 fixture（SSA-UNSUPPORTED-CLOSURE）；语料 closure*.go 在 M 里",
-      "phase": "M8"
-    },
-    {
-      "id": "U-M6-02",
-      "item": "defer / recover",
-      "why": "延迟调用链是运行期结构，不是 SSA 值",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-DEFER）；T-EX-34..37 的 fixture",
-      "phase": "M8"
-    },
-    {
-      "id": "U-M6-03",
-      "item": "接口动态派发 / type switch",
-      "why": "目标函数运行期才定，CalleeRef 不做间接动态派发",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-IFACE-DYN）",
-      "phase": "M8"
-    },
-    {
-      "id": "U-M6-04",
-      "item": "map 读写",
-      "why": "键相等是宿主语义（C9 的 go_eq），memory 根无法覆盖",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-MAP）",
-      "phase": "M9"
-    },
-    {
-      "id": "U-M6-05",
-      "item": "chan / go / select",
-      "why": "并发语义整体不做",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-CHAN）；U-M5-01",
-      "phase": "M8"
-    },
-    {
-      "id": "U-M6-06",
-      "item": "range over func",
-      "why": "HIR 层已拒（U-M5-06），SSA 见不到",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-RANGE-FUNC）；range4.go 在 M 里",
-      "phase": "M8d"
-    },
-    {
-      "id": "U-M6-07",
-      "item": "泛型实例化后的形态",
-      "why": "检查器没放进来（G-M5-03），M6 无输入",
-      "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-GENERIC）",
-      "phase": "检查器面"
-    },
-    {
-      "id": "U-M6-08",
-      "item": "函数值（函数字面量当值 / 具名函数当值 / 方法值）",
-      "why": "IR 里没有「把函数变成值」的指令（R-31-1）",
-      "positive_evidence": "T-SSA-33 的 funcvalue fixture（SSA-UNSUPPORTED-FUNC-VALUE）",
-      "phase": "M8"
-    },
-    {
-      "id": "U-M6-09",
-      "item": "range over string",
-      "why": "要按 rune 解码，指令集里没有对应操作（R-31-1）",
-      "positive_evidence": "T-SSA-33 的 range-str fixture（SSA-UNSUPPORTED-RANGE-STR）",
-      "phase": "M7"
-    }
-  ],
-  "coverage": {
-    "note": "roadmap §M6 十句逐项映射见 M6-tests.md §2.1；六个子阶段见 §2.2；manifest_m6.rs 对账「无孤儿 ID」「无野 ID」",
-    "matrix_rows": 10,
-    "test_ids_total": 64,
-    "unsupported_total": 7,
-    "legs": {
-      "甲": 14,
-      "乙": 16,
-      "丙": 7,
-      "丁": 9,
-      "反": 8,
-      "戊": 5,
-      "己": 5
-    },
-    "revisions": [
-      {
-        "id": "R-12-1",
-        "what": "verify 签名加 &TypeTable",
-        "why": "V3 要解析真实类型；类型表是包级的"
-      },
-      {
-        "id": "R-12-2",
-        "what": "V2 不查 mem，归 V6",
-        "why": "否则 V6 的 ① 不可达"
-      },
-      {
-        "id": "R-13-1",
-        "what": "签名存 SsaFunc::call_sigs（ir::Sig）",
-        "why": "SsaFunc 自足"
-      },
-      {
-        "id": "R-16-1",
-        "what": "dump 的 load/store 带 mem 令牌 + 可选写 _ + Effect 不进 dump",
-        "why": "C10 骨架漏了 mem 字段"
-      }
-    ]
-  },
-  "budget": {
-    "effort_calendar": {
-      "start": "2026-10-23",
-      "max_calendar_weeks": 12,
-      "note": "roadmap §6.1 的折算口径；本仓按任务数（Task 1–53），不换算人周"
-    },
-    "resource_limits": {
-      "steps": 100000000,
-      "build_instrs_per_func": 100000,
-      "wall_clock_sec": 10
-    },
-    "batch_budget": {
-      "smoke": "<=5min",
-      "milestone": "<=30min",
-      "full": "<=2h"
-    },
-    "measured": null
-  },
-  "open_gaps": [
-    {
-      "id": "G-M6-01",
-      "gate": "SSA-9",
-      "test_id": "T-SSA-41",
-      "what": "构建预算（超 1e5 指令的函数 ⇒ 构建期拒绝）**没有实现**",
-      "why": "设计稿 §4 有判据，但计划里没有对应 Task（Task 51–53 是文档与回归）；语料最大函数远小于 1e5，跑起来不暴露",
-      "owner": "M7（与寄存器分配的规模上限一起做）"
-    },
-    {
-      "id": "G-M6-02",
-      "gate": "SSA-8",
-      "test_id": "T-SSA-58",
-      "what": "派生指针只做**根级**保守闭包，不做对象级（`&s.n` 活 ⇒ 整块 `s` 活）",
-      "why": "对象级要 M9 的对象模型（`D-M6-10` 明确把逃逸分析划给 M9）",
-      "owner": "M9"
-    },
-    {
-      "id": "G-M6-03",
-      "gate": "SSA-8",
-      "test_id": "T-SSA-56",
-      "what": "协议 `ptrs` 只含 `*T`：切片 / map 的底层存储不在 live 协议里",
-      "why": "切片与 map 的对象表示属于 M9；现在把它们塞进 `ptrs` 是假承诺（没有回收语义）",
-      "owner": "M9"
-    },
-    {
-      "id": "G-M6-04",
-      "gate": "SSA-5",
-      "test_id": "T-SSA-63",
-      "what": "CSE 只在**块内**；不做跨块（可用表达式）与循环优化（LICM）",
-      "why": "roadmap 明确「复杂优化延期」；跨块要支配树 + 可用表达式，属 M7",
-      "owner": "M7"
-    },
-    {
-      "id": "G-M6-05",
-      "gate": "SSA-7",
-      "test_id": "T-SSA-33",
-      "what": "9 条白名单（闭包 / defer / 接口动态派发 / map / chan / 泛型 / range-func / 函数值 / range-str）全部拒",
-      "why": "各自要 M7–M9 的运行时设施；拒绝是**显式**的（码 + 退出码 1），不是静默不支持",
-      "owner": "M7–M9"
-    },
-    {
-      "id": "G-M6-06",
-      "gate": "SSA-3",
-      "test_id": "T-SSA-23",
-      "what": "`ssa_exec` 对 `CalleeRef::Indirect`（函数值调用）运行期报错",
-      "why": "函数值本身已白名单拒绝，间接调用只可能来自手搓 IR；M8 的 goroutine/闭包会需要它",
-      "owner": "M8"
-    }
-  ],
-  "phase_summary": {
-    "tasks": 53,
-    "gates": 9,
-    "status": "done",
-    "note": "九条门禁全 pass；open_gaps 6 条（均为 M7–M9 的已知边界，不是失败）；Task 53 全量回归后翻 done"
-  },
-  "test_ids_total": 64,
-  "closed_gaps": [
-    {
-      "id": "G-M6-07",
-      "what": "`Program::init_order` 没进 SSA（`var g = f()` 的右侧只有解释器跑）",
-      "closed_by": "Task 32b（`R-32-1`）：合成 `init` 函数 + `Module::init`"
-    },
-    {
-      "id": "G-M6-08",
-      "what": "`&&` / `||` 建成一条 `Bin`（两侧都求值，副作用多做一次）",
-      "closed_by": "Task 33b（`R-33-2`）：改成控制流，`join_into` 加 `lead` 参数"
-    }
-  ],
-  "measured": {
-    "workspace_suites": 176,
-    "workspace_tests": 1859,
-    "workspace_failed": 0,
-    "workspace_ignored": 1,
-    "m5_baseline_tests": 1608,
-    "corpus_buildable": 46,
-    "corpus_rejected": 23,
-    "corpus_total": 69,
-    "three_way_green": 46,
-    "three_way_skipped": 23,
-    "three_way_red": 0,
-    "live_safepoints": 678,
-    "live_functions": 140,
-    "mutations_red": 66,
-    "diag_codes": 103,
-    "corpus_sha_ok": "15618/15618",
-    "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
-    "collide_forms": "--run 69 绿 / --three-way 69 绿 / --ssa 46 绿 23 跳过 0 红 / --ssa --three-way 同上"
-  },
-  "retired_codes": [
-    {
-      "code": "SSA-UNSUPPORTED-IFACE-DYN",
-      "retired_by": "M9/Phase 3b",
-      "revision": "R-9-14",
-      "why": "方法表 + 静态 ITab（Task 28）+ `Instr::TypeAssert`（Task 33）+ `switch x.(type)` 的断言链下降（Task 34）都实现了 ⇒ 这个码再没有生产者。纪律是「不留永远不产出的码」：`SsaCode::ALL` 从 8 条收到 7 条，`ssa_reject::t_ssa_33_接口动态派发` 反转成「能建图 + 该码不出现」。"
-    },
-    {
-      "code": "SSA-UNSUPPORTED-CLOSURE",
-      "retired_by": "M9/Phase 4b",
-      "revision": "R-9-16",
-      "why": "闭包实现了（捕获按引用：funcval 存**指向变量存储的指针**，`R-9-15`）⇒ `unsupported()` 里那条 `Func.captured` 非空的拒绝再没有生产者。`SsaCode::ALL` 7 → 6。"
-    }
+ "stage": "M6",
+ "name": "SSA、verifier 与精简优化（顺序语义的 IR 基线）",
+ "generated_at": "2026-10-23T00:00:00Z",
+ "filled_at": "2026-10-24T00:00:00Z",
+ "fill_task": "M6-plan.md Task 50（按 M6-tests.md §7 的映射逐字段填实；由 rgoc-driver/tests/manifest_m6.rs 对账，三类谎必须被拦）",
+ "status": "已填实（九条门禁全 pass；open_gaps 列残余 6 条，均为 M7–M9 的已知边界）",
+ "scope": "HIR→SSA（块/值/块参数）+ 九条 verifier 不变式 + 诊断求值器三方差分 + 三 pass 与块内 CSE + 值级活跃性与 SSA-LIVE v1 协议；验收 = 手写 IR 两向（甲 14）+ 构建（乙 16）+ 三方差分（丙 7）+ 装置（丁 9）+ 变异（反 8）+ 协议（戊 5）+ passes（己 5）",
+ "docs": {
+  "design": "docs/milestones/M6-design.md（D-M6-1..16 / F1–F14 / §11 变更记录）",
+  "tests": "docs/milestones/M6-tests.md（64 个 T-SSA-*；§6 切片已冻结 N=46 / M=23，`R-6-1`；修订表 20 条）",
+  "plan": "docs/milestones/M6-plan.md（Task 1–53；进度台账 .superpowers/sdd/M6-plan/progress.md，不入库）",
+  "report": "docs/milestones/M6-report.md（交付 B；Task 52）",
+  "contracts": [
+   "docs/contracts/C4-ssa.md（Task 51 已升正式：§7 五项需求逐条兑现 + §8 差距表关闭）",
+   "docs/contracts/C10-ssa-dump.md（Task 51 已定稿：§3.2 示例按实现回填三处，golden 改为从文档读）",
+   "docs/contracts/C9-values-and-output.md（Task 51 补 §7.5「SSA 共用同一 Value 与合并流」）"
   ]
+ },
+ "crates": [
+  "rgoc/crates/rgoc-ssa（新：ir/build/cfg/dom/verify/typing/effect/opt/dump/live/diag）",
+  "rgoc/crates/rgoc-interp（加 ssa_exec 模块；convert/slice_value/append_value 提 pub(crate) 共用）",
+  "rgoc/crates/rgoc-driver（ssa 子命令 + run --via={hir,ssa} + --opt）",
+  "tools/run-oracle（ssa-classify.sh / ssa-rejected.txt 23 行 / run-collide.sh --ssa）",
+  "rgoc/crates/rgoc-ssa/src/diag.rs（SsaCode 9 码，crate-local；DiagCode 保持 103）",
+  "scripts/mutation-m6-notes.md（新；累计 66 条探针，M1–M65 + M67）"
+ ],
+ "corpus_lists": {
+  "root": "go_source_code/test + go_source_code/test/ken（只读；corpus-manifest.sha256 锁定）",
+  "candidate": {
+   "file": "tools/run-oracle/run-selected.txt",
+   "count": 69,
+   "note": "沿用 M5 的入选清单（已冻结）"
+  },
+  "buildable": {
+   "count": 68,
+   "frozen_by": "M6-plan Task 39（R-6-1）",
+   "note": "能建图且 verifier 通过的个数 N；68 个**全部**与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3 → 闭包 +3 → defer/panic/recover +5（M9/Phase 5c）。"
+  },
+  "rejected": {
+   "file": "tools/run-oracle/ssa-rejected.txt",
+   "count": 1,
+   "frozen_by": "M6-plan Task 39（R-6-1）",
+   "note": "拒绝 M；FUNC-VALUE 1（方法值 —— Phase 4c 的遗留）；N+M=69。`DEFER` 码仍留着，但它只守 `defer delete/recover` 两个形态，不再进语料分母。"
+  },
+  "re_frozen": {
+   "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）+ 4b（闭包）+ 5c（defer/panic/recover）",
+   "when": "2026-10-26",
+   "why": "map / iface / type switch / 无捕获函数值 / 闭包 / defer-panic-recover 依次从「宿主面」变成「已实现」，拒绝面六次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6 → 68/1。",
+   "delta": "N 46 → 68（+22）/ M 23 → 1（−22）；N + M 仍等于 69"
+  }
+ },
+ "gate": {
+  "SSA-1": {
+   "name": "IR 形状与 dump",
+   "status": "pass",
+   "definition": "变体穷尽 + dump 确定 + C10 冻结",
+   "test_ids": [
+    "T-SSA-01",
+    "T-SSA-13",
+    "T-SSA-14",
+    "T-SSA-46"
+   ],
+   "evidence": "T-SSA-01/13/14/46 全绿：dump 三次逐字节相同（dump.rs 7 条）、C10 示例 golden 逐字节（t_ssa_46_与_c10_示例逐字节一致）、C10 定稿（Task 51）"
+  },
+  "SSA-2": {
+   "name": "verifier 有牙",
+   "status": "pass",
+   "definition": "反例全拒 9/9 + 合法图全过 10/10 + 可定位",
+   "test_ids": [
+    "T-SSA-02",
+    "T-SSA-03",
+    "T-SSA-04",
+    "T-SSA-05",
+    "T-SSA-06",
+    "T-SSA-07",
+    "T-SSA-08",
+    "T-SSA-09",
+    "T-SSA-10",
+    "T-SSA-11",
+    "T-SSA-12"
+   ],
+   "evidence": "verify_negative 32 条（V1–V9 每族至少一条手写 IR 反例，全部被拒且带 block/idx）+ verify_positive 16 条（合法图全过，反向证明 verifier 不是一律拒）"
+  },
+  "SSA-3": {
+   "name": "HIR→SSA 构建",
+   "status": "pass",
+   "definition": "控制流/多值/调用/复合/指针/取址各一组",
+   "test_ids": [
+    "T-SSA-15",
+    "T-SSA-16",
+    "T-SSA-17",
+    "T-SSA-18",
+    "T-SSA-19",
+    "T-SSA-20",
+    "T-SSA-21",
+    "T-SSA-22",
+    "T-SSA-23",
+    "T-SSA-24",
+    "T-SSA-25",
+    "T-SSA-26",
+    "T-SSA-27",
+    "T-SSA-28",
+    "T-SSA-29",
+    "T-SSA-30"
+   ],
+   "evidence": "ssa_build.rs 76 条：直线/if/for/switch/goto/多返回值/直连/复合字面量/指针写穿/提升正反/变参/方法调用各一组"
+  },
+  "SSA-4": {
+   "name": "三方差分",
+   "status": "pass",
+   "definition": "N 上 HIR = SSA = go run",
+   "test_ids": [
+    "T-SSA-31",
+    "T-SSA-32",
+    "T-SSA-34",
+    "T-SSA-35",
+    "T-SSA-36",
+    "T-SSA-37"
+   ],
+   "evidence": "run-collide.sh --ssa --three-way ⇒ 69 = 绿 46 / 跳过 23 / 红 0；ssa_corpus_run：46 个 N 与官方 .out 逐字节；ssa_diff：46 个 hir == ssa 逐字节"
+  },
+  "SSA-5": {
+   "name": "pass 语义保持",
+   "status": "pass",
+   "definition": "每 pass 两路一致 + 每 pass 后 verifier 绿",
+   "test_ids": [
+    "T-SSA-60",
+    "T-SSA-61",
+    "T-SSA-62",
+    "T-SSA-63",
+    "T-SSA-64"
+   ],
+   "evidence": "opt_equiv：46 个 N 上 --opt=all == --opt=none 逐字节；opt::run 每 pass 后 verify（SSA-5 硬要求）；opt_config/fold/dce/copy/cse 共 32 条"
+  },
+  "SSA-6": {
+   "name": "memory 模型",
+   "status": "pass",
+   "definition": "同根保序 / 异根不串 / 堆根全序 / 全局跨函数",
+   "test_ids": [
+    "T-SSA-07",
+    "T-SSA-25",
+    "T-SSA-36",
+    "T-SSA-49"
+   ],
+   "evidence": "V6 反例（verify_negative）+ 写穿同根保序（ssa_build 写穿之后读同一个槽走同一条_mem_链）+ 全局跨函数（ssa_run 全局变量与初始化顺序）+ 切片共享底层数组 + 数组元素写"
+  },
+  "SSA-7": {
+   "name": "不支持面",
+   "status": "pass",
+   "definition": "9 条各一码：6 条直接 fixture（码 + 退出码 1）+ 3 条够不着的守卫测试（R-31-2）",
+   "test_ids": [
+    "T-SSA-33",
+    "T-SSA-38"
+   ],
+   "evidence": "9 码：6 条直接 fixture（码 + 退出码 1）+ 3 条守卫（R-31-2，本前端够不着）；ssa_reject.rs 12 条；DiagCode 仍 103（category 测试）"
+  },
+  "SSA-8": {
+   "name": "活跃性与协议",
+   "status": "pass",
+   "definition": "值级活跃正确（含回边）+ 协议自描述 + 消费方桩",
+   "test_ids": [
+    "T-SSA-55",
+    "T-SSA-56",
+    "T-SSA-57",
+    "T-SSA-58",
+    "T-SSA-59"
+   ],
+   "evidence": "live.rs 6 条（直线/分支/循环手算对照 + 协议自洽 + 根闭包 + 确定性）；live_consumer：46 文件 / 140 函数 / 678 safepoint / 48 个有存活指针"
+  },
+  "SSA-9": {
+   "name": "回归与收口",
+   "status": "pass",
+   "definition": "四条 cargo + 五条自检 + M5 零回归 + 文档；构建预算（T-SSA-41）**未实现**，由 G-M6-01 点名",
+   "test_ids": [
+    "T-SSA-41",
+    "T-SSA-42",
+    "T-SSA-43",
+    "T-SSA-44",
+    "T-SSA-45"
+   ],
+   "evidence": "四条 cargo 全 0（fmt/check/clippy/test）；176 suite / 1858 passed / 0 failed / 1 ignored（≥ M5 的 1608）；M5 语料 69/69；corpus-manifest.sha256 15618/15618 OK"
+  }
+ },
+ "test_ids": [
+  {
+   "id": "T-SSA-01",
+   "name": "指令/终止符穷尽",
+   "gate": "SSA-1",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-02",
+   "name": "V1 单一定义",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-03",
+   "name": "V2 支配",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-04",
+   "name": "V3 类型一致",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-05",
+   "name": "V4 CFG 互逆",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-06",
+   "name": "V5 调用结果数",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-07",
+   "name": "V6 mem 支配与同块序",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-08",
+   "name": "V7 块参数计数",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-09",
+   "name": "V8 可达性",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-10",
+   "name": "V9 取址即建根",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-11",
+   "name": "合法图全过",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-12",
+   "name": "拒绝可定位",
+   "gate": "SSA-2",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-13",
+   "name": "dump 确定性",
+   "gate": "SSA-1",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-14",
+   "name": "C10 格式符合",
+   "gate": "SSA-1",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-15",
+   "name": "直线函数",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-16",
+   "name": "if/else 汇合",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-17",
+   "name": "for 三形态",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-18",
+   "name": "switch",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-19",
+   "name": "goto 与 labeled",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-20",
+   "name": "多返回值接收",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-21",
+   "name": "return f() 直连",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-22",
+   "name": "g(f()) 实参直连",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-23",
+   "name": "调用与 effect",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-24",
+   "name": "复合字面量",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-25",
+   "name": "指针与写穿",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-26",
+   "name": "slot 提升正例",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-27",
+   "name": "slot 提升反例",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-28",
+   "name": "并行拷贝",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-29",
+   "name": "变参调用",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-30",
+   "name": "静态方法调用",
+   "gate": "SSA-3",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-31",
+   "name": "切片分类两向",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-32",
+   "name": "三方差分",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-33",
+   "name": "拒绝面每行有 fixture",
+   "gate": "SSA-7",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-34",
+   "name": "纯函数/输出",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-35",
+   "name": "循环与数组",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-36",
+   "name": "指针写穿语料",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-37",
+   "name": "复合字面量语料",
+   "gate": "SSA-4",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-38",
+   "name": "ssa --dump/--verify 通道",
+   "gate": "SSA-7",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-39",
+   "name": "run 默认行为不变",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-40",
+   "name": "步数上限",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-41",
+   "name": "构建预算",
+   "gate": "（装置/支撑）",
+   "verdict": "missing",
+   "note": "构建预算（1e5 指令）**未实现**：设计稿有判据、计划里没有对应 Task；见 G-M6-01"
+  },
+  {
+   "id": "T-SSA-42",
+   "name": "四条 cargo + 五条自检",
+   "gate": "SSA-9",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-43",
+   "name": "M5 切片零回归",
+   "gate": "SSA-9",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-44",
+   "name": "manifest 对账",
+   "gate": "SSA-9",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-45",
+   "name": "语料只读",
+   "gate": "SSA-9",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-46",
+   "name": "dump 契约自洽",
+   "gate": "SSA-1",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-47",
+   "name": "变异：删 V7 计数检查",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-48",
+   "name": "变异：支配短路",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-49",
+   "name": "变异：Store 不串 mem",
+   "gate": "SSA-6",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-50",
+   "name": "变异：调用只取第一个结果",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-51",
+   "name": "变异：CSE 跨块",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-52",
+   "name": "变异：块参数顺序赋值",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-53",
+   "name": "变异：分类器算进能建图",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-54",
+   "name": "变异：dump 哈希序",
+   "gate": "（装置/支撑）",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-55",
+   "name": "值级活跃性",
+   "gate": "SSA-8",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-56",
+   "name": "SSA-LIVE v1 字段自洽",
+   "gate": "SSA-8",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-57",
+   "name": "消费方桩",
+   "gate": "SSA-8",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-58",
+   "name": "派生指针保守策略",
+   "gate": "SSA-8",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-59",
+   "name": "协议确定性",
+   "gate": "SSA-8",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-60",
+   "name": "fold 语义保持",
+   "gate": "SSA-5",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-61",
+   "name": "dce 语义保持",
+   "gate": "SSA-5",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-62",
+   "name": "copy 语义保持",
+   "gate": "SSA-5",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-63",
+   "name": "cse 块内语义保持",
+   "gate": "SSA-5",
+   "verdict": "pass"
+  },
+  {
+   "id": "T-SSA-64",
+   "name": "A/B 与 verifier",
+   "gate": "SSA-5",
+   "verdict": "pass"
+  }
+ ],
+ "unsupported": [
+  {
+   "id": "U-M6-01",
+   "item": "闭包（捕获跨帧写）",
+   "why": "Func.captured 非空 ⇒ 帧槽与外层 Cell 别名，SSA 的值唯一定义不成立",
+   "positive_evidence": "T-SSA-33 的闭包 fixture（SSA-UNSUPPORTED-CLOSURE）；语料 closure*.go 在 M 里",
+   "phase": "M8"
+  },
+  {
+   "id": "U-M6-02",
+   "item": "defer / recover",
+   "why": "延迟调用链是运行期结构，不是 SSA 值",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-DEFER）；T-EX-34..37 的 fixture",
+   "phase": "M8"
+  },
+  {
+   "id": "U-M6-03",
+   "item": "接口动态派发 / type switch",
+   "why": "目标函数运行期才定，CalleeRef 不做间接动态派发",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-IFACE-DYN）",
+   "phase": "M8"
+  },
+  {
+   "id": "U-M6-04",
+   "item": "map 读写",
+   "why": "键相等是宿主语义（C9 的 go_eq），memory 根无法覆盖",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-MAP）",
+   "phase": "M9"
+  },
+  {
+   "id": "U-M6-05",
+   "item": "chan / go / select",
+   "why": "并发语义整体不做",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-CHAN）；U-M5-01",
+   "phase": "M8"
+  },
+  {
+   "id": "U-M6-06",
+   "item": "range over func",
+   "why": "HIR 层已拒（U-M5-06），SSA 见不到",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-RANGE-FUNC）；range4.go 在 M 里",
+   "phase": "M8d"
+  },
+  {
+   "id": "U-M6-07",
+   "item": "泛型实例化后的形态",
+   "why": "检查器没放进来（G-M5-03），M6 无输入",
+   "positive_evidence": "T-SSA-33（SSA-UNSUPPORTED-GENERIC）",
+   "phase": "检查器面"
+  },
+  {
+   "id": "U-M6-08",
+   "item": "函数值（函数字面量当值 / 具名函数当值 / 方法值）",
+   "why": "IR 里没有「把函数变成值」的指令（R-31-1）",
+   "positive_evidence": "T-SSA-33 的 funcvalue fixture（SSA-UNSUPPORTED-FUNC-VALUE）",
+   "phase": "M8"
+  },
+  {
+   "id": "U-M6-09",
+   "item": "range over string",
+   "why": "要按 rune 解码，指令集里没有对应操作（R-31-1）",
+   "positive_evidence": "T-SSA-33 的 range-str fixture（SSA-UNSUPPORTED-RANGE-STR）",
+   "phase": "M7"
+  }
+ ],
+ "coverage": {
+  "note": "roadmap §M6 十句逐项映射见 M6-tests.md §2.1；六个子阶段见 §2.2；manifest_m6.rs 对账「无孤儿 ID」「无野 ID」",
+  "matrix_rows": 10,
+  "test_ids_total": 64,
+  "unsupported_total": 7,
+  "legs": {
+   "甲": 14,
+   "乙": 16,
+   "丙": 7,
+   "丁": 9,
+   "反": 8,
+   "戊": 5,
+   "己": 5
+  },
+  "revisions": [
+   {
+    "id": "R-12-1",
+    "what": "verify 签名加 &TypeTable",
+    "why": "V3 要解析真实类型；类型表是包级的"
+   },
+   {
+    "id": "R-12-2",
+    "what": "V2 不查 mem，归 V6",
+    "why": "否则 V6 的 ① 不可达"
+   },
+   {
+    "id": "R-13-1",
+    "what": "签名存 SsaFunc::call_sigs（ir::Sig）",
+    "why": "SsaFunc 自足"
+   },
+   {
+    "id": "R-16-1",
+    "what": "dump 的 load/store 带 mem 令牌 + 可选写 _ + Effect 不进 dump",
+    "why": "C10 骨架漏了 mem 字段"
+   }
+  ]
+ },
+ "budget": {
+  "effort_calendar": {
+   "start": "2026-10-23",
+   "max_calendar_weeks": 12,
+   "note": "roadmap §6.1 的折算口径；本仓按任务数（Task 1–53），不换算人周"
+  },
+  "resource_limits": {
+   "steps": 100000000,
+   "build_instrs_per_func": 100000,
+   "wall_clock_sec": 10
+  },
+  "batch_budget": {
+   "smoke": "<=5min",
+   "milestone": "<=30min",
+   "full": "<=2h"
+  },
+  "measured": null
+ },
+ "open_gaps": [
+  {
+   "id": "G-M6-01",
+   "gate": "SSA-9",
+   "test_id": "T-SSA-41",
+   "what": "构建预算（超 1e5 指令的函数 ⇒ 构建期拒绝）**没有实现**",
+   "why": "设计稿 §4 有判据，但计划里没有对应 Task（Task 51–53 是文档与回归）；语料最大函数远小于 1e5，跑起来不暴露",
+   "owner": "M7（与寄存器分配的规模上限一起做）"
+  },
+  {
+   "id": "G-M6-02",
+   "gate": "SSA-8",
+   "test_id": "T-SSA-58",
+   "what": "派生指针只做**根级**保守闭包，不做对象级（`&s.n` 活 ⇒ 整块 `s` 活）",
+   "why": "对象级要 M9 的对象模型（`D-M6-10` 明确把逃逸分析划给 M9）",
+   "owner": "M9"
+  },
+  {
+   "id": "G-M6-03",
+   "gate": "SSA-8",
+   "test_id": "T-SSA-56",
+   "what": "协议 `ptrs` 只含 `*T`：切片 / map 的底层存储不在 live 协议里",
+   "why": "切片与 map 的对象表示属于 M9；现在把它们塞进 `ptrs` 是假承诺（没有回收语义）",
+   "owner": "M9"
+  },
+  {
+   "id": "G-M6-04",
+   "gate": "SSA-5",
+   "test_id": "T-SSA-63",
+   "what": "CSE 只在**块内**；不做跨块（可用表达式）与循环优化（LICM）",
+   "why": "roadmap 明确「复杂优化延期」；跨块要支配树 + 可用表达式，属 M7",
+   "owner": "M7"
+  },
+  {
+   "id": "G-M6-05",
+   "gate": "SSA-7",
+   "test_id": "T-SSA-33",
+   "what": "9 条白名单（闭包 / defer / 接口动态派发 / map / chan / 泛型 / range-func / 函数值 / range-str）全部拒",
+   "why": "各自要 M7–M9 的运行时设施；拒绝是**显式**的（码 + 退出码 1），不是静默不支持",
+   "owner": "M7–M9"
+  },
+  {
+   "id": "G-M6-06",
+   "gate": "SSA-3",
+   "test_id": "T-SSA-23",
+   "what": "`ssa_exec` 对 `CalleeRef::Indirect`（函数值调用）运行期报错",
+   "why": "函数值本身已白名单拒绝，间接调用只可能来自手搓 IR；M8 的 goroutine/闭包会需要它",
+   "owner": "M8"
+  }
+ ],
+ "phase_summary": {
+  "tasks": 53,
+  "gates": 9,
+  "status": "done",
+  "note": "九条门禁全 pass；open_gaps 6 条（均为 M7–M9 的已知边界，不是失败）；Task 53 全量回归后翻 done"
+ },
+ "test_ids_total": 64,
+ "closed_gaps": [
+  {
+   "id": "G-M6-07",
+   "what": "`Program::init_order` 没进 SSA（`var g = f()` 的右侧只有解释器跑）",
+   "closed_by": "Task 32b（`R-32-1`）：合成 `init` 函数 + `Module::init`"
+  },
+  {
+   "id": "G-M6-08",
+   "what": "`&&` / `||` 建成一条 `Bin`（两侧都求值，副作用多做一次）",
+   "closed_by": "Task 33b（`R-33-2`）：改成控制流，`join_into` 加 `lead` 参数"
+  }
+ ],
+ "measured": {
+  "workspace_suites": 176,
+  "workspace_tests": 1859,
+  "workspace_failed": 0,
+  "workspace_ignored": 1,
+  "m5_baseline_tests": 1608,
+  "corpus_buildable": 46,
+  "corpus_rejected": 23,
+  "corpus_total": 69,
+  "three_way_green": 46,
+  "three_way_skipped": 23,
+  "three_way_red": 0,
+  "live_safepoints": 678,
+  "live_functions": 140,
+  "mutations_red": 66,
+  "diag_codes": 103,
+  "corpus_sha_ok": "15618/15618",
+  "self_checks": "5/5（m0 232 条 / m1 / lex-golden 151 / ast-golden / ast-testdata / ast-stdlib）",
+  "collide_forms": "--run 69 绿 / --three-way 69 绿 / --ssa 46 绿 23 跳过 0 红 / --ssa --three-way 同上"
+ },
+ "retired_codes": [
+  {
+   "code": "SSA-UNSUPPORTED-IFACE-DYN",
+   "retired_by": "M9/Phase 3b",
+   "revision": "R-9-14",
+   "why": "方法表 + 静态 ITab（Task 28）+ `Instr::TypeAssert`（Task 33）+ `switch x.(type)` 的断言链下降（Task 34）都实现了 ⇒ 这个码再没有生产者。纪律是「不留永远不产出的码」：`SsaCode::ALL` 从 8 条收到 7 条，`ssa_reject::t_ssa_33_接口动态派发` 反转成「能建图 + 该码不出现」。"
+  },
+  {
+   "code": "SSA-UNSUPPORTED-CLOSURE",
+   "retired_by": "M9/Phase 4b",
+   "revision": "R-9-16",
+   "why": "闭包实现了（捕获按引用：funcval 存**指向变量存储的指针**，`R-9-15`）⇒ `unsupported()` 里那条 `Func.captured` 非空的拒绝再没有生产者。`SsaCode::ALL` 7 → 6。"
+  }
+ ]
 }

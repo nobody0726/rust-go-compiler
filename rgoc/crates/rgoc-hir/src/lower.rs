@@ -2756,18 +2756,14 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             }
             // 字段里的函数值：`x.f()`
             if let Some(path) = self.find_field(base_typ, &se.sel.value) {
-                let mut e = self.lower_expr(&se.x);
-                let typ = self.type_of(&se.x);
-                for i in path {
-                    e = Expr::new(
-                        ExprKind::Field {
-                            base: Box::new(e),
-                            index: i,
-                        },
-                        typ,
-                    );
-                }
-                return Callee::Value(Box::new(e));
+                // ⚠️ 每个 `Field` 节点的静态类型是**该字段自己的类型**，不是底座的
+                // 类型。写成 `type_of(&se.x)` 会让 `tt.fn` 的节点类型变成 `T`：
+                // 于是 SSA 的 `load` 用 `T` 去读一个 `func()` 字段，`Callee::Value`
+                // 的 `func_sig_of_ty(T)` 落空，退回「一个结果、类型 = 调用表达式的
+                // 类型」—— 而 0 结果调用的表达式类型是 `invalid`，最后炸在帧布局上
+                // （`nilptr2.go`：`v10 的类型 t35 没有运行期布局`）。
+                // 逐跳取类型与 `field_chain` / `recv_expr_path` 同口径。
+                return Callee::Value(Box::new(self.field_chain(&se.x, &path)));
             }
             // 包级函数
             if let Some(fid) = self.funcs_by_name.get(&se.sel.value) {

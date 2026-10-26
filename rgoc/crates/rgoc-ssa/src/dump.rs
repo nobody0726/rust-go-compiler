@@ -226,6 +226,8 @@ fn render_instr(i: &Instr) -> String {
         Instr::CapturePtr { dst, index } => format!("{} = capture#{index}", v(*dst)),
         // `C10` §3（M9/Phase 5 追加）：`defer v3`
         Instr::Defer { fv } => format!("defer {}", v(*fv)),
+        // `C10` §3（M9/Phase 5c 追加）：`nil-check v3`
+        Instr::NilCheck { addr } => format!("nil-check {}", v(*addr)),
         // `C10` §3（M9/Task 33 追加）：`v3 = assert v1 : t5` / `v3, v4 = assert v1 : t5`
         Instr::TypeAssert { dst, ok, x, typ } => match ok {
             Some(o) => format!("{}, {} = assert {} : {}", v(*dst), v(*o), v(*x), t(*typ)),
