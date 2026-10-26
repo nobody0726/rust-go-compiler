@@ -12,8 +12,9 @@
 ## 当前状态（2026-10-26）
 - **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**（M9 尾巴已清：`open_gaps` 0 / `closed_gaps` 4）
 - **M10（精确 STW GC）进行中**：三件套已出并拍板（块头 16 B / 逐位点 `sp_idx` / map 进托管堆）。
-  **Phase 0 收口**（Task 1–5）：`C12` 草案 + `C5`/`C9` 修订 + 统计行骨架 + 探针装置 + 三态入口。
-  读数 **228 suite / 2199 passed / 0 failed / 2 ignored**；语料 69/0/0；三态各 69/0/0
+  **Phase 0 收口**（Task 1–5）+ **Phase 1 前半**（Task 6–9：chunk 对齐 / 位图 / 16 字节块头 /
+  三种托管分配入口）。读数 **229 suite / 2205 passed / 0 failed / 2 ignored**；语料 69/0/0；
+  三态各 69/0/0。下一步 = Task 10–13（free list / 标记 / 清扫 / `rt_gc` + 全局根）
 - M9 终态读数：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**）；2184 passed
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
@@ -35,6 +36,14 @@
 - ⚠️ **`mapslots` 块自带 `{kdesc,vdesc}` 头**（`R-10-1`）：扫它不必回头找 `MapObj`
 - ⚠️ **`gcdata`/`ptrdata` 一致性**：`ptrdata > 0 ⇒ gcdata 非 null`。已知违反点
   `g_panic_str_desc`（Task 24 要改）
+- ⚠️ **`CHUNK_HDR`(64) ≠ `BLK_HDR`(16)**：`bump` 起点是 **64**。写成 16 会让第一个块
+  覆盖自己的 chunk 头（`meta_bm` 变 0）⇒ 第一次分配正常、**第二次**段错误。
+  `_Static_assert(sizeof(Chunk) == CHUNK_HDR)` 钉住
+- ⚠️ **arena 分配也带 16 字节块头**（kind = `K_ARENA` = 5，永不回收/不扫）：
+  不给头的话 sweep 按位图走会把它当空闲塞进 free list，复用就覆盖 itab（`R-10-6`）
+- ⚠️ **`array` 的 `n` 用 cap 不是 len**（`R-10-7`）：`s = s[:cap]` 之后的元素可写指针
+- ⚠️ **字符串字面量拼接会被编译期折叠**（`g := "a"+"b"` 不调 `rt_strcat`）——
+  要测 raw 分配必须放进函数（形参折不了）
 
 ## 跨阶段硬事实（会反复踩）
 - ⚠️ **「变异绿」两种成因**：① 判据缺形态；② **探针打错靶**（用例集不走那段代码）。先分辨再改
