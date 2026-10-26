@@ -11,11 +11,11 @@
 
 ## 当前状态（2026-10-26）
 - **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**（M9 尾巴已清：`open_gaps` 0 / `closed_gaps` 4）
-- **M10（精确 STW GC）已拍板开工**：块头 16 B / 逐位点 `sp_idx` / map 进托管堆。
-  三件套 `docs/milestones/M10-{design,tests,plan}.md`（`D-M10-1..15` / `GC-1..9` / Task 1–45）
-- M9 终态读数：native 语料 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**）；
-  225 suite / 2184 passed / 0 failed / 1 ignored；变异 12/12 全红
-- M6 收口：语料 N=46 / M=23 冻结；176 suite / 1859 passed；66 变异全红
+- **M10（精确 STW GC）进行中**：三件套已出并拍板（块头 16 B / 逐位点 `sp_idx` / map 进托管堆）。
+  **Phase 0 收口**（Task 1–5）：`C12` 草案 + `C5`/`C9` 修订 + 统计行骨架 + 探针装置 + 三态入口。
+  读数 **228 suite / 2199 passed / 0 failed / 2 ignored**；语料 69/0/0；三态各 69/0/0
+- M9 终态读数：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**）；2184 passed
+- M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
 ## M10 硬约束（先记住再动手）
 - 托管堆与 arena 分离（`rt_arena_alloc` 只留不含堆指针的结构）
@@ -27,11 +27,21 @@
 - 根协议源头：`Safepoint.ptr_words` 来自 `rgoc_types::layout::ptr_mask`（与 `TypeDesc.gcdata` 同函数）；
   回边 safepoint 用 `dom::DomTree` 判「目标支配本块」
 - `STACK-MAP v1`：`sp b<block>:<idx> off=<字下标> live=<n> ptrs=<hex>`；bit i ↔ `fp - frame_size + 8i`
+- **统计行语法冻结**（`C12` §5.2，12 字段）：`gc: collections= allocs= frees= live= heap= chunks= rss= kinds=<5 个逗号> bad_sp= bad_ptr= bad_desc= mode=<on|off|stress>`。
+  全字段**总是出现**（`R-10-2`）；`mode` 是 `R-10-3` 追加的**装置判据**
+- ⚠️ **`R-10-4`：DCE 不许删 `Instr::Make`**（`new`/`make` 有分配副作用）。
+  修之前 `gc1.go` 的 1e5 次 `new([100]byte)` 在 `--opt=all` 下被全删（`heap=0`）
+  ⇒ **stress 态退化成空跑**。CSE 早就正确排除了 `Make`，只有 DCE 漏了
+- ⚠️ **`mapslots` 块自带 `{kdesc,vdesc}` 头**（`R-10-1`）：扫它不必回头找 `MapObj`
+- ⚠️ **`gcdata`/`ptrdata` 一致性**：`ptrdata > 0 ⇒ gcdata 非 null`。已知违反点
+  `g_panic_str_desc`（Task 24 要改）
 
 ## 跨阶段硬事实（会反复踩）
 - ⚠️ **「变异绿」两种成因**：① 判据缺形态；② **探针打错靶**（用例集不走那段代码）。先分辨再改
 - ⚠️ **「记一笔 open_gap」不等于收口**；⚠️ **`manifest.measured` 是自报不是证据**（fmt 红过而 test 全绿）
 - ⚠️ **变异恢复源码后必须 `touch`**：`mv` 保留旧 mtime ⇒ cargo 复用变异版 rlib（单跑绿、全量红）
+- ⚠️ **变异恢复不能用 `git checkout`**：未提交的改动会被一起丢掉（Phase 0 踩过一次，
+  Task 3 的 `rt.c` 三处编辑全丢）。要么先提交、要么用「原文副本」（M9 的 `.m9bak`）
 - ⚠️ **变异前 `cargo clean -p <crate>`**；绑定挂载上 mtime 判据不可靠
 - ⚠️ **每次 `in-container.sh` 是新容器**：上一步 `/tmp/x` 下一步就没了（像莫名 rc=127）
 - ⚠️ **别拿 `| tail` 当全绿**：`--no-fail-fast` 要遍历所有 failures 区块，计数自己 `awk` 算
