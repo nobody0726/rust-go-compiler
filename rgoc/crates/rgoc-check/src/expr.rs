@@ -1114,6 +1114,35 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Expr::FuncType(ft) => self.func_type_expr(file, ft),
             // `...T` 单独出现只在参数表里，落到这里说明上下文不对。
             Expr::DotsType(d) => self.type_expr(file, &d.elem),
+            // `unsafe.Pointer`（M9 收口补，`G-M9-01` / `R-9-41`）。
+            //
+            // # 为什么必须在这里补
+            //
+            // 类型表达式 → `TypeId` 在本仓有**两份**实现：装载面的
+            // `rgoc-load::typeexpr::resolve_type`（填 `Decl` 的类型）与本函数
+            // （HIR lowering 的 `type_expr_of` 用它填 `param_types` /
+            // `result_types` / 局部变量）。只有前者认 `unsafe.Pointer`，于是
+            // 同一个 `unsafe.Pointer` 在**声明位置**有真类型、在**函数签名里**
+            // 是 `invalid` —— 症状是 `f := idp(p); f != nil` 报
+            // `V3: bin Ne 的两个操作数类型不同：invalid vs unsafe.Pointer`，
+            // 而报点离病灶（签名 lowering）隔了整条后端。
+            //
+            // # 为什么**不**在这里顺手做 `pkg.T`
+            //
+            // 那要走 `crate::imports::select`，而它会**上报诊断**
+            // （`TypUndeclaredImportedName` / `TypUnexportedName`）。本函数在
+            // 检查结束后还会被 lowering 调一次 ⇒ 同一个错误会报两遍。跨包类型名
+            // 仍是 M3 的遗留（`lib.T`），有独立的追踪项，不在这里捎带。
+            //
+            // 不看 `import "unsafe"`：与装载面**同口径**（那边也只看限定名，
+            // 理由见 `typeexpr.rs` 的注释 —— 限定名本来就被静默降级成
+            // `invalid`，认下来不比现状差，而 `unsafe.Sizeof(p)` 需要真类型）。
+            Expr::Selector(s)
+                if matches!(&*s.x, Expr::Name(n) if n.value == crate::unsafe_pkg::PKG_NAME)
+                    && s.sel.value == "Pointer" =>
+            {
+                Some(self.s.tt.add_basic(BasicId::UnsafePointer))
+            }
             _ => None,
         }
     }
