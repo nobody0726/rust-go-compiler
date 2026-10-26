@@ -43,6 +43,10 @@ pub struct FnBuilder {
     ptrs: BTreeMap<TypeId, TypeId>,
     /// `(len, elem) → [len]elem`（`array_of` 的缓存）。
     arrays: BTreeMap<(i64, TypeId), TypeId>,
+    /// `elem → []elem`（`slice_of` 的缓存）。
+    slices: BTreeMap<TypeId, TypeId>,
+    /// 空接口（`empty_iface` 的缓存）。
+    iface: Option<TypeId>,
 }
 
 impl FnBuilder {
@@ -61,6 +65,8 @@ impl FnBuilder {
             slot_types: BTreeMap::new(),
             ptrs: BTreeMap::new(),
             arrays: BTreeMap::new(),
+            slices: BTreeMap::new(),
+            iface: None,
         }
     }
 
@@ -83,6 +89,8 @@ impl FnBuilder {
             slot_types: BTreeMap::new(),
             ptrs: BTreeMap::new(),
             arrays: BTreeMap::new(),
+            slices: BTreeMap::new(),
+            iface: None,
         }
     }
 
@@ -140,6 +148,36 @@ impl FnBuilder {
         }
         let id = self.tt.add_pointer(elem);
         self.ptrs.insert(elem, id);
+        id
+    }
+
+    /// 取一个切片类型 `[]elem`（同一个 `elem` 复用同一个 `TypeId`）。
+    ///
+    /// 成立理由与 `ptr_to` 相同：根协议的「字粒度」判据（`T-ROOT-05`）要区分
+    /// 「整个值是根」与「值的第 0 个字是根」，切片正是那个反例 ——
+    /// `[]T` 的静态类型不是 `*T`，但它的字 0 指向堆。
+    pub fn slice_of(&mut self, elem: TypeId) -> TypeId {
+        if let Some(&id) = self.slices.get(&elem) {
+            return id;
+        }
+        let id = self.tt.add_slice(elem);
+        self.slices.insert(elem, id);
+        id
+    }
+
+    /// 取一个**空接口** `any`（`interface{}`）。
+    ///
+    /// `iface` 的两个字都是根（字 0 = tab、字 1 = data），是「一个字粒度不够」
+    /// 的第二个反例（`T-ROOT-05`）。
+    pub fn empty_iface(&mut self) -> TypeId {
+        if let Some(id) = self.iface {
+            return id;
+        }
+        let iid = self
+            .tt
+            .add_interface(Vec::new(), None, rgoc_types::IfaceTSet::All);
+        let id = self.tt.interface_type(iid);
+        self.iface = Some(id);
         id
     }
 

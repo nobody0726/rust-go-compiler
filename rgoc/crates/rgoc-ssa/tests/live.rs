@@ -430,16 +430,21 @@ fn t_ssa_56_协议字段自洽() {
     for v in ptrs {
         assert!(live_vs.contains(v), "ptrs 里的 v{v} 不在 live 里：{text}");
     }
-    // ③ `ptrs` 里的值类型都是指针
+    // ③ `ptrs` 里的值都**至少有一个根字**。
+    //
+    // M9/Phase 6 之前这里判的是「类型是 `*T`」。`RM-2` 之后粒度到字
+    // （`R-9-31`）：`[]T` / `string` / `interface` / 含指针的聚合都是根，
+    // 判据改为查 `ptr_mask` —— 与栈图的位图**同一个来源**。
     for v in ptrs {
         let t = f.value_types[*v as usize];
         assert!(
-            matches!(tt.type_of(rgoc_types::underlying(&tt, t)), Type::Pointer(_)),
-            "v{v} 的类型 {:?} 不是指针：{text}",
+            rgoc_types::layout::ptr_mask(&tt, t)
+                .is_some_and(|m| m.iter().any(|b| *b)),
+            "v{v} 的类型 {:?} 一个根字都没有：{text}",
             tt.type_of(t)
         );
     }
-    assert_eq!(ptrs, &vec![2], "只有 v2（`addr-of`）是指针；v1 是 mem 令牌");
+    assert_eq!(ptrs, &vec![2], "只有 v2（`addr-of`）是根；v1 是 mem 令牌");
     // ④ 区间自洽：def ≤ last，且 def 落在本块范围内
     for (v, def, last) in &ivs {
         assert!(def <= last, "v{v} 的区间反了：{def:?}..{last:?}\n{text}");
@@ -693,4 +698,118 @@ fn r_11_1_只在_goto_边实参里用的值也算活着() {
         "边实参里的 v1 也要活着：{:?}",
         sp.live
     );
+}
+
+// ── T-ROOT-05：位图粒度到「字」（M9/Phase 6，`ROOT-1`）────────────────
+
+/// 三个「字粒度与值粒度不同」的活值，跨过同一个调用。
+///
+/// - `s []int`：三个字，**只有字 0** 是根（`len`/`cap` 是整数）
+/// - `str string`：两个字，**只有字 0** 是根
+/// - `x any`：两个字，**两个字都是根**（tab + data）
+///
+/// 手写 IR 的理由与文件头相同：这三个形态的「应该是几位」是 `C5` §10 的
+/// 契约值，让构建器生成就等于拿它的输出当标准答案。
+fn grain_fixture() -> (SsaFunc, TypeTable, ValueId, ValueId, ValueId) {
+    let mut fb = FnBuilder::new("g");
+    let int = fb.basic("int");
+    let string = fb.basic("string");
+    let slice = fb.slice_of(int);
+    let any = fb.empty_iface();
+    let e = fb.entry();
+    let vs = fb.value(slice);
+    let vn = konst(&mut fb, e, ConstVal::Int(0), int);
+    let vstr = konst(&mut fb, e, ConstVal::Str("x".to_string()), string);
+    let vi = fb.value(int);
+    let vx = fb.value(any);
+    fb.instr(
+        e,
+        Instr::Make {
+            dst: vs,
+            typ: slice,
+            len: Some(vn),
+            cap: Some(vn),
+        },
+    );
+    fb.term(e, Term::Return(Vec::new()));
+    // 上面那条 `Make` 也是 safepoint，但它不读任何东西 ⇒ 活集为空。
+    // 真正要断言的是**下一个** safepoint。
+    let (mut f, tt) = fb.into_parts();
+    // 把调用追加进同一个块（`term` 之后不能再加指令，所以重建）
+    f.blocks[0].term = Term::Unreachable;
+    f.blocks[0].instrs.push(Instr::Const {
+        dst: vi,
+        c: ConstVal::Int(1),
+        typ: int,
+    });
+    f.blocks[0].instrs.push(Instr::Convert {
+        dst: vx,
+        x: vi,
+        typ: any,
+    });
+    f.blocks[0].instrs.push(Instr::Call {
+        dsts: Vec::new(),
+        callee: CalleeRef::Builtin(BuiltinKind::Println),
+        args: vec![vs, vstr, vx],
+        dots: false,
+        effect: Effect::default(),
+    });
+    f.blocks[0].term = Term::Return(Vec::new());
+    let _ = vstr;
+    (f, tt, vs, vstr, vx)
+}
+
+/// 某个值在 `ptr_words` 里的字下标（升序）。
+fn words_of(sp: &live::Safepoint, v: ValueId) -> Vec<u8> {
+    sp.ptr_words
+        .iter()
+        .filter(|(x, _)| *x == v)
+        .map(|(_, w)| *w)
+        .collect()
+}
+
+#[test]
+fn t_root_05_位图粒度到字() {
+    let (f, tt, vs, vstr, vx) = grain_fixture();
+    let l = analyze(&f, &tt);
+    // 读三个值的那条调用。
+    //
+    // ⚠️ 不能按「live 有 3 个」找：`Make` 也是 safepoint，它的活集里正好有
+    // `len` / `cap` 与刚被它盖掉之前的切片值。按**只有调用才读的那个值**找。
+    let sp = l
+        .safepoints
+        .iter()
+        .find(|s| s.live.contains(&vx))
+        .unwrap_or_else(|| panic!("找不到读 iface 的那个 safepoint：{:?}", l.safepoints));
+    assert_eq!(
+        sp.live,
+        vec![vs, vstr, vx],
+        "live 应是三个值（切片 / string / iface）；value_types={:?}",
+        f.value_types
+    );
+    assert_eq!(
+        words_of(sp, vs),
+        vec![0],
+        "`[]int` 只有字 0 是根（len / cap 是整数）：{:?}",
+        sp.ptr_words
+    );
+    assert_eq!(
+        words_of(sp, vstr),
+        vec![0],
+        "`string` 只有字 0 是根（len 是整数）：{:?}",
+        sp.ptr_words
+    );
+    assert_eq!(
+        words_of(sp, vx),
+        vec![0, 1],
+        "`any` 两个字都是根（tab + data）：{:?}",
+        sp.ptr_words
+    );
+    // 值级投影：三个值都在，且没有第四个
+    assert_eq!(sp.ptrs, vec![vs, vstr, vx], "ptrs 是 ptr_words 的值级投影");
+    // 位序是「值号升序、再字下标升序」—— 这条决定 `STACK-MAP` 的可复现性
+    let keys: Vec<(u32, u8)> = sp.ptr_words.iter().map(|(v, w)| (v.0, *w)).collect();
+    let mut sorted = keys.clone();
+    sorted.sort_unstable();
+    assert_eq!(keys, sorted, "ptr_words 必须已按 (值号, 字下标) 升序");
 }

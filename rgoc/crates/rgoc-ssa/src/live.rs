@@ -47,7 +47,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rgoc_types::{Type, TypeId, TypeTable};
+use rgoc_types::{TypeId, TypeTable};
 
 use crate::cfg::Cfg;
 use crate::ir::{BlockId, Instr, SsaFunc, ValueId};
@@ -109,8 +109,21 @@ pub struct Safepoint {
     pub idx: usize,
     /// 存活的值（**已闭包到根**，见模块头）。
     pub live: Vec<ValueId>,
-    /// `live` 里类型是指针的那些（`ptrs ⊆ live`）。
+    /// `live` 里**至少有一个字是根**的那些（`ptrs ⊆ live`）。
+    ///
+    /// ⚠️ M9/Phase 6 起它的含义从「值是指针类型」放宽成「值含根字」：
+    /// `[]T` / `string` / `interface` / 含指针的聚合都进来了。判据是
+    /// `ptr_mask` 至少一位为真，与栈图（`STACK-MAP`）**同一个来源**。
     pub ptrs: Vec<ValueId>,
+    /// 每个活值里**哪几个字**是根（`(值, 字下标)`，按值号、再按字下标升序）。
+    ///
+    /// 这是 `RM-2` 的修正（`M9-design.md` §3.11）：`ptrs` 只到「值」粒度，
+    /// 而栈扫描器需要「字」粒度 —— `[]int` 的三个字里只有一个是指向堆的根，
+    /// 另外两个是 `len` / `cap`（按根去追会把整数当地址，按值类型判又会漏根）。
+    ///
+    /// 来源是 `rgoc_types::layout::ptr_mask`（与 `TypeDesc.gcdata` 同一个函数），
+    /// **不另写一套**「什么类型算含指针」的判据。
+    pub ptr_words: Vec<(ValueId, u8)>,
 }
 
 /// 一个函数的活跃性结果。
@@ -270,22 +283,38 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
             let closure: BTreeSet<ValueId> = set.iter().map(|v| root_of_of(&root_of, *v)).collect();
             set.extend(closure);
             let live: Vec<ValueId> = set.into_iter().collect();
-            let ptrs: Vec<ValueId> = live
-                .iter()
-                .copied()
-                .filter(|v| {
-                    // mem 令牌是「时间点」而不是对象地址：它的类型确实是 `*T`
-                    // （构建器用 `const 0 : *T` 起头，见 `Fb::mem_of`），
-                    // 但它**不是**一个可以回收的指针。不排掉它，`ptrs` 里会
-                    // 混进一堆常量 0。
-                    !mem_values.contains(v) && is_ptr_ty(tt, f.value_types.get(v.index()).copied())
-                })
-                .collect();
+            // 字粒度（`R-9-31`）：逐值查 `ptr_mask`，把为真的字下标摊平。
+            // `live` 已按值号升序 ⇒ `ptr_words` 天然是「值号、再字下标」升序，
+            // 排序键不需要再排一遍（也就没有第二个排序口径）。
+            let mut ptr_words: Vec<(ValueId, u8)> = Vec::new();
+            for v in &live {
+                // mem 令牌是「时间点」而不是对象地址：它的类型确实是 `*T`
+                // （构建器用 `const 0 : *T` 起头，见 `Fb::mem_of`），
+                // 但它**不是**一个可以回收的指针。不排掉它，位图里会
+                // 混进一堆常量 0。
+                if mem_values.contains(v) {
+                    continue;
+                }
+                let Some(t) = f.value_types.get(v.index()).copied() else {
+                    continue;
+                };
+                for w in root_words(tt, t) {
+                    ptr_words.push((*v, w));
+                }
+            }
+            // `ptrs` 是它的「值级投影」：出现过的值去重，顺序仍按值号。
+            let mut ptrs: Vec<ValueId> = Vec::new();
+            for (v, _) in &ptr_words {
+                if ptrs.last() != Some(v) {
+                    ptrs.push(*v);
+                }
+            }
             safepoints.push(Safepoint {
                 block: b,
                 idx: ii,
                 live,
                 ptrs,
+                ptr_words,
             });
         }
     }
@@ -387,12 +416,26 @@ fn root_of_of(map: &BTreeMap<ValueId, ValueId>, v: ValueId) -> ValueId {
     map.get(&v).copied().unwrap_or(v)
 }
 
-fn is_ptr_ty(tt: &TypeTable, t: Option<TypeId>) -> bool {
-    let Some(t) = t else { return false };
+/// 类型 `t` 的哪些字是根（`T-ROOT-05`）。
+///
+/// # 为什么不再用「值是指针类型」
+///
+/// 那个判据在 `[]T` 上**漏根**（`RM-2`）：切片的静态类型不是 `*T`，但字 0
+/// 指向堆；在 `struct{p *int; n int}` 上又会把 `n` 当根（多标一位，不至于崩，
+/// 但会让位图与 `gcdata` 对不上）。`ptr_mask` 是 `TypeDesc.gcdata` 的**同一个**
+/// 函数（`T-META-04`），两侧因此不可能各按各的理解。
+fn root_words(tt: &TypeTable, t: TypeId) -> Vec<u8> {
     if t.index() >= tt.len() {
-        return false;
+        return Vec::new();
     }
-    matches!(tt.type_of(rgoc_types::underlying(tt, t)), Type::Pointer(_))
+    let Some(mask) = rgoc_types::layout::ptr_mask(tt, t) else {
+        return Vec::new();
+    };
+    mask.iter()
+        .enumerate()
+        .filter(|(_, b)| **b)
+        .map(|(i, _)| u8::try_from(i).unwrap_or(u8::MAX))
+        .collect()
 }
 
 /// 渲染 `SSA-LIVE v1`（逐函数一段；排序键 = 块号 + 指令下标）。
