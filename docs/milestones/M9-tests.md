@@ -70,6 +70,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `T-META-04` | ptrmask 的五个特例 | `string` = `[1,0]`；`slice` = `[1,0,0]`；`iface` = `[1,1]`；`*T` = `[1]`；`struct{a int; b *T}` 按字段偏移 `[0,1]` |
 | `T-META-05` | 类型 hash 稳定且区分 | 同一类型两次算 == 同一个值；`int` vs `int64` vs `[]int` vs `[]int64` 四者互不相同；结构体按字段序（`struct{a,b int}` ≠ `struct{b,a int}`） |
 | `T-META-06` | `elem` 递推 | `[][]int` 的 `elem` == `[]int` 的 desc；`[3]int` 的 `elem` == `int`；`map[string]int` 的 `elem` 是 value 的 desc（与 `key` 分开，见 `T-MAP-01`） |
+| `T-META-07` | `unsafe.Pointer` 作为**类型名** | 出现在形参 / 结果 / 结构体字段 / `var` 位置都必须解析成 `Basic(UnsafePointer)`（8 字节、可比较、`== nil` 成立）；**类型表达式 → `TypeId` 的两份实现口径一致**（`rgoc-load::typeexpr` 与 `rgoc-check::expr::type_expr`）。收口时补（`G-M9-01` / `R-9-41`），判据在 `unsafe_ptr.rs` 两条 |
 
 ### 2.3 `OBJ-1` slice（`S` + `O` + `D`，8 条）
 
@@ -84,7 +85,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `T-SLICE-07` | 越界 panic | `s[3]`（len=3）⇒ 退出 2 + `panic: runtime error: index out of range [3] with length 3` |
 | `T-SLICE-08` | 切片越界 | `s[2:5]`（len=3）⇒ 退出 2 + 与解释器**同文本**（`D` 腿比） |
 
-### 2.4 `OBJ-2` map（`S` + `O` + `D`，9 条）
+### 2.4 `OBJ-2` map（`S` + `O` + `D`，10 条）
 
 | ID | 名称 | 判据要点 |
 |---|---|---|
@@ -97,6 +98,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `T-MAP-07` | 键相等：struct | `struct{a,b int}` 作键，字段序不同算不同的键；`struct{p *int}` 作键按指针比 |
 | `T-MAP-08` | 迭代中删除不产出 | 迭代中 `delete` 一个**尚未访问**的键 ⇒ 它不产出；已访问过的不影响（`D` 腿 + 计数） |
 | `T-MAP-09` | 迭代顺序不承诺 | 同一 map 两次 `range` 的顺序**允许不同**（判据：只断言「键集合相同、次数相同」，**不断言顺序**） |
+| `T-MAP-10` | 删除不切断探测链 | 两个**哈希同桶**的键（`0` 与 `8`，`cap = 8` 时桶都是 5）：先插 `0`、再插 `8`（落到 6 号），删 `0` 之后 `m[8]` 仍查得到。`rt_map_del` 若把槽置成 `empty`，探测会在 5 号提前终止 ⇒ `(0, false)`。收口时补（`G-M9-04`）|
 
 ### 2.5 `OBJ-3` iface（`S` + `O` + `D`，10 条）
 
@@ -121,7 +123,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `T-FUNC-02` | 闭包捕获只读 | `f := func() int { return x }`；改 `x` 后 `f()` 看到新值（捕获是**引用**） |
 | `T-FUNC-03` | 闭包写捕获 | `x++` 在闭包里 ⇒ 外层 `x` 变（`D` 腿 + 3 次调用后 `x==3`） |
 | `T-FUNC-04` | 方法值 | `f := t.M`（值接收者）⇒ `f()` 用**捕获时的副本**；`g := p.M`（指针接收者）⇒ 用同一对象 |
-| `T-FUNC-05` | 多个捕获 | 捕获 4 个（含 `string` 与 `*T`）⇒ 每个都读对（防「只搬了第一个」） |
+| `T-FUNC-05` | 多个捕获 | 捕获 4 个（含 `string` 与 `*T`）⇒ 每个都读对（防「只搬了第一个」）。求值器半边 = `ssa_run::t_func_05_四个捕获都要打开`（收口时补，`G-M9-05`）：4 个捕获分别是 `int`/`string`/`int`/`*int`，且创建之后改 `n`/`s` 钉住「按引用」|
 | `T-FUNC-06` | 闭包作参数/返回值 | `apply(f, x)` 与 `mkAdder(n) func(int) int` 都对 |
 | `T-FUNC-07` | 嵌套闭包 | 两层闭包，内层捕获外层的捕获 ⇒ 值正确 |
 | `T-FUNC-08` | funcval 是指针 | `size_of(funcval) == 8`；两个不同的闭包 `!=`（比指针） |
@@ -133,7 +135,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `T-EXC-01` | defer 逆序 | 三个 `defer` ⇒ 输出倒序（`3,2,1`） |
 | `T-EXC-02` | defer 与命名返回值 | `func f() (r int) { defer func(){ r++ }(); return 1 }` ⇒ 返回 2 |
 | `T-EXC-03` | defer 在 panic 中执行 | `defer print("d"); panic(1)` ⇒ 输出 `d` 然后 `panic: 1`、退出 2 |
-| `T-EXC-04` | **逐层展开** | `f`→`g`→`h` 各 defer 一次，`h` 里 panic ⇒ 输出顺序 `h,g,f` 三个 defer 标记，再 `panic`。**少一层 = `V10` 漏注入**（`RM-1` 的牙） |
+| `T-EXC-04` | **逐层展开** | `f`→`g`→`h` 各 defer 一次，`h` 里 panic ⇒ 输出顺序 `h,g,f` 三个 defer 标记，再 `panic`。**少一层 = 漏注入**（`RM-1` 的牙）。native 半边 = `native_isel_cover::t_exc_04_逐层_defer_与_panic_之后调用方不再往下跑`（收口时补，`G-M9-06`）：**每层**调用之后都放一句可观察输出，再由 `main` 的 defer 接住 —— 少查任何一层，那句就漏出来 |
 | `T-EXC-05` | recover 有效 | `defer func(){ recover() }()` + panic ⇒ 退出 **0**，panic 之后的语句不跑，函数正常返回 |
 | `T-EXC-06` | recover 只在 defer 内有效 | 非 defer 里调 `recover()` ⇒ 返回 nil，panic 继续 |
 | `T-EXC-07` | recover 只对同帧有效 | 子函数里 recover 父函数的 panic ⇒ 无效（panic 继续） |
@@ -221,23 +223,29 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 
 ---
 
-## 6. 变异（10 条，每条必须实证变红）
+## 6. 变异（12 条，每条必须实证变红）
 
 | # | 变异 | 命令 | 必须变红的判据 |
 |---|---|---|---|
 | `M-M9-01` | `rt_alloc` 不清零（`need_zero` 恒 false） | `mutation-m9.sh` | `T-MEM-03` |
 | `M-M9-02` | `ptr_mask` 对 `string` 只标 1 位 | 同上 | `T-META-04` |
 | `M-M9-03` | `append` 扩容时不拷旧元素 | 同上 | `T-SLICE-06` |
-| `M-M9-04` | `rt_map_del` 不置 `tomb`（置 `empty`） | 同上 | `T-MAP-08`（tomb 丢了会让探测链断） |
+| `M-M9-04` | `rt_map_del` 不置 `tomb`（置 `empty`） | `mutation-m9.sh` | `T-MAP-10`（tomb 丢了会让探测链断）。⚠️ 收口前这条记的是 `T-MAP-08` 且**实测是绿的** —— 那条判据根本没有「链穿过被删槽」的形态 |
 | `M-M9-05` | 静态 ITab 的 `fn[]` 按字典序而非声明序 | notes | `T-IFACE-02`（方法调到错的那个） |
-| `M-M9-06` | `MakeClosure` 只填第一个捕获 | notes | `T-FUNC-05` |
-| `M-M9-07` | `panic_check` pass 跳过最后一个块 | notes | `T-EXC-04`（最外层没退） |
+| `M-M9-06` | `MakeClosure` 只填第一个捕获 | `mutation-m9.sh` | `T-FUNC-05`（收口前是绿的：求值器侧没有多捕获的闭包） |
+| `M-M9-07` | `check_panic` 不跳本帧出口 | `mutation-m9.sh` | `T-EXC-04`（收口前是绿的：探针打的是语料，而语料里 panic 之后调用方本来就走出口） |
 | `M-M9-08` | `rt_deferrun` 用正序而非逆序 | 同上 | `T-EXC-01` |
 | `M-M9-09` | `ptrs` 退回「值是指针类型」粒度 | notes | `T-ROOT-06`（`RM-2` 的牙） |
 | `M-M9-10` | 回边不产 safepoint | notes | `T-ROOT-04` |
+| `M-M9-11` | `type_expr` 不认 `unsafe.Pointer`（删 `Expr::Selector` 臂） | `mutation-m9.sh` | `T-META-07`（`unsafe_ptr.rs` 两条）。收口时补（`R-9-41`）|
 
-`scripts/mutation-m9.sh` 放**回归代价低**的 4 条（01/02/03/08），其余记
+`scripts/mutation-m9.sh` 放**回归代价低**的 8 条（01/02/03/04/06/07/08/11），其余记
 `scripts/mutation-m9-notes.md`（沿 M7/M8 的做法）。
+
+> **收口时补了四条进脚本**（04/06/07/11）。04/06/07 原来是「笔记里绿的那三条」——
+> 它们绿**不是**因为代码对，而是因为判据缺形态。补判据之后它们才红，于是从
+> 「记录」升级成「回归守卫」。这条经验值得单列：**变异绿先怀疑判据，别怀疑代码**，
+> 但也别停在「记一笔」—— 缺形态就补判据，补完再跑一遍。
 
 ---
 
@@ -246,9 +254,9 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | 门禁 | 判定 | 覆盖它的 ID |
 |---|---|---|
 | `MEM-1` | typed 分配 / 零值 / 对齐 / 超限退 2 | `T-MEM-01..08` |
-| `MEM-2` | 元数据逐类型对撞 | `T-META-01..06` |
+| `MEM-2` | 元数据逐类型对撞 | `T-META-01..07` |
 | `OBJ-1` | slice 全套 | `T-SLICE-01..08` |
-| `OBJ-2` | map 全套 | `T-MAP-01..09` |
+| `OBJ-2` | map 全套 | `T-MAP-01..10` |
 | `OBJ-3` | iface 全套 | `T-IFACE-01..10` |
 | `OBJ-4` | funcval 全套 | `T-FUNC-01..08` |
 | `EXC-1` | 异常与四条检查 | `T-EXC-01..10` |
@@ -260,15 +268,24 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 
 ## 8. 不变式与自检
 
-### 8.1 IR 的三条新不变式（`C4` §10）
+### 8.1 IR 的新不变式：**计划三条，落地零条**（`R-9-42`）
 
-| # | 不变式 | 抓什么 | 牙 |
-|---|---|---|---|
-| `V10` | 每个 `Term` 可达的 `Call` 之后，同一块内必须有 `panicking` 检查 | 漏注入 ⇒ panic 被吞 | `M-M9-07` 必须变红 |
-| `V11` | `Defer.call` 必须是 `Instr::Call` | defer 形状不一 | 变异（可选） |
-| `V12` | `MakeClosure` 的捕获数 == 被调方的 `captured` 数且类型逐个 identical | 捕获错位 | `T-FUNC-05` |
+这一节原写 `V10/V11/V12` 三条（每个 `Call` 后必须有 `panicking` 检查 / `Defer.call`
+形状 / `MakeClosure` 的捕获数）。**落地时一条都不需要** —— `verify.rs` 的
+`INVARIANTS` 仍是 `V1..V9`，逐条都有既有不变式兜住：
 
-**这四条（含 `T-EXC-04`）本身要做变异验证** —— 不变式恒真就等于没有不变式。
+| 计划里的 | 实际由谁查 | 为什么不用新的 |
+|---|---|---|
+| `V10`（`Call` 后必须有 `panicking` 检查） | **不查，也不该查** | 「哪些指令之后要查」是 **ABI 知识**（直接调用 / 方法 / 间接 / 断言 / 越界各不同），不是图的性质。落点改为 `isel::check_panic` 的内联，判据是行为（`T-EXC-04` + `M-M9-07`），不是图 |
+| `V11`（`Defer.call` 必须是 `Instr::Call`） | `typing.rs`（`Defer` 的操作数必须是函数值） | `V3` 的实现就是逐变体的类型校验 —— 写进 `INVARIANTS` 只是同一个检查换个名字 |
+| `V12`（`MakeClosure` 捕获数 == 被调方 `captured` 数） | `typing.rs` 的 `CapturePtr.index` 越界检查 + `T-FUNC-05` 的行为判据 | 同上；而且**捕获顺序**才是真风险（数量对、顺序错），那是行为判据能抓、静态数数抓不到的 |
+
+所以「三条新不变式」是**计划期的误判**（`R-9-38` 已记在 `C4` §10.1）。这一节保留
+下来是为了让后来者看到结论，而不是看到三条不存在的不变式。
+
+> 一条方法论：**写不出判据的不变式不要写**。`V10` 那种「同块内必须有检查」既能被
+> 合法地违反（分支汇合后查一次就够），又抓不到真错（漏查是**行为**错，不是图错）。
+> `M-M9-07` 的牙最终落在 `T-EXC-04` 的三层 fixture 上。
 
 ### 8.2 三条对账（`M9-design.md` §4.3）
 
@@ -327,6 +344,9 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-38` | 2026-10-26 | M9 的 IR 扩展面是 **6 个 `Instr` + 2 个 `CalleeRef` + 4 处数据面**，且**没有** `V10/V11/V12` | `D-M9-5` 预计「净增 3 个」；写下去发现还差 `CapturePtr` / `TypeAssert` / `NilCheck` / `CalleeRef::{Iface,Runtime}`。而 `V1/V3/V5` 已经对这些变体逐条表态 ⇒ 写一条查不出东西的不变式只是噪声（`C4` §10） |
 | `R-9-39` | 2026-10-26 | `C9` 新增 **§6.1**：native 独有的 `runtime error: out of memory (heap limit N bytes)`（stderr / 退出 2 / 无 `panic: ` 前缀 / 解释器无对应） | `rt.c` 的 `rt_fatal_oom` 早就注释着「与 `C9` §6 一致」，而那一节里**没有**这一条 —— 注释指向了一个不存在的契约项（`R-51-1` 的同一类错） |
 | `R-9-40` | 2026-10-26 | `C5` 的对象元数据布局落在 **§11**（计划写作「§10」，而 §10 是「本契约的验证方式」）；`C11` 的 hchan 落在 **§7**（计划的「§8」），两处变更记录顺延 | 节号是文档结构，不是内容。硬塞进「§10」会把它塞进「验证方式」里 |
+| `R-9-41` | 2026-10-26 | **收口后补**：`rgoc-check::expr::type_expr` 加 `Expr::Selector` 臂认 `unsafe.Pointer` ⇒ `Basic(UnsafePointer)`；判据 `T-META-07`（`unsafe_ptr.rs` 两条），变异 `M-M9-11` | 收口时记的 `G-M9-01` 写成「帧布局失败」，复现后是**更早**的一步：`V3: bin Ne 的两个操作数类型不同：invalid vs unsafe.Pointer`。真因是「类型表达式 → `TypeId`」在本仓有**两份实现**（`rgoc-load::typeexpr` 认、`rgoc-check::expr::type_expr` 不认），于是同一个 `unsafe.Pointer` 在声明位置有真类型、在**函数签名里**是 `invalid`。报点离病灶隔了整条后端 |
+| `R-9-42` | 2026-10-26 | §8.1 从「IR 的三条新不变式（`V10/V11/V12`）」改成「计划三条、落地零条」，逐条写谁在管 | `verify.rs` 的 `INVARIANTS` 一直是 `V1..V9`，而 `C4` §10.1 早已写明「一条新不变式都不需要」（`R-9-38`）。**两份文档互相矛盾**，而测试文档这份是错的 —— 它会让人去找三个不存在的常量 |
+| `R-9-43` | 2026-10-26 | 补三条判据的**形态**：`T-MAP-10`（删除不切断探测链，构造哈希同桶的键）、`T-FUNC-05` 求值器半边（4 个捕获）、`T-EXC-04` native 半边（三层各留可观察输出）；`M-M9-04/06/07` 从 notes 升进 `mutation-m9.sh` | 三条变异在 M9 收口时**全是绿的**，各自记成 `G-M9-04/05/06`。补判据之后三条全红（8 条脚本探针 8 红）。**「记一笔」不算收口**：绿说明判据缺形态，缺就补 |
 
 ---
 

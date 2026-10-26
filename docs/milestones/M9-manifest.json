@@ -4,7 +4,7 @@
  "generated_at": "2026-10-26T00:00:00Z",
  "filled_at": "2026-10-26T00:00:00Z",
  "fill_task": "M9-plan.md Task 68–69（按实测数字填；由 rgoc-driver/tests/manifest_m9.rs 对账）",
- "status": "已收口 —— 十条门禁 10/10 pass；语料 69/0/0（native）、69/0/0（--via=ssa，拒绝面为空）、69 绿（--run）；channel 契约 7/12/0 与 M8 冻结值一致；open_gaps 只剩 3 条记录性缺口",
+ "status": "已收口 —— 十条门禁 10/10 pass；语料 69/0/0（native）、69/0/0（--via=ssa，拒绝面为空）、69 绿（--run）；channel 契约 7/12/0 与 M8 冻结值一致；收口后清完四个尾巴（G-M9-01/04/05/06 全部关闭，见 closed_gaps），open_gaps 现为空",
  "scope": "M7 的 native 后端从「39 个语料能跑」扩到「69 个全跑、且与解释器逐字节一致」：堆与对象头、TypeDesc、切片/map/接口/闭包/方法值、defer+panic+recover、字粒度根协议（STACK-MAP v1 + .rodata 表）、hchan 的布局与状态机契约。native 的 goroutine/select 执行不在本里程碑面内（M11）",
  "docs": {
   "design": "docs/milestones/M9-design.md（D-M9-1..16 / F1..F16 / 门禁 MEM-1..SCH-1 / §3.11 根协议 / §3.12 channel）",
@@ -98,7 +98,7 @@
    "id": "MEM-2",
    "name": "逐类型 size + ptrmask 与解释器布局对撞",
    "status": "pass",
-   "evidence": "desc_layout.rs（69 语料的类型闭包逐类型比 size/ptrdata/kind/flags/gcdata）+ desc_emit.rs 4 条（硬编码表逐字节）+ rgoc-types/tests/ptr_mask.rs 的五个特例；`M-M9-02` 变异实证",
+   "evidence": "desc_layout.rs（69 语料的类型闭包逐类型比 size/ptrdata/kind/flags/gcdata）+ desc_emit.rs 4 条（硬编码表逐字节）+ rgoc-types/tests/ptr_mask.rs 的五个特例+ unsafe_ptr.rs 2 条（`T-META-07`：`unsafe.Pointer` 作为类型名在形参 / 结果 / 字段 / `var` 四处都解析成 `Basic(UnsafePointer)`）；`M-M9-02` 与 `M-M9-11` 变异实证",
    "gap": "—"
   },
   {
@@ -112,7 +112,7 @@
    "id": "OBJ-2",
    "name": "map 全套（迭代中 delete / 键相等 / comma-ok）",
    "status": "pass",
-   "evidence": "obj_map.rs 7 条（含 bigmap 的大值搬运）+ 语料里 5 个 map 文件经 native_corpus_run 逐字节；`M-M9-04`（rt_map_del 不置 tomb）在 notes 里实测变红",
+   "evidence": "obj_map.rs 8 条（含 `t_map_10_删除不切断探测链`：构造哈希同桶的两个键，钉住「`rt_map_del` 必须留 `TOMB`」）+ 语料里 5 个 map 文件经 native_corpus_run 逐字节；`M-M9-04`（`rt_map_del` 置 `empty`）实测变红",
    "gap": "—"
   },
   {
@@ -126,14 +126,14 @@
    "id": "OBJ-4",
    "name": "funcval（闭包 / 方法值 / 捕获写回）",
    "status": "pass",
-   "evidence": "语料里含闭包与方法值的 7 个文件（closure1/2/4、method、method5、ddd、nilfunc）经 native_corpus_run 逐字节；`M-M9-06`（闭包只填一个捕获）在 notes 里实测变红",
+   "evidence": "语料里含闭包与方法值的 7 个文件（closure1/2/4、method、method5、ddd、nilfunc）经 native_corpus_run 逐字节+ ssa_run.rs::t_func_05_四个捕获都要打开（`T-FUNC-05` 求值器半边：4 个捕获含 `string` 与 `*int`，且创建后改外层变量钉住「按引用」）；`M-M9-06`（闭包只填第一个捕获）实测变红",
    "gap": "—"
   },
   {
    "id": "EXC-1",
    "name": "defer 逆序 / panic 逐层 / recover 仅 defer 内有效 / 除零越界 nil",
    "status": "pass",
-   "evidence": "语料里 5 个 defer/panic 文件（closure4 / defernil / method / nilptr2 / print）经 native_corpus_run 与解释器逐字节 + run-native.sh 69/0/0；`M-M9-08` 变异实证（defer 改正序 ⇒ native 与解释器分叉）",
+   "evidence": "语料里 5 个 defer/panic 文件（closure4 / defernil / method / nilptr2 / print）经 native_corpus_run 与解释器逐字节+ native_isel_cover.rs::t_exc_04_逐层_defer_与_panic_之后调用方不再往下跑（三层各留一句可观察输出，再由 `main` 的 defer 接住）+ run-native.sh 69/0/0；`M-M9-07`/`M-M9-08` 变异实证",
    "gap": "—"
   },
   {
@@ -264,9 +264,10 @@
    "chan_contract.rs",
    "native_corpus_run.rs",
    "native_frame_map.rs",
-   "native_unsupported.rs"
+   "native_unsupported.rs",
+   "unsafe_ptr.rs"
   ],
-  "test_files_note": "M9 新增/重写的端到端文件；`obj_iface` / `obj_funcval` **没有**独立文件 —— 接口与闭包面的证据在语料（native_corpus_run 与解释器逐字节）与 native_isel_cover 的指令覆盖里，如实记在对应门禁的 evidence 中",
+  "test_files_note": "M9 新增/重写的端到端文件；`obj_iface` / `obj_funcval` **没有**独立文件 —— 接口与闭包面的证据在语料（native_corpus_run 与解释器逐字节）与 native_isel_cover 的指令覆盖里，如实记在对应门禁的 evidence 中 收口后补的 `unsafe_ptr.rs` 专管 `unsafe.Pointer` 的类型名面（`T-META-07`）。",
   "reject_codes_note": "SsaCode::ALL 现为 5 条（FUNC-VALUE 在 Phase 4c 下线）；RejectKind::ALL 5 条"
  },
  "budget": {
@@ -275,52 +276,15 @@
   "steps": "1e8（解释器默认）；native 没有步数预算",
   "note": "native 多一条 fatal：`runtime error: out of memory (heap limit N bytes)` + 退出 2（C9 §6.1）"
  },
- "open_gaps": [
-  {
-   "id": "G-M9-01",
-   "gate": "OBJ-4",
-   "what": "`unsafe.Pointer` 作为**形参类型**会让后端帧布局失败（Value 的类型没有运行期布局）—— M9 收口时发现，未修；语料里没有这种形态，所以不影响 69/69",
-   "test_id": null
-  },
-  {
-   "id": "G-M9-02",
-   "gate": "EXC-1",
-   "what": "native 独有的 `out of memory` 在解释器里没有对应（C9 §6.1）：两条通路的第一条已知不同口径，理由是「解释器没有 arena」",
-   "test_id": null
-  },
-  {
-   "id": "G-M9-03",
-   "gate": "ROOT-1",
-   "what": "根协议**保守**的两处：聚合实参在栈上只标 1 位（指向调用方的槽，不是堆根）、帧里的 addr_slots 不单独标；两处都写清理由，但都没有「不保守也正确」的判据",
-   "test_id": "T-ROOT-08"
-  },
-  {
-   "id": "G-M9-04",
-   "gate": "OBJ-2",
-   "what": "`T-MAP-08` 的判据缺「删除后再插满、原键仍查得到」的形态：`M-M9-04`（`rt_map_del` 置 `empty` 而不是 `tomb`）在 `obj_map` 上**是绿的** —— 探测链断掉没有用例能看见",
-   "test_id": "T-MAP-08"
-  },
-  {
-   "id": "G-M9-05",
-   "gate": "OBJ-4",
-   "what": "`T-FUNC-05` 的求值器半边缺**两个捕获**的闭包：`M-M9-06`（`MakeClosure` 只填第一个捕获）在 `ssa_run` 上是绿的",
-   "test_id": "T-FUNC-05"
-  },
-  {
-   "id": "G-M9-06",
-   "gate": "EXC-1",
-   "what": "`T-EXC-04` 缺一条「panic 之后调用方还有可观察输出」的 native fixture：`M-M9-07`（`check_panic` 不跳出口）在 69 语料上是绿的 —— 语料里的 panic 之后调用方本来就走出口",
-   "test_id": "T-EXC-04"
-  }
- ],
+ "open_gaps": [],
  "phase_summary": {
   "tasks_done": "Task 1–74（全）",
   "design_revisions": [],
   "done": true
  },
  "measured": {
-  "workspace_suites": 224,
-  "workspace_tests": 2179,
+  "workspace_suites": 225,
+  "workspace_tests": 2184,
   "workspace_failed": 0,
   "workspace_ignored": 1,
   "native_ok": 69,
@@ -342,11 +306,45 @@
   "hir_reject_codes": 5,
   "hchan_size": 96,
   "sudog_size": 48,
-  "mutations_script_red": 4,
+  "mutations_script_red": 8,
   "mutations_script_miss": 0,
-  "mutations_notes_total": 10,
-  "final_rerun": "四条 cargo 全绿（fmt/check/clippy/test）；四套语料与上表逐项一致",
-  "mutations_notes_red": 7,
-  "mutations_notes_green": 3
- }
+  "mutations_notes_total": 12,
+  "final_rerun": "四条 cargo 全绿（fmt/check/clippy/test，225 suite / 2184 passed / 0 failed / 1 ignored）；四套语料与上表逐项一致",
+  "mutations_notes_script": 8,
+  "mutations_notes_manual": 4
+ },
+ "closed_gaps": [
+  {
+   "id": "G-M9-01",
+   "gate": "OBJ-4",
+   "what": "`unsafe.Pointer` 作为**形参类型**过不了后端",
+   "closed_on": "2026-10-26",
+   "how": "复现后病灶比收口时记的更早：`V3: bin Ne 的两个操作数类型不同：invalid vs unsafe.Pointer`。真因是「类型表达式 → `TypeId`」有两份实现，`rgoc-check::expr::type_expr` 的 `_ => None` 吞掉了 `unsafe.Pointer`（装载面 `rgoc-load::typeexpr` 认）。补 `Expr::Selector` 臂（`R-9-41`）",
+   "evidence": "unsafe_ptr.rs 2 条（`T-META-07`）+ `M-M9-11` 变异红"
+  },
+  {
+   "id": "G-M9-04",
+   "gate": "OBJ-2",
+   "what": "`T-MAP-08` 缺「删除后再插满、原键仍查得到」的形态（`M-M9-04` 在 obj_map 上是绿的）",
+   "closed_on": "2026-10-26",
+   "how": "新增 `T-MAP-10`（`obj_map::t_map_10_删除不切断探测链`）。判据必须**构造哈希碰撞**：`0` 与 `8` 在 `cap=8` 时桶都是 5 ⇒ 删 0 之后查 8 会经过被删的槽。「填 40 删偶数再插 20」那种自然形态实测仍是绿的",
+   "evidence": "`M-M9-04` 现在红（左 `0 false 1` / 右 `800 true 1`）"
+  },
+  {
+   "id": "G-M9-05",
+   "gate": "OBJ-4",
+   "what": "`T-FUNC-05` 的求值器半边缺两个以上捕获的闭包（`M-M9-06` 在 ssa_run 上是绿的）",
+   "closed_on": "2026-10-26",
+   "how": "新增 `ssa_run::t_func_05_四个捕获都要打开`：4 个捕获分别是 `int`/`string`/`int`/`*int`，创建之后再改 `n`/`s` 钉住按引用",
+   "evidence": "`M-M9-06` 现在红（`panic: 捕获下标 1 越界（构建 bug）`）"
+  },
+  {
+   "id": "G-M9-06",
+   "gate": "EXC-1",
+   "what": "`T-EXC-04` 的 native 半边看着缺一条「panic 之后调用方还有可观察输出」的 fixture（`M-M9-07` 在 69 语料上是绿的）",
+   "closed_on": "2026-10-26",
+   "how": "收口后核对：判据**其实已经有了** —— `native_isel_cover::nat2_panic_终止符` 在去掉 `cbnz` 之后立刻红（`panic 之后不该再有 stdout：\"unreachable\\n\"`）。错的是**探针**：它打的是 `native_corpus_run`，而语料里的 panic 之后调用方本来就走出口。仍补 `t_exc_04_逐层_defer_与_panic_之后调用方不再往下跑`，理由是形态更强（三层各留一句可观察输出），不是「补上缺的那条」",
+   "evidence": "`M-M9-07` 现在红（输出多出 `after-h` / `after-g` / `unreachable`）；`nat2_panic_终止符` 同样红"
+  }
+ ]
 }

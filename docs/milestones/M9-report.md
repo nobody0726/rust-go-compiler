@@ -2,7 +2,7 @@
 
 > **一句话**：M7 的 native 后端从「39 个语料能跑」扩到「**69 个全跑**，且与解释器
 > 逐字节一致」；新增 `rgoc-meta` 一个 crate；十条门禁 **10/10 pass**；四条 cargo 全绿
-> （224 suite / **2179 passed / 0 failed**）；四套语料零回归。
+> （225 suite / **2184 passed / 0 failed**）；四套语料零回归。
 >
 > 不承诺的十件事写在第 6 节，其中 `U-M9-10`（interior pointer）是**语义级拒绝**。
 
@@ -16,10 +16,10 @@
 | 三方差分（`--run`） | **69 绿 / 0 跳过 / 0 红** | `run-collide.sh run-selected.txt --run` |
 | `--via=ssa` | **69 绿 / 0 跳过 / 0 红**（拒绝面为空） | `run-collide.sh run-selected.txt --ssa` |
 | 并发语料（M8 面） | **7 ok / 12 skip / 0 bad / 19** | `run-chan.sh chan-input.txt` |
-| workspace 测试 | **224 suite / 2179 passed / 0 failed / 1 ignored** | `cargo test --workspace --no-fail-fast` |
+| workspace 测试 | **225 suite / 2184 passed / 0 failed / 1 ignored** | `cargo test --workspace --no-fail-fast` |
 | 四条 cargo | `fmt --check` / `check --all-targets` / `clippy -D warnings` / `test` **全绿** | 四条各跑一次 |
-| 变异（脚本 4 条） | **红 4 / 失手 0** | `bash scripts/mutation-m9.sh` |
-| 变异（笔记 10 条） | **红 7 / 绿 3**（3 条绿是判据缺口，已记 `G-M9-04..06`） | `scripts/mutation-m9-notes.md` |
+| 变异（脚本 8 条） | **红 8 / 失手 0** | `bash scripts/mutation-m9.sh` |
+| 变异（共 12 条） | 脚本 8 条全红 + notes 里 4 条（05/09/10/08 的另一种改法）全红 —— **12/12** | 上面两条 |
 | 二进制体积（`print.go`） | `.text` 30888 B / `.rodata` 4100 B；`panic` 检查点 19 个 | `size -A` |
 
 ### 1.1 三件必须写清的量
@@ -103,6 +103,7 @@ M9 一共挖出 **6 类**既有 bug。分类比清单本身有用：它说明**�
 | **A'** | 没人用的**单值类型断言**被 DCE 删掉 ⇒ `_ = i.(J)` 不 panic | 同上：失败即 panic 是「可观察的副作用」，而 DCE 只看 dst 有没有人用 | `R-9-30` |
 | **B. 一条指令两处算** | `tt.fn` 的类型是 `tt`（HIR 给 `Field` 标了底座类型） | 0 结果调用的 `invalid` 一路漏到帧布局才炸 | `R-9-20` |
 | **C. 两边各一份实现** | `--via=ssa` 打 `false`、native 打 `true`（`uintptr(p)` 恒 0） | 语料里没有 `uintptr` 转换 | `R-9-35` |
+| **C''. 同一件事两份实现，口径不一致** | `func idp(p unsafe.Pointer) unsafe.Pointer` 构不过去：签名里的 `unsafe.Pointer` 是 `invalid`（`V3: bin Ne 的两个操作数类型不同`）| 「类型表达式 → `TypeId`」有**两份**：装载面 `rgoc-load::typeexpr` 认这个限定名，检查面 `rgoc-check::expr::type_expr` 的 `_ => None` 吞掉它。声明位置走前者、签名 lowering 走后者 ⇒ 同一个类型在两处不同身份。**判据只覆盖了「声明位置」**（`var p unsafe.Pointer` 一直是好的）| `R-9-41`（收口后补）|
 | **C'** | `m[1]` 与 `seq(11,13)` 不等（`bigmap` 的 `BUG mismatch`）——**两边同时被截断**所以比较仍相等 | 「两边都对」不等于「两边都错得一样」也能过；只有**逐字节对官方 `.out`** 才抓得到 | `R-9-29`（大聚合返回走堆）|
 | **D. 帧是定长的，栈不是** | `use(*bigstructp)` 段错误（128 MiB 帧 vs 8 MiB 栈） | M7 的语料帧最大 10 KiB | `R-9-22` |
 | **E. 语言级细节** | 零大小类型的 `load`/`store` 仍读写 8 字节（踩邻居槽）；nil 接口断言段错误或静默成功；`__imeth_` 桩不按宽度读接收者 | 这些形态都没有**独立**的语料：`struct{}`、nil 接口、1 字节接收者 | `R-9-27`/`R-9-30` |
@@ -110,6 +111,33 @@ M9 一共挖出 **6 类**既有 bug。分类比清单本身有用：它说明**�
 **一条元教训**：`C'` 那类（两边同时错）只能靠**外部标准**发现 —— 这里就是
 `ssa_corpus_run` 与官方 `.out` 的逐字节比对。手写 fixture 与「native == 解释器」
 都不够。
+
+### 5.1 收口后清掉的四个尾巴（`closed_gaps` 4/4）
+
+收口时留了四个 `open_gaps`。回头核的时候发现它们的形状**并不相同**：两个是
+「判据没覆盖那个形态」（`G-M9-04/05`），一个是「探针打错了靶」（`G-M9-06`，判据本来就有），
+一个是「同一件事两份实现」（`G-M9-01`）。**「都是判据问题」这个归纳是错的** —— 逐条核过才知道。
+
+| 缺口 | 真因 | 怎么关的 |
+|---|---|---|
+| `G-M9-01` | 收口时记的是「帧布局失败」，复现后**更早**：`V3: bin Ne 的两个操作数类型不同：invalid vs unsafe.Pointer`。`unsafe.Pointer` 在签名里是 `invalid` —— `rgoc-check::expr::type_expr` 不认这个限定名（装载面认）| 补 `Expr::Selector` 臂（`R-9-41`）+ `unsafe_ptr.rs` 两条（`T-META-07`）。变异 `M-M9-11` 实测红 |
+| `G-M9-04` | `M-M9-04`（`rt_map_del` 置 `empty`）在 `obj_map` 上**是绿的** —— 没有「探测链穿过被删槽」的形态 | 新增 `T-MAP-10`：**构造哈希同桶**（`0` 与 `8` 在 `cap=8` 时桶都是 5）。先试的自然形态（填 40 删偶数再插 20）**仍然是绿的** |
+| `G-M9-05` | `M-M9-06`（闭包只填第一个捕获）在 `ssa_run` 上**是绿的** —— 求值器侧一个多捕获闭包都没有 | 新增 `ssa_run::t_func_05_四个捕获都要打开`：4 个捕获 = `int`/`string`/`int`/`*int`，创建后改 `n`/`s` 钉住按引用 |
+| `G-M9-06` | `M-M9-07`（`check_panic` 不跳出口）在 **69 语料**上**是绿的**。**但判据本来就有**：`nat2_panic_终止符` 去掉 `cbnz` 立刻红 —— 错的是**探针**（打 `native_corpus_run`，语料里 panic 之后调用方本来就走出口）| 仍补 `native_isel_cover::t_exc_04_...`，理由是形态**更强**（三层各留一句可观察输出），不是「补上缺的那条」。**探针打错靶在 M9 出现了两次**（另一次是 `M-M9-03` 打 `obj_slice`）|
+
+**变异从 7 红 3 绿变成 12/12 全红**，脚本里的探针从 4 条增到 8 条
+（04/06/07/11 从「notes 里记一笔」升进回归守卫）。
+
+两条过程教训，都值得进下一轮的手册：
+
+1. **「记一笔」不算收口。** 三条绿当时各写了一条 `open_gap` 就收工了 —— 但绿说明
+   判据缺形态，缺就该补。补完三条立刻变红，说明当时的结论（「判据只覆盖了正确
+   实现那一面」）是对的，而**行动不完整**。
+2. **恢复源码之后必须 `touch`。** 变异脚本用 `mv` 从备份恢复，`mv` 保留备份的
+   mtime（创建于变异**之前**），而变异期间编出的 `.rlib` mtime 更新 ⇒ cargo 认为
+   源码没变，全量测试跑的是**变异版**的 `rgoc-check`（`unsafe_ptr` 报 `V3`，
+   而单跑那条测试却是绿的）。这正是记忆里那条「产物陈旧陷阱」的又一次现形；
+   脚本已加 `touch` 与注释。
 
 ---
 
@@ -186,4 +214,4 @@ M9 一共挖出 **6 类**既有 bug。分类比清单本身有用：它说明**�
 M9 期间的技术修订（`R-9-*`）全部记在 `.superpowers/sdd/M9-plan/progress.md` 的
 对应 Phase 段（该目录不入库），与契约相关的六条同步进了 `C4`/`C5`/`C9`/`C11`
 的变更记录。逐条索引见 `M9-manifest.json` 的 `measurement_deviations` 与
-`open_gaps`。
+`open_gaps`（现为空）与 `closed_gaps`（4 条，逐条写「真因 / 怎么关的」）。
