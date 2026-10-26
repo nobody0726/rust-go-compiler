@@ -455,7 +455,8 @@ native 通路的静态元数据全部在 `.rodata`，形状是 `#[repr(C)]` 冻�
 ```text
 header（活块）: bit0=0  bit1=marked  bit2=raw  bit3..63 = desc 指针（8 对齐）
 header（空闲块）: bit0=1  bit32..63 = 本块总字节数（含头）
-+8（活块）: n | (kind << 32)          +8（空闲块）: next 空闲块地址
++8（活块）: n | (kind << 32) | ((blk >> 4) << 35)   （块大小自证，C12 §2.1）
++8（空闲块）: next 空闲块地址
 ```
 
 读 desc 一律 `(const TypeDesc *)(header & ~7UL)`。块大小恒 16 的倍数，

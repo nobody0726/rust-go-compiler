@@ -60,12 +60,17 @@ base ─┬─ [+0]   Chunk 头 64 字节 {next, base, size, bump, free_head,
 
 ```text
 gc_alloc(need, kind, desc, n):
-  1. 当前 chunk 的 bump 够 ⇒ bump（顺带 bm_set + page_summary 置位）
-  2. 当前 chunk 的 free list first-fit（余量 >= 32 字节才切分；否则整块给出）
-  3. 链上其它 chunk 的 free list → bump
-  4. 都不行 ⇒ 若 heap_committed >= gc_threshold ⇒ rt_gc() 后从 1 重试**一次**
-  5. 仍不行 ⇒ rt_fatal_oom(heap_limit)（`C9` §6.1 文本不变）
+  1. 遍历所有 chunk 的 free list，first-fit（余量 >= 32 字节才切分；否则整块给出）
+  2. 都不行 ⇒ 遍历所有 chunk 的 bump
+  3. 都不行 ⇒ 新 chunk，从它的 bump 切
+  4. 仍不行（`rt_grow` 里超上限）⇒ rt_fatal_oom(heap_limit)（`C9` §6.1 文本不变）
 ```
+
+⚠️ **free list 必须排在 bump 之前**（`R-10-12`）。第一版写成「先 bump、bump
+用完再用 free list」，结果是 **free list 形同虚设**：bump 一用完就开新 chunk，
+于是回收的块**永远不会被复用**。实测症状：`G` 的块进了 free list 但内容从没
+被覆盖，「全局根保活」的变异测试假绿三次。语义上也该如此 —— free list 里的块
+是已经付过 mmap 代价的。
 
 - **块大小恒 16 的倍数且 ≥ 16**：`blk = (16 + data + 15) & ~15`。
 - 分配出来的 `data = blk + 16`，**恒 16 对齐**（`blk` 是 16 的倍数、`base+64`
@@ -89,7 +94,7 @@ gc_alloc(need, kind, desc, n):
 ### 2.1 16 字节块头（`D-M10-2`）
 
 ```text
-块 = [+0 u64 header][+8 u64 n|kind][+16 data ...]
+块 = [+0 u64 header][+8 u64 n|kind|blk][+16 data ...]
 
 header（活块）：
   bit0  = 0
@@ -100,9 +105,19 @@ header（空闲块）：
   bit0  = 1
   bit1..31 = 0
   bit32..63 = 本块总字节数（含头；<= 16 MiB 故装得下）
-+8（活块）：n | (kind << 32)
++8（活块）：n | (kind << 32) | ((blk >> 4) << 35)
+  bit0..31  = n
+  bit32..34 = kind
+  bit35..63 = 块总字节数 >> 4（块恒 16 的倍数；16 MiB ⇒ 只需 20 位）
 +8（空闲块）：next 空闲块地址（0 = 链尾）
 ```
+
+⚠️ **块大小必须能从块头读出来**（`R-10-9`，Phase 1 实测改的）。一开始想按
+`kind + n + desc` 算（`object` 用 `desc->size`、`array` 用 `elem->size * n`…），
+但 **`desc` 非法时算不出来** —— 而 `sweep` 是按地址顺序走的，算错一步就会
+**走到块中间**、把中间当块首，之后整条链都错位。契约里说「宁可泄漏也不误扫」，
+所以大小必须**自证**。代价是 `n` 从 32 位让到 32 位（不变）、`kind` 只要 3 位、
+剩下 29 位给 `blk >> 4`（最大 8 GiB，够）。
 
 **读 desc 一律 `(const TypeDesc *)(header & ~7UL)`。** 任何地方直接 `(TypeDesc*)header`
 都是 bug（tag 位会带进去）。
@@ -119,6 +134,7 @@ header（空闲块）：
 | 2 | `closure` | null | 捕获个数 | `[fn, cap0, cap1…]` | **跳过字 0**（代码地址），扫 `n` 个捕获字 |
 | 3 | `raw` | null | 字节数 | 字节 | **不扫** |
 | 4 | `mapslots` | null | 槽数（cap） | `[+0 kdesc][+8 vdesc][+16 槽…]` | 每个 LIVE 槽的 key 与 value |
+| 5 | `arena` | null | 字节数 | 字节 | **不扫、永不回收**（`R-10-6`）|
 
 - `object` 的 `n` 恒 0 —— 元素个数只在 `array` 有意义。
 - `array` 的 `desc` 是**元素** desc（`[]T` 的 `elem`），不是切片类型 desc。
@@ -283,7 +299,7 @@ for i in 0..sp_words:
 |---|---|---|
 | `RGOC_GC` | `0` | **关**：`rt_gc()` 立即返回，分配失败直接 OOM（与 M9 等价）|
 | | 缺省 / 其它 | 开：自动触发（§5.3）|
-| `RGOC_GC_STRESS` | `1` | 每次 `gc_alloc` **之前**先 `rt_gc()`（慢，但能把漏扫的根全逼出来）|
+| `RGOC_GC_STRESS` | `<n>` | **每 n 次** `gc_alloc` 之前先 `rt_gc()`；`1` = 每次（最强，小 fixture 用）|
 | `RGOC_GC_STATS` | `1` | 退出时向 **stderr** 打一行（§5.2）|
 | `RGOC_GC_THRESHOLD` | 字节数 | 自动触发阈值（缺省 4 MiB）；`0` 表示「每次分配失败都收」|
 
@@ -327,7 +343,10 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 ```
 
 - **`RGOC_GC=0` ⇒ `rt_gc()` 立即返回** ⇒ 第 4 步等于直接 OOM。
-- **`RGOC_GC_STRESS=1` ⇒ 每次分配前先收**（此时阈值不起作用）。
+- **`RGOC_GC_STRESS=<n>` ⇒ 每 n 次分配前先收**（此时阈值不起作用）。
+  ⚠️ `n` 是**间隔不是开关**（`R-10-10`）：`n=1` 是每次分配都收，代价 O(n²) ——
+  `gc1.go` 的 1e5 次分配 × 平均块数 ≈ 1.7e10 次块扫描，语料里跑不完。
+  所以小 fixture 用 `1`（最强证据），语料用 `64`。
 - **GC 期间不分配**（`H5`）：标记与清扫里出现 `gc_alloc` 就是 bug。
   worklist 走 `mmap` 直调，不走 `gc_alloc`。
 
@@ -370,6 +389,12 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 | `MapObj` + `m->slots` | kind `object`（`rt_desc_mapobj`）+ kind `mapslots` | Task 25 |
 | `panic_set` 的文本 / `rt_recover` 的 box | kind `raw` / kind `object`（`rt_desc_panicstr`）| Task 24 |
 
+⚠️ **arena 分配也带 16 字节块头**（kind = `arena` = 5，`R-10-6`）。不给头的话，
+`sweep` 按起始位图走时会把 arena 的区域当成「空闲」塞进 free list —— 之后被
+`gc_alloc` 复用就覆盖了 itab / DeferRec。所以「托管堆与 arena 分离」（`D-M10-1`）
+体现在**语义**（arena 块永不回收、不扫描），**不在物理上**（同一个 chunk 链，
+省一套记账）。
+
 **守卫**（`T-GC-11`）：`gc_arena.rs` 扫 `rt.c` 源码，任何 `rt_arena_alloc`
 调用点都必须出现在上表第 1–5 行；多出来的就红。**新增一个 arena 调用点必须
 同时改本表** —— 这是「不留后门」的唯一机制。
@@ -380,4 +405,5 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-27 | **§2.1 块头编码加 `blk >> 4`**（`R-10-9`）；§1.3 分配顺序改成 **free list 优先**（`R-10-12`）；§2.2 加 `arena` kind（`R-10-6`）；§5.1 `RGOC_GC_STRESS` 改成**间隔**（`R-10-10`）；§6 补「arena 也带块头」| Phase 1 实测：① 块大小不能靠 desc 算（非法 desc 时 sweep 会走到块中间）；② bump 优先让 free list 形同虚设（判据假绿三次）；③ 不给 arena 块头会让 sweep 把 itab 当空闲；④ `stress=1` 在 1e5 次分配的语料上是 O(n²) 跑不完 |
 | 2026-10-26 | **草案创建**（M10/Task 1）：§1 堆形状 / §2 块头与 kind / §3 起始位图 / §4 根集合与帧记录 / §5 触发与统计 / §6 arena 保留面 | `M10-design.md` `D-M10-1..15` / `F1..F14`；用户拍板三件事（16 字节块头 / 逐位点 `sp_idx` / map 进托管堆）|
