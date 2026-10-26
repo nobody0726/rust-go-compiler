@@ -10,7 +10,8 @@
 
 ## 当前状态（2026-10-26）
 - **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**。M9 收口后清了四个尾巴
-  （`open_gaps` **0** / `closed_gaps` 4），路线图下一个是 **M10（精确 STW GC）**
+  （`open_gaps` **0** / `closed_gaps` 4）。**M10（精确 STW GC）三件套已出、待拍板**：
+  `M10-design.md`（`D-M10-1..15`）/ `M10-tests.md` / `M10-plan.md`（Task 1–45）
 - **读数（M9 终态）**：native 语料 **69/0/0**；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**，
   `SsaCode` 5 条：CHAN/DEFER/GENERIC/MAP/RANGE-STR 里只有 4 条还在守）；`run-chan` 7/12/0；
   `cargo test --workspace` **225 suite / 2184 passed / 0 failed / 1 ignored**；变异 **12/12 全红**
@@ -22,6 +23,12 @@
 - ⚠️ **变异脚本恢复源码后必须 `touch`**：`mv` 从 `.m9bak` 恢复会保留备份的 mtime（早于变异），
   而变异期间编出的 `.rlib` 更新 ⇒ cargo 认为源码没变，紧接着的全量测试跑**变异版**
   （症状：单跑某测试绿、全量却红，且红在报 `V3` 之类的旧错）
+- ⚠️ **M10 的三条口径**：① 托管堆与 arena 分离（`rt_arena_alloc` 只留不含堆指针的结构）；
+  ② 块头 8 → **16 字节**（`{desc|flags, n|kind}`，数组/闭包要元素个数）；③ 根走
+  **帧记录链 + 逐位点**（`g_frames`，每帧 24 B）—— 函数级并集位图 = 保守扫描。
+  **没有寄存器根**（每值一槽的推论）与**不移动**（内部指针无 forwarding）是两条硬约束
+- ⚠️ **`rt_alloc` 返回 data（块首 + 8），不是块首**（`R-10-1`）：返回块首会让字段 0
+  与对象头重叠（M9 的 `D-M9-1` 因此从未生效），`need_zero` 的 memset 也会漏第一个字
 - ⚠️ **「类型表达式 → `TypeId`」有两份实现**：`rgoc-load::typeexpr::resolve_type`（填 `Decl`）
   与 `rgoc-check::expr::type_expr`（HIR 签名 / 局部）。**改一处要改两处** ——
   `unsafe.Pointer` 就只在前者被认，导致「声明位置有真类型、函数签名里是 `invalid`」（`R-9-41`）
