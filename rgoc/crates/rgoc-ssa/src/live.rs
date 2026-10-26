@@ -247,6 +247,51 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
     let root_of = root_values(f);
     let mem_values = mem_tokens(f);
     let mut safepoints: Vec<Safepoint> = Vec::new();
+    // 指令侧与终止符侧**共用**同一个构造函数：字粒度、根闭包、mem 令牌的排除
+    // 都只有一处口径（`R-9-32` 的教训 —— 两处各写一遍就会有一处忘掉 mem）。
+    let mk = |block: BlockId, idx: usize, set: BTreeSet<ValueId>| -> Safepoint {
+        // 闭包到根（保守，见模块头）
+        let closure: BTreeSet<ValueId> = set.iter().map(|v| root_of_of(&root_of, *v)).collect();
+        let mut set = set;
+        set.extend(closure);
+        let live: Vec<ValueId> = set.into_iter().collect();
+        // 字粒度（`R-9-31`）：逐值查 `ptr_mask`，把为真的字下标摊平。
+        // `live` 已按值号升序 ⇒ `ptr_words` 天然是「值号、再字下标」升序，
+        // 排序键不需要再排一遍（也就没有第二个排序口径）。
+        let mut ptr_words: Vec<(ValueId, u8)> = Vec::new();
+        for v in &live {
+            // mem 令牌是「时间点」而不是对象地址：它的类型确实是 `*T`
+            // （构建器用 `const 0 : *T` 起头，见 `Fb::mem_of`），
+            // 但它**不是**一个可以回收的指针。不排掉它，位图里会
+            // 混进一堆常量 0。
+            if mem_values.contains(v) {
+                continue;
+            }
+            let Some(t) = f.value_types.get(v.index()).copied() else {
+                continue;
+            };
+            for w in root_words(tt, t) {
+                ptr_words.push((*v, w));
+            }
+        }
+        // `ptrs` 是它的「值级投影」：出现过的值去重，顺序仍按值号。
+        let mut ptrs: Vec<ValueId> = Vec::new();
+        for (v, _) in &ptr_words {
+            if ptrs.last() != Some(v) {
+                ptrs.push(*v);
+            }
+        }
+        Safepoint {
+            block,
+            idx,
+            live,
+            ptrs,
+            ptr_words,
+        }
+    };
+    // 回边判据用**已有的**支配关系（`F16` / `dom.rs`）：边 `b → h` 是回边
+    // ⟺ `h` 支配 `b`。不另写「谁是循环头」的识别 —— 两套判据迟早会分叉。
+    let dom = crate::dom::DomTree::build(f, cfg);
     for (bi, blk) in f.blocks.iter().enumerate() {
         let b = BlockId(bi as u32);
         if !cfg.reachable(b) {
@@ -265,6 +310,9 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
         // 因为那些用例的返回值/边实参**同时也被别的指令用过**。
         let mut cur = live_out[bi].clone();
         cur.extend(blk.term.uses());
+        // 终止符位点的活集 = 这个种子本身（`live_out ∪ 终止符的读`）。
+        // 反向扫会把它改成 `live_in`，所以要**先留一份**。
+        let term_set = cur.clone();
         for ii in (0..blk.instrs.len()).rev() {
             after[ii] = cur.clone();
             for d in blk.instrs[ii].dsts() {
@@ -279,45 +327,24 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
             // 这条指令自己读的也算（传进调用的指针在调用期间活着）
             let mut set = after[ii].clone();
             set.extend(ins.uses());
-            // 闭包到根（保守，见模块头）
-            let closure: BTreeSet<ValueId> = set.iter().map(|v| root_of_of(&root_of, *v)).collect();
-            set.extend(closure);
-            let live: Vec<ValueId> = set.into_iter().collect();
-            // 字粒度（`R-9-31`）：逐值查 `ptr_mask`，把为真的字下标摊平。
-            // `live` 已按值号升序 ⇒ `ptr_words` 天然是「值号、再字下标」升序，
-            // 排序键不需要再排一遍（也就没有第二个排序口径）。
-            let mut ptr_words: Vec<(ValueId, u8)> = Vec::new();
-            for v in &live {
-                // mem 令牌是「时间点」而不是对象地址：它的类型确实是 `*T`
-                // （构建器用 `const 0 : *T` 起头，见 `Fb::mem_of`），
-                // 但它**不是**一个可以回收的指针。不排掉它，位图里会
-                // 混进一堆常量 0。
-                if mem_values.contains(v) {
-                    continue;
-                }
-                let Some(t) = f.value_types.get(v.index()).copied() else {
-                    continue;
-                };
-                for w in root_words(tt, t) {
-                    ptr_words.push((*v, w));
-                }
-            }
-            // `ptrs` 是它的「值级投影」：出现过的值去重，顺序仍按值号。
-            let mut ptrs: Vec<ValueId> = Vec::new();
-            for (v, _) in &ptr_words {
-                if ptrs.last() != Some(v) {
-                    ptrs.push(*v);
-                }
-            }
-            safepoints.push(Safepoint {
-                block: b,
-                idx: ii,
-                live,
-                ptrs,
-                ptr_words,
-            });
+            safepoints.push(mk(b, ii, set));
+        }
+        // 终止符也能是 safepoint：**回边**（`T-ROOT-04`）。
+        //
+        // 循环体里没有调用也没有分配时，`Call`/`Make` 一条都命中不了，于是
+        // 整个循环里**没有任何位点**可以扫栈。可循环的存活时间只受迭代次数
+        // 限制，别的线程（M11）随时可能在这条回边上把程序停下来 —— 那一瞬间
+        // 栈上活着的对象必须能被描述出来，否则就被当垃圾回收掉。
+        //
+        // 位点写 `idx = instrs.len()`：与区间里的「块尾」同一个哨兵
+        // （`Pos::instr(b, len)`），消费方不需要第二套约定。
+        if cfg.succs(b).iter().any(|t| dom.dominates(*t, b)) {
+            safepoints.push(mk(b, blk.instrs.len(), term_set));
         }
     }
+    // 排序键 = `(块号, 指令下标)`：终止符位点的 `idx` 是 `instrs.len()`，
+    // 天然排在本块所有指令位点之后；跨块要重排（上面是块内追加、再按块循环）。
+    safepoints.sort_by_key(|s| (s.block.0, s.idx));
 
     Liveness {
         live_in,
@@ -327,7 +354,9 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
     }
 }
 
-/// 一条指令是不是 safepoint（能调出去 / 能分配）。
+/// 一条**指令**是不是 safepoint（能调出去 / 能分配）。
+///
+/// 终止符不由它判：回边是「图上的性质」（目标支配本块），见 `analyze` 的 ④ 末段。
 fn is_safepoint(i: &Instr) -> bool {
     match i {
         // 任何调用：用户函数、方法、内建（`append` 会分配，`println` 会调出去）

@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use rgoc_hir::types::ConstVal;
 use rgoc_hir::{BinOp, BuiltinKind, SlotId};
 use rgoc_ssa::cfg::Cfg;
-use rgoc_ssa::ir::{CalleeRef, Effect, Instr, Root, SsaFunc, Term, ValueId};
+use rgoc_ssa::ir::{BlockId, CalleeRef, Effect, Instr, Root, SsaFunc, Term, ValueId};
 use rgoc_ssa::live::{self, Liveness};
 use rgoc_ssa::testsupport::FnBuilder;
 use rgoc_ssa::verify::verify;
@@ -812,4 +812,111 @@ fn t_root_05_位图粒度到字() {
     let mut sorted = keys.clone();
     sorted.sort_unstable();
     assert_eq!(keys, sorted, "ptr_words 必须已按 (值号, 字下标) 升序");
+}
+
+// ── T-ROOT-04：回边也是 safepoint（`M-M9-10` 的牙）────────────────────
+
+/// 一个「循环 100 次、循环体里**没有调用也没有分配**」的函数。
+///
+/// ```text
+/// b0:      v0 = 0; v1 = 1; v2 = 100; goto b1(v0)
+/// b1(p3):  v4 = p3 < v2; if v4 → b2 else b3
+/// b2:      v5 = p3 + v1; goto b1(v5)      ← 回边：b1 支配 b2
+/// b3:      return p3
+/// ```
+///
+/// 整个图里 `Call` / `Make` **一条都没有**，所以按 M6 的判据这里一个 safepoint
+/// 都不会有 —— 可这个循环要跑 100 次，M11 的抢占随时可能落在回边上。
+fn loop_fixture() -> (SsaFunc, TypeTable) {
+    let mut fb = FnBuilder::new("loop");
+    let int = fb.basic("int");
+    let boolean = fb.basic("bool");
+    let e = fb.entry();
+    let head = fb.block();
+    let body = fb.block();
+    let exit = fb.block();
+    let v0 = konst(&mut fb, e, ConstVal::Int(0), int);
+    let v1 = konst(&mut fb, e, ConstVal::Int(1), int);
+    let v2 = konst(&mut fb, e, ConstVal::Int(100), int);
+    let p3 = fb.value(int);
+    fb.term(
+        e,
+        Term::Goto {
+            to: head,
+            args: vec![v0],
+        },
+    );
+    fb.set_params(head, &[p3]);
+    let v4 = fb.value(boolean);
+    fb.instr(
+        head,
+        Instr::Bin {
+            dst: v4,
+            op: BinOp::Lt,
+            lhs: p3,
+            rhs: v2,
+            typ: boolean,
+        },
+    );
+    fb.term(
+        head,
+        Term::If {
+            cond: v4,
+            then_: (body, Vec::new()),
+            else_: (exit, Vec::new()),
+        },
+    );
+    let v5 = fb.value(int);
+    fb.instr(
+        body,
+        Instr::Bin {
+            dst: v5,
+            op: BinOp::Add,
+            lhs: p3,
+            rhs: v1,
+            typ: int,
+        },
+    );
+    fb.term(
+        body,
+        Term::Goto {
+            to: head,
+            args: vec![v5],
+        },
+    );
+    fb.term(exit, Term::Return(vec![p3]));
+    fb.into_parts()
+}
+
+#[test]
+fn t_root_04_回边也是_safepoint() {
+    let (f, tt) = loop_fixture();
+    let l = analyze(&f, &tt);
+    assert_eq!(
+        l.safepoints.len(),
+        1,
+        "这个图里没有调用也没有分配 ⇒ 唯一的 safepoint 必须是那条回边；实际 {:?}",
+        l.safepoints
+    );
+    let sp = &l.safepoints[0];
+    assert_eq!(sp.block, BlockId(2), "回边在 b2（循环体）");
+    assert_eq!(
+        sp.idx,
+        f.blocks[2].instrs.len(),
+        "终止符位点写 `idx = instrs.len()`（与区间里的块尾同一个哨兵）"
+    );
+    // 活集 = `live_out ∪ 终止符的读`：边实参 v5 与循环不变量 v1 / v2
+    assert!(
+        sp.live.contains(&ValueId(5)),
+        "回边实参必须活着（它就是下一次迭代的循环变量）：{:?}",
+        sp.live
+    );
+    // 用 O(1) 判据反向确认「这个图确实没有指令级 safepoint」
+    let has_instr_sp = f.blocks.iter().enumerate().any(|(bi, b)| {
+        b.instrs
+            .iter()
+            .enumerate()
+            .any(|(ii, _)| l.safepoints.iter().any(|s| s.block.0 as usize == bi && s.idx == ii))
+    });
+    assert!(!has_instr_sp, "不该有指令级 safepoint：{:?}", l.safepoints);
 }
