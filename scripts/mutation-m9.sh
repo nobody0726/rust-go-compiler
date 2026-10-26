@@ -21,13 +21,15 @@
 # 5. **恢复源码之后必须再 clean 一次**（见脚本末尾）：否则 `.rlib` 还是变异版，
 #    下一次全量测试会红一批与变异无关的用例。
 #
-# # 这里只有 4 条探针
+# # 这里 8 条探针
 #
-# 另外 6 条（05 ITab 填序 / 06 闭包只填一个捕获 / 07 `check_panic` 不查 /
-# 09 `ptrs` 退回值粒度 / 10 回边不产 safepoint / 以及 08 的**另一种**改法）
-# 已在执行期逐条实测变红，记录在 `scripts/mutation-m9-notes.md`。
-# 这里保留的是**回归代价低**的 4 条（08 是例外：它要重编 69 个程序的 rt.o，
-# 约 30 s —— 但它是唯一能证明「defer 逆序」这条判据有牙的探针，值得留着）。
+# 另外两条（05 ITab 填序 / 09 `ptrs` 退回值粒度 / 10 回边不产 safepoint）
+# 的实测记录在 `scripts/mutation-m9-notes.md`：05 要跑 69 个语料（~25 s，
+# 回归代价高），09/10 的判据在 `rgoc-ssa` 的单测里，没必要每次全跑。
+#
+# **收口补的四条**（04 / 06 / 07 / 11）原来都是「笔记里绿的那三条」——
+# 它们绿是因为**判据缺了形态**，不是代码对。补上判据之后它们才红，于是
+# 进脚本当回归守卫（详见 `mutation-m9-notes.md` §三）。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -57,6 +59,7 @@ p.write_text(s.replace(old, new, 1), encoding="utf-8")
 PY
   then
     mv "$file.m9bak" "$file"
+    touch "$file"
     report="$report
   MISS  $name  <<< 锚点没命中（改的那段代码已经变了）"
     fail=$((fail + 1))
@@ -69,6 +72,11 @@ PY
   local out
   out="$(cargo test "$@" 2>&1 | grep -E '^test result' | tail -1)"
   mv "$file.m9bak" "$file"
+  # ⚠️ 恢复之后**必须** `touch`：`mv` 保留了 `.m9bak` 的 mtime（创建于变异**之前**），
+  # 而变异期间产生的 `.rlib` 的 mtime 比它新 ⇒ cargo 认为源码没变、继续用
+  # **变异版**的 rlib。M9 收口实测踩到：探针全红，紧接着的全量测试在
+  # `unsafe_ptr` 上报 `V3` —— 那是变异版的 `rgoc-check` 还在产物里。
+  touch "$file"
   if printf '%s' "$out" | grep -q 'FAILED'; then
     report="$report
   RED   $name  [$out]"
@@ -180,12 +188,74 @@ probe "M-M9-08 rt_defer_push 改 FIFO（defer 正序）" \
   ../runtime/native/aarch64-unknown-linux-gnu/rt.c "$TMP/d_old" "$TMP/d_new" \
   - -p rgoc-driver --test native_corpus_run
 
+# ── M-M9-04：`rt_map_del` 置 `empty` 而不是 `tomb` ⇒ 探测链断 ─────────
+#
+# 判据 `T-MAP-10`（`obj_map::t_map_10_删除不切断探测链`）。
+#
+# ⚠️ 这条判据**必须构造哈希碰撞**才有牙：`rt_hash` 是 FNV-1a（整数按 8 字节
+# 小端），初表 `cap = 8`；`0` 与 `8` 的桶都是 5 ⇒ 先插 0 占 5 号、再插 8 落 6 号，
+# 删 0 之后查 8 会经过 5 号槽。用「填 40 个 → 删偶数 → 再插 20 个」那种自然
+# 形态实测**是绿的**（40 个键摊得太开，没一条链穿过被删的槽）。
+printf '%s' '    slot[0] = MAP_TOMB;
+' > "$TMP/e_old"
+printf '%s' '    slot[0] = MAP_EMPTY;
+' > "$TMP/e_new"
+probe "M-M9-04 rt_map_del 置 empty（探测链断）" \
+  ../runtime/native/aarch64-unknown-linux-gnu/rt.c "$TMP/e_old" "$TMP/e_new" \
+  - -p rgoc-driver --test obj_map t_map_10
+
+# ── M-M9-06：`MakeClosure` 只填第一个捕获 ─────────────────────────────
+#
+# 判据 `T-FUNC-05` 的求值器半边（`ssa_run::t_func_05_四个捕获都要打开`）。
+# 捕获 1 号以后缺失 ⇒ 读 `CapturePtr` 当场报「捕获下标越界」。
+printf '%s' '                for c in captures {
+' > "$TMP/f_old"
+printf '%s' '                for c in captures.iter().take(1) {
+' > "$TMP/f_new"
+probe "M-M9-06 闭包只填第一个捕获" \
+  crates/rgoc-interp/src/ssa_exec.rs "$TMP/f_old" "$TMP/f_new" \
+  rgoc-interp -p rgoc-driver --test ssa_run t_func_05
+
+# ── M-M9-07：`check_panic` 不跳本帧出口 ───────────────────────────────
+#
+# 判据 `T-EXC-04`（`native_isel_cover::t_exc_04_逐层_defer_与_panic_之后调用方不再往下跑`）。
+#
+# ⚠️ **别拿语料当这条的探针**：69 个语料里的 panic 之后调用方本来就走出口，
+# 去掉 `cbnz` 输出不变 ⇒ 绿。要的是「panic 之后还有可观察输出」的 fixture，
+# 而且**三层**都要有（只有一层的话抓不到「中间层忘了查」）。
+printf '%s' '    asm.ins("bl rt_panicking");
+    asm.ins(&format!("cbnz x0, {}", panic_label(cx)));
+' > "$TMP/g_old"
+printf '%s' '    asm.ins("bl rt_panicking");
+' > "$TMP/g_new"
+probe "M-M9-07 check_panic 不跳出口" \
+  crates/rgoc-arm64/src/isel.rs "$TMP/g_old" "$TMP/g_new" \
+  rgoc-arm64 -p rgoc-driver --test native_isel_cover t_exc_04
+
+# ── M-M9-11：`type_expr` 不认 `unsafe.Pointer`（M9 收口补的 `R-9-41`）──
+#
+# 判据 `G-M9-01` 的守门（`unsafe_ptr` 两条）。删掉那个 `Expr::Selector` 臂之后
+# 签名里的 `unsafe.Pointer` 重新变 `invalid`，`bin Ne` 当场被 `V3` 拒。
+printf '%s' '            Expr::Selector(s)
+                if matches!(&*s.x, Expr::Name(n) if n.value == crate::unsafe_pkg::PKG_NAME)
+                    && s.sel.value == "Pointer" =>
+            {
+                Some(self.s.tt.add_basic(BasicId::UnsafePointer))
+            }
+' > "$TMP/h_old"
+printf '%s' '' > "$TMP/h_new"
+probe "M-M9-11 type_expr 不认 unsafe.Pointer" \
+  crates/rgoc-check/src/expr.rs "$TMP/h_old" "$TMP/h_new" \
+  rgoc-check -p rgoc-driver --test unsafe_ptr
+
 rm -rf "$TMP"
 
 # ⚠️ 恢复源码之后**必须**让产物失效（同 mutation-m7.sh / -m8.sh 的理由）。
 cargo clean -p rgoc-meta >/dev/null 2>&1
 cargo clean -p rgoc-types >/dev/null 2>&1
 cargo clean -p rgoc-interp >/dev/null 2>&1
+cargo clean -p rgoc-check >/dev/null 2>&1
+cargo clean -p rgoc-arm64 >/dev/null 2>&1
 cargo clean -p rgoc-driver >/dev/null 2>&1
 
 echo ""

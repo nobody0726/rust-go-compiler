@@ -429,3 +429,30 @@ fn t_ssa_35_通过指针读字段() {
         "5\n",
     );
 }
+
+#[test]
+fn t_func_05_四个捕获都要打开() {
+    // 判据 `T-FUNC-05` 的**求值器半边**（M9 收口时补，`G-M9-05`）。
+    //
+    // # 为什么必须有一条
+    //
+    // `MakeClosure` 的捕获是一个数组，而 `natives` 侧（`module.rs`）与求值器
+    // （`ssa_exec`）是**两份**实现。变异 `M-M9-06`（`captures.iter().take(1)`）
+    // 在 M9 的整套 SSA 用例上是**绿的** —— 因为这里根本没有多捕获的闭包
+    // （语料里的 `closure1.go` 那种只捕一个）。
+    //
+    // # 为什么捕获 4 个、且类型要杂
+    //
+    // 只捕 2 个同样能抓住 `take(1)`，但抓不住「按类型宽度搬错」（`string` 是
+    // 16 字节两个字、`*int` 是 8 字节）与「顺序错位」。这里 4 个分别是
+    // `int` / `string` / `int` / `*int`，且**每个都在闭包体里被读**：
+    // `*p = x + d`（读 `x` 与 `p`）、`println(s)`（读 `s`）、`return n + x`。
+    //
+    // 期望值来自官方 `go run`；第二段在闭包**创建之后**改 `n` / `s`，钉住
+    // 「捕获按引用（同一块存储）」—— 按值拷贝会打出 `18 / 18`。
+    expect_out(
+        "closure-4-caps",
+        "package main\n\nfunc main() {\n\tn := 3\n\ts := \"hi\"\n\tx := 5\n\tp := &x\n\tf := func(d int) int {\n\t\t*p = x + d\n\t\tprintln(s)\n\t\treturn n + x\n\t}\n\tprintln(f(10))\n\tn = 4\n\ts = \"yo\"\n\tprintln(f(10))\n\tprintln(x, n, s)\n}\n",
+        "hi\n18\nyo\n29\n25 4 yo\n",
+    );
+}

@@ -194,6 +194,44 @@ fn nat2_panic_终止符() {
 }
 
 #[test]
+fn t_exc_04_逐层_defer_与_panic_之后调用方不再往下跑() {
+    // 判据 `T-EXC-04` 的 native 半边（M9 收口时补，`G-M9-06`）。
+    //
+    // # 它为什么不是「`nat2_panic_终止符` 的复制」
+    //
+    // 那一条的 panic 发生在 `f` 里，而 `main` 只是「调用 + 打印」。这条把
+    // **三层**各挂一个 defer，并在每层的调用**之后**都放一句可观察输出：
+    //
+    // ```text
+    // h 里 panic ⇒ g 的 println("after-h") 不该跑
+    //           ⇒ f 的 println("after-g") 不该跑
+    //           ⇒ main 的 println("unreachable") 不该跑
+    // ```
+    //
+    // 三个标记分别对应 `R-9-24`（直接调用之后要查 panic）在**三层**上都成立。
+    // 少注入任何一层，对应那句就会漏出来 —— 而 `nat2_panic_终止符` 只有一层，
+    // 抓不到「中间层忘了查」。
+    //
+    // 期望值来自官方 `go run`：3 个 defer 按**逆序**（h → g → f）跑完，再由
+    // `main` 的 defer 接住，退出码 0（recover 之后程序正常结束）。
+    let src = "package main\n\nfunc h() {\n\tdefer println(\"h\")\n\tpanic(7)\n}\n\nfunc g() {\n\tdefer println(\"g\")\n\th()\n\tprintln(\"after-h\")\n}\n\nfunc f() {\n\tdefer println(\"f\")\n\tg()\n\tprintln(\"after-g\")\n}\n\nfunc main() {\n\tdefer func() {\n\t\tif r := recover(); r != nil {\n\t\t\tprintln(\"recovered\")\n\t\t}\n\t}()\n\tf()\n\tprintln(\"unreachable\")\n}\n";
+    let (out, err, code) = run_native("exc04_layers", src);
+    assert_eq!(code, Some(0), "recover 之后应正常结束，stderr={err}");
+    assert_eq!(
+        out, "h\ng\nf\nrecovered\n",
+        "三层 defer 必须逆序跑完，且每层调用之后的输出都不该出现"
+    );
+    assert!(
+        !out.contains("after-") && !out.contains("unreachable"),
+        "panic 之后调用方不许继续往下跑：{out:?}"
+    );
+    // 与解释器对撞（两边一起错时仍然绿，所以上面还有手算那一条）
+    let (hout, herr, hcode) = run_hir("exc04_layers", src);
+    assert_eq!(hcode, Some(0), "解释器退出码 {hcode:?}，stderr={herr}");
+    assert_eq!(out, hout, "native 与解释器不一致");
+}
+
+#[test]
 fn nat2_切片变体真的被选择() {
     // # 这条判据在 M9/Phase 1 换过面（`R-9-4`）
     //
