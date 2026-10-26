@@ -28,8 +28,8 @@
 use std::collections::BTreeSet;
 
 use rgoc_hir::{
-    Block as HirBlock, BuiltinKind, Callee, CompositeItem, Expr, ExprKind, FuncId, GlobalId,
-    MakeKind, Place, Program, SlotId, Stmt,
+    Block as HirBlock, BuiltinKind, Callee, CompositeItem, Expr, ExprKind, FuncId, GlobalId, Place,
+    Program, SlotId, Stmt,
 };
 use rgoc_types::{TypeId, TypeTable};
 
@@ -182,10 +182,11 @@ pub fn builtin_summary(k: BuiltinKind) -> Summary {
         BuiltinKind::Panic => s.may_panic = true,
         // 输出是**可观察**的（`C9` 的合并流）：`print` 不写内存，但删了少一行
         BuiltinKind::Print | BuiltinKind::Println => s.prints = true,
-        // 纯读 / 纯分配：`new`/`make` 只写新分配的存储
+        // ⚠️ `new` **不在这张表里**（`R-10-11`）：分配可能 OOM，标 `may_panic`。
+        BuiltinKind::New => s.may_panic = true,
+        // 纯读
         BuiltinKind::Len
         | BuiltinKind::Cap
-        | BuiltinKind::New
         | BuiltinKind::Min
         | BuiltinKind::Max
         | BuiltinKind::Complex
@@ -393,17 +394,29 @@ fn scan_expr(cx: &Ctx, e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
         ExprKind::FuncLit(_) => {}
         ExprKind::Bound { recv, .. } => scan_expr(cx, recv, s, calls),
         ExprKind::TypeAssert { x, .. } => scan_expr(cx, x, s, calls),
-        ExprKind::Make { kind, args } => {
-            // `make` 分配新存储；但 `make([]T, n)` 之后对它写就是堆写，
-            // 那会在赋值点被 `Owner::Heap` 捕获。这里只扫实参。
-            match kind {
-                MakeKind::Slice | MakeKind::Map | MakeKind::Chan => {}
-            }
+        ExprKind::Make { args, .. } => {
+            // ⚠️ **`make` 不是纯的**（`R-10-11`）。注释原来说「只写新分配的
+            // 存储」—— 但分配有**可观察**副作用：
+            //
+            // ① OOM 时机：`C9` §6.1 的 `out of memory` 文本只有真的分配才可能
+            //    打出来；
+            // ② M10 的 GC 压力：`RGOC_GC_STRESS` 是「每 N 次分配收一次」，
+            //    分配被删干净之后 stress 态就是**空跑**。
+            //
+            // 标 `may_panic`（分配失败 = 不返回）：这样「只分配、不写、不打印」
+            // 的函数不会被 `dce` 当成纯调用整个删掉。
+            //
+            // 实测：`churn()` 里 2 万次 `_ = new([1000]byte)` 一次都没执行
+            // （`allocs=1`），因为 `churn` 的摘要是「纯」的 ⇒ 调用被删。
+            s.may_panic = true;
             for a in args {
                 scan_expr(cx, a, s, calls);
             }
         }
-        ExprKind::New(_) => {}
+        ExprKind::New(_) => {
+            // 同 `make`：`new(T)` 必然分配（`R-10-11`）。
+            s.may_panic = true;
+        }
         ExprKind::Builtin { kind, args, .. } => {
             for a in args {
                 scan_expr(cx, a, s, calls);

@@ -22,13 +22,21 @@ use support::gc_probe::run_with_env;
 ///
 /// # 这条钉的是什么
 ///
-/// `G` 是**全局** `*[1024]byte`。`churn()` 分配 2000 个 64 字节的块（全都没人
-/// 持有 ⇒ 每次 stress 都该被回收）。如果 `mark_roots` 没扫 `rt_globals`，
-/// `G` 指向的块会在第一次 churn 分配时被回收 —— 之后 `G[0]` 读到的是**别人的
-/// 数据**，`println` 打出来的不是 49。
+/// `G` 是**全局** `*[1024]byte`（块 = `align16(16+1024)` = **1040 字节**）。
+/// 如果 `mark_roots` 没扫 `rt_globals`，`G` 指向的块会被回收并**被 churn
+/// 复用**（`gc_alloc` 恒清零）⇒ `println` 打出来的不是 49。
 ///
-/// 这是「GC 到底扫没扫全局根」的唯一直接证据。只断言「不崩」是不够的：
-/// 回收后的内存还是可读的（只是内容被复用），所以必须断言**内容**。
+/// # ⚠️ 两个条件缺一不可（这条判据的牙，踩了两次）
+///
+/// 第一版：`2000 × new([64]byte)` = 160 KB —— bump 就够，`free_take` 根本不会
+/// 被调用 ⇒ 「回收了但没复用」，`G[0]` 照样读到 42，变异**是绿的**。
+///
+/// 第二版：`4000 × new([8192]byte)` —— 分配量够了，但 **8208 > 1040**，
+/// `free_take` 的 first-fit 装不进 `G` 那块 ⇒ 还是不复用，变异**还是绿的**。
+///
+/// 所以 churn 的**单块大小必须 <= `G` 的块大小**（`new([1000]byte)` ⇒ 1024），
+/// 且次数要够多（2 万次 = 20 MB）。`stress=16` 而不是 `=1`：2 万次 × 平均
+/// 块数在 `=1` 下是 O(n²)。
 #[test]
 fn t_root_12_全局根保活() {
     let src = r#"package main
@@ -36,8 +44,8 @@ fn t_root_12_全局根保活() {
 var G *[1024]byte
 
 func churn() {
-	for i := 0; i < 2000; i++ {
-		_ = new([64]byte)
+	for i := 0; i < 20000; i++ {
+		_ = new([1000]byte)
 	}
 }
 
@@ -49,7 +57,7 @@ func main() {
 	println(G[0] + G[1023])
 }
 "#;
-    let (out, s) = run_with_env("gc_root_global", src, &[("RGOC_GC_STRESS", "1")])
+    let (out, s) = run_with_env("gc_root_global", src, &[("RGOC_GC_STRESS", "16")])
         .expect("编译 + 运行不该失败");
     assert_eq!(
         out.stdout, "49\n",

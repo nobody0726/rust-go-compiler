@@ -648,19 +648,26 @@ static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
         rt_gc();
     }
 
+    /* 顺序是 **free list → bump → 新 chunk**（`C12` §1.3）。
+     *
+     * # ⚠️ 为什么 free list 必须在 bump 之前
+     *
+     * 第一版写成「先 bump、bump 用完再用 free list」，实测抓到一个**判据假绿**：
+     * `G` 的块被回收进了 free list，但 churn 的分配一直走 bump（16 MiB 用完
+     * 就开新 chunk），于是那个块的内容**从没被覆盖** —— `G[0]` 照样读到原值，
+     * 「全局根保活」的变异测试是绿的。
+     *
+     * 语义上也该如此：free list 里的块是**已经付过 mmap 代价**的，优先复用
+     * 它们才是「堆不增长」；先 bump 会把每个 chunk 都撑满才回头复用，
+     * 白白多占几个 chunk。 */
     u8 *p = 0;
-    for (Chunk *c = heap; c != 0; c = c->next) {
-        if (c->bump + blk <= c->size) {
-            p = bump_take(c, blk);
-            break;
-        }
+    for (Chunk *c = heap; c != 0 && p == 0; c = c->next) {
+        p = free_take(c, &blk);
     }
-    /* bump 不够 ⇒ free list（复用）。这一步就是「M10 的堆只增不减」变成
-     * 「会复用」的地方 —— `T-HEAP-04` 钉它。 */
     if (p == 0) {
         for (Chunk *c = heap; c != 0; c = c->next) {
-            p = free_take(c, &blk);
-            if (p != 0) {
+            if (c->bump + blk <= c->size) {
+                p = bump_take(c, blk);
                 break;
             }
         }
