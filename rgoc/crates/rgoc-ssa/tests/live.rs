@@ -775,10 +775,20 @@ fn t_root_05_位图粒度到字() {
     //
     // ⚠️ 不能按「live 有 3 个」找：`Make` 也是 safepoint，它的活集里正好有
     // `len` / `cap` 与刚被它盖掉之前的切片值。按**只有调用才读的那个值**找。
+    //
+    // ⚠️ M10 起**必须**按「位点上是 `Call`」过滤：`Convert`（转接口 ⇒ `rt_box`
+    // 会分配）现在也是 safepoint，它的活集里多了装箱的**源值** `v3`。
+    // 只按 `live.contains(&vx)` 找会命中 `Convert` 那个位点（它在前面）。
     let sp = l
         .safepoints
         .iter()
-        .find(|s| s.live.contains(&vx))
+        .find(|s| {
+            s.live.contains(&vx)
+                && matches!(
+                    f.blocks[s.block.index()].instrs.get(s.idx),
+                    Some(Instr::Call { .. })
+                )
+        })
         .unwrap_or_else(|| panic!("找不到读 iface 的那个 safepoint：{:?}", l.safepoints));
     assert_eq!(
         sp.live,

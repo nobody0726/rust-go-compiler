@@ -104,9 +104,12 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     for (i, f) in m.funcs.iter().enumerate() {
         let fr = frame::layout_with(f, tt, &siblings)
             .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
-        isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
+        // ⚠️ **M10：`Liveness` 只算一次**，`isel` 的 `sp_idx` 与这里的栈图
+        // 共用同一份（`M10-design.md` §8 风险 1）。两处各算一遍会错位，而
+        // 错位的症状是「扫了错的字」—— 随机崩或静默算错，极难查。
         let cfg = rgoc_ssa::cfg::Cfg::build(f);
         let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
+        isel::func(f, &fr, tt, &siblings, &lv, i, &mut asm).map_err(CompileError::Cg)?;
         stackmaps.push(stack_map_of(i, f, &fr, &lv, tt, &siblings));
     }
     emit_stackmap_rodata(&mut asm, &stackmaps);
@@ -890,6 +893,49 @@ pub fn stack_map_of(
             );
             if base >= 0 {
                 set(base as usize / 8 + usize::from(*w), &mut words);
+            }
+        }
+        // ── 取址槽：**保守标注**（`R-10-14`）──
+        //
+        // # 为什么必须单独标
+        //
+        // `live.rs` 的活跃性只覆盖 **`ValueId`**，而 `var` 声明的局部变量在
+        // SSA 里是 **slot**（`Load`/`Store` 访存），它的值不在值流里 ⇒
+        // **无法逐位点**。
+        //
+        // 漏标的代价是「活对象被回收」（不可接受）；误标的代价只是
+        // `bad_ptr++`（`mark_ptr` 对非块首地址会忽略）。所以按 `ptr_mask`
+        // **全部标注** —— 保守，但只标**真正可能含指针的字**。
+        //
+        // ⚠️ `uintptr` / `int` 那些字的 mask 是 0，不会被误标。这条边界很重要：
+        // `T-PREC-01` 的 `u := uintptr(p) + 8` 是**值**（不是 slot），仍走逐位点
+        // ⇒ 不会被当根；而 `var u uintptr` 的 mask 是 0 ⇒ 也不会被当根。
+        //
+        // 实测（M10/Phase 2）：`ken/interbasic.go` 的 `var ia, ib I0` 正是
+        // slot —— 不标它们，接口的 `data` 被回收后两块复用成同一块，
+        // `if ia == ib` 就成立了（`panic("4")`）。
+        for (slot, s) in &fr.addr_slots {
+            let base_off = i64::from(fr.frame_size) + i64::from(s.off);
+            if fr.heap.contains_key(slot) {
+                // 逃逸槽：帧里只有**一个指针格**，存储本身在别处（`R-13-5`）。
+                if s.size == 8 && base_off >= 0 {
+                    set(base_off as usize / 8, &mut words);
+                }
+                continue;
+            }
+            let Some(typ) = f.slot_types.get(slot) else {
+                continue;
+            };
+            let Some(mask) = ptr_mask(tt, *typ) else {
+                continue;
+            };
+            for (i, b) in mask.iter().enumerate() {
+                if *b {
+                    let base = base_off + 8 * i as i64;
+                    if base >= 0 {
+                        set(base as usize / 8, &mut words);
+                    }
+                }
             }
         }
         // 调用位点的 outgoing 区（`[sp, sp+outgoing)`）。

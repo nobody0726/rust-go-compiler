@@ -15,7 +15,7 @@
 #
 #   `--gc=off`    ⇒ 产物以 `RGOC_GC=0` 跑（与 M9 等价的对照）
 #   `--gc=on`     ⇒ 不额外设变量（缺省值就是开）
-#   `--gc=stress` ⇒ `RGOC_GC_STRESS=1`（每次分配前先收，最能把漏扫的根逼出来）
+#   `--gc=stress` ⇒ `RGOC_GC_STRESS=64`（每 64 次分配前先收，最能把漏扫的根逼出来）
 #
 #   三态必须跑**同一个产物**：环境变量在运行侧加，所以构建只做一次。
 #
@@ -75,7 +75,10 @@ esac
 run_prog() {
   case "$GC_MODE" in
     off) RGOC_GC=0 timeout 20 "$1" ;;
-    stress) RGOC_GC_STRESS=1 timeout 20 "$1" ;;
+    # ⚠️ 间隔是 **64** 不是 1（`R-10-10`）：`=1` 是每次分配都收，代价 O(n²) ——
+    # `gc1.go` 的 1e5 次分配 × 平均块数 ≈ 1.7e10 次块扫描，20 s 跑不完。
+    # 64 足够密：任何漏扫的根最多在 64 次分配后暴露。
+    stress) RGOC_GC_STRESS=64 timeout 60 "$1" ;;
     *) timeout 20 "$1" ;;
   esac
 }

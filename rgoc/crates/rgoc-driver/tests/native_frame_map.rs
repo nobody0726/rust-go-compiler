@@ -237,16 +237,30 @@ fn nat7_帧图与反汇编的偏移必须一致() {
             }
         }
         // ③ 双向：帧图里至少有一个槽偏移真的出现在代码里（否则表是假的）。
+        //
+        // M10 的两条例外（都不削弱「表不是编的」这条意图）：
+        //
+        // * `m.offsets.is_empty()`：函数没有值槽（`helloworld` 的 `main`）。
+        // * `only_rec`：代码里**只**访问帧记录区（`-16/-24/-32`）。
+        //   `SRC` 的 `main` 就是这样 —— 它的 15 个值槽全是**常量**，DCE 之后
+        //   直接进寄存器（`movz x1, #1`），一个都不落槽。所以「槽偏移没出现在
+        //   代码里」不是表假，是那些槽真的没被访问。
+        const REC_OFFS: [i64; 3] = [-16, -24, -32];
         let seen = m.offsets.iter().any(|o| codes.contains(o));
+        let only_rec = codes.iter().all(|o| REC_OFFS.contains(o));
         assert!(
-            seen,
+            seen || m.offsets.is_empty() || only_rec,
             "{name}: 帧图的槽偏移 {:?} 在反汇编里一个都没出现（代码只用了 {codes:?}）",
             m.offsets
         );
-        // ④ 每个负数偏移要么是槽，要么在栈实参区；正数偏移只能是栈实参。
+        // ④ 每个负数偏移要么是槽，要么在**帧记录区**（M10），要么在栈实参区。
+        //
+        // ⚠️ 记录区是 M10 新增的（`C12` §4.2）：`fp-16` prev / `fp-24` fi /
+        // `fp-32` sp_idx。它们**不是值槽**，所以不在 `.framemap` 的 `slot` 行里
+        // —— 那是另一张表（`.stackmap` 管位图，`.framemap` 管值槽）。
         for off in codes {
-            if *off < 0 && !m.offsets.contains(off) {
-                // 负偏移不是槽 ⇒ 一定是别的东西，报出来。
+            if *off < 0 && !m.offsets.contains(off) && !REC_OFFS.contains(off) {
+                // 负偏移不是槽也不是记录 ⇒ 一定是别的东西，报出来。
                 panic!("{name}: 负偏移 {off} 不在帧图的槽偏移里（{:?}）", m.offsets);
             }
         }

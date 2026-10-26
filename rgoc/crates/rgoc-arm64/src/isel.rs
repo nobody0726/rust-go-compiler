@@ -47,6 +47,16 @@ pub struct Ctx<'a> {
     pub tt: &'a TypeTable,
     /// `FuncId → 该函数`（调用点要按**被调方**的形参类型决定寄存器，`R-13-3`）。
     pub siblings: &'a std::collections::BTreeMap<rgoc_hir::FuncId, &'a SsaFunc>,
+    /// `(块号, 指令下标) → safepoint 下标`（`C12` §4.2）。
+    ///
+    /// 来源是 `Liveness::safepoints`，与 `<out>.stackmap` 的 `sp` 行**同序**
+    /// （`(block, idx)` 升序）。两处各算一遍就会错位，而错位的症状是
+    /// 「扫了错的字」—— 随机崩或静默算错（`M10-design.md` §8 风险 1）。
+    pub sp_of: std::collections::BTreeMap<(u32, usize), u32>,
+    /// 本函数在 `Module::funcs` 里的下标 —— `__funcinfo_<i>` 的符号名用它。
+    pub fi_index: usize,
+    /// 本函数**发不发** GC 帧记录（`D-M10-8`：只有含 safepoint 的才发）。
+    pub has_rec: bool,
 }
 
 impl<'a> Ctx<'a> {
@@ -210,15 +220,28 @@ pub fn func(
     fr: &Frame,
     tt: &TypeTable,
     siblings: &std::collections::BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    lv: &rgoc_ssa::live::Liveness,
+    fi_index: usize,
     asm: &mut Asm,
 ) -> Result<(), CgCode> {
     // M9/Task 11 起切片真的被选择（`make`/`Index`/`Slice`/`append`），
     // 所以 M7 的「整个函数一碰到切片就拒」（`U-M7-01`）在这里下线了。
+    //
+    // M10：`Liveness` 由 `module::compile` **只算一次**，代码与栈图共用
+    // （`sp_of` 与 `<out>.stackmap` 的 `sp` 行必须同序）。
+    let mut sp_of: std::collections::BTreeMap<(u32, usize), u32> =
+        std::collections::BTreeMap::new();
+    for (i, sp) in lv.safepoints.iter().enumerate() {
+        sp_of.insert((sp.block.0, sp.idx), u32::try_from(i).unwrap_or(u32::MAX));
+    }
     let cx = Ctx {
         f,
         fr,
         tt,
         siblings,
+        sp_of,
+        fi_index,
+        has_rec: !lv.safepoints.is_empty(),
     };
     // ⚠️ 符号名用 `fn<HIR FuncId>`，**不用** `f.name`：
     // ① 名字会撞（两个类型各有一个 `M` 方法）；
@@ -227,7 +250,7 @@ pub fn func(
     let sym = fn_sym(f.src);
     asm.global(&sym);
     asm.label(&sym);
-    prologue(fr, asm);
+    prologue(&cx, fr, asm);
 
     // **隐式第 0 实参（ctx）**（`M9/Task 40`）：`CapturePtr` 会在任意位置读它，
     // 所以必须先落进帧里保活。⚠️ 必须在 `bind_params` 之前 —— 聚合形参分支
@@ -255,9 +278,12 @@ pub fn func(
         if bi != f.entry.index() {
             asm.label(&block_label(&sym, bi));
         }
-        for ins in &blk.instrs {
+        for (idx, ins) in blk.instrs.iter().enumerate() {
+            emit_sp_idx(&cx, bi, idx, asm);
             instr(&cx, ins, asm)?;
         }
+        // 终止符位置也可能有 safepoint（回边）—— `live.rs` 用 `idx == instrs.len()`。
+        emit_sp_idx(&cx, bi, blk.instrs.len(), asm);
         term(&cx, blk, asm)?;
     }
     // panic 出口（`M9/Phase 5`）：跑本帧的 defer，然后**带着 panic 状态**返回。
@@ -268,7 +294,7 @@ pub fn func(
     asm.label(&panic_label(&cx));
     asm.ins("mov x0, x29");
     asm.ins("bl rt_deferrun");
-    epilogue(fr, asm);
+    epilogue(&cx, fr, asm);
     Ok(())
 }
 
@@ -288,8 +314,47 @@ fn check_panic(cx: &Ctx<'_>, asm: &mut Asm) {
     asm.ins(&format!("cbnz x0, {}", panic_label(cx)));
 }
 
+/// 写本帧的 GC 记录（`C12` §4.2）：`prev` / `fi` / `sp_idx`，再把 `g_frames`
+/// 指向本帧。
+///
+/// ⚠️ **必须在 `fp` 定下来之后调**：`off_stack` 的超大帧会把 `x29` 改成
+/// mmap 块尾，记录要落在块内（`fp-32` 在块内，因为块大小 >= `frame_size`）。
+fn write_rec(cx: &Ctx<'_>, asm: &mut Asm) {
+    // x9 = &g_frames
+    asm.ins("adrp x9, g_frames");
+    asm.ins("add x9, x9, :lo12:g_frames");
+    // prev = g_frames
+    asm.ins("ldr x10, [x9]");
+    asm.ins(&format!("str x10, [x29, #{}]", crate::frame::REC_PREV));
+    // fi = &__funcinfo_<i>
+    let fi = format!("__funcinfo_{}", cx.fi_index);
+    asm.ins(&format!("adrp x10, {fi}"));
+    asm.ins(&format!("add x10, x10, :lo12:{fi}"));
+    asm.ins(&format!("str x10, [x29, #{}]", crate::frame::REC_FI));
+    // sp_idx = 0（保守：还没走到任何 safepoint）
+    asm.ins(&format!("str xzr, [x29, #{}]", crate::frame::REC_SP));
+    // g_frames = fp
+    asm.ins("str x29, [x9]");
+}
+
+/// 在 `(block, idx)` 处如果有 safepoint，就先把它的下标写进帧记录。
+///
+/// **每条 safepoint 前都要写**：位图是**逐位点**的（`D-M10-7`）。用「整个函数的
+/// 并集位图」会踩到「槽里现在是整数、位图上却是根」—— 那是保守扫描，而
+/// `T-PREC-01` 钉的就是「像地址的整数不能被当根」。
+fn emit_sp_idx(cx: &Ctx<'_>, bi: usize, idx: usize, asm: &mut Asm) {
+    if !cx.has_rec {
+        return;
+    }
+    let Some(spi) = cx.sp_of.get(&(u32::try_from(bi).unwrap_or(u32::MAX), idx)) else {
+        return;
+    };
+    load_imm(asm, "x9", i64::from(*spi));
+    asm.ins(&format!("str x9, [x29, #{}]", crate::frame::REC_SP));
+}
+
 /// 序言：`stp` 保存 `fp`/`lr`，`mov fp, sp`，`sub sp`，取址槽清零。
-fn prologue(fr: &Frame, asm: &mut Asm) {
+fn prologue(cx: &Ctx<'_>, fr: &Frame, asm: &mut Asm) {
     asm.ins("stp x29, x30, [sp, #-16]!");
     asm.ins("mov x29, sp");
     // —— 超大帧（`R-9-22`）：整块存储走 mmap ——
@@ -304,6 +369,10 @@ fn prologue(fr: &Frame, asm: &mut Asm) {
         asm.ins("bl rt_stack_frame_alloc");
         load_imm(asm, "x1", i64::from(fr.off_stack_bytes()));
         asm.ins("add x29, x0, x1");
+        // 记录要落在 mmap 块内 ⇒ 必须在 `x29` 改完之后写。
+        if cx.has_rec {
+            write_rec(cx, asm);
+        }
         // mmap 给的是零页 ⇒ 取址槽的零值语义已经满足，不必再 `zero_init`
         // （那会为 128 MiB 帧生成 1600 万条 `str`）。
         return;
@@ -318,6 +387,9 @@ fn prologue(fr: &Frame, asm: &mut Asm) {
             load_imm(asm, "x10", i64::from(imm));
             asm.ins("sub sp, sp, x10");
         }
+    }
+    if cx.has_rec {
+        write_rec(cx, asm);
     }
     fr.zero_init(asm);
 }
@@ -347,7 +419,18 @@ fn release_outgoing(fr: &Frame, asm: &mut Asm) {
 }
 
 /// 尾声：`add sp`、`ldp` 恢复、`ret`。
-fn epilogue(fr: &Frame, asm: &mut Asm) {
+fn epilogue(cx: &Ctx<'_>, fr: &Frame, asm: &mut Asm) {
+    // 先摘链（`g_frames = prev`）—— 必须在 `x29` 还有效时做。
+    //
+    // `epilogue` 是**唯一出口**（`F14`：`Term::Return` 与 panic 出口都走它），
+    // 所以「摘链」只写一次就覆盖两条路径。漏了它会怎样：GC 顺着一条已经
+    // 返回的帧往下扫，扫到的是别人的栈 —— 随机崩。
+    if cx.has_rec {
+        asm.ins("adrp x9, g_frames");
+        asm.ins("add x9, x9, :lo12:g_frames");
+        asm.ins(&format!("ldr x10, [x29, #{}]", crate::frame::REC_PREV));
+        asm.ins("str x10, [x9]");
+    }
     if fr.off_stack() {
         // 先还那块 mmap（`fp` 还在，块首 = `fp - bytes`）
         load_imm(asm, "x1", i64::from(fr.off_stack_bytes()));
@@ -2946,7 +3029,7 @@ fn term(cx: &Ctx<'_>, blk: &Block, asm: &mut Asm) -> Result<(), CgCode> {
             asm.ins("mov x0, x29");
             asm.ins("bl rt_deferrun");
             return_values(cx, vals, asm);
-            epilogue(cx.fr, asm);
+            epilogue(cx, cx.fr, asm);
         }
         Term::Panic(v) => {
             // 只**置状态**，不退出：`defer` 里可能 `recover`（`M9/Phase 5`）。

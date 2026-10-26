@@ -44,9 +44,13 @@ fn 空函数的帧只有保存区() {
     let mut t = TypeTable::new();
     let f = func(Vec::new(), one_block(Term::Return(Vec::new())));
     let fr = layout(&f, &t).unwrap();
-    // `R-13-4`：`frame_size = SAVED + sub_sp_imm`，所以空函数是 16 + 0。
-    assert_eq!(fr.frame_size, 16, "只有 saved fp/lr");
-    assert_eq!(fr.sub_sp_imm(), 0, "stp 已经动了 16，sub 就是 0");
+    // `R-13-4`：`frame_size = SAVED + sub_sp_imm`，所以空函数是 32 + 0。
+    //
+    // ⚠️ M10 起 `SAVED` 是 **32**（保存区 16 + GC 记录区 16，`C12` §4.2）——
+    // 空函数也要那 16 字节，因为 `mark_frame` 要按固定偏移读 `prev/fi/sp_idx`。
+    assert_eq!(fr.frame_size, 32, "保存区 16 + 记录区 16");
+    // 空函数也要 `sub 16`：那 16 字节就是记录区。
+    assert_eq!(fr.sub_sp_imm(), 16, "记录区要落进帧里");
     assert_eq!(fr.tmp_base, None);
     let _ = t.add_basic(BasicId::Int); // 类型表与布局无关，这里只确认借用无副作用
 }
@@ -61,20 +65,22 @@ fn 相邻槽的区间不相交() {
 
     let a = fr.values[&ValueId(0)];
     let b = fr.values[&ValueId(1)];
-    // 第一个槽占 [fp-24, fp-16)（fp+0/+8 是 saved fp/lr）。
-    assert_eq!((a.off, a.size), (-24, 8), "v0 的槽");
-    assert_eq!((b.off, b.size), (-32, 8), "v1 的槽");
+    // 第一个槽占 [fp-40, fp-32)（fp+0/+8 是 saved fp/lr，fp-16..fp-32 是记录区）。
+    assert_eq!((a.off, a.size), (-40, 8), "v0 的槽");
+    assert_eq!((b.off, b.size), (-48, 8), "v1 的槽");
     // 几何断言：两个区间不相交（[off, off+size) 为左闭右开）。
     assert!(
         a.off + a.size as i32 <= b.off || b.off + b.size as i32 <= a.off,
         "槽区间相交：{a:?} 与 {b:?}"
     );
-    // `R-13-4`（帧太小）：`sub sp` 必须覆盖到**最低槽** `-32`
-    // ⇒ `sub = round_up(32,16) = 32`，`frame_size = 16 + 32 = 48`。
+    // `R-13-4`（帧太小）：`sub sp` 必须覆盖到**最低槽** `-48`
+    // ⇒ `sub = round_up(32+16,16) = 48`，`frame_size = 32 + 48 = 80`。
     // 旧写法 `frame_size=32 ⇒ sub=16` 会让 `sp = fp-16`，两个槽全在被调方
     // 的 `stp x29,x30,[sp,#-16]!` 覆盖范围内。
-    assert_eq!(fr.sub_sp_imm(), 32, "sub 要盖住最低槽");
-    assert_eq!(fr.frame_size, 48, "16 保存 + 32 sub");
+    //
+    // ⚠️ M10：`SAVED` 32（保存 16 + 记录 16）⇒ 同样的两个槽，帧从 48 涨到 80。
+    assert_eq!(fr.sub_sp_imm(), 64, "sub 要盖住最低槽");
+    assert_eq!(fr.frame_size, 80, "32 保存+记录 + 48 sub");
 }
 
 #[test]
@@ -87,11 +93,11 @@ fn 零大小值不推进游标() {
     let fr = layout(&f, &t).unwrap();
     assert_eq!(
         (fr.values[&ValueId(0)].off, fr.values[&ValueId(0)].size),
-        (-16, 0)
+        (-32, 0)
     );
     assert_eq!(
         (fr.values[&ValueId(1)].off, fr.values[&ValueId(1)].size),
-        (-24, 8)
+        (-40, 8)
     );
 }
 
@@ -104,15 +110,16 @@ fn 大槽按自身宽度占位() {
     let fr = layout(&f, &t).unwrap();
     assert_eq!(
         (fr.values[&ValueId(0)].off, fr.values[&ValueId(0)].size),
-        (-32, 16)
+        (-48, 16)
     );
     assert_eq!(
         (fr.values[&ValueId(1)].off, fr.values[&ValueId(1)].size),
-        (-40, 8)
+        (-56, 8)
     );
-    // 游标走 16 + 16 + 8 = 40 → 向上取 16 = 48（= sub），frame_size = 16 + 48 = 64。
-    assert_eq!(fr.sub_sp_imm(), 48, "sub 要盖住最低槽 -40");
-    assert_eq!(fr.frame_size, 64);
+    // 游标走 32（保存+记录）+ 16 + 8 + 16（对齐余量）= 72
+    // ⇒ sub = round_up(72,16) - 16 = 64，frame_size = 32 + 64 = 96。
+    assert_eq!(fr.sub_sp_imm(), 80, "sub 要盖住最低槽 -56");
+    assert_eq!(fr.frame_size, 96);
 }
 
 #[test]
@@ -127,10 +134,11 @@ fn 临时区按最大边实参() {
     let f = func(vec![i, i, i], one_block(term));
     let fr = layout(&f, &t).unwrap();
     assert_eq!(fr.tmp_slots, 3);
-    // 游标 16 + 3*8（槽）+ 3*8（临时区）= 64 ⇒ sub = 64，frame_size = 16 + 64 = 80。
-    assert_eq!(fr.sub_sp_imm(), 64);
-    assert_eq!(fr.frame_size, 80);
-    assert_eq!(fr.tmp_base, Some(-64), "临时区起点 = 帧底");
+    // 游标 32 + 3*8（槽）+ 3*8（临时区）+ 8（对齐余量）= 88
+    // ⇒ sub = round_up(88,16) - 16 = 80，frame_size = 32 + 80 = 112。
+    assert_eq!(fr.sub_sp_imm(), 96);
+    assert_eq!(fr.frame_size, 112);
+    assert_eq!(fr.tmp_base, Some(-80), "临时区起点 = 帧底");
 }
 
 #[test]
@@ -169,8 +177,8 @@ fn 取址槽进独立区() {
     let fr = layout(&f, &t).unwrap();
     assert_eq!(fr.values.len(), 1);
     assert_eq!(fr.addr_slots.len(), 1);
-    // 值槽占 [fp-24,-16)，取址槽在它下面 [fp-32,-24)
-    assert_eq!(fr.addr_slots[&SlotId(0)].off, -32);
+    // 值槽占 [fp-40,-32)，取址槽在它下面 [fp-48,-40)
+    assert_eq!(fr.addr_slots[&SlotId(0)].off, -48);
 }
 
 #[test]

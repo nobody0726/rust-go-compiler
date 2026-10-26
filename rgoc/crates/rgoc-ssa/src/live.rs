@@ -321,7 +321,7 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
             cur.extend(blk.instrs[ii].uses());
         }
         for (ii, ins) in blk.instrs.iter().enumerate() {
-            if !is_safepoint(ins) {
+            if !is_safepoint(ins, f, tt) {
                 continue;
             }
             // 这条指令自己读的也算（传进调用的指针在调用期间活着）
@@ -357,14 +357,77 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
 /// 一条**指令**是不是 safepoint（能调出去 / 能分配）。
 ///
 /// 终止符不由它判：回边是「图上的性质」（目标支配本块），见 `analyze` 的 ④ 末段。
-fn is_safepoint(i: &Instr) -> bool {
+fn is_safepoint(i: &Instr, f: &SsaFunc, tt: &TypeTable) -> bool {
     match i {
         // 任何调用：用户函数、方法、内建（`append` 会分配，`println` 会调出去）
         Instr::Call { .. } => true,
         // 分配点：`make` / `new`（`new` 是 `len=cap=None` 且 `typ` 为指针的 `Make`）
         Instr::Make { .. } => true,
+        // ⚠️ **M10 补的四条**（`R-10-13`）：它们也会 `bl` 出去，而且其中两条
+        // **会分配**。原来不算 safepoint ⇒ 那些点上的 GC **没有位点**，
+        // `sp_idx` 停在上一个位点上 ⇒ 扫到错的字（漏标 ⇒ 活对象被回收）。
+        //
+        // | 指令 | isel 发的 | 会不会分配 |
+        // |---|---|---|
+        // | `MakeClosure` | `rt_alloc_closure` | **会** |
+        // | `Convert`（**转接口**）| `rt_box` | **会** |
+        // | `Bin`（**接口 `==`/`!=`**）| `rt_iface_eq` | 不会，但会调出去 |
+        // | `TypeAssert` | `rt_panic_assert` | 不会，可能 panic |
+        //
+        // ⚠️ 后两条要**按类型判**：`Convert` 只在目标类型是接口时才 `rt_box`，
+        // `Bin` 只在操作数是接口时才 `rt_iface_eq`。全算的话每个二元运算都是
+        // 位点 —— `ken/interbasic.go` 从 4 个涨到 15 个，`turing.go` 那种程序
+        // 会涨到几百个（栈图膨胀 + 每条 `Bin` 前多两条指令）。
+        //
+        // 实测（M10/Phase 2）：`ken/interbasic.go` 的
+        // `if ia == ib { panic("4") }` 在 stress 下真的 panic 了 ——
+        // 装箱点没有位点 ⇒ `ib` 的接口 `data` 没被标记 ⇒ 被回收后
+        // `ia.data` 复用了同一块 ⇒ 两个接口「相等」。
+        Instr::MakeClosure { .. } => true,
+        Instr::TypeAssert { .. } => true,
+        // ⚠️ **`Convert` 到 `string` 也要**：`string(rune)` → `rt_i64_to_str`、
+        // `[]byte` → `string` → `rt_bytes2str`、`[]rune` → `string` →
+        // `rt_runes2utf8`，三个都**分配 raw 块**。
+        //
+        // `Bin`（接口 `==` → `rt_iface_eq`）**不需要**：它调出去但不分配，
+        // 而 GC 只在分配点触发 ⇒ 没有位点也不会漏根。少一个位点少两条指令。
+        Instr::Convert { typ, .. } => is_boxing_target(tt, *typ),
+        // 字符串拼接 `a + b` → `rt_strcat`（**分配 raw 块**）。
+        Instr::Bin { op, lhs, .. } => {
+            matches!(op, rgoc_hir::BinOp::Add) && is_string(tt, f.value_types[lhs.index()])
+        }
         _ => false,
     }
+}
+
+/// 这个转换目标会不会**分配**（`R-10-13`）？
+///
+/// 只有两种：
+/// * 接口 ⇒ `rt_box`（分配一块放被装箱的值）；
+/// * `string` ⇒ `rt_i64_to_str` / `rt_bytes2str` / `rt_runes2utf8`（分配 raw 块）。
+///
+/// ⚠️ `Bin`（接口 `==` → `rt_iface_eq`）**不需要**：它调出去但不分配，
+/// 而 GC 只在分配点触发 ⇒ 没有位点也不会漏根。少一个位点就少两条指令。
+fn is_boxing_target(tt: &TypeTable, t: TypeId) -> bool {
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, t)),
+        rgoc_types::typ::Type::Interface(_)
+            | rgoc_types::typ::Type::Basic(rgoc_types::BasicId::String)
+    )
+}
+
+/// 这个类型是 `string` 吗（含具名与别名）？
+fn is_string(tt: &TypeTable, t: TypeId) -> bool {
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, t)),
+        rgoc_types::typ::Type::Basic(rgoc_types::BasicId::String)
+    )
 }
 
 fn touch(iv: &mut BTreeMap<ValueId, Interval>, v: ValueId, pos: Pos) {

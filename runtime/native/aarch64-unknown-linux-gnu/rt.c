@@ -175,6 +175,21 @@ i64 rt_memcmp(const void *a, const void *b, u64 n) {
 #define BLK_HDR 16UL
 #define BLK_MIN 16UL /* 空闲块也有头 */
 
+/* 帧记录区（`C12` §4.2，与 `rgoc_arm64::frame::REC_*` **同值**）。
+ *
+ * ```text
+ * [fp-16] prev    上一帧的 fp（0 = 链尾）
+ * [fp-24] fi      *RtFuncInfo
+ * [fp-32] sp_idx  本帧当前的 safepoint 下标
+ * ```
+ *
+ * ⚠️ 三个值必须与 Rust 侧一致：`_Static_assert` 做不到（那边是 `i32` 常量），
+ * 所以靠 `T-ROOT-09`（帧记录链能跑通）与 `C12` §4.2 的文字钉。
+ */
+#define REC_PREV (-16)
+#define REC_FI (-24)
+#define REC_SP (-32)
+
 /* ⚠️ **Chunk 头 64 字节**，与块头**不是一回事**。`bump` 从 `CHUNK_HDR` 起 ——
  * 写成 `BLK_HDR`（16）会让第一个块覆盖自己的 chunk 头（`size`/`bump`/
  * `free_head`/`meta_bm` 全被写坏，症状是第二次分配时 `meta_bm == 0` 段错误）。
@@ -1019,8 +1034,84 @@ static void drain(void) {
     }
 }
 
-/* Phase 1 只扫**全局**根（`C12` §4.1 的第 2 类）。栈根在 Phase 2。 */
+/* ── 栈根：帧记录链（`C12` §4.2，M10/Task 22–23）── */
+
+/* 帧记录链的链头。由 `isel` 的序言/尾声维护（`g_frames = fp` / `= prev`），
+ * 这里只**读**。`.bss` 天然为零 ⇒ 空链。 */
+void *g_frames;
+
+/* `RtFuncInfo` 的 C 镜像（`C5` §11.4，M9 已发在 `.rodata`）。
+ *
+ * ⚠️ `sp_off[i]` 是第 `i` 个 safepoint 位图在 `sp_bits` 里的**起始字下标**
+ * （`R-9-33`），不是位偏移。写成「位偏移再除 64」会让三个 safepoint 共用
+ * 同一个 quad（实测 `.Lspoff0 = [0,1,2]` 正是字下标）。 */
+typedef struct {
+    u32 frame_size;
+    u32 n_sp;
+    const u32 *sp_off;
+    const u64 *sp_bits;
+} RtFuncInfo;
+
+/* 扫一帧的位图。位序：bit `i` ↔ `fp - frame_size + 8i`（`C5` §8.4 冻结）。
+ *
+ * 返回上一帧的 `fp`（0 = 链尾）。
+ *
+ * ⚠️ **绝对不要在这里改 `g_frames`**（第一版就是那么写的，`g_frames = prev`）：
+ * `g_frames` 是**链头**，扫完一次链它就变成 0 了 —— 之后每次 GC 都是空链。
+ * 实测症状：第一次 GC 打了 2 个 `F`，之后 100 次一个都没有，`live` 恒 0，
+ * 而 `collections` 正常增长（看起来「GC 在跑」，其实什么都没扫）。 */
+static u8 *mark_frame(u8 *fp) {
+    u64 prev = *(u64 *)(fp + REC_PREV);
+    const RtFuncInfo *fi = *(const RtFuncInfo **)(fp + REC_FI);
+    u64 idx = *(u64 *)(fp + REC_SP);
+    if (fi != 0) {
+        if (idx >= (u64)fi->n_sp) {
+            /* `sp_idx` 越界 ⇒ **跳过这一帧**（漏标总比乱扫好），但计数器
+             * 非 0 时测试会红。 */
+            gc_bad_sp++;
+        } else {
+            const u64 *bits = fi->sp_bits + fi->sp_off[idx];
+            u64 words = ((u64)fi->frame_size / 8 + 63) / 64;
+            u8 *base = fp - fi->frame_size;
+            for (u64 w = 0; w < words; w++) {
+                u64 word = bits[w];
+                while (word != 0) {
+                    u64 b = (u64)__builtin_ctzll(word);
+                    word &= word - 1;
+                    u64 bit = w * 64 + b;
+                    if (bit * 8 >= (u64)fi->frame_size) {
+                        continue;
+                    }
+                    void *q;
+                    rt_memcpy(&q, base + bit * 8, 8);
+                    mark_ptr(q);
+                }
+            }
+        }
+    }
+    return (u8 *)prev;
+}
+
+/* 走完整条帧链。链是**从新到旧**的（每帧的 `prev` 指向它的调用者）。
+ *
+ * 用**局部游标**遍历，`g_frames` 只读 —— 它是链头，写它等于把链剪断。 */
+static void mark_frames(void) {
+    u8 *fp = (u8 *)g_frames;
+    while (fp != 0) {
+        fp = mark_frame(fp);
+    }
+}
+
+/* defer 链的根（`C12` §4.1 第 3 类）。实现放在 `DeferRec` 定义之后。 */
+static void mark_defer(void);
+
+/* 扫根（`C12` §4.1）：**全局** / **栈** / **defer 链**。
+ *
+ * 还差的三类在 Task 25–26 接（map 槽 / 闭包捕获 / 数组元素）—— 那三类是
+ * **由被标记的块自己带出来的**（`scan_block` 按 kind 扫），不需要在这里列。 */
 static void mark_roots(void) {
+    mark_frames();
+    mark_defer();
     for (u64 i = 0; i < rt_nglobals; i++) {
         const TypeDesc *d = (const TypeDesc *)rt_globals[i].desc;
         u8 *a = rt_globals[i].addr;
@@ -1950,6 +2041,23 @@ static i64 g_in_defer;
  * M9 没有 reflect（`U-M9-04`），所以 `recover()` 的返回值只有「非 nil」与
  * 「按 `C9` §4.3 打印」两个可观察面 —— 给一个 string 接口两件事都成立。 */
 static const TypeDesc g_panic_str_desc = {16, 8, 0x9e3779b9u, 6, 1, 0, 0, 0, 0};
+
+/* defer 链的根（`C12` §4.1 第 3 类）。
+ *
+ * # 为什么 `DeferRec` 自己不是根
+ *
+ * 它留在 arena（`K_ARENA`，永不回收），所以不需要标记。但它的 `fv` 指向
+ * **托管堆上的闭包块**（`MakeClosure` 走 `rt_alloc_closure`）—— 不扫它，
+ * 闭包块会在下一次 GC 被回收，`rt_deferrun` 里的 `call_funcval(fv)` 就读到
+ * 垃圾（实测 `closure4.go` / `defernil.go` 在 stress 下 rc=135）。
+ *
+ * `next` 是 arena 地址、`fp` 是栈地址 —— `mark_ptr` 的 `chunk_of` 都会忽略。
+ */
+static void mark_defer(void) {
+    for (DeferRec *r = g_defer_top; r != 0; r = r->next) {
+        mark_ptr(r->fv);
+    }
+}
 
 void rt_defer_push(void *fp, void *fv) {
     DeferRec *r = rt_arena_alloc(sizeof(DeferRec), 8);

@@ -211,8 +211,36 @@ impl fmt::Display for FrameError {
     }
 }
 
-/// `saved fp` + `saved lr` 占的 16 字节。
-const SAVED: u32 = 16;
+/// 帧顶的 **GC 记录区**（`C12` §4.2，M10/Task 21）。
+///
+/// ```text
+/// [fp+8]  saved lr
+/// [fp]    saved fp
+/// [fp-8]  （M7 的保留间隙，仍未用）
+/// [fp-16] prev      上一帧的 fp（链头是全局 g_frames；0 = 链尾）
+/// [fp-24] fi        *RtFuncInfo（M9 已发在 .rodata）
+/// [fp-32] sp_idx    本帧**当前**的 safepoint 下标
+/// [fp-40] 槽 0
+/// ```
+///
+/// # 为什么记录在 `[fp-32, fp-8)` 而不是从 `fp-16` 起
+///
+/// M7 的布局把 `[fp-16, fp)` 空着（`SAVED = 16` 而第一个槽在 `fp-24`），
+/// 所以 `fp-16` 那个字本来就可白用。但三个字要从 `fp-16` 往上排就撞上
+/// `[fp]`（saved fp）—— 所以记录只能占 `fp-16` / `fp-24` / `fp-32`，
+/// 槽区整体下移 16 字节（`SAVED` 16 → 32）。
+pub const REC_PREV: i32 = -16;
+/// 记录区第 2 字：`*RtFuncInfo`。
+pub const REC_FI: i32 = -24;
+/// 记录区第 3 字：当前 safepoint 下标。
+pub const REC_SP: i32 = -32;
+
+/// `saved fp` + `saved lr` 的 16 字节 + GC 记录区的 16 字节（`REC_*`）。
+///
+/// ⚠️ **不是 16**：M10 把槽区整体下移 16 字节给记录区让位。写成 16 会让
+/// 第一个槽压在 `sp_idx` 上（`REC_SP == -32` 与槽 0 的 `-(16+8) == -24` 只差 8，
+/// 而记录占三个字）—— 症状是「GC 扫到垃圾 sp_idx」或「槽被记录覆盖」。
+const SAVED: u32 = 32;
 
 /// 布局一个函数。
 ///
@@ -239,7 +267,8 @@ pub fn layout_with(
 ) -> Result<Frame, FrameError> {
     let outgoing = max_outgoing(f, tt, siblings);
     // `cur` 是**槽区**的游标（从 0 起，不含保存区）。
-    // 槽的偏移一律是 `-(SAVED + cur)`：保存区占 `[fp-16, fp)`，槽区在它下面。
+    // 槽的偏移一律是 `-(SAVED + cur)`：保存区 + GC 记录区占 `[fp-32, fp)`，
+    // 槽区在它下面（`C12` §4.2）。
     //
     // 从 `SAVED` 起算再 `sub = round_up(cur,16)` 会让空函数也 `sub 16`（白占 16 字节），
     // 而且「`sub` 要 ≥ 最低槽」这条约束会写得不直观。

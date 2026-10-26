@@ -112,7 +112,9 @@ fn 多个取址槽按槽号升序() {
     let i = t.add_basic(BasicId::Int);
     let f = func(Vec::new(), vec![(SlotId(2), i), (SlotId(0), i)]);
     let lines = lines_of(&f, &t);
-    // 槽 0 的偏移比槽 2 浅（先分配）⇒ 先出现 -24，后出现 -32。
-    assert!(lines[0].contains("#-24"), "槽 0 先清：{}", lines[0]);
-    assert!(lines[2].contains("#-32"), "槽 2 后清：{}", lines[2]);
+    // 槽 0 的偏移比槽 2 浅（先分配）⇒ 先出现 -40，后出现 -48。
+    //
+    // ⚠️ M10：`SAVED` 16 → 32（帧顶多 16 字节 GC 记录区）⇒ 所有槽偏移 -16。
+    assert!(lines[0].contains("#-40"), "槽 0 先清：{}", lines[0]);
+    assert!(lines[2].contains("#-48"), "槽 2 后清：{}", lines[2]);
 }
