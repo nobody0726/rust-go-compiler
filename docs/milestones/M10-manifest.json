@@ -1,0 +1,301 @@
+{
+ "stage": "M10",
+ "name": "精确 STW GC（托管堆 / 16 字节块头 / 起始位图 / 帧记录链与逐位点根）",
+ "generated_at": "2026-10-27T00:00:00Z",
+ "filled_at": "2026-10-27T00:00:00Z",
+ "fill_task": "M10-plan.md Task 39（按实测数字填；由 rgoc-driver/tests/manifest_m10.rs 对账）",
+ "status": "已收口 —— 九条门禁 GC-1..GC-9 全部 pass；三态语料各 69/0/0（off / on / stress，**on 态在 Task 33 之后真的收垃圾**）；235 suite / 2234 passed / 0 failed / 2 ignored；变异 20/20 全红；open_gaps 为空，closed_gaps 5 条（G-M10-01..05 全部关闭）",
+ "scope": "把 M9 的 bump arena 换成**精确的 stop-the-world 标记-清扫**：托管堆与 arena 分离（语义上）、16 字节块头与五种 kind、chunk 16 MiB 对齐 + 起始位图 + 页摘要（内部指针回块首）、帧记录链（每帧 24 字节 {prev, fi, sp_idx}）+ 逐位点位图、八类根、自动触发与统计行。**不含**：多线程/并发 GC（M11）、对象移动/压缩（D-M10-5 明确不做）、分代（roadmap 的 M12 之后）",
+ "docs": {
+  "design": "docs/milestones/M10-design.md（D-M10-1..15 / F1..F14 / 门禁 GC-1..GC-9 / §3 根协议 / §8 风险）",
+  "tests": "docs/milestones/M10-tests.md（T-HDR/T-HEAP/T-GC/T-ROOT/T-PREC 各族 + §9 变异 + §10 不变式）",
+  "plan": "docs/milestones/M10-plan.md（Task 1–45；进度台账 .superpowers/sdd/M10-plan/progress.md，不入库）",
+  "report": "docs/milestones/M10-report.md",
+  "contracts": [
+   "C12（新建；堆形状 / 块头与 kind / 起始位图与内部指针 / 根集合与帧记录 ABI / 触发与统计 / arena 保留面）",
+   "C5 §11.1（对象头 8 → 16 字节）与 §7（帧布局 SAVED 16 → 32）",
+   "C9 §5（GC 统计行只进 stderr，合并流与退出码一字不改）"
+  ]
+ },
+ "crates": [
+  {
+   "name": "rgoc-ssa",
+   "role": "live.rs 的 is_safepoint 改成**穷尽匹配**（会分配的指令必须是位点）；DCE 与 effect 摘要不再把分配当纯"
+  },
+  {
+   "name": "rgoc-arm64",
+   "role": "isel（帧记录 write_rec / emit_sp_idx / epilogue 摘链 / rt_alloc_escaped）、frame（REC_* 与 SAVED=32、帧图补 addr-slot 行）、module（Liveness 前移、stack_map_of 的取址槽保守标注）"
+  },
+  {
+   "name": "rgoc-driver",
+   "role": "gc_*.rs 七个测试文件 + 变异脚本；统计行探针装置（support/gc_probe.rs）"
+  }
+ ],
+ "corpus_lists": {
+  "root": "go_source_code/test（只读；corpus-manifest.sha256 锁定）",
+  "input": {
+   "file": "tools/run-oracle/run-selected.txt",
+   "count": 69,
+   "note": "M5 冻结的 69 个入选语料"
+  },
+  "native": {
+   "states": ["off", "on", "stress"],
+   "counts": {
+    "off": "69/0/0",
+    "on": "69/0/0",
+    "stress": "69/0/0"
+   },
+   "note": "`run-native.sh --gc=off|on|stress`；stress 用**间隔 64**（R-10-10：`=1` 是 O(n²)，1e5 次分配的语料跑不完）"
+  },
+  "rejected": {
+   "count": 0,
+   "note": "拒绝面仍为空（M10 没有新增拒绝项）"
+  }
+ },
+ "measured": {
+  "workspace": "235 suite / 2234 passed / 0 failed / 2 ignored",
+  "corpus_native_three_states": "off 69/0/0 · on 69/0/0 · stress 69/0/0",
+  "mutations": "20/20 全红（scripts/mutation-m10.sh）",
+  "longrun": {
+   "fixture": "1e5 × make([]int,128)（累计 100 MB），RGOC_GC_THRESHOLD=1048576",
+   "collections": 97,
+   "allocs": 100000,
+   "frees": 99326,
+   "live_bytes": 1040,
+   "heap_committed": 17039872,
+   "chunks": 1,
+   "rss_kb": 2772,
+   "note": "100 MB 累计分配压在 **1 个 chunk（17 MB mmap）** 里，存活 1040 字节、峰值 RSS 2.7 MB"
+  },
+  "longrun_stress64": {
+   "collections": 100000,
+   "live_bytes": 1040,
+   "heap_committed": 17039872,
+   "rss_kb": 2772,
+   "note": "同一 fixture 在 stress=64 下每 64 次分配收一次，读数与自动态一致 —— 压力与自动等价"
+  },
+  "auto_small": {
+   "fixture": "20000 × make([]int,32)（累计 10 MB），RGOC_GC_THRESHOLD=65536",
+   "collections": 78,
+   "live_bytes": 272,
+   "rss_kb": 2784
+  }
+ },
+ "measurement_deviations": [
+  {
+   "item": "对象头 8 → 16 字节的代价",
+   "planned": 8,
+   "actual": 16,
+   "trigger": "块大小必须能从块头**自证**（R-10-9）：`desc` 非法时按 `kind + n + desc` 算不出大小，而 sweep 按地址顺序走 —— 算错一步就走到块中间。于是 `+8` 要放 `n | (kind<<32) | ((blk>>4)<<35)`",
+   "resolution": "块头固定 16 字节；`n` 32 位、`kind` 3 位、`blk>>4` 29 位（最大 8 GiB）。C12 §2.1 冻结"
+  },
+  {
+   "item": "帧记录区的大小",
+   "planned": "24 字节（`[-32, -8)`）",
+   "actual": "16 字节（`[-32, -16)`），`SAVED` 16 → 32",
+   "trigger": "M7 的布局在 `[fp-16, fp)` 空着 16 字节；三个记录字放不进 `[-32, -16)` 之外的地方，因为 `[fp]` 是 saved fp",
+   "resolution": "值槽从 `-40` 起；`frame_size = 32 + sub_sp_imm`。C12 §4.2 冻结"
+  },
+  {
+   "item": "自动触发的触发条件",
+   "planned": "分配失败 && heap_committed >= threshold",
+   "actual": "每次分配前 gc_since >= max(gc_threshold, gc_live_bytes*2)",
+   "trigger": "初稿的条件**永远不会触发**：chunk 是 16 MiB，语料里的程序都分配不到 16 MiB ⇒ bump 永远够 ⇒ 自动态退化成关态，off 与 on 逐字节相同（R-10-25）",
+   "resolution": "看 gc_since（真实分配量）而不是 heap_committed（mmap 量，一跳 16 MiB）；阈值随存活集自适应。T-GC-01 钉住"
+  },
+  {
+   "item": "根集合的「精确」程度",
+   "planned": "逐位点精确（live-in）",
+   "actual": "live-**out** 的保守超集（多标本轮 def 的槽）",
+   "trigger": "改成真 live-in 实测让 defernil / print / nilptr2 / method5 全部坏掉（MakeClosure 的 dst 尤其明显：去掉它 defer 就崩），机制未查清（R-10-21）",
+   "resolution": "保留超集（多标=泄漏一轮，漏标=活对象被回收，代价不对等）；bad_ptr 收窄成「只计真错」；T-ROOT-10 改成读内容。**机制留作 G-M10-06 的后续调查**"
+  },
+  {
+   "item": "变异条数",
+   "planned": "12",
+   "actual": 20,
+   "trigger": "Phase 1 的 9 条 + Phase 2 的 10 条（其中 2 条最初绿：t_root_10 的判据随 bad_ptr 收窄失效、t_root_11 缺「返回后再分配」）+ Phase 3 的 1 条",
+   "resolution": "20 条全部实证变红；两条「绿」的成因与修法写进 M10-report.md 的「判据没牙的三个层次」"
+  }
+ ],
+ "gate": [
+  {
+   "id": "GC-1",
+   "name": "对象头与块形状（16 字节 / 五种 kind / 16 对齐）",
+   "status": "pass",
+   "evidence": "gc_heap.rs::t_hdr_02（块头 16 字节与 16 对齐，用 `uintptr` 差值量）+ t_hdr_03（五种 kind 各 >= 1，含 mapslots）+ gc_arena.rs（六条 arena 保留面，按源码片段正反向查）；`M-M10-01`（块大小恒 32）/`M-M10-04`（不写标记位）变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "GC-2",
+   "name": "托管堆（chunk 16 MiB 对齐 / 起始位图 / 页摘要 / free list 复用 / 内部指针回块首）",
+   "status": "pass",
+   "evidence": "gc_heap.rs::t_heap_03/03b/03c（chunk 记账自洽、多 chunk、空程序不占堆）+ t_heap_05（1 MiB 数组的**尾字节**内部指针走 resolve_block 的退化路径）+ t_heap_01（复用块必须清零）+ t_heap_07（切片字面量元素各不相同）+ gc_reclaim.rs::t_heap_04（累计 100 MB 只占 1 个 chunk）；`M-M10-02`/`M-M10-06`/`M-M10-07`/`M-M10-08`/`M-M10-12` 变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "GC-3",
+   "name": "精确根（八类各一条：栈 / 全局 / defer / panic / map 槽 / 闭包 / 数组 / pin）",
+   "status": "pass",
+   "evidence": "gc_stack.rs 五条（t_root_09 局部指针活过 churn / t_root_10 每个位点用自己那张位图 / t_root_11 三层帧的链 / t_root_13 defer 闭包 / t_root_14 闭包捕获取址槽）+ gc_reclaim.rs::t_root_12（全局根保活）+ t_gc_12（非堆指针不算错）+ gc_heap.rs::t_map_11（map 值里的指针要保活）；`M-M10-09`/`M-M10-11`/`M-M10-14`/`M-M10-15`/`M-M10-16`/`M-M10-17`/`M-M10-19` 变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "GC-4",
+   "name": "精确性（「精确」二字的唯一强证据）",
+   "status": "pass",
+   "evidence": "gc_precise.rs::t_prec_01（`u := uintptr(unsafe.Pointer(p)); p = nil` 之后那块 8 KiB 必须被回收 ⇒ `live < 8192`）+ t_gc_10（`.s` 里不出现 callee-saved 寄存器 ⇒ 没有寄存器根）；`M-M10-18`（整帧保守扫描）变异实证",
+   "gap": "「逐位点 vs 函数级并集」这条**没有独立判据**了：并集位图只会多标（泄漏），不会错收，而 `bad_ptr` 收窄后抓不到它。现在由 t_prec_01（读 live）间接覆盖 —— 并集位图会把 `u` 在别的位点上也标上，从而钉住那块 8 KiB"
+  },
+  {
+   "id": "GC-5",
+   "name": "触发与统计（自动触发 / 统计行 12+1 字段 / 压力间隔 / 确定性）",
+   "status": "pass",
+   "evidence": "gc_stats.rs（stdout 一个字节不多 / 不设 STATS 时 stderr 为空 / 字段齐全且顺序固定）+ gc_probe.rs 七条（解析器对五种坏行各报错）+ gc_longrun.rs::t_gc_01（阈值 64 KiB + 1 MiB ⇒ collections>=1；反向 RGOC_GC=0 ⇒ 0 次）+ t_gc_08（跑两次四个数完全相同）；`M-M10-20`（自动触发永不触发）变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "GC-6",
+   "name": "零回归（三态语料各 69/0/0）",
+   "status": "pass",
+   "evidence": "run-native.sh --gc=off|on|stress 各 69/0/0；gc_corpus.rs::t_corp_00（六个代表语料三态 stdout 逐字节相同 + 每态 `mode=` 是各自那一个）+ t_corp_00b（语料里真的有分配，>=5/6）；`M-M10-10`（Composite 不是 safepoint）变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "GC-7",
+   "name": "长跑与碎片（有界 / 碎片只测不修 / OOM 不变 / RSS）",
+   "status": "pass",
+   "evidence": "gc_longrun.rs::t_gc_05（1e5 × 1 KiB ⇒ live 1040 B、heap 17 MB、1 chunk）+ t_gc_06（交替大小分配，判 live 与 heap，**记录**碎片率 99.99% 并写清「单 chunk 时分母里 16 MiB 是粒度不是碎片」）+ t_gc_07（`RGOC_HEAP_MAX=4194304` ⇒ 文本与退出码 2 一字不差）+ t_gc_09（0 < rss*1024 < heap）",
+   "gap": "—"
+  },
+  {
+   "id": "GC-8",
+   "name": "守卫（钉住「现在的实现没有这些东西」）",
+   "status": "pass",
+   "evidence": "gc_arena.rs::t_gc_11（arena 保留面，六条按源码片段正反向查）+ gc_precise.rs::t_gc_10（没有 callee-saved 寄存器）+ gc_reclaim.rs::t_gc_12（扫到非堆指针不算错）+ chan_contract.rs::t_sch_04（M9 不交 native 并发）",
+   "gap": "—"
+  },
+  {
+   "id": "GC-9",
+   "name": "变异（20 条，每条必须实证变红）",
+   "status": "pass",
+   "evidence": "scripts/mutation-m10.sh ⇒ `RED 20 / 失手 0`；脚本自带「锚点没命中就是 MISS」与「恢复后 touch」两条纪律（M9 踩过 mtime 陈旧导致 cargo 复用变异版 rlib）",
+   "gap": "—"
+  }
+ ],
+ "unsupported": [
+  {
+   "id": "U-M10-01",
+   "what": "并发 / 增量 GC",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "M10 是**单线程 STW**：`rt_gc` 只在分配点同步跑，没有写屏障、没有后台标记线程。M11 的 goroutine 一上来就必须先解决「多栈」与「抢占点」",
+   "map_note": "不存在面：没有判据能测「并发正确性」，如实记"
+  },
+  {
+   "id": "U-M10-02",
+   "what": "对象移动 / 压缩",
+   "code": null,
+   "exit": null,
+   "test_id": "T-GC-06",
+   "evidence": "`D-M10-5` 明确不移动：内部指针没有 forwarding 表。碎片只能**记录**不能修（t_gc_06 的注释里写清了 99.99% 这个数怎么读）",
+   "map_note": "不存在面：判据只能是「碎片率被记录」，不能是「碎片小」"
+  },
+  {
+   "id": "U-M10-03",
+   "what": "分代 / 年轻代",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "全堆标记。长跑判据（t_gc_05）量的是「有界」而不是「停顿短」",
+   "map_note": "不存在面：没有停顿时间判据"
+  },
+  {
+   "id": "U-M10-04",
+   "what": "写屏障",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "STW 全堆扫描不需要写屏障；`mark_defer` / 全局根 / 帧链都是「扫的时候现读」，所以**赋值不需要通知 GC**",
+   "map_note": "不存在面"
+  },
+  {
+   "id": "U-M10-05",
+   "what": "size-class / span 分配器",
+   "code": null,
+   "exit": null,
+   "test_id": "T-GC-05",
+   "evidence": "只有 first-fit free list + bump（`C12` §1.3）。t_gc_05 量「不涨堆」，不量「分配快」",
+   "map_note": "不存在面：没有吞吐判据"
+  },
+  {
+   "id": "U-M10-06",
+   "what": "finalizer / weak ref",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "Go 只有 `runtime.SetFinalizer`，M10 的语料面里没有；`unsafe.Pointer` 的 keepalive 语义也没做",
+   "map_note": "不存在面"
+  },
+  {
+   "id": "U-M10-07",
+   "what": "栈收缩 / 栈复制",
+   "code": null,
+   "exit": null,
+   "test_id": "T-ROOT-11",
+   "evidence": "帧是定长的（`C5` §7）；超大帧走 mmap（`R-9-22`）。M10 不改这条",
+   "map_note": "不存在面"
+  },
+  {
+   "id": "U-M10-08",
+   "what": "碎片治理",
+   "code": null,
+   "exit": null,
+   "test_id": "T-GC-06",
+   "evidence": "见 U-M10-02；碎片率记录在 manifest.measured 与 M10-report.md 里",
+   "map_note": "不存在面"
+  }
+ ],
+ "open_gaps": [],
+ "closed_gaps": [
+  {
+   "id": "G-M10-01",
+   "what": "escape3 在 stress 下 bad_sp=6",
+   "closed_at": "M10/Task 26",
+   "resolution": "根因是**起始位图没维护**（free_push 漏 bm_set、sweep 里已空闲的块漏 bm_clear）⇒ resolve_block 返回假块首 ⇒ 拿旧 desc 扫垃圾。修完之后 escape3 在 stress=1 下也 bad_sp=0（阶段收口时 stress 用间隔 64，但这条已不再依赖间隔）"
+  },
+  {
+   "id": "G-M10-02",
+   "what": "method5 在 stress 下 rc=139",
+   "closed_at": "M10/Task 26",
+   "resolution": "根因同上（假块首）**加上** Composite 不是 safepoint。两者一起修完 method5 在 stress=1/64 下都通过"
+  },
+  {
+   "id": "G-M10-03",
+   "what": "print 在 stress 下 DIFF",
+   "closed_at": "M10/Task 26",
+   "resolution": "根因是 Composite（切片字面量）不是 safepoint：`println(complex(...))` 之类走的复合字面量在构造过程中被回收"
+  },
+  {
+   "id": "G-M10-04",
+   "what": "ken_complit 在 stress 下 DIFF",
+   "closed_at": "M10/Task 25-26",
+   "resolution": "两个根因：① 切片字面量不是 safepoint（`sc.a/b/c` 指向同一个数组）；② map 槽块在 arena（`mc[i][j]` 全读到最后一组）。Task 25 把槽块托管化 + 自带 desc 头，Task 26 补 Composite 位点"
+  },
+  {
+   "id": "G-M10-05",
+   "what": "ken_simpswitch 在 stress 下 rc=139",
+   "closed_at": "M10/Task 26",
+   "resolution": "根因是起始位图不变式（R-10-20）：空闲区的起始位没置 ⇒ 字符串累加循环里「指向空闲区的指针」被当成块首、拿旧 desc 扫垃圾 ⇒ 段错误。t_heap_08 是它的最小化"
+  }
+ ],
+ "deferred_gaps": [
+  {
+   "id": "G-M10-06",
+   "what": "真 live-in 位图会让 defernil / print / nilptr2 / method5 坏掉，机制未查清",
+   "why_deferred": "保留 live-out 超集是**安全**的（多标 = 泄漏一轮），而查清它要重做「safepoint 的 def 是否必须在集合里」的整条推理，收益是省一点内存。M10 的门禁不依赖它",
+   "next": "M11（并发 GC）之前必须查清：并发标记对「多标」的容忍度更低（会拖慢终止判定）"
+  }
+ ]
+}

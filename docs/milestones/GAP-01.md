@@ -335,3 +335,50 @@ Frontend 列只在「语义判定发生在前端」时打 ✅；Native / Runtime
 **M9 之后的余额**：`RT-MEM-01/02`（分层分配，可能永不）、`RT-MEM-03/04/05`（栈与 GC，M10/M11）、
 `RT-CMP-03` 的渐进搬迁、`RT-CMP-05/06` 的 native 执行（M11）、`RT-POLY-05/06`（泛型与反射，M12）、
 `RT-EXC-05`（traceback，M12）、`PIPE-13`（逃逸优化）。
+
+## M10 节：精确 STW GC（2026-10-27）
+
+> **口径**：`RT-MEM-04/05/06/07/08` 里属于「GC」的 ID 是 M10 的范围
+> （`M10-design.md` §1 的对照表）。这里只记**实现后的**状态。
+> 判据在 `M10-manifest.json` 的 `gate`（`GC-1..GC-9`）与 `M10-tests.md` 的各族 `T-*`。
+
+| ID | 能力 | M10 后状态 | 说明 |
+|---|---|---|---|
+| `RT-MEM-04` | GC（STW）| ✅ | 单线程精确 mark-sweep：托管堆 + 16 字节块头 + 起始位图 + 帧记录链。**三态语料各 69/0/0**（`GC-6`）|
+| `RT-MEM-05` | GC（并发）| ✗ | 归 M11（`U-M10-01`）：没有写屏障、没有后台标记线程。`gc_arena::t_gc_11` 与 `t_sch_04` 一起钉住「代码里没有这些东西」|
+| `RT-MEM-06` | 堆位图与指针元数据 | ✅ | M9 交 `gcdata`/`ptrdata`，M10 交**起始位图**（1 位/8 B）+ **页摘要**（1 位/4 KiB）—— 内部指针回块首的唯一依据（`GC-2`）|
+| `RT-MEM-07` | 统一分配入口 | ✅ | `gc_alloc(need, kind, desc, n)`：free list → bump → 新 chunk；五种 kind（`GC-1`）|
+| `RT-MEM-08` | 内存统计 | ✅ | 13 字段统计行（`C12` §5.2）：`collections/allocs/frees/live/heap/chunks/rss/kinds/bad_*/mode`。`rss` 是 `getrusage` 的峰值（`T-GC-09`）|
+| `RT-MEM-01` | 多级分配器 | ✗ | 仍是 first-fit free list + bump（`U-M10-05`）；没有 size-class |
+| `RT-MEM-02` | 小/大对象路径 | ✗ | 同上 |
+| `RT-MEM-03` | 栈内存管理 | ✗ | 归 M11；M10 只加了「帧记录区 16 字节」与「逃逸槽进托管堆」|
+| — | 对象移动/压缩 | ✗ | `D-M10-5` 明确不做（`U-M10-02`）：内部指针没有 forwarding 表 |
+| — | 分代 | ✗ | 全堆标记（`U-M10-03`）|
+| — | 碎片治理 | ✗ | 只记录不修（`U-M10-08`）；`t_gc_06` 的注释写清了「单 chunk 时 99.99% 怎么读」|
+
+**三条口径说明**
+
+1. **`RT-MEM-05` 记 ✗ 而不是 ◐**：M10 一个字节的并发机制都没有 ——
+   没有写屏障、没有灰堆共享、没有 STW 握手。记 ◐ 会让人以为「有点基础」。
+2. **`RT-MEM-08` 记 ✅ 而不是 ◐**：M9 只报 `used`/`limit`；M10 的统计行有
+   **13 个字段**且**语法冻结**（`C12` §5.2），`gc_stats.rs` 逐字段对账。
+   这已经不是「有数字」而是「有契约」。
+3. **碎片那条不记 ID**：roadmap 里没有「碎片治理」这个能力项，
+   它在 `U-M10-08` 里如实记为「不做」。
+
+**M10 之后的余额**：`RT-MEM-01/02`（分层分配，可能永不）、`RT-MEM-03/05`
+（栈与并发，M11）、对象移动/分代/碎片治理（roadmap 的 M12 之后）。
+
+### M10 关掉的五个缺口
+
+| 缺口 | 症状 | 根因 | 关在 |
+|---|---|---|---|
+| `G-M10-01` | `escape3` 在 stress 下 `bad_sp=6` | 起始位图没维护 ⇒ 假块首 | Task 26 |
+| `G-M10-02` | `method5` rc=139 | 假块首 + `Composite` 不是 safepoint | Task 26 |
+| `G-M10-03` | `print` DIFF | `Composite`（切片字面量）不是 safepoint | Task 26 |
+| `G-M10-04` | `ken_complit` DIFF | 切片字面量 + map 槽块在 arena | Task 25–26 |
+| `G-M10-05` | `ken_simpswitch` rc=139 | 起始位图不变式（`R-10-20`）| Task 26 |
+
+**一条未关的**（进 `deferred_gaps`）：`G-M10-06` —— 真 live-in 位图会让
+`defernil`/`print`/`nilptr2`/`method5` 全坏，机制未查清。保留 live-out 超集是
+**安全**的（多标 = 泄漏一轮），但 M11 的并发标记对「多标」的容忍度更低。
