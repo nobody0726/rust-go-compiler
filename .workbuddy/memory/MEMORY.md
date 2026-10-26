@@ -7,7 +7,10 @@
 - Rust 重写 Go 编译器 `rgoc`；origin = github.com/nobody0726/rust-go-compiler（main）；
   `go_source_code/` 只读不入库；首发 Linux/arm64（Docker）→ aarch64 ELF；基准 go1.27.1
 - git 身份 `nobody0726` / `102368194+nobody0726@users.noreply.github.com`（见 `wangf <yhome@…local>` 即丢失）
-- commit 纪律：阶段收口即 commit + push（按交付块分）；push 被拦走 `gh api`；`.superpowers/` 已 gitignore
+- ⚠️ **`git push` 报 `CONNECT tunnel failed, response 502`** 是**代理**（`http://127.0.0.1:56060`）
+  坏了，不是网络断了：`env -u HTTP_PROXY -u HTTPS_PROXY -u http_proxy -u https_proxy git push`
+  **直连**就通（`gh api` 也通）。别急着改用 gh api 手工搬对象
+- commit 纪律：阶段收口即 commit + push（按交付块分）；`.superpowers/` 已 gitignore（台账不入库）
 
 ## 当前状态（2026-10-26）
 - **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**（M9 尾巴已清：`open_gaps` 0 / `closed_gaps` 4）
