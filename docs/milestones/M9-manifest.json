@@ -1,0 +1,352 @@
+{
+ "stage": "M9",
+ "name": "native 语义面（内存 / 复合类型 / 接口 / 闭包 / 异常 / 根协议 / channel 契约）",
+ "generated_at": "2026-10-26T00:00:00Z",
+ "filled_at": "2026-10-26T00:00:00Z",
+ "fill_task": "M9-plan.md Task 68–69（按实测数字填；由 rgoc-driver/tests/manifest_m9.rs 对账）",
+ "status": "已收口 —— 十条门禁 10/10 pass；语料 69/0/0（native）、69/0/0（--via=ssa，拒绝面为空）、69 绿（--run）；channel 契约 7/12/0 与 M8 冻结值一致；open_gaps 只剩 3 条记录性缺口",
+ "scope": "M7 的 native 后端从「39 个语料能跑」扩到「69 个全跑、且与解释器逐字节一致」：堆与对象头、TypeDesc、切片/map/接口/闭包/方法值、defer+panic+recover、字粒度根协议（STACK-MAP v1 + .rodata 表）、hchan 的布局与状态机契约。native 的 goroutine/select 执行不在本里程碑面内（M11）",
+ "docs": {
+  "design": "docs/milestones/M9-design.md（D-M9-1..16 / F1..F16 / 门禁 MEM-1..SCH-1 / §3.11 根协议 / §3.12 channel）",
+  "tests": "docs/milestones/M9-tests.md（T-META/T-MEM/T-OBJ/T-ROOT/T-SCH 各族 + §5 白名单 10 + §6 变异 10）",
+  "plan": "docs/milestones/M9-plan.md（Task 1–74；进度台账 .superpowers/sdd/M9-plan/progress.md，不入库）",
+  "report": "docs/milestones/M9-report.md",
+  "contracts": [
+   "C4 §10（M9 的 IR 扩展面；没有 V10/V11/V12）",
+   "C5 §8.4（STACK-MAP v1）与 §11（对象元数据布局）",
+   "C9 §6.1（native 独有的 out of memory）",
+   "C10（只有追加的 op 拼写，既有 golden 不变）",
+   "C11 §7（native 侧 hchan 的镜像）"
+  ]
+ },
+ "crates": [
+  {
+   "name": "rgoc-meta",
+   "role": "TypeDesc / Kind / flags / 方法表形状（新 crate，M9/Task 1）"
+  },
+  {
+   "name": "rgoc-ssa",
+   "role": "IR 扩展（6 Instr + 2 CalleeRef + 数据面）、build 的接口/闭包/defer 下降、live 的字粒度根"
+  },
+  {
+   "name": "rgoc-interp",
+   "role": "SSA 求值器的对象模型（切片/map/接口/闭包/defer）与 nil 语义对齐"
+  },
+  {
+   "name": "rgoc-arm64",
+   "role": "isel（对象/接口/闭包/defer）、frame（逃逸槽与超大帧）、module（desc/itab/funcval/stackmap）、hchan 契约"
+  },
+  {
+   "name": "rgoc-driver",
+   "role": "build 产物（.stackmap）、mem/obj/root/sch 各族端到端测试"
+  }
+ ],
+ "corpus_lists": {
+  "root": "go_source_code/test（只读；corpus-manifest.sha256 锁定）",
+  "input": {
+   "file": "tools/run-oracle/run-selected.txt",
+   "count": 69,
+   "note": "M5 冻结的 69 个入选语料（N' + M' = 69）"
+  },
+  "buildable": {
+   "count": 69,
+   "note": "能建图且 verifier 通过的个数 N；69 个**全部**与官方 .out 逐字节一致（ssa_corpus_run）"
+  },
+  "rejected": {
+   "file": "tools/run-oracle/ssa-rejected.txt",
+   "count": 0,
+   "note": "拒绝面为空：入选的 69 个全部能建图。`SsaCode` 仍留 4 条（CHAN/DEFER/GENERIC/RANGE-STR）"
+  },
+  "native": {
+   "file": "tools/run-oracle/native-input.txt",
+   "count": 63,
+   "note": "M7 的输入**快照**（46 → 63），不是 N 的实时镜像；判据是 subset（R-9-26）"
+  }
+ },
+ "measurement_deviations": [
+  {
+   "item": "设计稿的「净增 3 个 Instr」",
+   "planned": 3,
+   "actual": 8,
+   "trigger": "D-M9-5 只列了 FuncAddr / MakeClosure / Defer。写下去发现还差 CapturePtr（读 ctx）、TypeAssert（可能失败不是 Convert）、NilCheck（&*p 在 IR 里原本连指令都没有）、以及 CalleeRef::{Iface, Runtime}",
+   "resolution": "按实测记 6 个 Instr + 2 个 CalleeRef；C4 §10 逐条写清「为什么非有不可」，并明确**没有** V10/V11/V12（R-9-38）"
+  },
+  {
+   "item": "C11 的 hchan 字段清单",
+   "planned": 9,
+   "actual": 11,
+   "trigger": "计划漏了 sendx/recvx（环形推进没有它们就无处表达），且把 sendq 排在 recvq 前面，与官方 runtime/chan.go:34 不符",
+   "resolution": "按官方字段序实现（R-9-36）：Hchan 96 B（含 lock）/ Sudog 48 B；T-SCH-01 逐字段对账"
+  },
+  {
+   "item": "「一个 struct 带三操作」",
+   "planned": 1,
+   "actual": 2,
+   "trigger": "workspace 级 unsafe_code=forbid，在 Hchan 上实现操作必须解引用 *mut Sudog（R-9-37）",
+   "resolution": "拆成 Hchan（布局影子）+ ChanState（状态机影子），加 t_sch_01b 守「状态机字段 ⊆ 布局字段」"
+  }
+ ],
+ "gate": [
+  {
+   "id": "MEM-1",
+   "name": "typed 分配 / 零值 / 对齐 / 超限退 2",
+   "status": "pass",
+   "evidence": "mem_alloc.rs 3 条（`一百次_new_都对且走新分配器` / `含指针的类型要清零` / `零大小类型的_new_不给独立地址`）+ mem_limit.rs 3 条（`RGOC_HEAP_MAX` 超限 ⇒ stderr 一行 + 退出 2）；`M-M9-01` 变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "MEM-2",
+   "name": "逐类型 size + ptrmask 与解释器布局对撞",
+   "status": "pass",
+   "evidence": "desc_layout.rs（69 语料的类型闭包逐类型比 size/ptrdata/kind/flags/gcdata）+ desc_emit.rs 4 条（硬编码表逐字节）+ rgoc-types/tests/ptr_mask.rs 的五个特例；`M-M9-02` 变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "OBJ-1",
+   "name": "slice 全套（append 扩容 / 越界 / nil）",
+   "status": "pass",
+   "evidence": "obj_slice.rs 9 条（native 端到端，期望值来自官方 `go run`）+ 语料里 7 个切片文件经 native_corpus_run 与解释器逐字节；`T-SLICE-06` 的求值器半边见 ssa_run.rs::t_slice_06_append_扩容要拷旧元素（收口时补，`M-M9-03` 变异实证）",
+   "gap": "—"
+  },
+  {
+   "id": "OBJ-2",
+   "name": "map 全套（迭代中 delete / 键相等 / comma-ok）",
+   "status": "pass",
+   "evidence": "obj_map.rs 7 条（含 bigmap 的大值搬运）+ 语料里 5 个 map 文件经 native_corpus_run 逐字节；`M-M9-04`（rt_map_del 不置 tomb）在 notes 里实测变红",
+   "gap": "—"
+  },
+  {
+   "id": "OBJ-3",
+   "name": "iface（装箱 / 断言 / type switch / 方法调用）",
+   "status": "pass",
+   "evidence": "语料里含接口派发的 9 个文件（method / typeswitch / iface* 等）经 native_corpus_run 与解释器逐字节 + native_isel_cover.rs 的指令覆盖；`M-M9-05`（ITab 填序错）在 notes 里实测变红",
+   "gap": "—"
+  },
+  {
+   "id": "OBJ-4",
+   "name": "funcval（闭包 / 方法值 / 捕获写回）",
+   "status": "pass",
+   "evidence": "语料里含闭包与方法值的 7 个文件（closure1/2/4、method、method5、ddd、nilfunc）经 native_corpus_run 逐字节；`M-M9-06`（闭包只填一个捕获）在 notes 里实测变红",
+   "gap": "—"
+  },
+  {
+   "id": "EXC-1",
+   "name": "defer 逆序 / panic 逐层 / recover 仅 defer 内有效 / 除零越界 nil",
+   "status": "pass",
+   "evidence": "语料里 5 个 defer/panic 文件（closure4 / defernil / method / nilptr2 / print）经 native_corpus_run 与解释器逐字节 + run-native.sh 69/0/0；`M-M9-08` 变异实证（defer 改正序 ⇒ native 与解释器分叉）",
+   "gap": "—"
+  },
+  {
+   "id": "ROOT-1",
+   "name": "STACK-MAP 与 live 一致 + 全局 roots + 回边有 safepoint",
+   "status": "pass",
+   "evidence": "stackmap.rs 5 条（两侧逐字节 / 每函数有记录 / n_sp≥Call / 帧区间约定 / 产物落盘与行数）+ root_grain.rs 2 条（slice 的唯一根 / uintptr 不是根）+ global_roots.rs 3 条；`M-M9-09`/`M-M9-10` 变异实证",
+   "gap": "—"
+  },
+  {
+   "id": "CORP-1",
+   "name": "语料 69 全绿（39 零回归 + 逐个解锁）",
+   "status": "pass",
+   "evidence": "run-native.sh ⇒ ok=69 skip=0 bad=0；run-collide --run ⇒ 69 绿 / 0 跳过 / 0 红；run-collide --ssa ⇒ 69 绿 / 0 跳过 / 0 红（拒绝面为空）；run-chan.sh ⇒ 7/12/0",
+   "gap": "—"
+  },
+  {
+   "id": "SCH-1",
+   "name": "hchan 布局 + 三操作真值表单测",
+   "status": "pass",
+   "evidence": "chan_contract.rs 6 条：布局逐字段 vs C11 的两张表（文档驱动）/ 状态机是布局的投影 / 三操作与 M8 的 ChanObj 逐格差分（56 格 × 3 = 168 次）/ closed 排第一 / 环形推进与 revoke / M9 不交 native 并发的守卫",
+   "gap": "—"
+  }
+ ],
+ "unsupported": [
+  {
+   "id": "U-M9-01",
+   "what": "GC / 内存回收",
+   "code": null,
+   "exit": null,
+   "test_id": "T-MEM-05",
+   "evidence": "arena 只增；长程序撞 `RGOC_HEAP_MAX` ⇒ `runtime error: out of memory (heap limit N bytes)` + 退出 2（mem_limit.rs）",
+   "map_note": "不存在面：判据是「撞上限时的行为」，不是「回收正确」"
+  },
+  {
+   "id": "U-M9-02",
+   "what": "size-class 多级分配器",
+   "code": null,
+   "exit": null,
+   "test_id": "T-MEM-01",
+   "evidence": "只有 bump arena（16 MiB 起、mmap chunk 链、上限 256 MiB）；碎片不管 —— mem_alloc.rs 只断言「分配出来的值对」",
+   "map_note": "不存在面：无判据能测碎片"
+  },
+  {
+   "id": "U-M9-03",
+   "what": "寄存器分配与 spill",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "沿用 M7 的「每个值一个栈槽」；代价是代码慢 2–3×，而本里程碑没有性能门禁（测不出）",
+   "map_note": "不存在面：没有可测的替代判据，如实记"
+  },
+  {
+   "id": "U-M9-04",
+   "what": "反射（名字 / 字段表 / Tag）",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "`TypeDesc` 里只有 name_hash 没有名字；`reflect` 相关内建继续走检查面拒绝（C8）",
+   "map_note": "不存在面：归 M12"
+  },
+  {
+   "id": "U-M9-05",
+   "what": "泛型运行期表示",
+   "code": "HIR-UNSUPPORTED-GENERIC",
+   "exit": 1,
+   "test_id": null,
+   "evidence": "继续全量单态化（M5 的窄面）；运行期没有类型参数，所以 SSA 见到 `Type::TypeParam` 就拒（`RejectKind::Generic`）",
+   "map_note": "有码有出口：`RejectKind::ALL` 里的一条"
+  },
+  {
+   "id": "U-M9-06",
+   "what": "traceback / pclntab",
+   "code": null,
+   "exit": null,
+   "test_id": null,
+   "evidence": "panic 只有一行 `panic: <值>`，不打栈（沿 `U-M8-08`）；语料里的 panic 文件逐字节对得上正因为官方 .out 里也没有栈",
+   "map_note": "不存在面：归 M12"
+  },
+  {
+   "id": "U-M9-07",
+   "what": "native 的 go / select 执行",
+   "code": null,
+   "exit": null,
+   "test_id": "T-SCH-04",
+   "evidence": "chan_contract.rs::t_sch_04_m9_不交_native_并发 扫 rgoc-arm64/src 与 runtime/，`rt_go` / `rt_select` 不许出现（实测：往 rt.c 加一个 `rt_go` 立刻红）",
+   "map_note": "守卫测试：断言当前行为，行为一变就红"
+  },
+  {
+   "id": "U-M9-08",
+   "what": "map 的渐进搬迁",
+   "code": null,
+   "exit": null,
+   "test_id": "T-MAP-09",
+   "evidence": "一次 rehash；大量插入时会卡顿（可测但没有门禁）—— obj_map.rs 只断言语义，不断言停顿",
+   "map_note": "不存在面：半条（另一半是桶算法，已实现）"
+  },
+  {
+   "id": "U-M9-09",
+   "what": "open-coded defer",
+   "code": null,
+   "exit": null,
+   "test_id": "T-EXC-01",
+   "evidence": "全局链（`rt_defer_push` 插链头、`rt_deferrun` 从链头弹）⇒ 每次 defer 一次堆分配；语义与 open-coded 一致",
+   "map_note": "半条：语义对、性能不是"
+  },
+  {
+   "id": "U-M9-10",
+   "what": "interior pointer 的 metadata",
+   "code": null,
+   "exit": null,
+   "test_id": "T-ROOT-06",
+   "evidence": "root_grain.rs::u_m9_10_uintptr_不是根_守卫：`u := uintptr(unsafe.Pointer(&x))` 之后 `u` 在位图里**没有任何位**（Go 语义如此，也是能力边界）；`unsafe.Pointer` 本身按指针标，但指向对象中部的指针**无法映射回对象起点**",
+   "map_note": "语义级拒绝（roadmap 要求「明确支持或拒绝」，我们选拒绝）"
+  }
+ ],
+ "coverage": {
+  "test_files": [
+   "mem_alloc.rs",
+   "mem_limit.rs",
+   "desc_layout.rs",
+   "desc_emit.rs",
+   "global_roots.rs",
+   "obj_slice.rs",
+   "obj_map.rs",
+   "stackmap.rs",
+   "root_grain.rs",
+   "chan_contract.rs",
+   "native_corpus_run.rs",
+   "native_frame_map.rs",
+   "native_unsupported.rs"
+  ],
+  "test_files_note": "M9 新增/重写的端到端文件；`obj_iface` / `obj_funcval` **没有**独立文件 —— 接口与闭包面的证据在语料（native_corpus_run 与解释器逐字节）与 native_isel_cover 的指令覆盖里，如实记在对应门禁的 evidence 中",
+  "reject_codes_note": "SsaCode::ALL 现为 5 条（FUNC-VALUE 在 Phase 4c 下线）；RejectKind::ALL 5 条"
+ },
+ "budget": {
+  "heap": "16 MiB 起、mmap chunk 链可增长、上限 256 MiB（RGOC_HEAP_MAX 可调）",
+  "stack_frame": "1 MiB 超过则整帧走 mmap（R-9-22）；Linux 栈上限 8 MiB",
+  "steps": "1e8（解释器默认）；native 没有步数预算",
+  "note": "native 多一条 fatal：`runtime error: out of memory (heap limit N bytes)` + 退出 2（C9 §6.1）"
+ },
+ "open_gaps": [
+  {
+   "id": "G-M9-01",
+   "gate": "OBJ-4",
+   "what": "`unsafe.Pointer` 作为**形参类型**会让后端帧布局失败（Value 的类型没有运行期布局）—— M9 收口时发现，未修；语料里没有这种形态，所以不影响 69/69",
+   "test_id": null
+  },
+  {
+   "id": "G-M9-02",
+   "gate": "EXC-1",
+   "what": "native 独有的 `out of memory` 在解释器里没有对应（C9 §6.1）：两条通路的第一条已知不同口径，理由是「解释器没有 arena」",
+   "test_id": null
+  },
+  {
+   "id": "G-M9-03",
+   "gate": "ROOT-1",
+   "what": "根协议**保守**的两处：聚合实参在栈上只标 1 位（指向调用方的槽，不是堆根）、帧里的 addr_slots 不单独标；两处都写清理由，但都没有「不保守也正确」的判据",
+   "test_id": "T-ROOT-08"
+  },
+  {
+   "id": "G-M9-04",
+   "gate": "OBJ-2",
+   "what": "`T-MAP-08` 的判据缺「删除后再插满、原键仍查得到」的形态：`M-M9-04`（`rt_map_del` 置 `empty` 而不是 `tomb`）在 `obj_map` 上**是绿的** —— 探测链断掉没有用例能看见",
+   "test_id": "T-MAP-08"
+  },
+  {
+   "id": "G-M9-05",
+   "gate": "OBJ-4",
+   "what": "`T-FUNC-05` 的求值器半边缺**两个捕获**的闭包：`M-M9-06`（`MakeClosure` 只填第一个捕获）在 `ssa_run` 上是绿的",
+   "test_id": "T-FUNC-05"
+  },
+  {
+   "id": "G-M9-06",
+   "gate": "EXC-1",
+   "what": "`T-EXC-04` 缺一条「panic 之后调用方还有可观察输出」的 native fixture：`M-M9-07`（`check_panic` 不跳出口）在 69 语料上是绿的 —— 语料里的 panic 之后调用方本来就走出口",
+   "test_id": "T-EXC-04"
+  }
+ ],
+ "phase_summary": {
+  "tasks_done": "Task 1–74（全）",
+  "design_revisions": [],
+  "done": true
+ },
+ "measured": {
+  "workspace_suites": 224,
+  "workspace_tests": 2179,
+  "workspace_failed": 0,
+  "workspace_ignored": 1,
+  "native_ok": 69,
+  "native_skip": 0,
+  "native_bad": 0,
+  "collide_run_green": 69,
+  "collide_run_skip": 0,
+  "collide_run_red": 0,
+  "collide_ssa_green": 69,
+  "collide_ssa_skip": 0,
+  "collide_ssa_red": 0,
+  "chan_input": 19,
+  "chan_supported": 7,
+  "chan_skip": 12,
+  "chan_bad": 0,
+  "corpus_n": 69,
+  "corpus_m": 0,
+  "ssa_codes": 5,
+  "hir_reject_codes": 5,
+  "hchan_size": 96,
+  "sudog_size": 48,
+  "mutations_script_red": 4,
+  "mutations_script_miss": 0,
+  "mutations_notes_total": 10,
+  "final_rerun": "四条 cargo 全绿（fmt/check/clippy/test）；四套语料与上表逐项一致",
+  "mutations_notes_red": 7,
+  "mutations_notes_green": 3
+ }
+}

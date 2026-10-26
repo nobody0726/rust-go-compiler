@@ -169,6 +169,7 @@ M0 的图能给下游的**具体东西**：
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-26 | 新增 §10（M9 的 IR 扩展面）：8 个成员 + 4 处数据面；**没有** `V10/V11/V12`（`R-9-38`）| `M9-plan.md` Task 67。`D-M9-5` 预计「净增 3 个 `Instr`」，实测 6 个 `Instr` + 2 个 `CalleeRef` —— 三件事各自还差一条指令才能让「这一步在 IR 里看得见」|
 | 2026-10-07 | **初稿创建**（T51）。与 `ssa_needs.rs` 的需求清单逐条对齐 | Phase 3 的 S2（`T-S2-01/02/03`）+ 门禁 E6 |
 | 2026-10-24 | **升正式**（M6/Task 51）：补 §7 五项需求的兑现答案 + §8 差距表逐行关闭 | `M6-design.md` §3.2–§3.5；`M6-manifest.json` 的九条门禁 |
 
@@ -274,3 +275,57 @@ M8 给 HIR 加了六个并发节点（`C3` §6），SSA 侧**一条都不接** �
 **本契约的 §1–§8 一字未改**：并发的语义全在 `C11`（运行期），
 SSA 的形状（tuple / memory / phi / 支配）与并发无关 —— 一个单线程 IR
 不需要「谁来跑」的概念。
+
+---
+
+## 10. M9 的 IR 扩展面（2026-10-26 定稿）
+
+设计稿 `D-M9-5` 的原话是「**净增 3 个 `Instr`**（`FuncAddr` / `MakeClosure` / `Defer`），
+`Term` 不变」。实测**不是 3 个**（`R-9-38`）：写下去才发现三件事各自需要额外的指令
+才能表达「这一步在 IR 里看得见」。
+
+| 扩展 | 建在 | 干什么 | 为什么非有不可 |
+|---|---|---|---|
+| `Instr::FuncAddr { dst, func }` | Task 37 | 取具名函数的地址 | `f := g` 之后 `f` 是一个值；没有这条，「函数值」在 IR 里没有产生点 |
+| `Instr::MakeClosure { dst, func, captures }` | Task 38 | 造闭包（捕获是**指针**，按引用） | 捕获必须与外层共享同一块存储；`Copy` 造不出这条共享 |
+| `Instr::CapturePtr { dst, index }` | Task 38 | 取本帧第 `index` 个捕获的地址 | 被捕获函数的体里要读 ctx；`Field` 只能从根下钻，ctx 不是根 |
+| `Instr::Defer { fv }` | Phase 5 | 登记一条 defer | defer 链是**运行期结构**；把它摊平成控制流会改语义（条件求值时机） |
+| `Instr::TypeAssert { dst, ok, x, typ }` | Task 33 | 类型断言（单值与 comma-ok 两种） | `x.(T)` 不是 `Convert`：它**可能失败**，而失败是可观察的（panic 或 `ok=false`） |
+| `Instr::NilCheck { addr }` | Phase 5c | `addr == nil` ⇒ 可恢复 panic | `&*p` 在 IR 里原本连一条指令都没有；没有它，native 与解释器在「空指针何时炸」上必然分叉 |
+| `CalleeRef::Iface { recv, slot }` | Task 32 | 接口方法派发 | 被调方运行期才定；`Indirect(v)` 表达不了「按方法槽从 itab 取」 |
+| `CalleeRef::Runtime(RuntimeFn)` | Phase 5 | `rt_recover` 这类运行期助手 | 它们没有 SSA 函数体，不能写成一个 `FuncId` |
+
+数据面（不是指令，但同属本契约的形状）：
+
+| 项 | 建在 | 内容 |
+|---|---|---|
+| `Module::methods: Vec<MethodSet>` | Task 27 | 每个有方法的具名类型一块方法表（按 `type_hash` 升序） |
+| `Module::itabs: Vec<ItabDef>` | Task 28 | 每个 `(接口, 具体类型)` 一张静态 ITab（按 `(iface_hash, concrete_hash)` 升序） |
+| `SsaFunc::captured: Vec<Capture>` | Task 38 | 捕获表；`CapturePtr` 的 `index` 就是它的下标 |
+| `SsaFunc::ctx_abi: bool` | Task 40 | 带捕获的函数多一个隐式第 0 实参（`x0` = ctx） |
+
+### 10.1 为什么**没有** `V10` / `V11` / `V12`
+
+计划里写了「3 个新 `Instr` 的签名 + `V10/V11/V12`」。落地时的结论是：
+**一条新不变式都不需要**，上面八个扩展全部被既有的九条盖住：
+
+| 扩展 | 由谁查 |
+|---|---|
+| `FuncAddr` / `MakeClosure` / `CapturePtr` / `Defer` / `TypeAssert` / `NilCheck` | `V1`（每个值恰一个定义点 —— 新变体的 `dsts()` 已经登记）|
+| 带类型的操作数（`TypeAssert.typ`、`NilCheck.addr` 必须是指针或接口、`Defer` 的 `fv` 必须是函数值） | `V3` + `typing.rs`（`type_of` 逐变体校验；`typing` 是 `V3` 的实现，不是第二条不变式）|
+| `CapturePtr.index` 越界 | `typing.rs`（按 `f.captured.len()` 查）|
+| `Call` 的实参/结果个数 | `V5`（`Iface`/`Runtime` 也走同一张签名表）|
+| 捕获指针指向的存储必须逃逸 | **不查** —— 它是 `rgoc-arm64::frame::escaping_slots` 的**保守判定**，错了的后果是别名错而不是非法图 |
+
+所以 `INVARIANTS` 仍是 `V1..V9`（`verify.rs` 的常量）。**计划里的 V10/V11/V12 是空的**：
+写一条「查不出东西」的不变式等于给 verifier 加噪声，而 `V1/V3` 已经对这些变体
+逐条表态。
+
+### 10.2 `Defer` 为什么不算「控制流」
+
+`Term` 一个都没改，`Defer` 也不是终止符。defer 链是**帧上的运行期结构**：
+`Defer { fv }` 只是「把这一个值压进本帧的链」，跑不跑、什么时候跑由出口决定。
+把它摊平成控制流（在每个 `return` 前内联 defer 体）会改三件语义：条件表达式
+的求值时机、`recover()` 的作用域、以及 defer 之间的逆序。`C11` §3 的
+「`done` 由真完成的对端置位」同一类教训：**运行期结构不能靠静态展开模拟**。
+

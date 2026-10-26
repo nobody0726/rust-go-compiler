@@ -304,9 +304,29 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | `R-9-16` | 2026-10-25 | **闭包（捕获按引用）落地**：`Instr::{MakeClosure, CapturePtr}`；funcval = `{fn, caps:[*u8]}`，捕获的是**变量地址**；被捕获变量因「有根」自动逃逸到 arena。`SSA-UNSUPPORTED-CLOSURE` **整条下线**（`SsaCode::ALL` 7 → 6）。拒绝面 60/9 → **63/6** | ① **设计稿的「按值内联」是错的**：`closure2.go` 整份文件钉的是「改要改到外面去」⇒ 只能存地址（`R-9-15` 已记，此处落地）；② build 侧 `slot_ptr`（捕获槽 → 地址值）要路由**四处**（`read_slot`/`write_slot`/`place_addr_root`/`expr_addr_root`），少一处就是静默读写到本帧的废槽；③ 父帧侧要靠 `scan_rooted` 的 `lits`（体里出现的 `FuncLit` 目标）把「子函数捕获的槽」补进根表 —— 否则 `MakeClosure` 取不到地址（`place_addr_root` panic）；④ 后端 `Frame::ctx_off` 必须在 `bind_params` **之前**落 `x0`（聚合形参分支会打掉 `x0`）；⑤ 四个执行期真 bug 都不在闭包本身：`ValueId` 必须按指令顺序分配、`MakeClosure` 的捕获是**操作数不是定义**、`Def`/`scan_expr` 都漏了**被调方**（`f()` 里 `f` 是一次读）、`range` 的**复合下标目标**要每轮重新求值 |
 | `R-9-17` | 2026-10-25 | **间接调用与接口调用都要做变参打包**：`Callee::Value` 从函数值的**静态签名**（`TySig`）取「变参 + slice 类型」后走 `pack_variadic`；`Callee::Iface` 从接口方法表取同一组信息。另外 **nil 指针接收者**：接口派发沿嵌入链落到 `nil` 指针时传 `Value::Nil(Ptr)`（Go 允许在 nil 指针上调用方法），中间跳落 nil 仍然 `NilDeref` | `pack_variadic` 原来只在 `Callee::{Func,Method}` 与 `Callee::Iface`（传 `vty: None` ⇒ 直接返回）里出现过，`Callee::Value` **完全没有** ⇒ `f(4,5,7)`（`f` 是 `func(...int) int`）把 3 个 int 塞给一个 `[]int` 形参，`range args` 当场 nil 解引用（`ddd.go` 的 `sumD 16 0` + native 段错误）。⚠️ 变参那一位**不能**按 `[]T` 逐位对齐 —— 实参给的是**元素**（照 `[]T` 对齐会把第一个元素 `Convert` 成 slice）。⚠️ `ddd.go` 一度是 `G-M9-05`：它**在 N 里但语义错**，四条逐字节判据各有一条真阳性红 —— **不许**把它塞回拒绝面「变绿」（那是把 bug 伪装成「不支持」） |
 
-
-
-
+| `R-9-18` | 2026-10-25 | **defer / panic / recover 落地**（Phase 5）：`Instr::Defer` + `CalleeRef::Runtime(Recover)` + 帧上的 defer 链；**panic 用返回码传播，不 unwind** | `.framemap` 不在 ELF 里 ⇒ `longjmp` 展开会跳过栈上的根（M10 一上就漏扫）。所以 `rt_panic_*` 只置状态，每个调用/断言/越界点之后 `bl rt_panicking; cbnz x0, <本帧出口>`；出口 = 跑 defer + `ret`。跑 defer 期间 panic **挂起**（被 defer 调用的函数是正常执行） |
+| `R-9-19` | — | _（台账里空缺；编号保留不重排）_ | 重排会与 `progress.md` 的旧记录对不上。缺的那一条是 Phase 5 里并入相邻条目的编号 |
+| `R-9-20` | 2026-10-26 | HIR 的 `x.f()` 分支给每个 `Field` 节点标了**底座**类型 ⇒ `tt.fn` 的类型成了 `tt`，0 结果调用的 `invalid` 一路漏到帧布局（`v10 的类型 t35 没有运行期布局`）。改走 `field_chain` 取成员类型 | `nilptr2.go` 的构建期失败；症状是**帧布局**报错，离病灶（HIR 标注）隔了三层 |
+| `R-9-21` | 2026-10-26 | DCE 的「读是纯的」判据从**一律**收窄成「地址**可证非空**」（`AddrOf`/`Make`/`FuncAddr`/`MakeClosure` 及其 `Field`/`Index`/`Copy`/`Convert` 派生） | `a.h()` 的方法体是空的 ⇒ `Call` 的 effect 全空 ⇒ 调用被删 ⇒ 接收者的 `load` 变死 ⇒ **panic 消失**（`method.go`）。这与 `R-9-30` 的单值断言是同一类错：把「有陷阱的指令」当成纯的 |
+| `R-9-22` | 2026-10-26 | **超大帧走 mmap**：`frame_size - 16 > 1 MiB` 时把帧底换成一块 mmap 零页（`fp = block + bytes`），槽偏移一字不改；`rt_stack_frame_alloc/_free` 成对 | `nilptr2.go` 的 `[128<<20]byte` 逐字拷贝要 128 MiB 帧，而 `ulimit -s` 是 8 MiB ⇒ 段错误。判据 `big1/big3`（4 MiB / 128 MiB） |
+| `R-9-23` | 2026-10-26 | `print_value` 从「只按 `SlotClass` 分派」改成**先按类型分派**：接口 / 切片 / map / 指针 / nil 各走自己的 runtime 入口，格式表抄 `C9` §5（与 `rgoc-interp::print` 同一张表） | `print.go` 里 nil 接口、nil 切片、nil map 打成空 / `0`；旧实现只认标量 |
+| `R-9-24` | 2026-10-26 | **直接调用 / 方法调用之后也要查 panic**（之前只有间接调用有） | `f(3)` 里 `panic` 之后 `f` 是**正常返回**的（只置状态），调用方接着跑 —— `nat2_panic_终止符` 真的打出了 `unreachable`。返回码传播这条设计里没有「只有间接调用才要查」的例外 |
+| `R-9-25` | 2026-10-26 | `ssa_exec` 的 nil 解引用从 `Halt::Runtime` 改成**可恢复 panic**（`nil_panic()`：置 `PanicState` + `unwinding`）；`Index` 的空底座同样走它 | `Halt` 是「整个程序停在这里」—— 那样 `defer` 跑不了、`recover()` 接不住，`--via=ssa` 与 native 在 `method.go`/`nilptr2.go` 上直接分叉（native exit 0、ssa exit 2）。另：`nilSlice[0]` 的错因是 nil 解引用，不是越界 |
+| `R-9-26` | 2026-10-26 | **分母第六次重冻结 63/6 → 68/1**；`ssa-rejected.txt` 只留 `method5`；`M6-manifest` 的 `re_frozen` 记第六次收缩；`native-input.txt` 的判据从「相等」放宽成「子集」 | 拒绝面真的收缩了。「`native-input.txt` 相等」是错的判据：它是 **M7 的输入快照**，改了就等于抹掉历史（与 `R-9-4`/`R-9-8` 同款） |
+| `R-9-27` | 2026-10-26 | `__imeth_` 桩**按宽度读接收者**：`Step::LoadScalar { width, signed }`，宽度从**布局**取（`slot_of().size` 是槽宽不是值宽） | `func (v byte) M()` 的盒子只有 1 字节，桩一律 `ldr x0,[x0]` 读 8 字节 ⇒ 高 56 位是垃圾。实测 `method5.go` 的 `i.M(100)` 打出 15 位数字（解释器对、native 错） |
+| `R-9-28` | 2026-10-26 | `bind_params` 改**两趟**：先把所有寄存器形参落槽（聚合存的是指针），再做聚合的 `memcpy` | 单趟写法（第 k 个形参是聚合就当场 `memcpy`）会把**后面**还在寄存器里的形参冲掉 —— `rt_memcpy` 按 AAPCS64 可以任意改写 `x0..x18`。实测 `(v Tbigv) M(x int, b byte)` 算出 `16, 281473487730057`。M7 语料里没有「聚合形参 + 寄存器形参」的组合，所以一直没露头 |
+| `R-9-29` | 2026-10-26 | **大聚合返回值在堆上拷一份、返回地址**（`size > 16`）；`take_results` 再从地址拷回本帧槽 | `return_values` 把 `size > 8` 当「两个字」，`[1000]byte` 只搬前 16 字节，其余留在调用方旧槽。**`bigmap.go` 一直绿，是因为两边同时被截断 ⇒ 比较仍相等** —— 这条只能靠逐字节对官方 `.out` 才抓得到。不能返回本帧地址：`ret` 之后那块存储就死了 |
+| `R-9-30` | 2026-10-26 | 一组「语言级细节」的修正 + **拒绝面清空 68/1 → 69/0**：① `load`/`store` 对**零大小**类型不再读写 8 字节（判据是**类型布局为 0**，不是槽宽为 0）；② nil 接口上的 `x.(J)` 不再段错误/静默成功（源 tab 为 0 ⇒ 跳过 `rt_itab`）；③ DCE 不再删「没人用的**单值**类型断言」（失败即 panic，是可观察的）；④ 方法值的 nil 接口用 `NilCheck` 而不是 `TypeAssert`；⑤ `FUNC-VALUE` 整条下线（`SsaCode::ALL` 6 → 5） | ① `struct{}` 的槽宽 0，写 8 字节会踩邻居槽 / `rt_zerobase`；② `ldr x11,[x9+8]` 而 `x9` 是 0；`rt_itab(desc,0)` 返回非 0 ⇒ 「nil 接口断言到接口」静默成功；③ `_ = i.(J)` 在 nil 接口上必须 panic |
+| `R-9-31` | 2026-10-26 | `Safepoint.ptrs` 的语义从「**值**是指针类型」放宽成「值**含根字**」；新增 `ptr_words: Vec<(ValueId, u8)>`（来源 `rgoc_types::layout::ptr_mask`，与 `TypeDesc.gcdata` **同一个函数**） | `RM-2`：按值类型判 ⇒ `[]int` 的 ptr 字**漏扫**。`T-SSA-56` 的第 ③ 条判据跟着换成 `ptr_mask` |
+| `R-9-32` | 2026-10-26 | `is_safepoint` **只判指令**；回边（目标支配本块）在 `analyze` 里判，位点写 `idx = instrs.len()`（与区间的「块尾」同一个哨兵） | 把 CFG 的判据塞进一个纯函数（`is_safepoint(&Instr)`）就等于让它去看图。回边位点的活集取反向扫的**种子**（`live_out ∪ 终止符的读`）—— 反向扫会把它改成 `live_in`，要先留一份 |
+| `R-9-33` | 2026-10-26 | `STACK-MAP v1` 的 `off=` 定成**该位图在 `sp_bits` 里的起始字下标**（不是字节、不是位） | 位下标会让消费方每次做除法；字下标让 `sp_bits[sp_off[i]+k]` 直接可写。同时钉住位序：bit `i` ↔ `fp - frame_size + 8*i` |
+| `R-9-34` | 2026-10-26 | 栈图的位点写 **`sp b<block>:<idx>`**（设计稿只写了 `<idx>`） | 不同块的同一下标无法区分，而对账必须能定位到**那一条指令**。写法与 `SSA-LIVE v1` 同形，不新造约定 |
+| `R-9-35` | 2026-10-26 | `convert` 的「整数目标 + 指针源」（`uintptr(p)`）用 `Cell` 的**堆地址**顶替 | `to_i128(&Value::Ptr(..))` 给 0 ⇒ `--via=ssa` 打 `false`、native 打 `true`。判据只要三条性质：同一存储恒定、不同存储不同、非零。`r_9_35_uintptr_转换给出非零地址` |
+| `R-9-36` | 2026-10-26 | `hchan` 的字段序按**官方** `runtime/chan.go:34`：含 `sendx`/`recvx`，`elemsize: u16` / `closed: u32`，`recvq` 在 `sendq` 之前 | 计划里的清单漏了 `sendx`/`recvx`（环形推进没有它们就无处表达），且把两个队列的顺序写反了。`Hchan` = 96 B / `Sudog` = 48 B |
+| `R-9-37` | 2026-10-26 | 三操作**不在** `Hchan` 上，而在 `ChanState`（队列存 `(id, token)`，`done` 由返回值交出）；加守卫 `t_sch_01b`（`STATE_FIELDS ⊆ LAYOUT_FIELDS`） | workspace 级 `unsafe_code = "forbid"`，在 `Hchan` 上实现操作必须解引用 `*mut Sudog`（取 `next`、写 `done`）。「整个编译器不含 `unsafe`」比「省一个类型」值钱，代价是两个类型会漂 ⇒ 用守卫顶上 |
+| `R-9-38` | 2026-10-26 | M9 的 IR 扩展面是 **6 个 `Instr` + 2 个 `CalleeRef` + 4 处数据面**，且**没有** `V10/V11/V12` | `D-M9-5` 预计「净增 3 个」；写下去发现还差 `CapturePtr` / `TypeAssert` / `NilCheck` / `CalleeRef::{Iface,Runtime}`。而 `V1/V3/V5` 已经对这些变体逐条表态 ⇒ 写一条查不出东西的不变式只是噪声（`C4` §10） |
+| `R-9-39` | 2026-10-26 | `C9` 新增 **§6.1**：native 独有的 `runtime error: out of memory (heap limit N bytes)`（stderr / 退出 2 / 无 `panic: ` 前缀 / 解释器无对应） | `rt.c` 的 `rt_fatal_oom` 早就注释着「与 `C9` §6 一致」，而那一节里**没有**这一条 —— 注释指向了一个不存在的契约项（`R-51-1` 的同一类错） |
+| `R-9-40` | 2026-10-26 | `C5` 的对象元数据布局落在 **§11**（计划写作「§10」，而 §10 是「本契约的验证方式」）；`C11` 的 hchan 落在 **§7**（计划的「§8」），两处变更记录顺延 | 节号是文档结构，不是内容。硬塞进「§10」会把它塞进「验证方式」里 |
 
 ---
 
@@ -319,5 +339,5 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 | M6 的 SSA | **零回归 + 面全开**：`--via=ssa` **69 绿 0 跳过 0 红**（分母 46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6 → 68/1 → **69/0**，见 `R-9-8`/`R-9-12`/`R-9-14`/`R-9-15`/`R-9-16`/`R-9-26`/`R-9-30`；`G-M9-04`/`G-M9-05` 都已收口）；M9 拆掉的 `SSA-UNSUPPORTED-*` 是**新建图能力**而不是改既有图，其中 `MAP`、`IFACE-DYN`、`CLOSURE`、`FUNC-VALUE` 四条**整条下线**（`DEFER` 留着 —— 它仍守着 `defer delete/recover`）|
 | M7 的 native | **零回归**：39 个文件逐个仍绿（`T-CORP-03`）；`.framemap` 产物不变，**新加** `.stackmap` |
 | M8 的并发 | **零回归**：`run-chan.sh` 7 ok 12 skip 0 bad 不变；`M9d` 只交契约，不改解释器 |
-| M8 的 `C11` | `M9d` 的 `hchan` **参照不同构**（单线程 vs 多核）—— 写进 `C11` §8 的抬头 |
+| M8 的 `C11` | `M9d` 的 `hchan` **参照不同构**（单线程 vs 多核）—— 写进 `C11` §7 的抬头（`R-9-40`） |
 | `--via=ssa` 在 chan 上 | 仍拒绝（`SSA-UNSUPPORTED-CHAN` 不变）；M9 不碰并发 |

@@ -296,6 +296,25 @@ fn t_ssa_35_内建_len_cap_append_copy() {
 }
 
 #[test]
+fn t_slice_06_append_扩容要拷旧元素() {
+    // 判据 `T-SLICE-06` 的**求值器半边**（M9 收口时补）。
+    //
+    // 原有的 `t_ssa_35_内建_len_cap_append_copy` 只 append 到 **cap 够**的切片
+    // （`make([]int,2,4)` ⇒ `len=3,cap=4` 不扩容），所以「扩容时不拷旧元素」
+    // 这条**只能靠 native 的 `obj_slice` 抓**。而 `append_value` 是两套求值器
+    // 共用的一份实现（`D-M6-7`）—— 它坏了解释器侧就没人管（实测：变异
+    // `M-M9-03` 在 `ssa_run` 上原本是**绿的**）。
+    //
+    // 期望值来自官方 `go run`：`[]int{1,2}` 上 `append` 会扩到 cap 4，
+    // 新数组前两个必须是**拷过来的** 1 和 2，旧切片 `s` 仍是 len 2。
+    expect_out(
+        "slice-append-grow",
+        "package main\n\nfunc main() {\n\ts := []int{1, 2}\n\tt := append(s, 3)\n\tprintln(len(t), t[0], t[1], t[2], len(s), s[0], s[1])\n}\n",
+        "3 1 2 3 2 1 2\n",
+    );
+}
+
+#[test]
 fn t_ssa_35_内建_min_max_complex() {
     expect_out(
         "builtin-num",

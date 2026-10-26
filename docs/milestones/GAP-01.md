@@ -280,3 +280,58 @@ Frontend 列只在「语义判定发生在前端」时打 ✅；Native / Runtime
 **M8 之后的余额**：`RT-SCH-02/03`（有栈切换与 GMP，M9d 若仍要）、
 `RT-SCH-07`（抢占）、`RT-SCH-08`（定时器）、`U-M8-03` 的 range-over-func
 `return`/`goto`、`U-M8-08` 的 goroutine panic 栈。
+
+---
+
+## M9 节：native 对象模型、接口与 metadata（2026-10-26）
+
+> **口径**：`RT-MEM` / `RT-CMP` / `RT-POLY` / `RT-EXC` 四族里属于「对象模型与
+> metadata」的 ID 是 M9 的范围（`M9-design.md` §7 的对照表）。这里只记**实现后的**
+> 状态，与设计稿的不同之处逐条标出。
+> 判据在 `M9-manifest.json` 的 `gate`（`MEM-1..SCH-1`）与 `M9-tests.md` 的各族 `T-*`。
+
+| ID | 能力 | M9 后状态 | 说明 |
+|---|---|---|---|
+| `RT-MEM-01` | 多级分配器 | ✗ | `U-M9-02`：只有 bump arena（16 MiB 起、mmap chunk 链、上限 256 MiB） |
+| `RT-MEM-02` | 小/大对象路径 | ✗ | 同上；没有 size-class |
+| `RT-MEM-03` | 栈内存管理 | ✗ | 归 M11（native 的 goroutine 栈）。M9 只做「超大帧走 mmap」（`R-9-22`） |
+| `RT-MEM-04/05` | GC（STW / 并发） | ✗ | 归 M10。M9 交的是**根协议**（`STACK-MAP` + `RtFuncInfo` + `rt_globals`） |
+| `RT-MEM-06` | 堆位图与指针元数据 | ✅ | `TypeDesc.gcdata` + `ptr_mask`（同一函数供 `desc` 与 `live` 用，`R-9-31`）|
+| `RT-MEM-07` | 统一分配入口 | ✅ | `rt_alloc(desc, need_zero)`；对象头 8 字节（`D-M9-1`）|
+| `RT-MEM-08` | 内存统计 | ◐ | 只报 `used`/`limit`（`RGOC_HEAP_MAX`），不做 `HeapAlloc`/`HeapObjects` 细分 |
+| `RT-CMP-01` | Slice 头 | ✅ | `{ptr,len,cap}`；`growslice` 的**拷贝**是 `M-M9-03` 的靶子 |
+| `RT-CMP-02` | String 头 | ✅ | M7 已有；M9 补 `string(rune)` 与拼接边界、以及**引用型打印**（`R-9-23`）|
+| `RT-CMP-03` | Map 桶算法 | ◐ | 开放寻址 + 线性探测 + `tomb`；**无渐进搬迁**（`U-M9-08`）。判据缺口见 `G-M9-04`（`M-M9-04` 是绿的）|
+| `RT-CMP-04` | Map 迭代随机化 | ✅ | 迭代器按槽状态判（「已删不产出」）；顺序**不承诺**（连解释器都固定插入序）|
+| `RT-CMP-05` | Channel 结构 | ◐ | 只交 `hchan` 布局（`C11` §7，96 B）与状态机影子；**执行归 M11**（`U-M9-07` 的守卫钉住「代码里没有 `rt_go`/`rt_select`」）|
+| `RT-CMP-06` | Channel 语义全套 | ✗ | 归 M11。解释器侧的那一套在 M8（`C11` §3）|
+| `RT-CMP-07` | 数组/结构体表示 | ✅ | 值语义留栈 + `zerobase`；**零大小值**的读写判据修正见 `R-9-30` |
+| `RT-POLY-01` | `_type` 元数据 | ✅ | `TypeDesc` 40 B（`C5` §11.1）|
+| `RT-POLY-02` | 接口值布局 | ✅ | `{tab|type, data}` 两字；`ptr_mask` 两个字都标根 |
+| `RT-POLY-03` | itab 动态分派 | ◐ | 静态 ITab（`(iface, concrete)` 对）+ `rt_itab` 兜底；**无哈希缓存** |
+| `RT-POLY-04` | 断言 / type switch | ✅ | `x.(T)` 比 desc；`x.(J)` 走 `rt_itab`。**nil 接口**的两个坑（段错误 / 静默成功）在 `R-9-30` 修掉 |
+| `RT-POLY-05` | 泛型分派 | ✗ | 继续全量单态化（`U-M9-05`）；`HIR-UNSUPPORTED-GENERIC` + 退 1 |
+| `RT-POLY-06` | 反射元数据 | ✗ | 归 M12（`U-M9-04`）：`TypeDesc` 只有 `name_hash`，没有名字 |
+| `RT-POLY-07` | method value 闭包化 | ✅ | **实现与设计稿不同**：`MakeClosure{fn: 合成包装函数, captures: [接收者盒子]}`，盒子用 `new(T)+Store`（`box_new`）而不是 1 元素 slice —— 后者对 16 字节接口元素只落半个值（`R-9-30`）|
+| `RT-EXC-01` | defer 链表 | ◐ | 全局链（`rt_defer_push` 插链头 / `rt_deferrun` 从链头弹）；**非** open-coded（`U-M9-09`）|
+| `RT-EXC-02` | panic 级联展开 | ✅ | **返回码逐层传播**（`D-M9-12`）：`rt_panic_*` 只置状态，每个调用/断言/越界点后 `bl rt_panicking; cbnz`；体积代价实测 **0.49%**（`M9-report.md` §1.1②）|
+| `RT-EXC-03` | recover 拦截器 | ✅ | 仅 defer 直接函数体内有效；跑 defer 期间 panic **挂起** |
+| `RT-EXC-04` | 运行时致命错误 | ◐ | 四条检查（除零/越界/nil/nilmap）+ **`out of memory`**（`C9` §6.1，`R-9-39`）；不做栈溢出与并发 map 写。判据缺口 `G-M9-06` |
+| `RT-EXC-05` | 栈展开与 traceback | ✗ | 归 M12（`U-M9-06`）：panic 只有一行，不打栈 |
+| `RT-EXC-06` | 编译器协同 | ✅ | **实现与设计稿不同**：没有独立的 `panic_check` pass —— 检查点由 `isel` 在每个安全点内联（`check_panic`），因为「哪些指令之后要查」是 ABI 知识，不是图的性质 |
+| `PIPE-13` | 逃逸分析 | ✗ | **不做优化**（roadmap 明写）；只有「取址且逃出 ⇒ arena」的保守判定（`R-13-5` / `escaping_slots`）|
+
+**四条口径说明**
+
+1. **`RT-MEM-01/02` 记 ✗**：不是「做了一半」，是**整件事不做** —— 只有 bump arena。
+   把它记 ◐ 会让人以为有分层分配的路。
+2. **`RT-CMP-05` 记 ◐ 而不是 ✅**：M9 只交**布局与状态机影子**（`Hchan` + `ChanState`），
+   一个字节的可执行代码都没有；`t_sch_04` 就是钉这一点的守卫。
+3. **两条「实现与设计稿不同」**（`RT-POLY-07` / `RT-EXC-06`）：设计稿写的是形状，
+   落地时形状变了 —— 原因分别写在括号里，改的是**怎么做到**，不是**做到什么**。
+4. **三个判据缺口**（`G-M9-04/05/06`）都是「变异改坏之后判据不红」：它们比
+   「没实现」更值得记，因为「绿的」看起来像有据。
+
+**M9 之后的余额**：`RT-MEM-01/02`（分层分配，可能永不）、`RT-MEM-03/04/05`（栈与 GC，M10/M11）、
+`RT-CMP-03` 的渐进搬迁、`RT-CMP-05/06` 的 native 执行（M11）、`RT-POLY-05/06`（泛型与反射，M12）、
+`RT-EXC-05`（traceback，M12）、`PIPE-13`（逃逸优化）。

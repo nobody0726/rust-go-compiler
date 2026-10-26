@@ -428,10 +428,91 @@ rt_nfuncs: .quad <n>
 
 ---
 
-## 11. 变更记录
+## 11. 对象元数据布局（M9 新增，**偏移冻结**）
+
+native 通路的静态元数据全部在 `.rodata`，形状是 `#[repr(C)]` 冻结的。改一个字段
+就要同步本节、`M9-tests.md` 的 `T-META-01/02`、以及 M10 的扫描器。
+
+### 11.1 `TypeDesc`（40 字节）
+
+| 偏移 | 大小 | 字段 | 说明 |
+|---|---|---|---|
+| 0 | 4 | `size` | data 部分的字节数（**不含** 8 字节对象头） |
+| 4 | 4 | `ptrdata` | `[0, ptrdata)` 前缀里可能有指针；`gcdata` 只覆盖这段（`string` 是 8，不是 16） |
+| 8 | 4 | `hash` | 类型 hash（接口 `==`、map 键、`__desc_<hash>` 的符号名都靠它） |
+| 12 | 1 | `kind` | `reflect.Kind` 的子集（15 个值，`C5` 冻结） |
+| 13 | 1 | `flags` | bit0 可比较 / bit1 含指针 / bit2 要清零 |
+| 14 | 2 | _（填充）_ | 对齐 `gcdata` |
+| 16 | 8 | `gcdata` | ptrmask，每 8 字节 1 位；`ptrdata == 0` 时为 **null** |
+| 24 | 8 | `elem` | `*T` / `[]T` / `[n]T` 的元素 desc；其余 null |
+| 32 | 8 | `methods` | 方法表；无方法为 null（运行期 itab 构造读它） |
+
+**对象头**（`D-M9-1`）：堆对象是 `[+0 *TypeDesc][+8 data...]`，`size` 只数 data。
+所以同一个 desc 既描述「栈上的值」（无头）也描述「堆上的对象」（有头）——
+分配器负责加 8。
+
+### 11.2 `MethodTable` / `MethodEntry`
+
+```text
+MethodTable  = { count: u32, pad: u32 }              # 8 字节，entries 紧随其后
+MethodEntry  = { name_hash: u32, sig_hash: u32, func: *u8 }   # 16 字节
+```
+
+条目**按名字升序**（`Module::methods` 的序，`C4` §10）。`name_hash` 是名字的
+hash 而不是指针 —— 真名字归 M12（`RT-POLY-06`）。
+
+### 11.3 `ITab`
+
+```text
+ITab = { iface: *TypeDesc, concrete: *TypeDesc, fn: [*u8] }
+```
+
+`fn` 从偏移 **16** 起，第 `i` 项对应**接口方法序**（`C4` §10 的 `iface_methods`）
+的第 `i` 个方法。`isel` 的 `tab.fn[i]` 就是 `ldr x, [tab, #16+8*i]`。
+`fn[i]` 可能指向真方法，也可能指向一段 `__imeth_*` 尾部跳转桩 —— 「要不要桩」
+是 **ABI 知识**（`SlotClass` / 嵌入偏移 / 接收者宽度），归 `rgoc-arm64`
+（`module::recv_steps`）。
+
+### 11.4 `GlobalRoot` / `RtFuncInfo`
+
+```text
+GlobalRoot = { desc: *TypeDesc, addr: *u8 }          # rt_globals，按全局下标
+RtFuncInfo = { frame_size: u32, n_sp: u32, sp_off: *u32, sp_bits: *u64 }
+```
+
+`rt_globals` / `rt_nglobals` 与 `rt_funcs` / `rt_nfuncs` 是 M10 扫根的**唯一入口**。
+`RtFuncInfo` 的语义与 `STACK-MAP v1` 的位序见 §8.4（同一份数据两种形态）。
+
+### 11.5 funcval 与隐式第 0 实参
+
+```text
+funcval = { fn: *u8, caps: [*u8; n] }     # 间接调用 `ldr x16, [x0; #0]`
+```
+
+- **即使没有捕获**也要发 funcval（`__fv_<FuncId>`，8 字节）：间接调用一律
+  `ldr x16, [x0]`，直接把函数符号当 funcval 用会读到函数的第一条指令（实测
+  `Bus error`）。
+- **带捕获的函数**（`ctx_abi == true`）多一个隐式第 0 实参 `x0 = ctx`（funcval 的
+  地址）；用户实参从 `x1` 起。这条约定是 `isel::pass_args_ctx` 与
+  `frame::call_stack_args` 共用的（`R-9-28`：栈实参的起点因此整体后移一格）。
+- **sret 不用**：聚合返回值走「堆上拷一份 + 返回地址」（`R-9-29`），因为
+  `[1000]byte` 装不进两个寄存器，而 `ret` 之后本帧就死了。
+
+### 11.6 `.stackmap` 与 `.framemap` 的分工
+
+| 产物 | 粒度 | 谁消费 |
+|---|---|---|
+| `<out>.framemap`（`FRAME-MAP v1`，只在 `--keep-asm`）| 值 | 人 / `objdump` 对账（`T-NAT-04`）|
+| `<out>.stackmap`（`STACK-MAP v1`，**总是**写）| 字 | 文档 / 调试 / 与 `.rodata` 对账（`T-ROOT-01`）|
+| `.rodata` 的 `RtFuncInfo` | 字 | M10 的栈扫描器 |
+
+---
+
+## 12. 变更记录
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-26 | 新增 §11（对象元数据布局，`R-9-40`）：`TypeDesc` 40 B / `MethodTable` / `ITab` / `GlobalRoot` / `RtFuncInfo` / funcval 与隐式第 0 实参 / sret 不用；变更记录顺延为 §12 | `M9-plan.md` Task 67。计划把这节写作「§10」，而 §10 是「本契约的验证方式」⇒ 落地在 §11 |
 | 2026-10-07 | **初稿创建**（T52）。六项记录逐条对应 `T-S3-04`；补记链接可复现性的完整定位过程 | Phase 3 的 S3（`T-S3-01`…`05`）+ 门禁 E6 / E7 |
 | 2026-10-26 | **新增 §8.4 `STACK-MAP v1`**（`R-9-33`/`R-9-34`）；§8.1 的 `ptrs` 从「指针类型的偏移」放宽成「至少一个根字的偏移」（`R-9-31`） | M9/Phase 6（根协议）：`off` 定为**字下标**、位点带块号 `b<k>:<idx>` —— 只写块内下标时不同块的同一下标无法区分，对账与调试都得靠猜 |
 | 2026-10-25 | §8 的 `type=` 定为 `t<id>`（`R-11-2`）；`offs` 明确为**数值**升序 | 写 `FRAME-MAP v1` 时发现原示例写的是类型名，那要求这里再造一个渲染器，必然与 `C7` 漂 |

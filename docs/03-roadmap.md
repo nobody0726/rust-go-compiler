@@ -417,6 +417,17 @@ arm64 指令选择、最小寄存器分配、调用/栈对齐、静态/全局数
 
 ### M9：native 对象模型、接口与 metadata（RT-CMP/POLY/MEM 子集）
 
+> **状态：✅ 已收口**（2026-10-26）—— 子阶段 M9a/b/c1/c2/d 全部交付，门禁
+> `MEM-1`/`MEM-2`/`OBJ-1..4`/`EXC-1`/`CORP-1`/`ROOT-1`/`SCH-1` **10/10 pass**。
+> native 语料 **69/0/0**（M7 收口时是 39）；三方差分 `--run` 69 绿、`--via=ssa`
+> 69 绿（**拒绝面为空**）；根协议交 `STACK-MAP v1` + `.rodata` 的 `RtFuncInfo`
+> （两方逐字节对账）；channel 只交布局与状态机（`C11` §7），执行归 M11。
+> 详见 [`M9-report.md`](./milestones/M9-report.md) 与
+> [`M9-manifest.json`](./milestones/M9-manifest.json)。
+> **下游注意**：① 根协议有两处**保守**（聚合实参只标 1 位、`addr_slots` 不单独标），
+> M10 的扫描器要按「多标无害」处理；② `U-M9-10`（interior pointer）是**语义级拒绝**，
+> 不是「还没做」；③ 没有 GC —— arena 只增，撞 `RGOC_HEAP_MAX` 退 2。
+
 - **M9a（依赖 M7）**：typed allocation、bump/arena、零值、统一分配入口、布局/对齐/指针 metadata、资源统计。
 - **M9b**：string/slice/map、闭包/方法值、iface/eface、接口调用/断言/type switch；基础 itab/动态类型标识在这里完成，不能全部拖到 M12。
 - **M9c**：native defer/panic/recover 和运行时检查；全局 roots、调用/回边安全点、stack maps、寄存器 spill/save roots、宿主桥接暂停策略。
