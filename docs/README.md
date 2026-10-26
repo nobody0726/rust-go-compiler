@@ -37,6 +37,7 @@
 | M5 | [`contracts/C9-values-and-output.md`](./contracts/C9-values-and-output.md) | **值表示 / 输出字节 / 退出码**（13 个 `Value` 变体 + 7 条不变量 + 四类赋值语义 + `print/println` 字节表 + 合并流 + 退出码表 + 三件不承诺） | ✅ **已冻结（候选）**（M5/Task 9，2026-10-23 收口期补写） |
 | M6 | [`contracts/C10-ssa-dump.md`](./contracts/C10-ssa-dump.md) | **SSA 中立 dump 格式**（头三行字段 / 块段与指令行语法 / 终止符与边实参 / 编号顺序 / 六条禁止项 / 完整示例） | ✅ **已冻结**（M6/Task 1 新建；Task 51 定稿，2026-10-24） |
 | M8 | [`contracts/C11-concurrency.md`](./contracts/C11-concurrency.md) | **解释器并发**（调度三规则 / 通道四操作真值表 / select 三阶段与撤销 / 死锁判定 / 六条不承诺） | ✅ **已定稿**（M8/Task 1 新建、Task 64 定稿，2026-10-25；执行期 14 条 `R-8-*` 已折回正文） |
+| M10 | [`contracts/C12-heap-and-gc.md`](./contracts/C12-heap-and-gc.md) | **托管堆与 GC**（chunk 16 MiB 对齐 / 16 字节块头与五种 kind / 起始位图与内部指针解析 / 七类根与帧记录 ABI / 触发与统计行语法 / `rt_arena_alloc` 保留面） | 🟡 **草案**（M10/Task 1 新建，2026-10-26；§6 与 §5.2 在 Phase 1/3 各改一次，Task 38 定稿） |
 | M1 | [`milestones/M1-design.md`](./milestones/M1-design.md) | **怎么建 M1** —— 九个决策 D-M1-1~9（五字段）、**20 条实测事实基线**、六切面测试组、诊断代号表、oracle adapter 组成 | **已确认**（2026-10-11） |
 | M1 | [`milestones/M1-tests.md`](./milestones/M1-tests.md) | **怎么验 M1** —— 冻结的 LEX-01..13 测试 ID、六切面用例清单、负例的双向断言、分母 | **已冻结**（T-L21，2026-10-12） |
 | M1 | [`milestones/M1-plan.md`](./milestones/M1-plan.md) | **怎么干 M1** —— RED-GREEN 任务分解 | **已完成**（T-L01–T-L21，2026-10-12） |

@@ -1,0 +1,374 @@
+# C12 契约：托管堆与 GC
+
+> **状态**：草案（2026-10-26，M10/Task 1）。§6 与 §5.2 在 Phase 1/3 会各改一次，
+> 定稿在 M10/Task 38。
+>
+> **范围**：native 通路的**堆形状**、**对象头**、**根集合**、**帧记录 ABI**、
+> **触发与统计**。它约束 `runtime/native/aarch64-unknown-linux-gnu/rt.c` 与
+> `rgoc-arm64` 的帧发射；**不**约束解释器（`U-M10-06`）。
+>
+> **与其它契约的关系**：
+> - `C5` §11.1 给 `TypeDesc` 的 40 字节布局 —— 本契约**只消费**它，不改。
+> - `C5` §8.4 给 `STACK-MAP v1` 的位序 —— 本契约的帧记录用同一份位图，不改格式。
+> - `C5` §7 给帧布局 —— 本契约在帧顶**多要 24 字节**（§4.2），值槽整体下移。
+> - `C9` §5 给合并流 —— 本契约的统计行**只进 stderr**，合并流一字不改。
+
+---
+
+## 1. 堆形状
+
+### 1.1 chunk
+
+```text
+Chunk（data 区 **16 MiB 对齐**）
+base ─┬─ [+0]   Chunk 头 64 字节 {next, base, size, bump, free_head,
+        │                          meta_bm, meta_summary, live_bytes}
+       ├─ [+64]  块 0
+       ├─ ...
+       └─ [+size) 块 n           （size = data 容量，16 MiB 或更大，4096 的倍数）
+
+旁挂（每 chunk 单独 mmap，计入 heap_committed）：
+  start_bitmap  256 KiB  （1 位 / 8 字节，覆盖 data 区）
+  page_summary  512 B    （1 位 / 4 KiB，覆盖 data 区）
+```
+
+- `Chunk` 头**在数据区内**（前 64 字节），所以 `base` 到 `base+64` 不是块。
+- 对齐做法：`mmap(size + 16 MiB)` → `base = (r + 16MiB - 1) & ~(16MiB-1)` →
+  前缀与后缀各 `munmap`。前缀不进 `heap_committed`（已还）。
+- `id = base >> 24`。**判「是不是堆指针」= `chunk_by_id(p >> 24) != null`**（O(1)）。
+  `p >> 24 == base >> 24` 对所有 `base <= p < base + 16 MiB` 成立 —— 因为
+  `base` 16 MiB 对齐而 `size >= 16 MiB`。**`size > 16 MiB` 的 chunk 只认首 16 MiB**
+  （`p >> 24` 只覆盖第一个 16 MiB 段）；超过 16 MiB 的 chunk 在
+  `chunk_by_id` 里登记**每一段**的 id（`size >> 24` 项），这是 §1.4 的唯一例外。
+- `chunk_by_id`：64 槽开放寻址哈希表，键 `id`，值 `*Chunk`。**满 64 个 chunk
+  不再增长**（64 × 16 MiB = 1 GiB > 缺省上限 256 MiB，够用；撞满就 OOM）。
+
+### 1.2 记账口径
+
+| 量 | 定义 | 谁读 |
+|---|---|---|
+| `heap_committed` | Σ 每个 chunk 的（data 容量 + 64 头 + 元数据 288 KiB），**不含**已 munmap 的对齐前缀 | `rt_heap_used()` / `RGOC_HEAP_MAX` / 统计行 `heap=` |
+| `live_bytes` | 上次清扫后**存活块的块总字节（含 16 字节头）** | 统计行 `live=` |
+| `chunk_count` | chunk 数 | 统计行 `chunks=` |
+
+`RGOC_HEAP_MAX`（缺省 256 MiB）按 `heap_committed` 算 —— **与 M9 同口径**，
+只是多算了元数据的 288 KiB / chunk。所以同样的 `RGOC_HEAP_MAX` 下，M10 能装的
+对象比 M9 少一点（1.8%），这是可接受的（`T-GC-07` 的判据是「文本与退出码不变」，
+不是「能装同样多」）。
+
+### 1.3 分配
+
+```text
+gc_alloc(need, kind, desc, n):
+  1. 当前 chunk 的 bump 够 ⇒ bump（顺带 bm_set + page_summary 置位）
+  2. 当前 chunk 的 free list first-fit（余量 >= 32 字节才切分；否则整块给出）
+  3. 链上其它 chunk 的 free list → bump
+  4. 都不行 ⇒ 若 heap_committed >= gc_threshold ⇒ rt_gc() 后从 1 重试**一次**
+  5. 仍不行 ⇒ rt_fatal_oom(heap_limit)（`C9` §6.1 文本不变）
+```
+
+- **块大小恒 16 的倍数且 ≥ 16**：`blk = (16 + data + 15) & ~15`。
+- 分配出来的 `data = blk + 16`，**恒 16 对齐**（`blk` 是 16 的倍数、`base+64`
+  是 16 的倍数）。
+- `need_zero`：**复用的块必须清零**；新 bump 出来的块在零页上，可省（但实现
+  **不省** —— 一条 memset 比「判断这块是新页还是复用」便宜，且是唯一的防线）。
+- **零大小对象不进托管堆**（`rt_zerobase`）。
+
+### 1.4 不变量
+
+1. 活块的 `blk` 是 16 的倍数，且 `blk >= 16`。
+2. 活块的 `data` 落在 `[base+64, base+size)` 内，且 `data + data_size <= base + size`。
+3. 块与块在 chunk 内**不重叠、无缝隙**（bump 与 free list 合起来铺满 data 区）。
+4. `live_bytes <= Σ 活块 blk`，等号在「清扫刚结束」时成立。
+5. `heap_committed >= 16 MiB × chunk_count`。
+
+---
+
+## 2. 块头与 kind
+
+### 2.1 16 字节块头（`D-M10-2`）
+
+```text
+块 = [+0 u64 header][+8 u64 n|kind][+16 data ...]
+
+header（活块）：
+  bit0  = 0
+  bit1  = 已标记（marked）
+  bit2  = raw（**不扫描**的快速位）
+  bit3..63 = desc 指针         （TypeDesc 8 对齐 ⇒ 低 3 位恒 0）
+header（空闲块）：
+  bit0  = 1
+  bit1..31 = 0
+  bit32..63 = 本块总字节数（含头；<= 16 MiB 故装得下）
++8（活块）：n | (kind << 32)
++8（空闲块）：next 空闲块地址（0 = 链尾）
+```
+
+**读 desc 一律 `(const TypeDesc *)(header & ~7UL)`。** 任何地方直接 `(TypeDesc*)header`
+都是 bug（tag 位会带进去）。
+
+`n` 的语义按 kind 而定（§2.2）。`kind` 占 `n` 的高 32 位 —— `n` 因此上限 2^32，
+足够（`n` 是元素个数 / 捕获个数 / 字节数 / 槽数）。
+
+### 2.2 五种 kind
+
+| kind | 名字 | `desc` | `n` | data 布局 | 扫描 |
+|---|---|---|---|---|---|
+| 0 | `object` | 对象类型 desc | 0 | 值本体 | `[0, desc->ptrdata)` 按 `desc->gcdata` |
+| 1 | `array` | **元素** desc | 元素个数 | 元素数组 | `n` 个元素，每个按 `elem->gcdata` |
+| 2 | `closure` | null | 捕获个数 | `[fn, cap0, cap1…]` | **跳过字 0**（代码地址），扫 `n` 个捕获字 |
+| 3 | `raw` | null | 字节数 | 字节 | **不扫** |
+| 4 | `mapslots` | null | 槽数（cap） | `[+0 kdesc][+8 vdesc][+16 槽…]` | 每个 LIVE 槽的 key 与 value |
+
+- `object` 的 `n` 恒 0 —— 元素个数只在 `array` 有意义。
+- `array` 的 `desc` 是**元素** desc（`[]T` 的 `elem`），不是切片类型 desc。
+- `closure` 的 `n` = 捕获个数；data 字 0 是 `fn`（代码地址，`mark_ptr` 会忽略，
+  但**不扫更省**）。
+- `mapslots` 的 data 前 16 字节是**两个 desc 指针**（`kdesc`/`vdesc`），
+  槽数组从 `+16` 起。槽的 stride = `8 + align8(kdesc->size) + align8(vdesc->size)`，
+  槽字 0 是 `state`（0=空 / 1=LIVE / 2=墓碑）。**GC 只扫 `state == 1` 的槽。**
+  这样 mapslots 块**自身完备**（不需要回到 `MapObj` 才能扫）。
+
+### 2.3 `gcdata` 与 `ptrdata` 的一致性（**新增不变量**）
+
+`C5` §11.1 说「`ptrdata == 0` 时 `gcdata` 为 null」。本契约补上反方向：
+
+> **`ptrdata > 0` ⇒ `gcdata` 必须非 null，且 `gcdata` 至少覆盖
+> `ceil(ptrdata / 8)` 个位。**
+
+违反时的行为：`bad_desc++`，该块按 **`raw`** 处理（不扫）。宁可泄漏也不误扫。
+
+⚠️ 已知违反点：`rt.c` 的 `g_panic_str_desc`（`string`，`ptrdata=8` 而 `gcdata=0`）。
+M10/Task 24 必须把它改成 `gcdata = 1`（bit0 = 第 0 个字是指针）。
+
+### 2.4 `raw` 位的用途
+
+`bit2` 与 `kind == 3` 是**同一件事的两种编码**。保留 bit2 是因为扫描器
+**只看第一个字**就能跳过 raw 块；读 `+8` 拿 kind 要多一次访存，而 raw 块
+（字符串、`[]byte`）在语料里占多数。
+
+两者不一致时的行为：以 `kind` 为准（`bit2` 只当提示）。
+
+---
+
+## 3. 起始位图与内部指针
+
+### 3.1 为什么需要（`D-M10-4`）
+
+Go 的指针**可以指向块中部**：`s[2:]`、`&a[i]`、子串 `t[1:]`。而 GC 需要块首
+才能读块头。**不移动**（`D-M10-12`）意味着没有 forwarding 可查 ⇒ 必须能
+从任意内部地址**回扫**到块首。
+
+### 3.2 位图
+
+| 表 | 粒度 | 大小 / chunk | 置位时机 |
+|---|---|---|---|
+| `start_bitmap` | 1 位 / 8 字节 | 256 KiB | 分配（bump 或 free list 切出）时置位；块合并成空闲 run 时清除 |
+| `page_summary` | 1 位 / 4 KiB | 512 B | 该页内**出现第一个**块起点时置位；该页**没有任何**起点时清除 |
+
+位下标一律用**相对 `base` 的字节偏移**：`start_bitmap[off >> 6] & (1 << ((off >> 3) & 63))`
+覆盖 `[base + off, base + off + 8)`。
+
+### 3.3 `resolve_block`（三步）
+
+```text
+resolve_block(c, p) -> u8 *（块首）| null
+  1. off = (u64)p - (u64)c->base；若 off < 64 或 off >= c->size ⇒ null
+  2. page = off >> 12
+     若 page_summary(page)：
+        从字 w = off & ~7UL 起，向下到 page << 12，逐个 bm_test(w >> 3)；
+        命中 ⇒ 返回 base + w
+        （**必然命中**：本页有起点且本页的起点是 <= p 的最大起点，见 3.4）
+  3. 否则 q 从 page-1 递减到 0，找第一个 page_summary(q) 为真的页：
+        从字 w = ((q+1) << 12) - 8 起，向下到 q << 12 逐个 bm_test；
+        命中 ⇒ 返回 base + w
+      q 到 0 都没找到 ⇒ null
+```
+
+### 3.4 正确性论证（写下来，因为它就是 `T-HEAP-05` 的推理）
+
+设块起点为 `s`，`p` 在块内（`s <= p`）。块内除 `s` 外没有起点（不变量 §1.4.3）。
+
+- 若 `s` 与 `p` 同页：本页有起点 ⇒ 走第 2 步，本页内 `<= p` 的最大起点就是 `s`。
+- 若 `s` 在更早的页：则**本页不可能有起点** —— 因为本页若有起点 `s'`，
+  则 `s' > s` 且 `s' <= p`（本页起点必 ≤ p，否则它在本页内但 > p… 注意本页
+  起点可能 > p，那就不是「≤p 的最大」）。等等 —— 本页可能有起点但都 > p。
+  此时第 2 步在本页扫到页顶也找不到 ⇒ **必须继续往前找**。
+  ⇒ **第 2 步找不到时要退化成第 3 步**，不能直接返回 null。
+
+修正后的第 2 步：本页找不到就进第 3 步（从 `page-1` 起）。这个修正
+**必须**在实现里体现 —— 漏了它，症状是「1 MiB 数组里 `&s[3]` 返回 null」，
+而 `&s[1MiB-1]`（在本页末尾、起点在页头附近但跨页）反而可能碰巧对。
+
+`bad_ptr` 计数器：`resolve_block` 返回 null 但 `p` 在某个 chunk 范围内 ⇒ `bad_ptr++`。
+它是「位图漏置位」的唯一可观测信号。
+
+---
+
+## 4. 根集合与帧记录 ABI
+
+### 4.1 七类根
+
+| # | 根 | 来源 | 扫描 |
+|---|---|---|---|
+| 1 | 栈 | `g_frames` 链 | §4.2 |
+| 2 | 全局 | `rt_globals[i] = {desc, addr}` | `[addr, addr + desc->ptrdata)` 按 `gcdata`；零大小全局不在表里 |
+| 3 | defer 链 | `g_defer_top->fv` | `mark_ptr(fv)`（闭包块或 rodata funcval）|
+| 4 | panic 值 | `g_p_text` / `g_saved_text` | `mark_ptr`（托管 raw 块）|
+| 5 | map 槽 | `MapObj` → `slots` 块 | 由 kind `mapslots` 的扫描负责（§2.2）|
+| 6 | 闭包捕获 | kind `closure` | §2.2 |
+| 7 | 数组元素 | kind `array` | §2.2 |
+
+**不扫**：帧记录的 `prev`（栈地址）/ `fi`（rodata）、`rt_zerobase`、itab（rodata）、
+静态 funcval（rodata）、`rt_arena_alloc` 的结构（§6 逐条核）。
+
+`mark_ptr(p)` 的第一步永远是「在堆里吗」：
+`chunk_by_id((u64)p >> 24)` 为 null ⇒ 直接返回。**这一步是全部 rodata/栈地址
+被忽略的唯一机制** —— 没有它，`mark_ptr` 会把 `desc` 指针当对象。
+
+### 4.2 帧记录（`D-M10-7`）
+
+```text
+fp-16: prev      上一帧的 fp（链头是全局 g_frames；0 = 链尾）
+fp-24: fi        *RtFuncInfo（`C5` §11.4；M9 已发在 .rodata）
+fp-32: sp_idx    u64，本帧**当前**的 safepoint 下标
+```
+
+- 记录区 `[-32, -16)` 共 24 字节。**值槽从 `-40` 起**（M9 是 `-16`）。
+- `frame_size` 增加 24 后再向上取 16 的倍数。
+- **只有 `lv.safepoints` 非空的函数发记录**（`D-M10-8`）。理由：没有 call /
+  alloc / 回边 ⇒ 不可能停在 GC 点。判据：`.s` 里出现 `g_frames` 的函数集合
+  == 有 safepoint 的函数集合。
+- prologue（在 `sub sp` 与存 `fp/lr` **之后**）：
+  `prev = g_frames; fi = &__funcinfo_N; sp_idx = 0; g_frames = fp`
+- epilogue（`epilogue()` 是唯一出口，`F14`）：`g_frames = prev`
+- 每个 safepoint **之前**：`sp_idx = <该位点的下标>`
+- `sp_idx` 的下标空间 = `.stackmap` 里该函数的 `sp` 行序（**`(block, idx)` 升序**，
+  `F6`）。两处**必须同源**：`Liveness` 只算一次，`stack_map_of` 与 `sp_index`
+  都从它派生（`M10-design.md` §8 风险 1）。
+
+### 4.3 扫一帧
+
+```text
+fi = *(RtFuncInfo**)(fp - 24)
+idx = *(u64*)(fp - 32)
+if (idx >= fi->n_sp) { bad_sp++; continue; }        # 跳过该帧，不崩
+bits = fi->sp_bits + fi->sp_off[idx] / 64           # sp_off 是**位**偏移
+base = fp - fi->frame_size
+for i in 0..sp_words:
+    w = bits[i]
+    while (w) { j = ctz(w); w &= w-1; mark_ptr(*(void**)(base + 8*(64*i + j))); }
+```
+
+`sp_words = ceil(frame_size / 8 / 64)` 是**导出量**（`D-M10-10`：`RtFuncInfo`
+不加字段）。
+
+⚠️ 位序：bit `i` ↔ `fp - frame_size + 8i`（`C5` §8.4 冻结）。**不是** `fp - 8(i+1)`。
+
+### 4.4 为什么没有寄存器根（`D-M10-9`）
+
+每个值一个栈槽（`C5` §7）⇒ 任何跨调用的活值都同时在槽里；`isel` 是
+`ld` 到寄存器再 `bl`，不覆盖槽。所以扫栈就够。
+
+**这条要写成判据**（`T-GC-10`：`.s` 里不出现 `stp x19` / `str x19`）。
+将来加寄存器分配时这条会红 —— 红的时候必须**补寄存器根**，不能改判据。
+
+---
+
+## 5. 触发与统计
+
+### 5.1 环境变量
+
+| 变量 | 值 | 作用 |
+|---|---|---|
+| `RGOC_GC` | `0` | **关**：`rt_gc()` 立即返回，分配失败直接 OOM（与 M9 等价）|
+| | 缺省 / 其它 | 开：自动触发（§5.3）|
+| `RGOC_GC_STRESS` | `1` | 每次 `gc_alloc` **之前**先 `rt_gc()`（慢，但能把漏扫的根全逼出来）|
+| `RGOC_GC_STATS` | `1` | 退出时向 **stderr** 打一行（§5.2）|
+| `RGOC_GC_THRESHOLD` | 字节数 | 自动触发阈值（缺省 4 MiB）；`0` 表示「每次分配失败都收」|
+
+`RGOC_HEAP_MAX` 沿用 M9（缺省 256 MiB）。
+
+### 5.2 统计行（**语法冻结**）
+
+一行，`\n` 结尾，字段顺序固定，**所有字段总是出现**（`rss` 在 M10c 之前恒 0）：
+
+```text
+gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> kinds=<o>,<a>,<c>,<r>,<m> bad_sp=<n> bad_ptr=<n> bad_desc=<n>
+```
+
+- 前缀 `gc: `（含空格），字段间单个空格，键值间 `=`，无空格。
+- `kinds` 是**五个**逗号分隔的十进制计数，顺序 `object,array,closure,raw,mapslots`。
+- `bad_*` 三个**总是出现**（不是「非 0 才追加」）。
+
+> ⚠️ **推翻 `M10-plan.md` Task 4 Step 2 的初稿口径**（「`bad_*` 只在非 0 时追加」）。
+> 理由：「不出现」与「=0」是两件事，判据要写两遍；总是出现让
+> `bad_sp=0 bad_ptr=0 bad_desc=0` 成为**一条**断言，而且 diff 更稳。
+> 记 `R-10-2`。
+
+**写入点**：由**生成的 `main` 出口**调用 `rt_gc_stats_line()`（`module.rs` 在
+`main` 的 `ret` 之前插一条 `bl`），**不**依赖 libc 的 `atexit`（freestanding 没有）。
+`gc_stats == 0` 时该函数立即返回 ⇒ 不打任何字节。
+
+### 5.3 自动触发
+
+```text
+gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
+  ⇒ rt_gc()；重试一次；仍失败 ⇒ OOM
+```
+
+- **`RGOC_GC=0` ⇒ `rt_gc()` 立即返回** ⇒ 第 4 步等于直接 OOM。
+- **`RGOC_GC_STRESS=1` ⇒ 每次分配前先收**（此时阈值不起作用）。
+- **GC 期间不分配**（`H5`）：标记与清扫里出现 `gc_alloc` 就是 bug。
+  worklist 走 `mmap` 直调，不走 `gc_alloc`。
+
+### 5.4 探针
+
+| 符号 | 返回 | 用途 |
+|---|---|---|
+| `rt_gc_collections()` | `u64` | 收了几次 |
+| `rt_gc_live_bytes()` | `u64` | 上次清扫后的存活块字节 |
+| `rt_gc_alloc_bytes()` | `u64` | 累计分配字节（= Σ data 字节，不含头）|
+| `rt_gc_bad_sp()` | `u64` | 帧记录 `sp_idx >= n_sp` 的次数（**必须 0**）|
+| `rt_gc_bad_ptr()` | `u64` | 堆内指针解析不到块首的次数（**必须 0**）|
+| `rt_gc_bad_desc()` | `u64` | 块头 desc 非法的次数（**必须 0**）|
+
+探针**不新增内建**：测试读 §5.2 的统计行。
+
+---
+
+## 6. `rt_arena_alloc` 的保留面
+
+`D-M10-1`：托管堆只放**含 Go 值语义**的对象。下面逐条列出「现在还留在 arena」
+的结构，以及为什么它可以留（**不含指向托管堆的指针**）。
+
+| # | 调用点（`rt.c`）| 结构 | 为什么留 arena |
+|---|---|---|---|
+| 1 | `write_all` 的输出缓冲 | `char[nb]` | 纯字节；且 `write_all` 在 GC 期间**也会被调用**（统计行、panic 文本），它不能触发分配 |
+| 2 | `rt_itab` | `{iface, concrete, fn[]}` | 三个字段全是 **rodata / 代码地址**；不含堆指针 |
+| 3 | `rt_defer_push` 的 `DeferRec` | `{next, fp, fv}` | 运行时簿记。`next` 是 arena 地址、`fp` 是栈地址（`mark_ptr` 都忽略）；`fv` **是根**，但由 §4.1 的第 3 类**单独扫**，不靠扫这条链 |
+| 4 | chunk 元数据 / worklist | 位图、页摘要、标记栈 | GC 自己用；参与回收就没有底了 |
+| 5 | 超大帧（`rt_stack_frame_alloc`）| `mmap`/`munmap` 成对 | 不是 arena，也不进 `heap_committed`；`R-9-22` 不变 |
+
+**移出 arena（进托管堆）**：
+
+| 结构 | 变成 | 谁改 |
+|---|---|---|
+| `rt_alloc`（`new`/`rt_box`）| kind `object` | Task 8 |
+| `rt_makeslice` / `slice_grow` 底层数组 | kind `array` | Task 9 |
+| `MakeClosure` 的闭包块 | kind `closure` | Task 9 |
+| `rt_bytes2str` / `rt_runes2utf8` / `rt_strcat` / `rt_i64_to_str` | kind `raw` | Task 9 |
+| `MapObj` + `m->slots` | kind `object`（`rt_desc_mapobj`）+ kind `mapslots` | Task 25 |
+| `panic_set` 的文本 / `rt_recover` 的 box | kind `raw` / kind `object`（`rt_desc_panicstr`）| Task 24 |
+
+**守卫**（`T-GC-11`）：`gc_arena.rs` 扫 `rt.c` 源码，任何 `rt_arena_alloc`
+调用点都必须出现在上表第 1–5 行；多出来的就红。**新增一个 arena 调用点必须
+同时改本表** —— 这是「不留后门」的唯一机制。
+
+---
+
+## 7. 变更记录
+
+| 日期 | 变更 | 依据 |
+|---|---|---|
+| 2026-10-26 | **草案创建**（M10/Task 1）：§1 堆形状 / §2 块头与 kind / §3 起始位图 / §4 根集合与帧记录 / §5 触发与统计 / §6 arena 保留面 | `M10-design.md` `D-M10-1..15` / `F1..F14`；用户拍板三件事（16 字节块头 / 逐位点 `sp_idx` / map 进托管堆）|
