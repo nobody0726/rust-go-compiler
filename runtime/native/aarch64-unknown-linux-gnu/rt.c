@@ -368,6 +368,21 @@ u64 rt_heap_limit(void) { return heap_limit; }
  */
 static u64 gc_on = 1;                            /* 0 = 关（与 M9 等价） */
 static u64 gc_stress;                            /* 1 = 每次分配前先收 */
+
+/* 「这段时间里不要触发 GC」（`R-10-23`）。
+ *
+ * # 为什么需要
+ *
+ * 有些分配是**构造函数的一部分**：块刚分配出来、还没写进任何可达位置。
+ * 如果这时 GC 跑起来，那块就是不可见的 ⇒ 被收掉。`rt_alloc_escaped` 就是
+ * 这个形状（逃逸槽的存储在序言里分配，紧接着存进帧里的指针格）。
+ *
+ * 关掉触发是**安全**的：从分配到发布之间没有任何分配点，所以「这段时间里
+ * 没有垃圾产生」—— 不收也不会 OOM（上限只在 `rt_grow` 里判）。
+ *
+ * 与 `gc_pin` 的分工：`gc_pin` 解决「中间还要再分配一次」（map 的两块），
+ * `gc_pause` 解决「一次分配 + 立即发布」。 */
+static u64 gc_pause;
 static u64 gc_stats;                             /* 1 = 退出时打一行 */
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 
@@ -678,7 +693,7 @@ static void *gc_alloc(u64 need, u64 kind, const void *desc, u64 n) {
      * ⚠️ `gc_stress` 是**间隔**不是开关：`=1` 是「每次分配都收」，代价
      * O(n²) —— `gc1.go` 的 1e5 次分配 × 平均 17 万块 = 1.7e10 次块扫描，
      * 语料里跑不完。所以小 fixture 用 `=1`（最强证据），语料用 `=64`。 */
-    if (gc_stress != 0 && gc_on != 0 && (gc_allocs % gc_stress) == 0) {
+    if (gc_pause == 0 && gc_stress != 0 && gc_on != 0 && (gc_allocs % gc_stress) == 0) {
         rt_gc();
     }
 
@@ -888,6 +903,28 @@ void *rt_alloc_array(const TypeDesc *elem, u64 cap) {
 
 /* 裸字节：字符串本体 / `[]byte` 的底层存储。**不扫描**（里面没有指针）。 */
 void *rt_alloc_raw(u64 bytes) { return gc_alloc(bytes, K_RAW, 0, bytes); }
+
+/* 逃逸的取址槽（`R-10-23`）：`p := &x` 里 `p` 逃出函数时，`x` 的存储放这里。
+ *
+ * # 为什么必须进托管堆
+ *
+ * M9 用的是 `rt_arena_alloc`（arena **不扫描**）。于是「闭包里改了 `x`，
+ * 而 `x` 是个指针」这种形状就丢了根：闭包捕获的是 `&槽`，`mark_ptr(&槽)` 在
+ * 栈上 ⇒ `chunk_of` 返回 0 ⇒ 槽里那个指针一个字都没被标。
+ *
+ * 实测：`p := new([1024]byte); f := func() int { return p[0] }; churn(); f()`
+ * 在 stress 下打印 204 而不是 42 —— 1 KiB 的块在 churn 里被回收了。
+ *
+ * # 为什么要 `gc_pause`
+ *
+ * 它在**序言**里分配，此时帧记录刚写好、`sp_idx = 0`；而块要等到 `st_x` 之后
+ * 才可达。中间不能有 GC。关掉触发是安全的：从分配到发布之间没有别的分配点。 */
+void *rt_alloc_escaped(const TypeDesc *desc) {
+    gc_pause++;
+    void *p = gc_alloc(desc->size, K_OBJECT, desc, 0);
+    gc_pause--;
+    return p;
+}
 
 /* 闭包：`{fn, cap0, cap1…}`。返回 data（`fn` 已写好），isel 只负责填捕获。 */
 void *rt_alloc_closure(const void *fn, u64 ncaps) {

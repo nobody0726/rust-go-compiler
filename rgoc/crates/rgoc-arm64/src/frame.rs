@@ -455,6 +455,28 @@ pub fn render_frame_map(f: &SsaFunc, fr: &Frame, lv: &rgoc_ssa::live::Liveness) 
             v.0, s.off, s.size, typ
         );
     }
+    // 取址槽（`R-10-14`）：它们的指针字在**每个** safepoint 上都被标成根
+    // （活跃性只覆盖 `ValueId`，槽里的值逐位点算不出来）。
+    //
+    // ⚠️ 这三行是 M10 补的：之前 `addr_slots` **完全不可观测** —— 帧图里没有它，
+    // 反汇编对账也看不到它，于是「保守标了没标」「标的位置对不对」都没有判据。
+    // 实测踩过：闭包捕获 `&槽` 之后，槽里的指针一个字都没被标，1 KiB 的块
+    // 在 `churn()` 里被回收（`c_a` 打印 204 而不是 42）。
+    for (slot, s) in &fr.addr_slots {
+        let typ = f
+            .slot_types
+            .get(slot)
+            .map_or_else(|| "-".to_string(), |t| format!("t{}", t.index()));
+        let _ = writeln!(
+            out,
+            "# addr-slot s{} off={} size={} type={} heap={}",
+            slot.0,
+            s.off,
+            s.size,
+            typ,
+            u8::from(fr.heap.contains_key(slot))
+        );
+    }
     for sp in &lv.safepoints {
         let offs = offsets_of(fr, &sp.live);
         let ptrs = offsets_of(fr, &sp.ptrs);

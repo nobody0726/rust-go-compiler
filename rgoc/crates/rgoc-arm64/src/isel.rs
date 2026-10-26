@@ -262,14 +262,32 @@ pub fn func(
     // 形参：入口块的 `params` 从寄存器落到槽里。
     bind_params(&cx, asm);
 
-    // 逃逸的取址槽：存储从 arena 拿，指针存进帧里的指针格。
+    // 逃逸的取址槽：存储从**托管堆**拿（`R-10-23`），指针存进帧里的指针格。
     //
-    // **必须在 `bind_params` 之后**：`rt_arena_alloc` 是普通 C 函数，
+    // ⚠️ M9 用的是 `rt_arena_alloc` —— arena **不扫描**，于是「闭包捕获 `&x`、
+    // 而 `x` 里是指针」这种形状就丢了根：闭包块里的捕获字是 `&槽`（栈地址），
+    // `mark_ptr` 直接忽略，槽里那个指针一个字都没被标。
+    // 实测：`p := new([1024]byte); f := func() int { return p[0] }; churn(); f()`
+    // 在 stress 下打印 204 而不是 42。
+    //
+    // 换成 `rt_alloc_escaped(desc)`：块是 `K_OBJECT`，GC 按 desc 扫它 ——
+    // 「槽里有什么类型」这件事在编译期就知道，直接给 desc 最准。
+    //
+    // **必须在 `bind_params` 之后**：`rt_alloc_escaped` 是普通 C 函数，
     // 会按 AAPCS64 覆盖 `x0..x3`（也就是形参）。放在前面等于把形参丢了。
-    for h in fr.heap.values() {
-        load_imm(asm, "x0", i64::from(h.size));
-        load_imm(asm, "x1", i64::from(h.align));
-        asm.ins("bl rt_arena_alloc");
+    for (slot, h) in &fr.heap {
+        let typ = *f
+            .slot_types
+            .get(slot)
+            .expect("逃逸槽必须在 slot_types 里（否则它的存储没法给 desc）");
+        debug_assert!(
+            h.align <= 16,
+            "逃逸槽的对齐 {} > 16：托管堆的块只保证 16 对齐",
+            h.align
+        );
+        let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(tt, typ));
+        load_addr(asm, "x0", &desc);
+        asm.ins("bl rt_alloc_escaped");
         st_x(asm, "x0", h.cell);
     }
 

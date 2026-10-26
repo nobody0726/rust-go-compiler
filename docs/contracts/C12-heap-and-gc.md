@@ -79,6 +79,23 @@ gc_alloc(need, kind, desc, n):
   **不省** —— 一条 memset 比「判断这块是新页还是复用」便宜，且是唯一的防线）。
 - **零大小对象不进托管堆**（`rt_zerobase`）。
 
+#### 「已分配但还没发布」的两条出路（`R-10-18`）
+
+`gc_alloc` 在 stress 下会在**分配之前**先跑一次 GC。所以「刚分配出来、还没写进
+任何可达位置」的块是**看不见的** —— 多块构造函数必然有这么一个瞬间。
+
+| 场景 | 机制 | 例子 |
+|---|---|---|
+| 中间**还要再分配一次** | `gc_pin[]`（深度 8）：`mark_roots` 扫它 | `map_new` 先建槽块、再建 `MapObj` |
+| 一次分配 + **立即发布** | `gc_pause++` / `--`：抑制触发 | `rt_alloc_escaped`（§4.5）|
+
+⚠️ 实测（`R-10-18`）：`map_new` 先建槽块再建 `MapObj`，第二次分配前的 GC 把
+槽块收掉，而 `MapObj` 恰好**复用了同一块**（free list 优先）⇒ `m->slots` 指向
+自己的中间 ⇒ `m[0]` 读出 0。`gc_pin` 就是为这个加的。
+
+溢出**不静默**：`gc_pin_push` 超深直接 abort —— 静默丢一个 pin 的后果是
+「随机时刻丢对象」，比崩难查一百倍。
+
 ### 1.4 不变量
 
 1. 活块的 `blk` 是 16 的倍数，且 `blk >= 16`。
@@ -223,7 +240,7 @@ resolve_block(c, p) -> u8 *（块首）| null
 
 ## 4. 根集合与帧记录 ABI
 
-### 4.1 七类根
+### 4.1 八类根
 
 | # | 根 | 来源 | 扫描 |
 |---|---|---|---|
@@ -234,6 +251,7 @@ resolve_block(c, p) -> u8 *（块首）| null
 | 5 | map 槽 | `MapObj` → `slots` 块 | 由 kind `mapslots` 的扫描负责（§2.2）|
 | 6 | 闭包捕获 | kind `closure` | §2.2 |
 | 7 | 数组元素 | kind `array` | §2.2 |
+| 8 | **pin 槽** | `gc_pin[]`（深度 8）| `mark_ptr` —— 「已分配但还没发布」的块（§1.3）|
 
 **不扫**：帧记录的 `prev`（栈地址）/ `fi`（rodata）、`rt_zerobase`、itab（rodata）、
 静态 funcval（rodata）、`rt_arena_alloc` 的结构（§6 逐条核）。
@@ -250,8 +268,9 @@ fp-24: fi        *RtFuncInfo（`C5` §11.4；M9 已发在 .rodata）
 fp-32: sp_idx    u64，本帧**当前**的 safepoint 下标
 ```
 
-- 记录区 `[-32, -16)` 共 24 字节。**值槽从 `-40` 起**（M9 是 `-16`）。
-- `frame_size` 增加 24 后再向上取 16 的倍数。
+- 记录区 `[-32, -8)`：`fp-8` 是 M7 就留着的间隙（仍未用），`fp-16/-24/-32`
+  三个字是记录。**值槽从 `-40` 起**（M9 是 `-16`）⇒ `SAVED` 16 → **32**。
+- `frame_size = 32 + sub_sp_imm`（空函数也要 `sub 16`，那 16 字节就是记录区）。
 - **只有 `lv.safepoints` 非空的函数发记录**（`D-M10-8`）。理由：没有 call /
   alloc / 回边 ⇒ 不可能停在 GC 点。判据：`.s` 里出现 `g_frames` 的函数集合
   == 有 safepoint 的函数集合。
@@ -269,7 +288,7 @@ fp-32: sp_idx    u64，本帧**当前**的 safepoint 下标
 fi = *(RtFuncInfo**)(fp - 24)
 idx = *(u64*)(fp - 32)
 if (idx >= fi->n_sp) { bad_sp++; continue; }        # 跳过该帧，不崩
-bits = fi->sp_bits + fi->sp_off[idx] / 64           # sp_off 是**位**偏移
+bits = fi->sp_bits + fi->sp_off[idx]                # sp_off 是**字**下标（不是位偏移！）
 base = fp - fi->frame_size
 for i in 0..sp_words:
     w = bits[i]
@@ -280,8 +299,52 @@ for i in 0..sp_words:
 不加字段）。
 
 ⚠️ 位序：bit `i` ↔ `fp - frame_size + 8i`（`C5` §8.4 冻结）。**不是** `fp - 8(i+1)`。
+判据 `T-ROOT-09`（把 `base` 写成 `fp - 8` 就红）。
 
-### 4.4 为什么没有寄存器根（`D-M10-9`）
+**`mark_ptr` 有三道防线**（`R-10-20`）：
+
+1. `chunk_of(p)` 为 null ⇒ 返回（非堆地址）；
+2. `resolve_block` 返回 0 ⇒ `bad_ptr++` 并返回（起始位图漏置位）；
+3. **块头结构校验**：`kind <= K_ARENA`、`blk_size >= BLK_MIN`、
+   `offset + blk_size <= chunk->bump`。任一不满足 ⇒ `bad_ptr++` 并返回。
+
+第 3 道是 Phase 2 加的第二防线：`scan_block` 拿一个假 desc 去读 `ptrdata`
+会**直接段错误**，而「跳过」最坏只是泄漏 —— 契约里说得很清楚：宁可泄漏也不误扫。
+
+### 4.4 位图是 live-**out** 的保守超集（`R-10-21`）
+
+⚠️ **这不是精确的 live-in**。`live.rs` 用的是 `after[ii]`（执行完第 `i` 条之后
+还活着的值），而 GC 在指令**执行之前**跑 ⇒ 「本指令自己的 def」也在集合里，
+那一刻它的槽里还是**上一条命的值**。
+
+试过改成真 live-in（把 def 从集合里去掉），**实测让
+`defernil` / `print` / `nilptr2` / `method5` 全部坏掉**（`MakeClosure` 的 dst
+尤其明显：去掉它 `defer` 就崩）。机制没查清 ⇒ 保留超集。
+
+**代价不对等**：多标 = 泄漏一轮；漏标 = 活对象被回收。所以保守优先。
+
+**副作用**：扫到「指向已回收块的指针」成为常态。所以 `bad_ptr` **只计真错**
+（上面第 2、3 道防线），「指向空闲块」不计 —— 否则探针恒非 0，没人再信它。
+判据 `T-ROOT-10` 因此改成读**内容**（`sp_idx` 卡在 0 会让后面的指针漏标）。
+
+### 4.5 逃逸槽必须进托管堆（`R-10-23`）
+
+`p := &x` 而 `p` 逃出函数（被闭包捕获 / 存进全局）时，`x` 的存储不在帧里：
+帧里只留一个 8 字节**指针格**，存储本身走 `rt_alloc_escaped(desc)`。
+
+⚠️ **M9 用的是 `rt_arena_alloc`** —— arena 不扫描，于是「闭包捕获 `&x`、
+而 `x` 里是指针」这种形状就丢了根：闭包块里的捕获字是 `&槽`（**栈地址**），
+`mark_ptr` 直接忽略，槽里那个指针一个字都没被标。
+
+实测：`p := new([1024]byte); f := func() int { return p[0] }; churn(); f()`
+在 stress 下打印 `204` 而不是 `42`。判据 `T-ROOT-14`。
+
+`rt_alloc_escaped` 里 `gc_pause++`：它在**序言**里分配，块要等 `st_x` 之后才
+可达，中间不能有 GC。关掉触发是安全的（从分配到发布之间没有别的分配点）。
+`gc_pause` 与 `gc_pin`（§1.3）的分工：`gc_pin` 解决「中间还要再分配一次」
+（map 的两块），`gc_pause` 解决「一次分配 + 立即发布」。
+
+### 4.6 为什么没有寄存器根（`D-M10-9`）
 
 每个值一个栈槽（`C5` §7）⇒ 任何跨调用的活值都同时在槽里；`isel` 是
 `ld` 到寄存器再 `bl`，不覆盖槽。所以扫栈就够。
@@ -358,7 +421,7 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 | `rt_gc_live_bytes()` | `u64` | 上次清扫后的存活块字节 |
 | `rt_gc_alloc_bytes()` | `u64` | 累计分配字节（= Σ data 字节，不含头）|
 | `rt_gc_bad_sp()` | `u64` | 帧记录 `sp_idx >= n_sp` 的次数（**必须 0**）|
-| `rt_gc_bad_ptr()` | `u64` | 堆内指针解析不到块首的次数（**必须 0**）|
+| `rt_gc_bad_ptr()` | `u64` | 堆内指针**解析不到块首**或**块头结构非法**的次数（**必须 0**）。⚠️ 「指向已回收的块」**不计** —— 保守位图下那是常态（§4.4）|
 | `rt_gc_bad_desc()` | `u64` | 块头 desc 非法的次数（**必须 0**）|
 
 探针**不新增内建**：测试读 §5.2 的统计行。
@@ -375,8 +438,10 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 | 1 | `write_all` 的输出缓冲 | `char[nb]` | 纯字节；且 `write_all` 在 GC 期间**也会被调用**（统计行、panic 文本），它不能触发分配 |
 | 2 | `rt_itab` | `{iface, concrete, fn[]}` | 三个字段全是 **rodata / 代码地址**；不含堆指针 |
 | 3 | `rt_defer_push` 的 `DeferRec` | `{next, fp, fv}` | 运行时簿记。`next` 是 arena 地址、`fp` 是栈地址（`mark_ptr` 都忽略）；`fv` **是根**，但由 §4.1 的第 3 类**单独扫**，不靠扫这条链 |
-| 4 | chunk 元数据 / worklist | 位图、页摘要、标记栈 | GC 自己用；参与回收就没有底了 |
-| 5 | 超大帧（`rt_stack_frame_alloc`）| `mmap`/`munmap` 成对 | 不是 arena，也不进 `heap_committed`；`R-9-22` 不变 |
+| 4 | `panic_set` 的文本 | `char[n+1]` | 纯字节 |
+| 5 | `rt_recover` 的 box | `{ptr, len}` 的 string | 含一个堆指针，但它指向的文本**也在 arena**（永不回收）⇒ 不需要标记 |
+| 6 | chunk 元数据 / worklist | 位图、页摘要、标记栈 | GC 自己用；参与回收就没有底了 |
+| — | 超大帧（`rt_stack_frame_alloc`）| `mmap`/`munmap` 成对 | **不是 arena**，也不进 `heap_committed`；`R-9-22` 不变 |
 
 **移出 arena（进托管堆）**：
 
@@ -387,7 +452,7 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 | `MakeClosure` 的闭包块 | kind `closure` | Task 9 |
 | `rt_bytes2str` / `rt_runes2utf8` / `rt_strcat` / `rt_i64_to_str` | kind `raw` | Task 9 |
 | `MapObj` + `m->slots` | kind `object`（`rt_desc_mapobj`）+ kind `mapslots` | Task 25 |
-| `panic_set` 的文本 / `rt_recover` 的 box | kind `raw` / kind `object`（`rt_desc_panicstr`）| Task 24 |
+| **逃逸的取址槽**（`p := &x` 且 `p` 逃出函数）| kind `object`（`rt_alloc_escaped(desc)`）| Task 28（`R-10-23`）|
 
 ⚠️ **arena 分配也带 16 字节块头**（kind = `arena` = 5，`R-10-6`）。不给头的话，
 `sweep` 按起始位图走时会把 arena 的区域当成「空闲」塞进 free list —— 之后被
@@ -396,8 +461,12 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 省一套记账）。
 
 **守卫**（`T-GC-11`）：`gc_arena.rs` 扫 `rt.c` 源码，任何 `rt_arena_alloc`
-调用点都必须出现在上表第 1–5 行；多出来的就红。**新增一个 arena 调用点必须
-同时改本表** —— 这是「不留后门」的唯一机制。
+调用点都必须出现在上表里；多出来的就红（反向也查：表里有、源码里没有 ⇒ 红）。
+**新增一个 arena 调用点必须同时改本表与那张 `ARENA_SITES` 表** —— 这是
+「不留后门」的唯一机制。
+
+⚠️ 表按**源码片段**认，不按行号：行号会随任何无关改动漂移，那样守卫每周都要
+修一次，最后没人维护；而片段本身被改动时，那正是应该重审保留面的时刻。
 
 ---
 
@@ -405,5 +474,6 @@ gc_alloc 的第 4 步：分配失败 && heap_committed >= gc_threshold
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-27 | **Phase 2 定稿**：§4.1 八类根（加 pin 槽）；§4.2 记录区改成「`[-32,-8)`、值槽从 `-40` 起、`frame_size = 32 + sub`」；§4.3 修正 `sp_off` 是**字**下标（原来写成位偏移）并补 `mark_ptr` 三道防线；新增 §4.4（保守超集）/ §4.5（逃逸槽）；§5.4 `bad_ptr` 口径收窄；§6 表补到 6 条 + 按源码片段认 | 实测：① `sp_off` 按位偏移读会扫到帧外的字；② 真 live-in 位图让 `defernil`/`print`/`nilptr2`/`method5` 全坏；③ 逃逸槽在 arena ⇒ 闭包捕获 `&槽` 时槽里的指针没有根；④ 起始位图漏维护 ⇒ 假块首 ⇒ 段错误（`ken/simpswitch.go`）|
 | 2026-10-27 | **§2.1 块头编码加 `blk >> 4`**（`R-10-9`）；§1.3 分配顺序改成 **free list 优先**（`R-10-12`）；§2.2 加 `arena` kind（`R-10-6`）；§5.1 `RGOC_GC_STRESS` 改成**间隔**（`R-10-10`）；§6 补「arena 也带块头」| Phase 1 实测：① 块大小不能靠 desc 算（非法 desc 时 sweep 会走到块中间）；② bump 优先让 free list 形同虚设（判据假绿三次）；③ 不给 arena 块头会让 sweep 把 itab 当空闲；④ `stress=1` 在 1e5 次分配的语料上是 O(n²) 跑不完 |
 | 2026-10-26 | **草案创建**（M10/Task 1）：§1 堆形状 / §2 块头与 kind / §3 起始位图 / §4 根集合与帧记录 / §5 触发与统计 / §6 arena 保留面 | `M10-design.md` `D-M10-1..15` / `F1..F14`；用户拍板三件事（16 字节块头 / 逐位点 `sp_idx` / map 进托管堆）|
