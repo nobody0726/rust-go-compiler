@@ -228,6 +228,18 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
     }
     std::fs::write(&asm_path, &asm).map_err(|e| format!("写 {} 失败：{e}", asm_path.display()))?;
 
+    // `STACK-MAP v1` 是**交付物**（`M9-design.md` §3.11）：M10 的栈扫描器消费它，
+    // 所以无条件落盘，不受 `--keep-asm` 影响。同一份内容也编在 `.rodata` 的
+    // `RtFuncInfo` 表里 —— 两侧逐字节对账是 `T-ROOT-01`。
+    //
+    // ⚠️ 它**不能**塞进 `.s`：行首的 `#` 在 AArch64 的 as 里是立即数前缀。
+    {
+        let map = rgoc_arm64::module::stack_maps(&module, &tt).map_err(|e| e.to_string())?;
+        let map_path = out.with_extension("stackmap");
+        std::fs::write(&map_path, map)
+            .map_err(|e| format!("写 {} 失败：{e}", map_path.display()))?;
+    }
+
     // `FRAME-MAP v1` 与 `.s` 并列（`C5` §8）：前缀 `#` 在 AArch64 的 as 里是立即数前缀，
     // 塞进 `.s` 就汇编不过。只在 `--keep-asm` 时留 —— 它与 `.s` 同属「中间件」。
     if cmd.keep_asm {

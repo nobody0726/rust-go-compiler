@@ -96,12 +96,20 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     emit_descs(&mut asm, m, tt, &mt);
     emit_global_roots(&mut asm, m, tt);
 
-    // ③ 逐函数。
-    for f in &m.funcs {
+    // ③ 逐函数；顺手收栈图（`M9/Phase 6`，`Task 59`）。
+    //
+    // 帧只算一次，代码与栈图共用同一个 `fr` —— 两处各 layout 一遍就会出现
+    // 「位图按 A 帧算、指令按 B 帧发」这种只在改过帧布局之后才露头的错。
+    let mut stackmaps: Vec<FuncStackMap> = Vec::with_capacity(m.funcs.len());
+    for (i, f) in m.funcs.iter().enumerate() {
         let fr = frame::layout_with(f, tt, &siblings)
             .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         isel::func(f, &fr, tt, &siblings, &mut asm).map_err(CompileError::Cg)?;
+        let cfg = rgoc_ssa::cfg::Cfg::build(f);
+        let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
+        stackmaps.push(stack_map_of(i, f, &fr, &lv, tt, &siblings));
     }
+    emit_stackmap_rodata(&mut asm, &stackmaps);
 
     // ④ 除零的统一出口。
     //
@@ -765,4 +773,280 @@ pub fn frame_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     }
     let _ = writeln!(out, "# end");
     Ok(out)
+}
+
+// ── STACK-MAP v1（`M9-design.md` §3.11；门禁 `ROOT-1`）──────────────────
+
+/// 协议版本行（改动等于契约变更）。
+pub const STACKMAP_VERSION: &str = "STACK-MAP v1";
+
+/// 一个 safepoint 的位图：`words[i]` 的第 `k` 位 ↔ 帧内地址
+/// `fp - frame_size + 8*(64*i + k)`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpBitmap {
+    /// 位点所在的块。
+    pub block: u32,
+    /// 块内指令下标；`== instrs.len()` 表示**终止符**（回边）。
+    pub idx: usize,
+    /// 活值个数（信息性；位图才是根的真集）。
+    pub live: u32,
+    /// 位图（字为单位）。
+    pub words: Vec<u64>,
+}
+
+/// 一个函数的栈图。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FuncStackMap {
+    /// 在 `Module::funcs` 里的下标（M9 只用它做「函数索引」）。
+    pub index: usize,
+    /// 二进制里的符号（`fn<FuncId>`）—— `FRAME-MAP` 的 `sym=` 同一口径。
+    pub sym: String,
+    /// 帧字节数（与 `FRAME-MAP` 的 `frame=` 同一个数）。
+    pub frame_size: u32,
+    /// 逐 safepoint（顺序 = `live` 的排序键：块号 + 指令下标）。
+    pub sps: Vec<SpBitmap>,
+}
+
+impl FuncStackMap {
+    /// 每个 safepoint 的位图占几个字。
+    ///
+    /// ⚠️ 一位 = 一个 8 字节字，所以位数是 `frame_size / 8`，不是 `frame_size`。
+    /// 写成 `frame_size.div_ceil(64)` 会把 656 字节的帧算成 11 个字（实际 2 个）——
+    /// 于是 `off` 的步长与真实位图宽度对不上，M10 会读到别的 safepoint 的位。
+    #[must_use]
+    pub fn words_per_sp(&self) -> usize {
+        (self.frame_size as usize / 8).div_ceil(64)
+    }
+
+    /// 拼成一维的 `sp_bits` 流（第 `i` 个 safepoint 从 `i * words_per_sp` 起）。
+    #[must_use]
+    pub fn flat_bits(&self) -> Vec<u64> {
+        let mut out = Vec::with_capacity(self.sps.len() * self.words_per_sp());
+        for sp in &self.sps {
+            out.extend_from_slice(&sp.words);
+        }
+        out
+    }
+}
+
+/// 算一个函数的栈图。
+///
+/// # 位序（`C5` §10 冻结，两侧都按它读）
+///
+/// 位图覆盖整个帧区间 `[fp - frame_size, fp)`，bit `i` ↔ `fp - frame_size + 8*i`，
+/// bit 0 = 帧内最低地址。**含** outgoing 区（栈实参里有指向堆的指针）与
+/// tmp 区；**不含** saved `fp`/`lr`（它们在 `[fp-16, fp)`，那两位永远写 0）。
+///
+/// # 标哪几处
+///
+/// 1. 每个活值按 `ptr_words`（`live.rs`，来源 `ptr_mask`）标它的根字；
+/// 2. **调用位点**的 outgoing 区：栈实参里是指针的那些字。
+///
+/// 帧里的 `addr_slots`（`&x` 的存储）**不单独标**：它的内容在「有人能读到」
+/// 时必然以某个活值的 `Load` / `AddrOf` 形式出现；而逃逸槽在帧里只剩一个
+/// arena 指针（不是堆地址），标它会让 M10 去追一块不由 GC 管的存储。
+///
+/// # 一个刻意的保守
+///
+/// 聚合实参在栈上是**指向本帧的指针**（`C5` §6.1 按指针传），不是堆根。
+/// 仍然标它（1 位）：M10 扫到不在堆里的地址会忽略，而漏标的代价是「活对象
+/// 被回收」。代价不对称时选保守那一侧。
+#[must_use]
+pub fn stack_map_of(
+    index: usize,
+    f: &SsaFunc,
+    fr: &crate::frame::Frame,
+    lv: &rgoc_ssa::live::Liveness,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> FuncStackMap {
+    let bits = fr.frame_size as usize / 8;
+    let words_per_sp = bits.div_ceil(64);
+    let mut sps = Vec::with_capacity(lv.safepoints.len());
+    for sp in &lv.safepoints {
+        let mut words = vec![0u64; words_per_sp];
+        let set = |bit: usize, words: &mut Vec<u64>| {
+            debug_assert!(bit < bits, "位下标 {bit} 超出帧（{bits} 位）");
+            if bit < bits {
+                words[bit / 64] |= 1 << (bit % 64);
+            }
+        };
+        for (v, w) in &sp.ptr_words {
+            let Some(slot) = fr.values.get(v) else {
+                continue;
+            };
+            // 槽偏移是**相对 fp 的负数**；帧内低位在 `fp - frame_size`。
+            let base = i64::from(fr.frame_size) + i64::from(slot.off);
+            debug_assert!(
+                base >= 0,
+                "槽偏移 {} 超出帧（frame_size = {}）",
+                slot.off,
+                fr.frame_size
+            );
+            if base >= 0 {
+                set(base as usize / 8 + usize::from(*w), &mut words);
+            }
+        }
+        // 调用位点的 outgoing 区（`[sp, sp+outgoing)`）。
+        //
+        // `sp = fp - (frame_size - 16)`，所以 `[sp, #k]` 的位下标是 `(16 + k)/8`。
+        if let Some(ins) = f.blocks[sp.block.index()].instrs.get(sp.idx)
+            && let rgoc_ssa::ir::Instr::Call { callee, args, .. } = ins
+        {
+            let (stack_args, _) = crate::frame::call_stack_args(f, tt, siblings, callee, args);
+            for (off, ty) in stack_args {
+                let slot_class = slot_of(tt, ty).map_or(SlotClass::Int, |s| s.class);
+                // 聚合在栈上只有**一个指针**（指向调用方的槽），不是它自己的位图。
+                let word_ids: Vec<u8> = if slot_class == SlotClass::Agg {
+                    vec![0]
+                } else {
+                    ptr_mask(tt, ty)
+                        .map(|m| {
+                            m.iter()
+                                .enumerate()
+                                .filter(|(_, b)| **b)
+                                .map(|(i, _)| u8::try_from(i).unwrap_or(u8::MAX))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                for w in word_ids {
+                    set((16 + off as usize) / 8 + usize::from(w), &mut words);
+                }
+            }
+        }
+        sps.push(SpBitmap {
+            block: sp.block.0,
+            idx: sp.idx,
+            live: u32::try_from(sp.live.len()).unwrap_or(u32::MAX),
+            words,
+        });
+    }
+    FuncStackMap {
+        index,
+        sym: format!("fn{}", f.src.0),
+        frame_size: fr.frame_size,
+        sps,
+    }
+}
+
+/// 渲染一个函数的 `STACK-MAP v1` 段。
+#[must_use]
+pub fn render_stackmap(fsm: &FuncStackMap) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "# func {} name={} frame={} safepoints={}",
+        fsm.index,
+        fsm.sym,
+        fsm.frame_size,
+        fsm.sps.len()
+    );
+    let wp = fsm.words_per_sp();
+    for (i, sp) in fsm.sps.iter().enumerate() {
+        // 位点写 `b<块>:<下标>`，与 `SSA-LIVE v1` 的 `# safepoint b<k> <idx>`
+        // **同形**（`R-9-34`）：只写块内下标的话，不同块的同一下标无法区分，
+        // 对账与调试都得靠猜。
+        let _ = writeln!(
+            out,
+            "sp b{}:{} off={} live={} ptrs={}",
+            sp.block,
+            sp.idx,
+            i * wp,
+            sp.live,
+            hex_words(&sp.words)
+        );
+    }
+    out
+}
+
+/// 位图的十六进制文本：**按字节下标升序**直排（与 `gcdata` 的字节序一致），
+/// 每个字节两位；**不做**大小端翻转 —— 「谁在前」靠这一句定，不靠猜。
+fn hex_words(words: &[u64]) -> String {
+    let mut s = String::with_capacity(words.len() * 16);
+    for w in words {
+        for b in w.to_le_bytes() {
+            s.push_str(&format!("{b:02x}"));
+        }
+    }
+    s
+}
+
+/// 整个模块的 `STACK-MAP v1` 文本（并列产物 `<out>.stackmap`，`Task 59`）。
+///
+/// # Errors
+///
+/// 帧布局失败（某个值的静态类型没有运行期布局）。
+pub fn stack_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
+    let mut out = String::new();
+    out.push_str(STACKMAP_VERSION);
+    out.push('\n');
+    let siblings: BTreeMap<rgoc_hir::FuncId, &SsaFunc> =
+        m.funcs.iter().map(|f| (f.src, f)).collect();
+    for (i, f) in m.funcs.iter().enumerate() {
+        let fr = frame::layout_with(f, tt, &siblings)
+            .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
+        let cfg = rgoc_ssa::cfg::Cfg::build(f);
+        let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
+        let fsm = stack_map_of(i, f, &fr, &lv, tt, &siblings);
+        out.push_str(&render_stackmap(&fsm));
+    }
+    Ok(out)
+}
+
+/// 把 `RtFuncInfo` 表编进 `.rodata`（`M10` 的消费面）。
+///
+/// ```text
+/// RtFuncInfo = { frame_size: u32, n_sp: u32, sp_off: *u32, sp_bits: *u64 }
+/// ```
+///
+/// `sp_off[i]` 是第 `i` 个 safepoint 位图在 `sp_bits` 里的**起始字下标**
+/// （`R-9-33`）。选「字下标」而不是「位下标」：`sp_off` 的类型是 `*u32`，
+/// 而位下标在 4 KiB 帧上会到 4096 —— 还没溢出，但字下标让
+/// `sp_bits[sp_off[i] + k]` 直接可写，不用再做除法。
+///
+/// `n_sp == 0` 时两张表都是 null（沿 `TypeDesc.gcdata` 的「没有根就不发位图」
+/// 同一条纪律）：一个指向空标签的指针比 `0` 更难判，且 M10 只判 `n_sp`。
+fn emit_stackmap_rodata(asm: &mut Asm, sms: &[FuncStackMap]) {
+    for fsm in sms {
+        let off_lbl = format!(".Lspoff{}", fsm.index);
+        let bits_lbl = format!(".Lspbits{}", fsm.index);
+        let mut body = vec![
+            format!(".long {}", fsm.frame_size),
+            format!(".long {}", fsm.sps.len()),
+        ];
+        if fsm.sps.is_empty() {
+            body.push(".quad 0".to_string());
+            body.push(".quad 0".to_string());
+        } else {
+            let wp = fsm.words_per_sp();
+            let offs: Vec<String> = (0..fsm.sps.len())
+                .map(|i| format!(".long {}", i * wp))
+                .collect();
+            asm.rodata_named_raw(&off_lbl, &offs);
+            let bits: Vec<String> = fsm
+                .flat_bits()
+                .iter()
+                .map(|w| format!(".quad {w}"))
+                .collect();
+            asm.rodata_named_raw(&bits_lbl, &bits);
+            body.push(format!(".quad {off_lbl}"));
+            body.push(format!(".quad {bits_lbl}"));
+        }
+        asm.rodata_named_raw(&format!("__funcinfo_{}", fsm.index), &body);
+    }
+    // 全局索引：M10 只拿得到「函数索引」这一个数（按 PC 反查函数归 M10 的
+    // pclntab），所以必须有这张表把索引变成 `RtFuncInfo` 的地址。
+    let mut body: Vec<String> = sms
+        .iter()
+        .map(|f| format!(".quad __funcinfo_{}", f.index))
+        .collect();
+    if body.is_empty() {
+        body.push(".quad 0".to_string());
+    }
+    asm.global("rt_funcs");
+    asm.global("rt_nfuncs");
+    asm.rodata_named_raw("rt_funcs", &body);
+    asm.rodata_named_raw("rt_nfuncs", &[format!(".quad {}", sms.len())]);
 }

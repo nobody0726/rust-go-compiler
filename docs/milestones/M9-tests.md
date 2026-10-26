@@ -145,7 +145,7 @@ M9 要**从头实现一整套对象表示**（slice 头 / map 桶 / 接口对 / 
 
 | ID | 名称 | 判据要点 |
 |---|---|---|
-| `T-ROOT-01` | `STACK-MAP` 与 `.rodata` 一致 | `<out>.stackmap` 与 ELF 里的 `RtFuncInfo` 表**逐字节**对账（`native_frame_map` 的同款） |
+| `T-ROOT-01` | `STACK-MAP` 与 `.rodata` 一致 | `<out>.stackmap` 与 `.s` 的 `.rodata` 里 `RtFuncInfo` 表**逐字节**对账（`native_frame_map` 的同款）。读 `.s` 而不是 ELF：`.s` 是那些字节的唯一来源，错了能一眼看出是哪一行（沿 `desc_emit` 的口径）；「汇编器有没有忠实搬运」由 `T-NAT-*` 与 M10 负责 |
 | `T-ROOT-02` | 每个函数都有帧记录 | 69 个语料里每个被编译的函数都能在 `STACK-MAP` 里找到（按函数数对账） |
 | `T-ROOT-03` | safepoint 数 ≥ 调用点数 | 逐函数：`n_sp >= 该函数 IR 里的 Call 数`（漏了 safepoint 就红） |
 | `T-ROOT-04` | 回边有 safepoint | 一个「循环 100 次、循环体里无调用无分配」的函数 ⇒ `n_sp >= 1` 且其中之一在回边块上 |

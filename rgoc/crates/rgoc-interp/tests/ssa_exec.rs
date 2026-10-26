@@ -332,3 +332,112 @@ fn t_ssa_52_回边上对调两个块参数() {
         "三轮交换后应是 2,1；顺序赋值会得到 2,2（静默算错）"
     );
 }
+
+// ── `R-9-35`：`uintptr(p)` 不能是 0 ────────────────────────────────
+
+#[test]
+fn r_9_35_uintptr_转换给出非零地址() {
+    // `x := 7; u := uintptr(&x); println(u != 0)`
+    //
+    // 判据只要求三条性质（解释器没有真实地址）：**同一块存储恒定**、
+    // **非零**。实测 `convert` 曾把 `Value::Ptr` 交给 `to_i128` ⇒ 0，
+    // 于是 `--via=ssa` 打 `false` 而 native 打 `true`（`R-9-35`）。
+    let mut fb = FnBuilder::new("main");
+    let int = fb.basic("int");
+    let uintptr = fb.basic("uintptr");
+    let boolean = fb.basic("bool");
+    let p_int = fb.ptr_to(int);
+    let e = fb.entry();
+    let r = fb.root(rgoc_ssa::ir::Root::Slot(rgoc_hir::SlotId(0)));
+    fb.slot_root(rgoc_hir::SlotId(0), r);
+    fb.slot_typ(rgoc_hir::SlotId(0), int);
+
+    let v_addr = fb.value(p_int);
+    fb.instr(
+        e,
+        Instr::AddrOf {
+            dst: v_addr,
+            root: r,
+        },
+    );
+    let v_u = fb.value(uintptr);
+    fb.instr(
+        e,
+        Instr::Convert {
+            dst: v_u,
+            x: v_addr,
+            typ: uintptr,
+        },
+    );
+    // 再取一次同一个槽的地址：两块 `AddrOf` 必须给出**同一个**数
+    let v_addr2 = fb.value(p_int);
+    fb.instr(
+        e,
+        Instr::AddrOf {
+            dst: v_addr2,
+            root: r,
+        },
+    );
+    let v_u2 = fb.value(uintptr);
+    fb.instr(
+        e,
+        Instr::Convert {
+            dst: v_u2,
+            x: v_addr2,
+            typ: uintptr,
+        },
+    );
+    let v_zero = fb.value(int);
+    fb.instr(
+        e,
+        Instr::Const {
+            dst: v_zero,
+            c: ConstVal::Int(0),
+            typ: int,
+        },
+    );
+    let v_ne = fb.value(boolean);
+    fb.instr(
+        e,
+        Instr::Bin {
+            dst: v_ne,
+            op: BinOp::Ne,
+            lhs: v_u,
+            rhs: v_zero,
+            typ: boolean,
+        },
+    );
+    let v_eq = fb.value(boolean);
+    fb.instr(
+        e,
+        Instr::Bin {
+            dst: v_eq,
+            op: BinOp::Eq,
+            lhs: v_u,
+            rhs: v_u2,
+            typ: boolean,
+        },
+    );
+    fb.instr(
+        e,
+        Instr::Call {
+            dsts: Vec::new(),
+            callee: CalleeRef::Builtin(rgoc_hir::BuiltinKind::Println),
+            args: vec![v_ne, v_eq],
+            dots: false,
+            effect: Effect::default(),
+        },
+    );
+    fb.term(e, Term::Return(Vec::new()));
+    let (f, tt) = fb.into_parts();
+    let m = Module {
+        main: Some(rgoc_hir::FuncId(0)),
+        ..module_of(vec![f])
+    };
+    let out = run_ssa(&m, &tt, Options::default());
+    assert_eq!(out.exit, 0, "应正常跑完：{out:?}");
+    assert_eq!(
+        out.output, "true true\n",
+        "`uintptr(&x)` 必须非零，且同一槽两次取址得到同一个数：{out:?}"
+    );
+}

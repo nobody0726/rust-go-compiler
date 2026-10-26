@@ -4537,6 +4537,16 @@ pub(crate) fn convert(tt: &TypeTable, v: Value, to: TypeId, from: TypeId) -> Val
         return v;
     };
     if b.is_integer() {
+        // `uintptr(p)`：解释器里没有真实地址，用 `Cell` 的**堆地址**顶替。
+        //
+        // 不这么做的话 `to_i128(&Value::Ptr(..))` 给 0 —— 实测
+        // `u := uintptr(unsafe.Pointer(&x)); println(u != 0)` 在 `--via=ssa`
+        // 下打 `false`，而 native 打 `true`（`R-9-35`）。
+        // 判据只需要三条性质：**同一块存储恒定**、**不同存储不同**、**非零**。
+        if let Value::Ptr(c) = &v {
+            let a = Rc::as_ptr(c) as usize;
+            return Value::Int(ops::normalize(a as i128, b));
+        }
         let i = to_i128(&v);
         return Value::Int(ops::normalize(i, b));
     }

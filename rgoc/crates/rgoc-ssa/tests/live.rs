@@ -15,7 +15,7 @@ use rgoc_ssa::ir::{BlockId, CalleeRef, Effect, Instr, Root, SsaFunc, Term, Value
 use rgoc_ssa::live::{self, Liveness};
 use rgoc_ssa::testsupport::FnBuilder;
 use rgoc_ssa::verify::verify;
-use rgoc_types::{Type, TypeId, TypeTable};
+use rgoc_types::{TypeId, TypeTable};
 
 fn vset(xs: &[u32]) -> BTreeSet<ValueId> {
     xs.iter().map(|x| ValueId(*x)).collect()
@@ -438,8 +438,7 @@ fn t_ssa_56_协议字段自洽() {
     for v in ptrs {
         let t = f.value_types[*v as usize];
         assert!(
-            rgoc_types::layout::ptr_mask(&tt, t)
-                .is_some_and(|m| m.iter().any(|b| *b)),
+            rgoc_types::layout::ptr_mask(&tt, t).is_some_and(|m| m.iter().any(|b| *b)),
             "v{v} 的类型 {:?} 一个根字都没有：{text}",
             tt.type_of(t)
         );
@@ -913,10 +912,11 @@ fn t_root_04_回边也是_safepoint() {
     );
     // 用 O(1) 判据反向确认「这个图确实没有指令级 safepoint」
     let has_instr_sp = f.blocks.iter().enumerate().any(|(bi, b)| {
-        b.instrs
-            .iter()
-            .enumerate()
-            .any(|(ii, _)| l.safepoints.iter().any(|s| s.block.0 as usize == bi && s.idx == ii))
+        b.instrs.iter().enumerate().any(|(ii, _)| {
+            l.safepoints
+                .iter()
+                .any(|s| s.block.0 as usize == bi && s.idx == ii)
+        })
     });
     assert!(!has_instr_sp, "不该有指令级 safepoint：{:?}", l.safepoints);
 }

@@ -574,6 +574,63 @@ pub fn callee_param_tys(
         .collect()
 }
 
+/// 一次调用的**栈实参**：`(相对 sp 的字节偏移, 类型)`，以及这块区的总字节数。
+///
+/// 三个消费者必须拿到同一份：`max_outgoing`（帧有多大）、`isel::pass_args`
+/// 的写入偏移、`stack map` 里 outgoing 区哪些字是根。各算一遍就会有一处错位。
+#[must_use]
+pub fn call_stack_args(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    callee: &CalleeRef,
+    args: &[ValueId],
+) -> (Vec<(u32, TypeId)>, u32) {
+    let arg_tys: Vec<TypeId> = args
+        .iter()
+        .map(|a| {
+            f.value_types
+                .get(a.index())
+                .copied()
+                .unwrap_or_else(|| TypeId::from_index(0))
+        })
+        .collect();
+    let fid = match callee {
+        // 接口派发：被调方运行期才定 ⇒ 没有静态签名可查（出参槽按 0 算，
+        // 而 `call` 自己会按接口签名写结果，见 `isel::call`）
+        CalleeRef::Iface { .. } => None,
+        CalleeRef::Func(id) => Some(*id),
+        CalleeRef::Method { func, .. } => Some(*func),
+        // 内建走 runtime 的固定签名，没有栈实参。
+        // 运行期助手没有 SSA 函数体（它们是 `rt.c` 里的 C 函数）。
+        CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
+    };
+    let want = callee_param_tys(&arg_tys, fid, siblings);
+    // `ctx_abi` 的被调方多占一个整数寄存器（`x0` = ctx，`M9/Task 40`）⇒
+    // 栈实参的起点整体后移。**间接调用**没有静态目标，但按约定它一定是
+    // ctx ABI（凡是被当作值用过的函数都带它）。
+    let needs_ctx = match (callee, fid) {
+        (CalleeRef::Indirect(_), _) => true,
+        (_, Some(id)) => siblings.get(&id).is_some_and(|f| f.ctx_abi),
+        _ => false,
+    };
+    let want = if needs_ctx {
+        let mut w = vec![TypeId::from_index(0)];
+        w.extend(want);
+        w
+    } else {
+        want
+    };
+    let (locs, sp) = crate::abi::place_args(tt, &want);
+    let mut out = Vec::new();
+    for (loc, ty) in locs.iter().zip(&want) {
+        if let crate::abi::ArgLoc::Stack { off } = loc {
+            out.push((*off, *ty));
+        }
+    }
+    (out, sp)
+}
+
 /// 全函数所有调用点里，**最大的 outgoing 区字节数**。
 fn max_outgoing(
     f: &SsaFunc,
@@ -587,42 +644,7 @@ fn max_outgoing(
                 Instr::Call { callee, args, .. } => (callee, args),
                 _ => continue,
             };
-            let arg_tys: Vec<TypeId> = args
-                .iter()
-                .map(|a| {
-                    f.value_types
-                        .get(a.index())
-                        .copied()
-                        .unwrap_or_else(|| TypeId::from_index(0))
-                })
-                .collect();
-            let fid = match callee {
-                // 接口派发：被调方运行期才定 ⇒ 没有静态签名可查（出参槽按 0 算，
-                // 而 `call` 自己会按接口签名写结果，见 `isel::call`）
-                CalleeRef::Iface { .. } => None,
-                CalleeRef::Func(id) => Some(*id),
-                CalleeRef::Method { func, .. } => Some(*func),
-                // 内建走 runtime 的固定签名，没有栈实参。
-                // 运行期助手没有 SSA 函数体（它们是 `rt.c` 里的 C 函数）。
-                CalleeRef::Builtin(_) | CalleeRef::Indirect(_) | CalleeRef::Runtime(_) => None,
-            };
-            let want = callee_param_tys(&arg_tys, fid, siblings);
-            // `ctx_abi` 的被调方多占一个整数寄存器（`x0` = ctx，`M9/Task 40`）⇒
-            // 栈实参的起点整体后移。**间接调用**没有静态目标，但按约定它一定是
-            // ctx ABI（凡是被当作值用过的函数都带它）。
-            let needs_ctx = match (callee, fid) {
-                (CalleeRef::Indirect(_), _) => true,
-                (_, Some(id)) => siblings.get(&id).is_some_and(|f| f.ctx_abi),
-                _ => false,
-            };
-            let want = if needs_ctx {
-                let mut w = vec![TypeId::from_index(0)];
-                w.extend(want);
-                w
-            } else {
-                want
-            };
-            let (_, sp) = crate::abi::place_args(tt, &want);
+            let (_, sp) = call_stack_args(f, tt, siblings, callee, args);
             max = max.max(sp);
         }
     }
