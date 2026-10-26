@@ -2076,6 +2076,20 @@ fn composite_item_off(tt: &TypeTable, typ: TypeId, k: usize) -> u32 {
 }
 
 /// 读内存（按目标宽度）。
+/// 解引用前的 **nil 检查**（`M9/Phase 5c`）。
+///
+/// `reg` 为 0 ⇒ 走 `rt_panic_nil`（**可恢复**的 panic），然后跳本帧出口。
+/// 没有这一步，解引用 nil 就是硬件 SIGSEGV —— `recover` 救不回来，
+/// 而 Go 里它是**可恢复**的（`nilptr2.go` / `method.go`）。
+///
+/// 用数字局部标签（`1f` / `1:`）：同一个函数里有几十处检查，起名会撞。
+fn check_nil_reg(cx: &Ctx<'_>, reg: &str, asm: &mut Asm) {
+    asm.ins(&format!("cbnz {reg}, 1f"));
+    asm.ins("bl rt_panic_nil");
+    asm.ins(&format!("b {}", panic_label(cx)));
+    asm.ins("1:");
+}
+
 fn load(cx: &Ctx<'_>, dst: ValueId, addr_v: ValueId, typ: TypeId, asm: &mut Asm) {
     let (d, a) = (cx.slot(dst), cx.slot(addr_v));
     if d.size > 8 {
@@ -2083,11 +2097,13 @@ fn load(cx: &Ctx<'_>, dst: ValueId, addr_v: ValueId, typ: TypeId, asm: &mut Asm)
         addr(asm, d.off);
         asm.ins("mov x0, x9");
         ld_x(asm, "x1", a.off);
+        check_nil_reg(cx, "x1", asm);
         load_imm(asm, "x2", i64::from(d.size));
         asm.ins("bl rt_memcpy");
         return;
     }
     ld_x(asm, "x10", a.off);
+    check_nil_reg(cx, "x10", asm);
     match cx.width(typ) {
         1 => asm.ins("ldrb w11, [x10]"),
         2 => asm.ins("ldrh w11, [x10]"),
@@ -2120,6 +2136,7 @@ fn store(cx: &Ctx<'_>, addr_v: ValueId, val: ValueId, asm: &mut Asm) {
     let (a, v) = (cx.slot(addr_v), cx.slot(val));
     if v.size > 8 {
         ld_x(asm, "x0", a.off);
+        check_nil_reg(cx, "x0", asm);
         addr(asm, v.off);
         asm.ins("mov x1, x9");
         load_imm(asm, "x2", i64::from(v.size));
@@ -2127,6 +2144,7 @@ fn store(cx: &Ctx<'_>, addr_v: ValueId, val: ValueId, asm: &mut Asm) {
         return;
     }
     ld_x(asm, "x10", a.off);
+    check_nil_reg(cx, "x10", asm);
     ld_x(asm, "x11", v.off);
     match cx.width(cx.ty(val)) {
         1 => asm.ins("strb w11, [x10]"),
