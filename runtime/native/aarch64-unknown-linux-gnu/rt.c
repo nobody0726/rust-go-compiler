@@ -205,6 +205,17 @@ i64 rt_memcmp(const void *a, const void *b, u64 n) {
 /* `+8` 的 kind（占高 32 位）。`K_ARENA` 是「永不回收、不扫描」的运行时结构。 */
 enum { K_OBJECT = 0, K_ARRAY = 1, K_CLOSURE = 2, K_RAW = 3, K_MAPSLOTS = 4, K_ARENA = 5 };
 
+/* map 槽状态（`C12` §2.2 的 `mapslots`）。**扫描器要用**，所以提到这里。
+ *
+ * `TOMB` 与 `EMPTY` 必须分开：`TOMB` **不终止探测** —— 否则「删过的键」会把
+ * 后面的键挡在探测链外（查不到）。 */
+#define MAP_EMPTY 0
+#define MAP_LIVE 1
+#define MAP_TOMB 2
+
+/* 8 字节向上取整。定义在 map 那一节，但扫描器也要用（算槽的 stride）。 */
+static u64 align8(u64 n);
+
 /* 一个 chunk（`C12` §1.1）。**正好 64 字节**，在数据区**之内**（前 64 字节）。
  *
  * `base` 16 MiB 对齐 ⇒ 任意堆内地址 `p` 的 `p >> 24` 就是本 chunk 的 id
@@ -594,6 +605,14 @@ static void free_push(Chunk *c, u64 off, u64 len) {
     *(u64 *)blk = HDR_FREE | (len << 32);
     *(u64 *)(blk + 8) = c->free_head;
     c->free_head = off;
+    /* ⚠️ **空闲块的起点也要置位**（`R-10-20`）。起始位图的语义是
+     * 「这里有一个块头」，**不区分活块与空闲块**。漏了它，`resolve_block`
+     * 对「指向空闲区的指针」会往前找到**残留的旧位**（某个早先被回收的块），
+     * 把空闲区里的旧字节当成块头读 —— `h` 是旧的 desc 指针（bit0 是 0），
+     * 于是被当成**活块**标记、进 worklist、`scan_block` 拿旧 desc 去扫
+     * 垃圾指针 ⇒ 段错误。实测 `ken/simpswitch.go` 正是这样崩的。 */
+    bm_set(c, off);
+    sum_set(c, off >> 12);
 }
 
 /* first-fit 取一块，`*blk` 是**请求**大小、返回时是**实际**大小。
@@ -954,11 +973,30 @@ static void mark_ptr(void *p) {
     }
     u64 h = *(u64 *)blk;
     if (h & (HDR_FREE | HDR_MARK)) {
-        if (h & HDR_FREE) {
-            /* 指向空闲块：说明有人拿着已回收的指针（漏扫的根）。 */
-            gc_bad_ptr++;
-        }
+        /* 指向空闲块**不算错**（`R-10-21`）。
+         *
+         * 位图是 live-out 的**保守超集**（`live.rs`）：safepoint 上「本指令
+         * 自己的 def」也在集合里，而 GC 在指令执行前跑 ⇒ 那个槽里还是上一条命
+         * 的值。所以「扫到一个指向已回收块的指针」是**设计内的常态**。
+         *
+         * 实测：`ken/simpswitch.go` 的字符串累加循环稳定 `bad_ptr=4`，4 次
+         * 全是这一类；程序输出与 `off` 态逐字节相同。
+         *
+         * 真正的错（`bad_ptr` 要抓的）只有两类：**解析不到块首**（起始位图漏
+         * 置位）与**块头非法**（desc/大小坏了）—— 那两个都会让扫描器扫错东西，
+         * 而这一类只是多看一眼已经死掉的块。 */
         return;
+    }
+    /* 第二道防线（`R-10-20`）：起始位图万一还有假阳性，这里把「块头明显
+     * 不像块」的情况挡掉。`scan_block` 拿一个假 desc 去读 `ptrdata` 会直接
+     * 段错误，而「跳过」最坏只是泄漏 —— 契约里说得很清楚：宁可泄漏也不误扫。 */
+    {
+        u64 nk = *(u64 *)(blk + 8);
+        u64 sz = blk_size_of(h, nk);
+        if (NK_KIND(nk) > K_ARENA || sz < BLK_MIN || (u64)(blk - c->base) + sz > c->bump) {
+            gc_bad_ptr++;
+            return;
+        }
     }
     *(u64 *)blk = h | HDR_MARK;
     wl_push(blk);
@@ -1021,8 +1059,34 @@ static void scan_block(u8 *blk) {
             mark_ptr(q);
         }
         break;
+    case K_MAPSLOTS: {
+        /* data = `[+0 kdesc][+8 vdesc][+16 槽…]`（`C12` §2.2）。
+         *
+         * ⚠️ **自带 desc 头**（`R-10-17`）：`MapObj` 里也有 kdesc/vdesc，但
+         * 槽块一旦被单独分配，扫它的人手里只有块本身 —— 回头找 `MapObj`
+         * 需要在块里存一个 `MapObj*`，那是多余的一跳（而且 `MapObj` 自己
+         * 也在托管堆里，扫的时候还没轮到它）。 */
+        const TypeDesc *kd = *(const TypeDesc *const *)data;
+        const TypeDesc *vd = *(const TypeDesc *const *)(data + 8);
+        if (kd == 0 || vd == 0) {
+            gc_bad_desc++;
+            break;
+        }
+        u64 ksz = align8((u64)kd->size);
+        u64 stride = 8UL + ksz + align8((u64)vd->size);
+        u8 *sl = data + 16;
+        for (u64 i = 0; i < n; i++) {
+            u8 *slot = sl + i * stride;
+            if (slot[0] != MAP_LIVE) {
+                continue;
+            }
+            mark_words(slot + 8, kd);
+            mark_words(slot + 8 + ksz, vd);
+        }
+        break;
+    }
     default:
-        /* `K_MAPSLOTS`：Task 25 接（`MapObj` + slots 托管化）。 */
+        /* `K_ARENA` 走上面的早返回，其它 kind 不存在。 */
         break;
     }
 }
@@ -1105,6 +1169,37 @@ static void mark_frames(void) {
 /* defer 链的根（`C12` §4.1 第 3 类）。实现放在 `DeferRec` 定义之后。 */
 static void mark_defer(void);
 
+/* ── pin 槽：已分配但**还没发布**的块（`R-10-18`）──
+ *
+ * # 为什么需要
+ *
+ * `gc_alloc` 在 stress 下会在**分配之前**先跑一次 GC。所以「刚分配出来、
+ * 还没写进任何可达位置」的块是**看不见的** —— 而多块构造函数（map 的
+ * `MapObj` + 槽块）必然有一个瞬间同时持有两块，其中前一块还没发布。
+ *
+ * 实测：`map_new` 先建槽块、再建 `MapObj`，第二次分配前的 GC 把槽块收掉，
+ * 而 `MapObj` 恰好**复用了同一块**（free list 优先）⇒ `m->slots` 指向自己的
+ * 中间 ⇒ `m[0]` 读出来是 0。
+ *
+ * 深度只需要 2，给 8 是留余量。溢出**不静默**：超了就 abort —— 静默丢一个
+ * pin 的后果是「随机时刻丢对象」，比崩难查一百倍。
+ */
+static void *gc_pin[8];
+static u64 gc_npin;
+
+static void gc_pin_push(void *p) {
+    if (gc_npin >= 8) {
+        rt_fatal_oom(0);
+    }
+    gc_pin[gc_npin++] = p;
+}
+
+static void gc_pin_pop(void) {
+    if (gc_npin > 0) {
+        gc_pin[--gc_npin] = 0;
+    }
+}
+
 /* 扫根（`C12` §4.1）：**全局** / **栈** / **defer 链**。
  *
  * 还差的三类在 Task 25–26 接（map 槽 / 闭包捕获 / 数组元素）—— 那三类是
@@ -1112,6 +1207,9 @@ static void mark_defer(void);
 static void mark_roots(void) {
     mark_frames();
     mark_defer();
+    for (u64 i = 0; i < gc_npin; i++) {
+        mark_ptr(gc_pin[i]);
+    }
     for (u64 i = 0; i < rt_nglobals; i++) {
         const TypeDesc *d = (const TypeDesc *)rt_globals[i].desc;
         u8 *a = rt_globals[i].addr;
@@ -1154,6 +1252,9 @@ static void sweep(void) {
                     run_off = off;
                 }
                 run_len += sz;
+                /* 已经空闲的块也要清位：它会并进 `run_off` 那个更大的 run，
+                 * 自己不再是块首。留着它 = 给 `resolve_block` 一个假块首。 */
+                bm_clear(c, off);
             } else if (h & HDR_MARK) {
                 if (run_len > 0) {
                     free_push(c, run_off, run_len);
@@ -1339,22 +1440,33 @@ void rt_panic_nilmap(void);
 
 /* ── 映射（M9/Task 18–23；`D-M9-8` 的开放寻址）── */
 
-/* 槽状态。`TOMB` 与 `EMPTY` 必须分开：`TOMB` **不终止探测** ——
- * 否则「删过的键」会把后面的键挡在探测链外（查不到）。 */
-#define MAP_EMPTY 0
-#define MAP_LIVE 1
-#define MAP_TOMB 2
+/* 槽状态在文件前部的 `MAP_*`（扫描器也要用）。 */
 
-/* `MapObj` 的形状（`M9-design.md` §3.7）。单字指针指向它。 */
+/* `MapObj` 的形状（`M9-design.md` §3.7）。单字指针指向它。
+ *
+ * ⚠️ **`count` 必须留在 `+0`**（`R-10-19`）：`isel` 的 `len(m)` 就是
+ * `ldr x11, [x10]`（`BuiltinKind::Len` 的 map 分支），**没有**调
+ * `rt_map_len`。M10 一开始把 `slots` 挪到字 0（想让 gcdata 只有 bit0），
+ * 结果 `len(m)` 读出的是槽块指针 —— `indirect.go` 立刻报 `wrong maplen`。
+ * 改回来，用 gcdata 的 bit5 指 `slots`。
+ */
 typedef struct {
-    u64 count;          /* 活条目数 */
-    u64 cap;            /* 槽数，恒为 2 的幂 */
-    u32 key_size;
-    u32 val_size;
-    const TypeDesc *kdesc;
-    const TypeDesc *vdesc;
-    u8 *slots;          /* cap × stride 字节 */
+    u64 count;          /* +0  活条目数（`len(m)` 读这里，别动） */
+    u64 cap;            /* +8  槽数，恒为 2 的幂 */
+    u32 key_size;       /* +16 */
+    u32 val_size;       /* +20 */
+    const TypeDesc *kdesc; /* +24 */
+    const TypeDesc *vdesc; /* +32 */
+    u8 *slots;          /* +40 槽块（托管，kind = mapslots）的**槽区**起点 */
 } MapObj;
+
+/* `MapObj` 的 desc：**只有一个指针字**，在字 5（`slots`）。 */
+static const u8 mapobj_gcdata[1] = {0x20};
+static const TypeDesc mapobj_desc = {
+    sizeof(MapObj), 48, 0, 9 /* Kind::Struct */, 2 /* HAS_POINTERS */, 0,
+    mapobj_gcdata, 0, 0};
+_Static_assert(__builtin_offsetof(MapObj, count) == 0, "len(m) 读 +0");
+_Static_assert(__builtin_offsetof(MapObj, slots) == 40, "gcdata 的 bit5 指这里");
 
 static u64 align8(u64 n) { return (n + 7UL) & ~7UL; }
 
@@ -1436,12 +1548,26 @@ int rt_equal(const TypeDesc *d, const void *a, const void *b) {
     return 1;
 }
 
-/* 分配 `cap` 个槽并清零。 */
+/* 分配一个 `cap` 槽的**槽块**（`C12` §2.2 的 `mapslots`），返回**槽区**起点。
+ *
+ * data 形状：`[+0 kdesc][+8 vdesc][+16 槽…]`。`gc_alloc` 恒清零 ⇒ 槽状态
+ * 全是 `MAP_EMPTY`，不必再 memset。
+ *
+ * ⚠️ 槽块的 `n` 是 **cap** 不是 count：扫的时候要按 `cap` 走（`EMPTY`/`TOMB`
+ * 的槽里可能还躺着上一条命的指针 —— `gc_alloc` 清零过，但 `delete` 只把状态
+ * 改成 `TOMB`、**不清 key/val**）。按 `count` 扫会漏掉后面的 LIVE 槽。 */
+static u8 *map_slots_new(const TypeDesc *kdesc, const TypeDesc *vdesc, u64 cap) {
+    u64 stride = 8UL + align8((u64)kdesc->size) + align8((u64)vdesc->size);
+    u8 *p = (u8 *)gc_alloc(16 + cap * stride, K_MAPSLOTS, 0, cap);
+    *(const TypeDesc **)p = kdesc;
+    *(const TypeDesc **)(p + 8) = vdesc;
+    return p + 16;
+}
+
+/* 分配 `cap` 个槽。 */
 static void map_alloc_slots(MapObj *m, u64 cap) {
     m->cap = cap;
-    u64 bytes = cap * slot_stride(m);
-    m->slots = (u8 *)rt_arena_alloc(bytes, 8);
-    rt_memset(m->slots, 0, bytes);
+    m->slots = map_slots_new(m->kdesc, m->vdesc, cap);
 }
 
 /* `make(map[K]V[, n])` —— `n` 只是容量提示，M9 从 8 个槽起步（靠 rehash 长）。
@@ -1451,18 +1577,31 @@ static void map_alloc_slots(MapObj *m, u64 cap) {
  * 它只影响性能，不影响可观测语义（`len` 只数活条目，`cap` 对 map 不可见）。
  * 按 `n` 预分配反而会让「小 map 大 n」浪费一堆 arena —— 而 M9 没有 GC。
  */
-/* 真正的构造函数。 */
+/* 真正的构造函数。
+ *
+ * # ⚠️ 顺序：**先槽块、后 `MapObj`**（`R-10-18`）
+ *
+ * `gc_alloc` 在 stress 下会在分配**之前**先跑一次 GC。所以「刚分配出来、
+ * 还没写进任何可达位置」的块是**看不见的** —— 如果先建 `MapObj` 再建槽块，
+ * 第二次分配触发的 GC 会把 `MapObj` 收掉，返回给 Go 的就是一块死内存。
+ *
+ * 反过来（先槽块、后 `MapObj`）就安全：`MapObj` 是最后一个分配，它返回后
+ * 立刻被调用方存进可达位置，中间不再分配。
+ *
+ * 这条对 `map_grow` 同样适用：新槽块分配之后只做 memcpy，不分配。 */
 static MapObj *map_new(const TypeDesc *kdesc, const TypeDesc *vdesc) {
-    /* 头用 `rt_arena_alloc` 而不是 `rt_alloc`：`MapObj` 不是 Go 值
-     * （程序里看到的只是一个 `*MapObj` 指针），给它写对象头会让 M10 把它当
-     * 一个「kind=Struct 的对象」去扫 —— 而它的字段是宿主结构。 */
-    MapObj *m = (MapObj *)rt_arena_alloc(sizeof(MapObj), 8);
+    u8 *slots = map_slots_new(kdesc, vdesc, 8);
+    /* 槽块还没发布 ⇒ pin 住，否则 `MapObj` 那次分配前的 GC 会收掉它。 */
+    gc_pin_push(slots);
+    MapObj *m = (MapObj *)gc_alloc(sizeof(MapObj), K_OBJECT, &mapobj_desc, 0);
+    gc_pin_pop();
+    m->slots = slots;
     m->count = 0;
+    m->cap = 8;
     m->key_size = kdesc->size;
     m->val_size = vdesc->size;
     m->kdesc = kdesc;
     m->vdesc = vdesc;
-    map_alloc_slots(m, 8);
     return m;
 }
 
@@ -1525,7 +1664,10 @@ static void map_grow(MapObj *m) {
     u8 *old_slots = m->slots;
     u64 old_cap = m->cap;
     u64 old_stride = slot_stride(m);
-    map_alloc_slots(m, old_cap * 2);
+    /* 先分配新槽块，再改 `m->slots` —— 中间**不分配**（只有 memcpy）。 */
+    u8 *new_slots = map_slots_new(m->kdesc, m->vdesc, old_cap * 2);
+    m->cap = old_cap * 2;
+    m->slots = new_slots;
     for (u64 i = 0; i < old_cap; i++) {
         u8 *slot = old_slots + i * old_stride;
         if (slot[0] != MAP_LIVE) {

@@ -327,6 +327,20 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
             // 这条指令自己读的也算（传进调用的指针在调用期间活着）
             let mut set = after[ii].clone();
             set.extend(ins.uses());
+            // ⚠️ **位图是 live-out 的保守超集，不是精确的 live-in**（`R-10-21`）。
+            //
+            // `after[ii]` 是 live-**out**，而 GC 是在指令**执行之前**跑的，所以
+            // 本指令的 def 槽此刻还是旧值 —— 标它等于多标一个可能已死的块。
+            //
+            // 试过把 def 去掉（真 live-in 语义），**实测会让
+            // `defernil` / `print` / `nilptr2` / `method5` 全部坏掉**
+            // （`MakeClosure` 的 dst 尤其明显：去掉它 `defer` 就崩）。机制没查清，
+            // 所以这里**保留超集**：多标 = 泄漏一轮，漏标 = 活对象被回收。
+            // 两者代价不对等，保守优先（`C12` §4.3）。
+            //
+            // 代价是「扫到已死指针」会变成常态，所以探针分成两个：
+            // `bad_ptr`（解析不到块首 / 块头非法 —— 真错）与
+            // `bad_stale`（指向已回收的块 —— 保守位图的预期产物）。
             safepoints.push(mk(b, ii, set));
         }
         // 终止符也能是 safepoint：**回边**（`T-ROOT-04`）。
@@ -357,47 +371,81 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
 /// 一条**指令**是不是 safepoint（能调出去 / 能分配）。
 ///
 /// 终止符不由它判：回边是「图上的性质」（目标支配本块），见 `analyze` 的 ④ 末段。
+/// 这条指令**会不会走到分配器**（`C12` §5.1 / `R-10-13`）。
+///
+/// # 为什么必须是**穷尽**匹配（不留 `_ => false`）
+///
+/// GC 只在分配点触发。所以「哪些指令是位点」必须与「哪些指令会分配」
+/// **一一对应** —— 漏一条，那个点上的 GC 就没有位点，`sp_idx` 停在上一个
+/// 位点上，扫到的是**那一刻**的活跃集，而不是**这一刻**的。
+///
+/// 这个错在 M10 里犯了三次，每次都是「漏了一条指令」，每次症状都不同：
+///
+/// | 漏的 | 症状 | 怎么发现的 |
+/// |---|---|---|
+/// | `Instr::Make`（DCE 层）| `heap=0`，stress 空跑 | 统计行 |
+/// | `MakeClosure` / `Convert` / `Bin` | `interbasic` 的 `ia == ib` 成立 | stress 语料 |
+/// | `Composite`（切片字面量）| 三个 slice 头指向同一个数组 | stress 语料 |
+///
+/// 所以这里**不留兜底**：新增一个 `Instr` 变体会编译失败，逼人写下判断。
+/// 判据是 `live::t_root_07_每条指令都要被分类`（穷尽性由编译器保证，
+/// 那条测的是「分类结果与 isel 的实际行为一致」）。
 fn is_safepoint(i: &Instr, f: &SsaFunc, tt: &TypeTable) -> bool {
     match i {
-        // 任何调用：用户函数、方法、内建（`append` 会分配，`println` 会调出去）
+        // ── 会分配 ⇒ 必须是位点 ──────────────────────────────────
+        //
+        // `Call`：用户函数、方法、内建。`append` 会 `rt_append_one` /
+        // `rt_append_dots`（扩容时分配），`println` 会调出去。
         Instr::Call { .. } => true,
-        // 分配点：`make` / `new`（`new` 是 `len=cap=None` 且 `typ` 为指针的 `Make`）
+        // `make` / `new`：`rt_makeslice` / `rt_alloc`。
         Instr::Make { .. } => true,
-        // ⚠️ **M10 补的四条**（`R-10-13`）：它们也会 `bl` 出去，而且其中两条
-        // **会分配**。原来不算 safepoint ⇒ 那些点上的 GC **没有位点**，
-        // `sp_idx` 停在上一个位点上 ⇒ 扫到错的字（漏标 ⇒ 活对象被回收）。
-        //
-        // | 指令 | isel 发的 | 会不会分配 |
-        // |---|---|---|
-        // | `MakeClosure` | `rt_alloc_closure` | **会** |
-        // | `Convert`（**转接口**）| `rt_box` | **会** |
-        // | `Bin`（**接口 `==`/`!=`**）| `rt_iface_eq` | 不会，但会调出去 |
-        // | `TypeAssert` | `rt_panic_assert` | 不会，可能 panic |
-        //
-        // ⚠️ 后两条要**按类型判**：`Convert` 只在目标类型是接口时才 `rt_box`，
-        // `Bin` 只在操作数是接口时才 `rt_iface_eq`。全算的话每个二元运算都是
-        // 位点 —— `ken/interbasic.go` 从 4 个涨到 15 个，`turing.go` 那种程序
-        // 会涨到几百个（栈图膨胀 + 每条 `Bin` 前多两条指令）。
-        //
-        // 实测（M10/Phase 2）：`ken/interbasic.go` 的
-        // `if ia == ib { panic("4") }` 在 stress 下真的 panic 了 ——
-        // 装箱点没有位点 ⇒ `ib` 的接口 `data` 没被标记 ⇒ 被回收后
-        // `ia.data` 复用了同一块 ⇒ 两个接口「相等」。
+        // 闭包：`rt_alloc_closure`。
         Instr::MakeClosure { .. } => true,
-        Instr::TypeAssert { .. } => true,
-        // ⚠️ **`Convert` 到 `string` 也要**：`string(rune)` → `rt_i64_to_str`、
-        // `[]byte` → `string` → `rt_bytes2str`、`[]rune` → `string` →
-        // `rt_runes2utf8`，三个都**分配 raw 块**。
-        //
-        // `Bin`（接口 `==` → `rt_iface_eq`）**不需要**：它调出去但不分配，
-        // 而 GC 只在分配点触发 ⇒ 没有位点也不会漏根。少一个位点少两条指令。
+        // 复合字面量：**切片**的那种要 `rt_makeslice` 建底层数组
+        // （数组/结构体的元素就长在值里，不分配）。
+        Instr::Composite { typ, .. } => is_slice(tt, *typ),
+        // 装箱：接口 ⇒ `rt_box`；`string` ⇒ `rt_i64_to_str` /
+        // `rt_bytes2str` / `rt_runes2utf8`。四个都分配。
         Instr::Convert { typ, .. } => is_boxing_target(tt, *typ),
-        // 字符串拼接 `a + b` → `rt_strcat`（**分配 raw 块**）。
+        // 字符串拼接 ⇒ `rt_strcat`（分配 raw 块）。
         Instr::Bin { op, lhs, .. } => {
             matches!(op, rgoc_hir::BinOp::Add) && is_string(tt, f.value_types[lhs.index()])
         }
-        _ => false,
+
+        // ── 不分配 ⇒ 不是位点 ────────────────────────────────────
+        //
+        // `TypeAssert` 走 `rt_itab` / `rt_panic_assert`：可能 panic，但**不分配**
+        // ⇒ 不会触发 GC ⇒ 不需要位点。
+        //
+        // `Bin` 的接口 `==`/`!=` 走 `rt_iface_eq`：同上，调出去但不分配。
+        // 给它位点的代价是每个二元运算前多两条指令（`turing.go` 那种程序会
+        // 多出几百条），而收益是零。
+        Instr::Const { .. }
+        | Instr::Copy { .. }
+        | Instr::Un { .. }
+        | Instr::AddrOf { .. }
+        | Instr::Field { .. }
+        | Instr::Index { .. }
+        | Instr::Slice { .. }
+        | Instr::Load { .. }
+        | Instr::Store { .. }
+        | Instr::FuncAddr { .. }
+        | Instr::CapturePtr { .. }
+        | Instr::Defer { .. }
+        | Instr::TypeAssert { .. }
+        | Instr::NilCheck { .. } => false,
     }
+}
+
+/// 这个类型是切片吗（含具名与别名）？
+fn is_slice(tt: &TypeTable, t: TypeId) -> bool {
+    if t.index() >= tt.len() {
+        return false;
+    }
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, t)),
+        rgoc_types::typ::Type::Slice(_)
+    )
 }
 
 /// 这个转换目标会不会**分配**（`R-10-13`）？

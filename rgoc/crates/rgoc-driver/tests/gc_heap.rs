@@ -136,7 +136,7 @@ fn t_heap_04_统计行可解析且自检干净() {
     s.assert_clean().expect("自检计数器");
 }
 
-/// 四种 kind 都必须出现（`T-HDR-03`，`C12` §2.2）。
+/// 五种 kind 都必须出现（`T-HDR-03`，`C12` §2.2）。
 ///
 /// # 为什么用 `kinds` 计数而不是「跑得对」
 ///
@@ -144,13 +144,12 @@ fn t_heap_04_统计行可解析且自检干净() {
 /// `make([]int,3)` 仍然走 `rt_arena_alloc`（无块头），程序照样跑对，
 /// 而 GC 扫不到它 —— 那正是 Phase 2 会踩的雷。
 ///
-/// # 为什么现在只断言四种
+/// # 五种都要出现（Task 25 起 `mapslots` 也进托管堆）
 ///
-/// `mapslots`（kind 4）的切换在 Task 25（map 托管化）。这里断言
-/// `o/a/c/r` 各 >= 1、`m == 0` —— **`m == 0` 是有信息的**：它钉住「现在还没
-/// 切 map」，Task 25 会把这一位翻成 >= 1。
+/// 早先这里断言 `m == 0`（map 槽块还在 arena）。Task 25 把槽块托管化之后翻成
+/// `m >= 1` —— 这一位就是「map 的槽有没有被 GC 看见」的开关。
 #[test]
-fn t_hdr_03_四种_kind_都出现() {
+fn t_hdr_03_五种_kind_都出现() {
     // ⚠️ `g := a + b` 里的两个字面量会被**编译期折叠**成 "abcd"（不调
     // `rt_strcat`），所以拼接必须放进函数 —— 那里的操作数是形参，折不了。
     let src = r#"package main
@@ -164,17 +163,18 @@ func main() {
 	s[0] = 2
 	f := func() int { return *p }
 	g := cat("ab", "cd")
-	println(*p + s[0] + f() + len(g))
+	mm := map[int]int{0: 5}
+	println(*p + s[0] + f() + len(g) + mm[0])
 }
 "#;
     let (out, s) = run_with_env("gc_heap_kinds", src, &[]).expect("编译 + 运行不该失败");
-    assert_eq!(out.stdout, "8\n", "程序本身要跑对");
+    assert_eq!(out.stdout, "13\n", "程序本身要跑对");
     let [o, a, c, r, m] = s.kinds;
     assert!(o >= 1, "object（new）没出现：{:?}", s.kinds);
     assert!(a >= 1, "array（make）没出现：{:?}", s.kinds);
     assert!(c >= 1, "closure 没出现：{:?}", s.kinds);
     assert!(r >= 1, "raw（字符串拼接）没出现：{:?}", s.kinds);
-    assert_eq!(m, 0, "mapslots 还没切（Task 25 才切）：{:?}", s.kinds);
+    assert!(m >= 1, "mapslots（map 槽块）没出现：{:?}", s.kinds);
     s.assert_clean().expect("自检计数器");
 }
 
@@ -257,6 +257,171 @@ func main() {
     assert_eq!(
         out.stdout, "0\n",
         "复用的块没清零 ⇒ 读到上一条命的 99（stderr: {}）",
+        out.stderr
+    );
+    s.assert_clean().expect("自检计数器");
+}
+
+/// 切片复合字面量的元素**各不相同**（`T-HEAP-07`，`R-10-22`）。
+///
+/// # 这条钉的是什么
+///
+/// `Instr::Composite` 在类型是**切片**时要 `rt_makeslice` 建底层数组 ——
+/// 那是**分配**，所以它必须是 safepoint。漏了它，`SC{[]int{1,2,3}, ...}` 的
+/// 三个底层数组会在构造过程中互相顶掉：第一个被回收、第二个复用同一块、
+/// 第三个再复用 ⇒ 三个 slice 头指向**同一个数组**。
+///
+/// 实测（`ken/complit.go`）：`sc.a[i]` / `sc.b[i]` / `sc.c[i]` 全读到
+/// `sc.c` 的值。最小复现只要三行。
+#[test]
+fn t_heap_07_切片字面量元素各不相同() {
+    let src = r#"package main
+
+type SC struct{ a, b, c []int }
+
+var sc = SC{[]int{1, 2, 3}, []int{4, 5, 6}, []int{7, 8, 9}}
+
+func main() {
+	println(sc.a[0], sc.b[0], sc.c[0])
+}
+"#;
+    let (out, s) = run_with_env("gc_heap_slicelit", src, &[("RGOC_GC_STRESS", "1")])
+        .expect("编译 + 运行不该失败");
+    assert_eq!(
+        out.stdout, "1 4 7\n",
+        "三个 slice 头指向了同一个数组（Composite 不是 safepoint？）"
+    );
+    s.assert_clean().expect("自检计数器");
+}
+
+/// `map` 的**值**里的指针要保活（`T-MAP-11`，`R-10-17`）。
+///
+/// # 这条钉的是什么
+///
+/// map 的槽块（`mapslots`）必须进托管堆并**被扫描**：`map[int][]int` 的每个
+/// 值是一个 slice 头，它的 ptr 指向另一块。槽块如果不扫（M9 的 arena 语义），
+/// 那些数组会被回收、被后来的分配复用 ⇒ 所有键读到同一份数据。
+///
+/// 实测（`ken/complit.go`）：`mc[i][j]` 全部读到最后一组。
+#[test]
+fn t_map_11_map_值里的指针要保活() {
+    let src = r#"package main
+
+var mc = map[int][]int{0: []int{1, 2, 3}, 1: []int{4, 5, 6}, 2: []int{7, 8, 9}}
+
+func main() {
+	for i := 0; i < 2000; i++ {
+		_ = new([64]byte)
+	}
+	println(mc[0][0], mc[1][0], mc[2][0], len(mc))
+}
+"#;
+    let (out, s) =
+        run_with_env("gc_map_ptr", src, &[("RGOC_GC_STRESS", "8")]).expect("编译 + 运行不该失败");
+    assert_eq!(
+        out.stdout, "1 4 7 3\n",
+        "map 值里的指针没被扫描（槽块进了托管堆但没扫？）stderr: {}",
+        out.stderr
+    );
+    s.assert_clean().expect("自检计数器");
+}
+
+/// `delete` 之后的 `TOMB` 槽不能当成活槽扫（`T-MAP-12`）。
+///
+/// # 这条钉的是什么
+///
+/// 槽块的 `n` 是 **cap**，扫描按 cap 走。`delete` 只把状态改成 `TOMB`，
+/// **不清 key/val** —— 所以 TOMB 槽里躺着已删条目的旧指针。按状态过滤掉它们，
+/// 那些对象才会被回收；不过滤就是把死对象标记活（永久泄漏）。
+///
+/// # ⚠️ 判据必须是「删完之后还要再分配」
+///
+/// 第一版在 `delete` 循环后直接 `println(len(m))` —— 那之后**一次分配都没有**，
+/// 于是 GC 根本不会再跑，200 个块一个都回收不掉（`frees=6`），
+/// 「不过滤」的变异实测**是绿的**。
+///
+/// 所以后面接一段 `new` 循环把 GC 逼出来。
+///
+/// # 判据为什么是 `live` 而不是 `frees`
+///
+/// `frees` 太软：实测「过滤」2205、「不过滤」2005 —— 都远大于任何合理的
+/// 阈值，`frees >= 190` 这种写法两次都绿（第一版就是这样，变异没抓到）。
+///
+/// 换成 `live` 就硬了：那 200 个被删的块每个是 `align16(16+64) = 80` 字节，
+/// 合计 **16000** 字节。不过滤时它们全被 TOMB 槽钉住 ⇒ `live >= 16000`；
+/// 过滤时只剩最后那批 churn 块 ⇒ 实测 12384。所以阈值 `200 * 80` 是**从数据
+/// 推出来的**，不是凑出来的。
+#[test]
+fn t_map_12_删掉的槽不参与扫描() {
+    let src = r#"package main
+
+func main() {
+	m := map[int]*[64]byte{}
+	for i := 0; i < 200; i++ {
+		m[i] = new([64]byte)
+	}
+	for i := 0; i < 200; i++ {
+		delete(m, i)
+	}
+	for i := 0; i < 2000; i++ {
+		_ = new([64]byte)
+	}
+	println(len(m))
+}
+"#;
+    let (out, s) =
+        run_with_env("gc_map_tomb", src, &[("RGOC_GC_STRESS", "8")]).expect("编译 + 运行不该失败");
+    assert_eq!(out.stdout, "0\n", "stderr: {}", out.stderr);
+    assert!(
+        s.live < 200 * 80,
+        "存活字节 {} ≥ 16000 —— 删掉的 200 个 80 字节块被 TOMB 槽钉住了：{s:?}",
+        s.live
+    );
+    s.assert_clean().expect("自检计数器");
+}
+
+/// 字符串累加循环（`T-HEAP-08`，`R-10-20`）。
+///
+/// # 这条钉的是什么
+///
+/// 每一轮都 `rt_strcat` 出一个新块、上一轮的块变成垃圾。几轮之后堆里就有
+/// **空闲区**，而空闲区的起始位图必须置位（`free_push` 里 `bm_set`）。
+///
+/// 漏了它，`resolve_block` 对「指向空闲区的指针」会往前找到**残留的旧位**
+/// （某个更早被回收的块），把空闲区里的旧字节当成块头 —— 旧的 desc 指针
+/// bit0 是 0，于是被当成**活块**标记、进 worklist、`scan_block` 拿旧 desc
+/// 扫垃圾指针 ⇒ 段错误。
+///
+/// 实测：`ken/simpswitch.go` 就是这样崩的（`stress` 任意间隔都崩）。
+/// 这个用例是它的最小化：`switch` 只是为了制造多条产出路径，真正起作用的是
+/// 循环里的两次 `+`。
+#[test]
+fn t_heap_08_字符串累加循环() {
+    let src = r#"package main
+
+func main() {
+	r := ""
+	a := 3
+	for i := 0; i < 10; i = i + 1 {
+		switch i {
+		case 5:
+			r += "five"
+		case a, 7:
+			r += "a"
+		default:
+			r += string(i + 48)
+		}
+		r += "out" + string(i+48)
+	}
+	println(r)
+}
+"#;
+    let want = "0out01out12out2aout34out4fiveout56out6aout78out89out9\n";
+    let (out, s) = run_with_env("gc_heap_strloop", src, &[("RGOC_GC_STRESS", "1")])
+        .expect("编译 + 运行不该失败");
+    assert_eq!(
+        out.stdout, want,
+        "字符串累加循环错了（空闲区的起始位图没维护？）stderr: {}",
         out.stderr
     );
     s.assert_clean().expect("自检计数器");
