@@ -208,3 +208,46 @@ func main() {
     );
     s.assert_clean().expect("自检计数器");
 }
+
+/// 扫到**非堆**指针不算错（`T-GC-12`，`C12` §4.1）。
+///
+/// # 这条钉的是什么
+///
+/// `mark_ptr` 的第一步是 `chunk_of`（「在堆里吗」）。栈地址、`.rodata` 地址、
+/// 代码地址全都要在这一步被**静默忽略**。
+///
+/// 这里造一个**堆上的**结构体，它的 `string` 字段的 ptr 指向 `.rodata` 的
+/// 字面量 —— 于是 GC 扫这个对象时必然调用 `mark_ptr(rodata_addr)`。
+///
+/// * 正确实现：`chunk_of` 返回 0 ⇒ 直接返回，`bad_ptr == 0`；
+/// * 变异（去掉 `chunk_of`，直接拿链头 chunk 去 `resolve_block`）：
+///   `resolve_block` 的范围检查失败 ⇒ `bad_ptr++` ⇒ `assert_clean` 红。
+///
+/// ⚠️ 没有这条判据时，「去掉堆判定」的变异是**绿的**（实测）：只扫一个
+/// `*[1024]byte`（`ptrdata == 0`）根本不会调用 `mark_ptr` 去处理非堆地址。
+#[test]
+fn t_gc_12_非堆指针不算错() {
+    let src = r#"package main
+
+type S struct {
+	s string
+}
+
+var G *S
+
+func main() {
+	G = new(S)
+	G.s = "hello"
+	for i := 0; i < 1000; i++ {
+		_ = new([64]byte)
+	}
+	println(G.s)
+}
+"#;
+    let (out, s) =
+        run_with_env("gc_nonheap_ptr", src, &[("RGOC_GC_STRESS", "1")]).expect("编译 + 运行");
+    assert_eq!(out.stdout, "hello\n", "stderr: {}", out.stderr);
+    assert!(s.collections >= 1, "stress 下必须真的收过：{s:?}");
+    s.assert_clean()
+        .expect("扫到 .rodata 指针时 `bad_ptr` 必须仍是 0");
+}
