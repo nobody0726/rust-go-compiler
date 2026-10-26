@@ -33,21 +33,21 @@
    "note": "沿用 M5 的入选清单（已冻结）"
   },
   "buildable": {
-   "count": 68,
+   "count": 69,
    "frozen_by": "M6-plan Task 39（R-6-1）",
-   "note": "能建图且 verifier 通过的个数 N；68 个**全部**与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3 → 闭包 +3 → defer/panic/recover +5（M9/Phase 5c）。"
+   "note": "能建图且 verifier 通过的个数 N；69 个**全部**与官方 .out 逐字节一致（ssa_corpus_run）。M6 收口 46 → map +4 → iface +6 → type switch +1 → 无捕获函数值 +3 → 闭包 +3 → defer/panic/recover +5 → 方法值 +1（M9/Phase 4c）。"
   },
   "rejected": {
    "file": "tools/run-oracle/ssa-rejected.txt",
-   "count": 1,
+   "count": 0,
    "frozen_by": "M6-plan Task 39（R-6-1）",
-   "note": "拒绝 M；FUNC-VALUE 1（方法值 —— Phase 4c 的遗留）；N+M=69。`DEFER` 码仍留着，但它只守 `defer delete/recover` 两个形态，不再进语料分母。"
+   "note": "拒绝 M = **0**：入选的 69 个语料全部能建图。`SsaCode` 仍留 4 条（CHAN / DEFER / GENERIC / RANGE-STR），只是这 69 个用不到 —— 拒绝面为空不等于「没有拒绝面」。"
   },
   "re_frozen": {
-   "by": "M9/Phase 2（map）+ 3（iface）+ 3b（type switch）+ 4a（无捕获函数值）+ 4b（闭包）+ 5c（defer/panic/recover）",
+   "by": "M9/Phase 2+3+3b+4a+4b+5c+4c",
    "when": "2026-10-26",
-   "why": "map / iface / type switch / 无捕获函数值 / 闭包 / defer-panic-recover 依次从「宿主面」变成「已实现」，拒绝面六次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6 → 68/1。",
-   "delta": "N 46 → 68（+22）/ M 23 → 1（−22）；N + M 仍等于 69"
+   "why": "七次收缩：46/23 → 50/19 → 56/13 → 57/12 → 60/9 → 63/6 → 68/1 → 69/0。最后一次是方法值（`method5`）—— `FUNC-VALUE` 码随之整条下线。",
+   "delta": "N 46 → 69（+23）/ M 23 → 0（−23）；N + M 仍等于 69"
   }
  },
  "gate": {

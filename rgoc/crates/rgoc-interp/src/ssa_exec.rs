@@ -67,12 +67,12 @@ use crate::value::{Cell, NilKind, Value, cell, zero_of};
 /// 方法体的第 0 个形参在 IR 里的用法是固定的：`p.a` 就是 `Field(p, ..)`，
 /// 而 `Field` 只认地址。所以「形参槽里装的是什么」不能靠猜 —— 装错了就是
 /// `panic: 地址不是指针`（`R-9-13`）。
-fn recv_wants_addr(tt: &TypeTable, t: TypeId) -> bool {
-    let u = rgoc_types::underlying(tt, rgoc_types::unalias(tt, t));
-    if matches!(tt.type_of(u), rgoc_types::typ::Type::Pointer(_)) {
-        return true;
-    }
-    rgoc_types::layout::layout(tt, t).is_none_or(|l| l.size > 8)
+/// 接收者类型是不是**指针**（只有它要地址；聚合由被调方入口按值拷）。
+fn recv_is_ptr(tt: &TypeTable, t: TypeId) -> bool {
+    matches!(
+        tt.type_of(rgoc_types::underlying(tt, rgoc_types::unalias(tt, t))),
+        rgoc_types::typ::Type::Pointer(_)
+    )
 }
 
 /// 是不是接口类型（剥具名 / 别名）。
@@ -719,6 +719,16 @@ impl Exec<'_> {
             // 覆盖**不读内存**的取址（`&*p` / `&p.f`）。
             Instr::NilCheck { addr } => {
                 let p = self.read(*addr)?;
+                // 接口：nil 判据是**没有动态类型**（`typ == None`），不是 data 那一格。
+                let ty = self.m.funcs[fi].value_types[addr.index()];
+                if is_iface_ty(self.tt, ty) {
+                    let nil =
+                        matches!(p, Value::Nil(_)) || matches!(&p, Value::Iface { typ: None, .. });
+                    if nil {
+                        self.nil_panic();
+                    }
+                    return Ok(None);
+                }
                 if self.deref_or_panic(&p)?.is_none() {
                     return Ok(None);
                 }
@@ -1084,8 +1094,13 @@ impl Exec<'_> {
                 }
                 let idx = index_of(self.m, fid)
                     .ok_or_else(|| Halt::Runtime(format!("调用不存在的方法 func#{}", fid.0)))?;
-                // 接收者要值还是地址：指针与「超过一个字」的聚合要地址（本后端的
-                // 聚合按指针传参，`C5` §6.1），其余标量要值。
+                // 接收者传**值**（标量与聚合都是）：native 侧把聚合按地址传，
+                // 但**被调方入口会按值拷进自己的槽**（`bind_params`），所以 IR
+                // 语义上仍然是「传值」。这里跟着传值 —— 传地址会让方法体里的
+                // `v[0]` 看到「指向指针」的底座（实测 `method5.go` 的 `Tbigv`：
+                // `取下标：底座是「指向指针」的指针`）。
+                //
+                // 例外：**指针接收者**要那个指针本身。
                 let rv = if nil_recv {
                     // nil 指针接收者：与 `((*T)(nil)).M()` 同一个表示（`Value::Nil`），
                     // 这样方法体里真的解引用时仍然报同一句 `nil pointer dereference`。
@@ -1094,13 +1109,13 @@ impl Exec<'_> {
                     match self.m.funcs[idx].params.first() {
                         Some(p0) => {
                             let rt = self.m.funcs[idx].value_types[p0.index()];
-                            if recv_wants_addr(self.tt, rt) {
+                            if recv_is_ptr(self.tt, rt) {
                                 Value::Ptr(addr)
                             } else {
                                 addr.borrow().clone()
                             }
                         }
-                        None => Value::Ptr(addr),
+                        None => addr.borrow().clone(),
                     }
                 };
                 let mut all = Vec::with_capacity(avals.len() + 1);

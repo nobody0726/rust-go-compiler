@@ -19,7 +19,7 @@
 
 use rgoc_hir::FuncId;
 
-/// SSA 构建期的拒绝码（**6 条**）。
+/// SSA 构建期的拒绝码（**5 条**）。
 ///
 /// # 下线的码（不是「忘了写」）
 ///
@@ -29,6 +29,7 @@ use rgoc_hir::FuncId;
 /// | `SSA-UNSUPPORTED-IFACE-DYN` | M9/Phase 3（`R-9-14`） | 方法表 + 静态 ITab + `Instr::TypeAssert` 实现了派发与 type switch |
 /// | `SSA-UNSUPPORTED-CLOSURE` | M9/Phase 4b（`R-9-16`） | 闭包实现了（捕获按引用，funcval 存变量地址） |
 /// | `SSA-UNSUPPORTED-RANGE-FUNC` | M8/Task 45 | HIR 把 range-over-func 下降成合成函数，拒绝改走 `FUNC-VALUE` |
+/// | `SSA-UNSUPPORTED-FUNC-VALUE` | M9/Phase 4c（`R-9-30`） | 方法值实现了（绑定点拷贝接收者 + 合成包装函数）；语料里已无拒绝面 |
 ///
 /// 纪律是「**不留永远不产出的码**」：一条没人能触发的拒绝码，读的人会以为
 /// 「有这个限制」，而实际上它只是一段死分支。
@@ -40,8 +41,6 @@ pub enum SsaCode {
     Chan,
     /// `defer` / `recover`。
     Defer,
-    /// 函数值（`func(){}` / 方法值 / 间接调用）—— `R-31-1`。
-    FuncValue,
     /// 泛型实例化后的形态。
     Generic,
     /// `map` 的读写（键相等是宿主语义）。
@@ -52,10 +51,9 @@ pub enum SsaCode {
 
 impl SsaCode {
     /// 全部码（顺序 == 声明顺序 == 字典序）。
-    pub const ALL: [SsaCode; 6] = [
+    pub const ALL: [SsaCode; 5] = [
         SsaCode::Chan,
         SsaCode::Defer,
-        SsaCode::FuncValue,
         SsaCode::Generic,
         SsaCode::Map,
         SsaCode::RangeStr,
@@ -67,7 +65,6 @@ impl SsaCode {
         match self {
             SsaCode::Chan => "SSA-UNSUPPORTED-CHAN",
             SsaCode::Defer => "SSA-UNSUPPORTED-DEFER",
-            SsaCode::FuncValue => "SSA-UNSUPPORTED-FUNC-VALUE",
             SsaCode::Generic => "SSA-UNSUPPORTED-GENERIC",
             SsaCode::Map => "SSA-UNSUPPORTED-MAP",
             SsaCode::RangeStr => "SSA-UNSUPPORTED-RANGE-STR",
@@ -108,8 +105,8 @@ mod tests {
     fn 码总数与字典序自洽() {
         assert_eq!(
             SsaCode::ALL.len(),
-            6,
-            "§5 的 7 条 + R-31-1 补的 2 条 − 下线的四条（RANGE-FUNC / MAP / IFACE-DYN / CLOSURE）"
+            5,
+            "§5 的 7 条 + R-31-1 补的 2 条 − 下线的五条（RANGE-FUNC / MAP / IFACE-DYN / CLOSURE / FUNC-VALUE）"
         );
         let mut sorted = SsaCode::ALL;
         sorted.sort_unstable();

@@ -74,7 +74,7 @@ fn t_nat_40_冻结的分母对得上() {
     );
     assert_eq!(
         n.len(),
-        68,
+        69,
         "N 侧应为 68（46 → map +4 → iface +6 → typeswitch +1 → funcval +3 → closure +3 → defer/panic +5）"
     );
 
@@ -92,7 +92,7 @@ fn t_nat_40_冻结的分母对得上() {
     );
     assert_eq!(
         n.len() - m.len(),
-        68,
+        69,
         "N' 冻结为 68（39 + 切片 7 + map 4 + iface 6 + typeswitch 1 + funcval 3 + closure 3 + defer 5）"
     );
 }

@@ -26,9 +26,9 @@ use rgoc_types::TypeTable;
 /// 入选总数（`run-selected.txt` 的非注释行数，M5 冻结）。
 const SELECTED: usize = 69;
 /// 能建图（`N`）—— 本文件冻的就是这两个数（`M6-tests.md` §6）。
-const BUILDABLE: usize = 68;
+const BUILDABLE: usize = 69;
 /// 被拒（`M`）。
-const REJECTED: usize = 1;
+const REJECTED: usize = 0;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -86,7 +86,7 @@ fn t_ssa_31_切片冻结值两向自洽() {
     let sel: BTreeSet<String> = rows("run-selected.txt").into_iter().collect();
     assert_eq!(sel.len(), SELECTED, "入选清单行数变了（M5 冻结的 69）");
     let rej = rejected_map();
-    assert_eq!(rej.len(), REJECTED, "拒绝清单行数变了（冻结 1）");
+    assert_eq!(rej.len(), REJECTED, "拒绝清单行数变了（冻结 0）");
     assert_eq!(
         BUILDABLE + REJECTED,
         SELECTED,
@@ -99,7 +99,7 @@ fn t_ssa_31_切片冻结值两向自洽() {
             "{path}: 在拒绝清单里但不在入选清单里（幽灵行）"
         );
     }
-    assert_eq!(sel.len() - rej.len(), BUILDABLE, "入选 − 拒绝 必须等于 68");
+    assert_eq!(sel.len() - rej.len(), BUILDABLE, "入选 − 拒绝 必须等于 69");
 }
 
 #[test]
@@ -151,5 +151,5 @@ fn t_ssa_31_清单与实测一致() {
             listed = listed.get(path)
         );
     }
-    assert_eq!(actual.len(), REJECTED, "实测被拒数应为 1");
+    assert_eq!(actual.len(), REJECTED, "实测被拒数应为 0");
 }

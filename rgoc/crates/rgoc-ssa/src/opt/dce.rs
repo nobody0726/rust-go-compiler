@@ -142,11 +142,18 @@ fn keep(i: &Instr, used: &BTreeSet<ValueId>, defs: &BTreeMap<ValueId, Def>) -> b
         // 空指针检查**没有结果**：它的全部意义就是「这里可能 panic」。
         // 删它 = 把 panic 变没（`nilptr2.go` 的 `&*p` 正是这样）。
         Instr::NilCheck { .. } => true,
-        // 类型断言：单值形态**会 panic**（失败即 `rt_panic_assert`），
-        // comma-ok 形态的 `ok` 也是一个可观察的结果 ⇒ 两个 dst 都没人用才删。
-        Instr::TypeAssert { dst, ok, .. } => {
-            used.contains(dst) || ok.is_some_and(|o| used.contains(&o))
-        }
+        // 类型断言：**单值形态永不删** —— 它失败即 `rt_panic_assert`，那是
+        // 可观察的（`_ = i.(J)` 在 nil 接口上必须 panic）。
+        //
+        // `comma-ok` 形态不 panic，但 `ok` 是可观察的结果 ⇒ 两个 dst 都没人用才删。
+        //
+        // 初版写成「两个 dst 都没人用就删」，于是 `_ = i.(J)`（dst 没人用）
+        // 被整个删掉、panic 消失（实测 `method5.go` 的 `shouldPanic` 组）。
+        // 与 `Load`（`R-9-21`）是同一类错误：**把「有陷阱的指令」当成纯的**。
+        Instr::TypeAssert { dst, ok, .. } => match ok {
+            None => true,
+            Some(o) => used.contains(dst) || used.contains(o),
+        },
         // 读内存：地址可证非空才是纯的（空指针上的读 = 可恢复的 panic，`R-9-21`）
         Instr::Load { dst, addr, .. } => used.contains(dst) || !provably_nonnull(defs, *addr, 0),
         Instr::Call {

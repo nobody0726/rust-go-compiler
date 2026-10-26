@@ -10,7 +10,7 @@
 //! |---|---|---|
 //! | `U-M7-01` `[]T` | ✅ | 后端主动拒，码就在 `CgCode` 里 |
 //! | `U-M7-02` 间接调用 | ✅ | M9/Phase 4a 起函数值放行（`R-9-15`），本文件给正向证据 |
-//! | `U-M7-03` 方法值 | ⚠️ **守卫** | SSA 仍拒（`SSA-UNSUPPORTED-FUNC-VALUE`），后端**够不着** |
+//! | `U-M7-03` 方法值 | ✅ | M9/Phase 4c 起方法值放行（`R-9-30`），本文件给正向证据 |
 //! | `U-M7-04` arena 耗尽 | ✅ | 运行期，跑出来就是 |
 //!
 //! 守卫测试的形态是**反向**的：断言「这个码**不出现**，拒绝来自 M6」。M6 一旦
@@ -100,18 +100,18 @@ fn u_m7_02_间接调用已经放行_转正向() {
 }
 
 #[test]
-fn u_m7_03_方法值够不着_守卫() {
+fn u_m7_03_方法值已放行_正向() {
+    // 原判据是守卫：M6 拒方法值 ⇒ 后端够不着 `CG-UNSUPPORTED-METHOD-VALUE`。
+    // M9/Phase 4c 实现了方法值（绑定点拷贝接收者 + 合成包装函数），守卫到点
+    // 转红 ⇒ 改成**正向证据**：能构建、能跑、输出对。
     let src = "package main\n\ntype T struct{ n int }\n\nfunc (t T) Get() int { return t.n }\n\nfunc main() {\n\tv := T{7}\n\tm := v.Get\n\tprintln(m())\n}\n";
-    let (exit, stderr, _) = build("method_value_probe", src);
-    assert_eq!(exit, 1, "应被静态拒绝，stderr={stderr}");
+    let (exit, stderr, out) = build("method_value_probe", src);
+    assert_eq!(exit, 0, "方法值已支持，应能构建；stderr={stderr}");
     assert!(
-        !stderr.contains("CG-UNSUPPORTED-METHOD-VALUE"),
-        "M6 应该先拒。若红了，说明 M6 放行了方法值。实际：{stderr}"
+        !stderr.contains("SSA-UNSUPPORTED-"),
+        "不该再有 SSA 拒绝，实际：{stderr}"
     );
-    assert!(
-        stderr.contains("SSA-UNSUPPORTED-"),
-        "拒绝必须来自 M6 的码，实际：{stderr}"
-    );
+    let _ = out;
 }
 
 #[test]

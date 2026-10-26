@@ -278,11 +278,15 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
         // 后端那条 `cbnz` 对非指针同样"能跑"，会静默通过。
         Instr::NilCheck { addr } => {
             let at = need(f, *addr)?;
+            // 指针与**接口**都算「引用值」：接口的 nil 判定看它的类型字（tab），
+            // 而那正是 `i.M` 在绑定点的检查（`method5.go` 的 nil 接口）。
             if !matches!(
                 tt.type_of(rgoc_types::underlying(tt, at)),
-                rgoc_types::typ::Type::Pointer(_)
+                rgoc_types::typ::Type::Pointer(_) | rgoc_types::typ::Type::Interface(_)
             ) {
-                return Err(format!("nil-check 的操作数类型 {at:?} 不是指针"));
+                return Err(format!(
+                    "nil-check 的操作数类型 {at:?} 既不是指针也不是接口"
+                ));
             }
             Ok(())
         }

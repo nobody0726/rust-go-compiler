@@ -54,7 +54,8 @@ pub struct BuildOutcome {
 #[must_use]
 pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
     DEFER_WRAPPERS.with(|w| w.borrow_mut().clear());
-    DEFER_SEQ.with(|c| c.set(0));
+    MV_WRAPPERS.with(|w| w.borrow_mut().clear());
+    SYNTH_SEQ.with(|c| c.set(0));
     // 调用摘要（`Task 27`）：算一次、全函数共用。它只依赖 HIR，与建图进度无关。
     let effs = crate::effect::summarize(program, tt);
     let mut funcs = Vec::with_capacity(program.funcs.len() + 1);
@@ -114,7 +115,11 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
         let mut v = w.borrow_mut();
         funcs.append(&mut v);
     });
-    DEFER_SEQ.with(|c| c.set(0));
+    MV_WRAPPERS.with(|w| {
+        let mut v = w.borrow_mut();
+        funcs.append(&mut v);
+    });
+    SYNTH_SEQ.with(|c| c.set(0));
 
     let methods = collect_methods(program, tt);
     let itabs = collect_itabs(&funcs, &methods, tt);
@@ -603,7 +608,9 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
         // `Instr::FuncAddr` / `Instr::MakeClosure`。函数字面量的**体**是独立
         // 函数，它自己会被扫（`unsupported()` 逐函数跑）。
         ExprKind::FuncLit(_) => None,
-        ExprKind::Bound { .. } => Some((SsaCode::FuncValue, "方法值（`x.M` 不调用）".to_string())),
+        // 方法值支持了（`M9/Phase 4c`）：绑定点的接收者拷贝 + 合成的包装函数
+        // （`Instr::MakeClosure`）。包装函数的体同样由 `unsupported()` 逐函数扫。
+        ExprKind::Bound { recv, .. } => unsup_expr(tt, recv),
         // 类型断言支持了（M9/Task 33）：`Instr::TypeAssert`。
         ExprKind::TypeAssert { x, .. } => unsup_expr(tt, x),
         ExprKind::Make { kind, args } => match kind {
@@ -1165,8 +1172,164 @@ thread_local! {
     /// 「收集 → `build()` 收尾时 append」。
     static DEFER_WRAPPERS: std::cell::RefCell<Vec<SsaFunc>> =
         const { std::cell::RefCell::new(Vec::new()) };
-    /// 已发出去的包装函数个数（用来编唯一的 `FuncId`）。
-    static DEFER_SEQ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// 已发出去的**合成函数**个数（`defer` 与方法值的包装共用）。
+    ///
+    /// 必须共用：两类包装都从 `u32::MAX-1` 往下发号，各自从 0 数就会撞
+    /// （`method5.go` 里两者同时出现 ⇒ 同一个 `FuncId` 指向两个体）。
+    static SYNTH_SEQ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// **方法值**的包装函数（`M9/Phase 4c`，`x.M` 不调用）。
+    ///
+    /// 与 `defer` 的包装同形不同因：`defer` 要的是「实参在登记时求值」，
+    /// 方法值要的是「接收者在**绑定**时求值并拷贝」。
+    static MV_WRAPPERS: std::cell::RefCell<Vec<SsaFunc>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// 方法值的包装函数要调什么（`M9/Phase 4c`）。
+enum MvCallee {
+    /// 具体方法：捕获 0 是「装着**声明接收者类型**值的盒子」。
+    ///
+    /// 盒子里放的是值（不是地址）：值接收者 ⇒ 接收者的**拷贝**（Go 在绑定点
+    /// 拷贝）；指针接收者 ⇒ 指针的拷贝（于是 nil 指针也能绑定，不 panic）。
+    Concrete {
+        /// 方法体。
+        func: FuncId,
+        /// 方法声明的接收者类型（决定 `load` 的类型）。
+        recv_ty: TypeId,
+    },
+    /// 接口方法：捕获 0 是「装着接口值的盒子」，调用点按静态 itab 派发。
+    Iface {
+        /// 方法名在 `iface_methods` 序里的槽号。
+        slot: u32,
+        /// 接口类型（`load` 的类型）。
+        iface_ty: TypeId,
+    },
+}
+
+/// 合成一个**方法值**的包装函数（`f := x.M`），返回它的 `FuncId`。
+///
+/// # 它长什么样
+///
+/// ```text
+/// fn methodvalue#k(ctx, p0, p1, …) {      // 形参 = 绑定后的签名（不含接收者）
+///     v0 = const 0 : *u8                  // mem 令牌
+///     a0 = capture#0 ; r = load v0 heap a0 : <接收者类型>
+///     o0, o1 = call method(r, func#n)(p0, p1, …)
+///     return o0, o1
+/// }
+/// ```
+///
+/// # 为什么接收者要先装进盒子
+///
+/// `f := x.M` 的 `x` 在**绑定那一刻**定下来：`f := v.M; v = ...; f()` 调的是
+/// 旧值（官方 `method5.go` 的 `shouldPanic`/`shouldNotPanic` 两组就在钉这件事）。
+/// 而 funcval 的捕获一律是**指针**（`R-9-15`），所以调用点必须先把接收者
+/// 拷进一个盒子（`Fb::box_value`：堆上的一格，生命周期跟着 funcval 走 ——
+/// 用帧临时槽会在函数返回后悬垂）。
+fn synth_method_value_wrapper(
+    tt: &mut TypeTable,
+    callee: MvCallee,
+    params: &[TypeId],
+    rtypes: &[TypeId],
+    eff: Effect,
+    sig: Option<(FuncId, Sig)>,
+) -> FuncId {
+    let seq = SYNTH_SEQ.with(|c| {
+        let n = c.get();
+        c.set(n + 1);
+        n
+    });
+    let id = FuncId(u32::MAX - 1 - seq);
+
+    let mut vt: Vec<TypeId> = Vec::new();
+    let mut instrs: Vec<Instr> = Vec::new();
+
+    // 形参 = 入口块参数
+    let mut pvals: Vec<ValueId> = Vec::new();
+    for t in params {
+        let v = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+        vt.push(*t);
+        pvals.push(v);
+    }
+
+    let u8t = tt.add_basic(rgoc_types::BasicId::Uint8);
+    let memt = tt.add_pointer(u8t);
+    let mem = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+    vt.push(memt);
+    instrs.push(Instr::Const {
+        dst: mem,
+        c: rgoc_hir::types::ConstVal::Int(0),
+        typ: memt,
+    });
+
+    let recv_ty = match callee {
+        MvCallee::Concrete { recv_ty, .. } => recv_ty,
+        MvCallee::Iface { iface_ty, .. } => iface_ty,
+    };
+    let capt = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+    vt.push(tt.add_pointer(recv_ty));
+    instrs.push(Instr::CapturePtr {
+        dst: capt,
+        index: 0,
+    });
+
+    let recv = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+    vt.push(recv_ty);
+    instrs.push(Instr::Load {
+        dst: recv,
+        mem,
+        root: RootId(0),
+        addr: capt,
+        typ: recv_ty,
+    });
+
+    let mut dsts: Vec<ValueId> = Vec::new();
+    for t in rtypes {
+        let d = ValueId(u32::try_from(vt.len()).expect("值号超出 u32"));
+        vt.push(*t);
+        dsts.push(d);
+    }
+    let cref = match callee {
+        MvCallee::Concrete { func, .. } => CalleeRef::Method { recv, func },
+        MvCallee::Iface { slot, .. } => CalleeRef::Iface { recv, slot },
+    };
+    instrs.push(Instr::Call {
+        dsts: dsts.clone(),
+        callee: cref,
+        args: pvals.clone(),
+        dots: false,
+        effect: eff,
+    });
+
+    let mut call_sigs: BTreeMap<FuncId, Sig> = BTreeMap::new();
+    if let Some((fid, sg)) = sig {
+        call_sigs.insert(fid, sg);
+    }
+
+    let f = SsaFunc {
+        src: id,
+        name: format!("methodvalue#{seq}"),
+        params: pvals.clone(),
+        blocks: vec![Block {
+            params: pvals,
+            instrs,
+            term: Term::Return(dsts),
+        }],
+        entry: BlockId(0),
+        roots: vec![Root::Heap],
+        slot_root: BTreeMap::new(),
+        slot_types: BTreeMap::new(),
+        value_types: vt,
+        call_sigs,
+        // ctx 是隐式第 0 实参（`x0` = funcval），与闭包同一条 ABI
+        captured: vec![rgoc_hir::Capture {
+            outer_slot: SlotId(0),
+            slot: SlotId(0),
+        }],
+        ctx_abi: true,
+    };
+    MV_WRAPPERS.with(|w| w.borrow_mut().push(f));
+    id
 }
 
 /// `defer` 包装函数里要重建的那个被调方（`M9/Phase 5b`）。
@@ -1214,7 +1377,7 @@ fn synth_defer_wrapper(
     eff: Effect,
     sig: Option<(FuncId, Sig)>,
 ) -> FuncId {
-    let seq = DEFER_SEQ.with(|c| {
+    let seq = SYNTH_SEQ.with(|c| {
         let n = c.get();
         c.set(n + 1);
         n
@@ -3636,6 +3799,98 @@ impl Fb<'_> {
                     dst
                 }
             }
+            // 方法值（`f := x.M`，`M9/Phase 4c`）：绑定点求值接收者、装盒子、
+            // 合成一个「读盒子 + 转调」的包装函数，funcval 里只放那个盒子地址。
+            //
+            // 三个语义点（`method5.go` 整份都在钉它们）：
+            // 1. **接收者在绑定点求值并拷贝** —— `f := v.M; v = ...; f()` 用旧值；
+            // 2. **值接收者遇到 nil 指针要在绑定点 panic**（`psv.M` 的 `psv == nil`），
+            //    而 HIR 已经补了那次 `*psv` 的 `Load` ⇒ 检查天然在位；
+            // 3. **指针接收者绑定时不 panic**（`psp = nil; f = psp.M` 合法）——
+            //    所以盒子里放的是**指针值**，包装函数只 `load` 指针、不解引用。
+            ExprKind::Bound { recv, method } => {
+                let fs = self.func_sig_of_ty(e.typ).unwrap_or(TySig {
+                    params: Vec::new(),
+                    results: Vec::new(),
+                    variadic: false,
+                    slice: None,
+                });
+                let (cap_addr, callee, eff, sig) = match method {
+                    rgoc_hir::MethodRef::Func(fid) => {
+                        let decl = self.program.funcs[fid.index()]
+                            .param_types
+                            .first()
+                            .copied()
+                            .unwrap_or(e.typ);
+                        // HIR 已按方法声明的接收者类型补齐 `&` / `*`（`recv_expr_path`）
+                        let v = self.expr(recv);
+                        let v = self.coerce_to(decl, v);
+                        let addr = self.box_new(v, decl);
+                        let full = self.sig_of(*fid, false).1;
+                        let eff = crate::effect::to_effect(&self.effs[fid.index()]);
+                        (
+                            addr,
+                            MvCallee::Concrete {
+                                func: *fid,
+                                recv_ty: decl,
+                            },
+                            eff,
+                            Some((*fid, full)),
+                        )
+                    }
+                    rgoc_hir::MethodRef::Iface(name) => {
+                        let it = recv.typ;
+                        let slot = crate::ir::iface_methods(self.tt, it)
+                            .iter()
+                            .position(|n| n == name)
+                            .map_or_else(
+                                || {
+                                    todo!(
+                                        "接口 {} 的方法表里没有 `{name}`（检查器漏判）",
+                                        dump_ty(self.tt, it)
+                                    )
+                                },
+                                |p| u32::try_from(p).expect("方法下标超出 u32"),
+                            );
+                        let v = self.expr(recv);
+                        // **nil 接口在绑定点 panic**：`i.M` 要先取方法地址。
+                        //
+                        // ⚠️ 用 `NilCheck`（判类型字为 0）而不是 `TypeAssert`：
+                        // 断言到它自己的接口类型看着更"直接"，但它要跑一遍
+                        // `rt_itab` —— 那是一次真实的接口转换，除了多做一次工作，
+                        // 还会在「静态 itab 已存在但动态查询不认」的边界上假失败
+                        // （实测 `method5.go`：`panic: interface conversion: failed`）。
+                        // 这里要的只是「非空」，一条 `cbnz` 就够。
+                        if !self.is_untyped_nil_expr(recv) {
+                            self.emit(Instr::NilCheck { addr: v });
+                        }
+                        let checked = v;
+                        let addr = self.box_new(checked, it);
+                        (
+                            addr,
+                            MvCallee::Iface { slot, iface_ty: it },
+                            // 接口派发：被调方运行期才定 ⇒ 保守「什么都能写 + 可能回调 + 可能 panic」
+                            Effect {
+                                writes: Vec::new(),
+                                writes_all: true,
+                                may_panic: true,
+                                may_call_back: true,
+                                prints: true,
+                            },
+                            None,
+                        )
+                    }
+                };
+                let w =
+                    synth_method_value_wrapper(self.tt, callee, &fs.params, &fs.results, eff, sig);
+                let dst = self.new_value(e.typ);
+                self.emit(Instr::MakeClosure {
+                    dst,
+                    func: w,
+                    captures: vec![cap_addr],
+                });
+                dst
+            }
             // 类型断言（`M9/Task 33`）：`x.(T)` / `v, ok := x.(T)`。
             //
             // 单值形态**会 panic**（失败即 `rt_panic_assert`），所以 `ok == None`
@@ -5794,6 +6049,31 @@ impl Fb<'_> {
     ///
     /// **每次调用都新分配**：循环里登记 N 次 `defer` 就有 N 份互不干扰的副本
     /// （Go 的 `for i := 0; i < 3; i++ { defer println(i) }` 打 `2 1 0` 靠的就是它）。
+    /// 把 `v` 拷进一块**新分配的堆存储**，返回它的地址（方法值的接收者盒子）。
+    ///
+    /// # 为什么不用 `box_value`（1 元素 slice）
+    ///
+    /// `box_value` 走 `Composite`（`[]T{v}`）再取 `&s[0]`。切片元素的写入路径
+    /// 对**接口**这类 16 字节聚合不成立 —— 实测 `method5.go` 的 `i.M`：
+    /// 盒子里只落下半个接口值，`load` 回来的是垃圾（`187650321575017`）。
+    /// `new(T)` + `Store` 走的是「按值宽度写」，标量与聚合都只有一条路。
+    ///
+    /// 生命周期也要紧：盒子必须**逃逸到堆**（funcval 可能活过本帧），
+    /// 所以是 `Make` 而不是帧临时槽。
+    fn box_new(&mut self, v: ValueId, t: TypeId) -> ValueId {
+        let pt = self.tt.add_pointer(t);
+        let dst = self.new_value(pt);
+        self.emit(Instr::Make {
+            dst,
+            typ: pt,
+            len: None,
+            cap: None,
+        });
+        let root = self.heap_root();
+        self.store_root(root, dst, v);
+        dst
+    }
+
     fn box_value(&mut self, v: ValueId, t: TypeId) -> ValueId {
         let slice_ty = self.tt.add_slice(t);
         let comp = self.new_value(slice_ty);

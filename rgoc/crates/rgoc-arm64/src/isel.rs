@@ -95,7 +95,7 @@ impl<'a> Ctx<'a> {
 }
 
 /// 剥命名/别名后的 `BasicId`（只认基本类型）。
-fn basic_of(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
+pub(crate) fn basic_of(tt: &TypeTable, t: TypeId) -> Option<BasicId> {
     use rgoc_types::typ::Type;
     let mut cur = t;
     for _ in 0..64 {
@@ -406,6 +406,20 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
         place_args(cx.tt, &want)
     };
     let shift = usize::from(cx.f.ctx_abi);
+    // ── 两趟：先把所有**寄存器**形参落槽，再做聚合的 memcpy ──
+    //
+    // # 为什么必须两趟（`R-9-28`）
+    //
+    // `rt_memcpy` 是普通 C 函数，按 AAPCS64 可以任意改写 `x0..x18` 与 `v0..v7`。
+    // 单趟写法（第 k 个形参是聚合就当场 memcpy）会把**后面**那些还在寄存器里的
+    // 形参冲掉：实测 `method5.go` 的 `(v Tbigv) M(x int, b byte)` —— 聚合接收者
+    // 拷完，`x1`（= `x`）与 `x2`（= `b`）已是垃圾，方法体算出
+    // `16, 281473487730057`（`M7` 的语料里没有「聚合形参 + 寄存器形参」的组合，
+    // 所以这条一直没露头）。
+    //
+    // 聚合形参的入参是**指针**，先把它存进自己的槽（槽宽 ≥ 8，指针正好一个格），
+    // 第二趟再从槽里读回来当 `memcpy` 的源 —— 中间不再依赖任何寄存器。
+    let mut aggs: Vec<(usize, i32, u32)> = Vec::new(); // (下标, 槽偏移, 字节数)
     for (i, p) in cx.f.params.iter().enumerate() {
         let s = cx.slot(*p);
         let class = cx.class(*p);
@@ -415,21 +429,12 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
             .unwrap_or(ArgLoc::X { reg: 0, n: 1 });
         match loc {
             ArgLoc::X { reg, n } => match class {
-                // 聚合：从寄存器里拿到**指针**，把内容拷进本帧的槽（值语义）。
-                //
-                // ⚠️ 顺序不能反：源指针可能在 `x0`（第 0 个形参就是聚合时），
-                // 而 `addr` 之后 `mov x0, x9` 会把 `x0` 覆盖掉。先取源、再设目的。
-                //
-                // 反了会变成 `memcpy(dst, dst, size)` —— 拷的是本帧未初始化的槽。
-                // 症状：`len(s)`/`cap(s)` 是垃圾（切片形参），或者一索引就段错误
-                // （垃圾 ptr）。而 `string` 形参**不**受影响（它是 `Int` 类、走
-                // 两个字），所以 M7 的语料全绿也没抓到。
+                // 聚合：源是**指针**，先落槽，第二趟再拷内容（值语义）。
                 SlotClass::Agg => {
-                    addr(asm, s.off);
-                    asm.ins(&format!("mov x1, x{reg}"));
-                    asm.ins("mov x0, x9");
-                    load_imm(asm, "x2", i64::from(s.size));
-                    asm.ins("bl rt_memcpy");
+                    if s.size > 0 {
+                        st_x(asm, &format!("x{reg}"), s.off);
+                        aggs.push((i, s.off, s.size));
+                    }
                 }
                 _ => {
                     st_x(asm, &format!("x{reg}"), s.off);
@@ -462,12 +467,14 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
                 let base = 16 + off;
                 match class {
                     SlotClass::Agg => {
-                        // 栈上那一格是指针；拷内容进槽。
-                        asm.ins(&format!("ldr x1, [x29, #{base}]"));
-                        addr(asm, s.off);
-                        asm.ins("mov x0, x9");
-                        load_imm(asm, "x2", i64::from(s.size));
-                        asm.ins("bl rt_memcpy");
+                        // 栈上那一格是指针；拷内容进槽（源在内存，不受 memcpy 影响）
+                        if s.size > 0 {
+                            asm.ins(&format!("ldr x1, [x29, #{base}]"));
+                            addr(asm, s.off);
+                            asm.ins("mov x0, x9");
+                            load_imm(asm, "x2", i64::from(s.size));
+                            asm.ins("bl rt_memcpy");
+                        }
                     }
                     _ => {
                         // 按「字」搬：`string` 两个、`complex128` 两个、其余一个。
@@ -481,6 +488,14 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
                 }
             }
         }
+    }
+    // 第二趟：聚合形参的内容拷贝（源指针从槽里读，此时没有入参寄存器要保）
+    for (_, off, size) in aggs {
+        ld_x(asm, "x1", off);
+        addr(asm, off);
+        asm.ins("mov x0, x9");
+        load_imm(asm, "x2", i64::from(size));
+        asm.ins("bl rt_memcpy");
     }
 }
 
@@ -554,7 +569,11 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         }
         Instr::TypeAssert { dst, ok, x, typ } => type_assert(cx, *dst, *ok, *x, *typ, asm),
         // 空指针检查（`M9/Phase 5c`）：`addr == nil` ⇒ 可恢复的 panic。
+        //
+        // 操作数也可能是**接口**（`i.M` 的绑定点）：接口的 nil 判据是它的
+        // **类型字**（`tab`）为 0，`data` 那一格是什么都不算数。
         Instr::NilCheck { addr } => {
+            // 一个 `ld_x` 覆盖两种：指针看它那一格，接口看**第一格**（正好是 tab）
             let a = cx.slot(*addr);
             ld_x(asm, "x10", a.off);
             check_nil_reg(cx, "x10", asm);
@@ -1236,8 +1255,16 @@ fn retag_iface(cx: &Ctx<'_>, dst: ValueId, x: ValueId, to: TypeId, asm: &mut Asm
     if iface_arity(cx.tt, from) == 0 {
         ld_x(asm, "x11", s.off);
     } else {
+        // ⚠️ **nil 接口**没有动态类型（`tab == 0`）：无脑 `ldr [x9,#8]` 会
+        // 解引用空指针 —— 硬件 SEGV，`recover` 救不回来（实测 `method5.go`：
+        // `var i Tinter; f = i.M` 直接段错误）。这里把 x11 置 0 后跳过那次读，
+        // 后面的判据自然走「失败」分支（`rt_itab` 拿 0 查 ⇒ 0；`cmp` 不等）。
+        let skip = format!(".Lass_nil{}", asm.fresh_label());
         ld_x(asm, "x9", s.off);
+        asm.ins("mov x11, xzr");
+        asm.ins(&format!("cbz x9, {skip}"));
         asm.ins("ldr x11, [x9, #8]");
+        asm.label(&skip);
     }
     // data 先落位（后面要 bl，x10 会被打掉）
     ld_x(asm, "x10", s.off + 8);
@@ -1278,12 +1305,36 @@ fn type_assert(
     if iface_arity(cx.tt, from) == 0 {
         ld_x(asm, "x11", s.off);
     } else {
+        // ⚠️ **nil 接口**没有动态类型（`tab == 0`）：无脑 `ldr [x9,#8]` 会
+        // 解引用空指针 —— 硬件 SEGV，`recover` 救不回来（实测 `method5.go`：
+        // `var i Tinter; f = i.M` 直接段错误）。这里把 x11 置 0 后跳过那次读，
+        // 后面的判据自然走「失败」分支（`rt_itab` 拿 0 查 ⇒ 0；`cmp` 不等）。
+        let skip = format!(".Lass_nil{}", asm.fresh_label());
         ld_x(asm, "x9", s.off);
+        asm.ins("mov x11, xzr");
+        asm.ins(&format!("cbz x9, {skip}"));
         asm.ins("ldr x11, [x9, #8]");
+        asm.label(&skip);
     }
 
     if to_iface {
         // 到接口：tab = rt_itab(desc(J), concrete)；null 表示失败
+        //
+        // ⚠️ 源是 **nil 接口**时 `concrete == 0`，那是「没有动态类型」而不是
+        // 「某个类型」—— 不能拿去查表（实测 `rt_itab(desc, 0)` 返回非 0，
+        // 于是 `var i I; _ = i.(J)` 被静默当成成功）。这里直接给小 tab = 0，
+        // 让下面的 `finish_assert` 走失败分支（单值形态 ⇒ panic）。
+        let (nil_lbl, itab_lbl) = if iface_arity(cx.tt, from) == 0 {
+            (None, None)
+        } else {
+            let a = format!(".Lass_itab{}", asm.fresh_label());
+            let b = format!(".Lass_conv{}", asm.fresh_label());
+            asm.ins(&format!("cbnz x11, {a}"));
+            asm.ins("mov x0, xzr");
+            asm.ins(&format!("b {b}"));
+            asm.label(&a);
+            (Some(b), Some(a))
+        };
         load_addr(
             asm,
             "x0",
@@ -1291,6 +1342,10 @@ fn type_assert(
         );
         asm.ins("mov x1, x11");
         asm.ins("bl rt_itab");
+        if let Some(done) = nil_lbl {
+            asm.label(&done);
+        }
+        let _ = itab_lbl;
         // data 与 tab 一起落位（失败时 tab 是 0，正好是零值）
         st_x(asm, "x0", d.off);
         ld_x(asm, "x10", s.off + 8);
@@ -2166,6 +2221,18 @@ fn check_nil_reg(cx: &Ctx<'_>, reg: &str, asm: &mut Asm) {
 
 fn load(cx: &Ctx<'_>, dst: ValueId, addr_v: ValueId, typ: TypeId, asm: &mut Asm) {
     let (d, a) = (cx.slot(dst), cx.slot(addr_v));
+    // 零大小值（`struct{}` / `[0]int`）：**没有字节要读**，但空指针检查仍然要有。
+    //
+    // 少了这条会写坏邻居：`d.size == 0` 落到下面的单字分支，`ld_x(d.off)`
+    // 把 8 字节写进一个 0 宽槽 —— 也就是**下一个槽**（实测 `method5.go` 的
+    // `T4 = struct{}` 方法值：`(i=t4)` 之后段错误）。
+    // ⚠️ 判据是**类型的布局为 0**，不是「槽宽为 0」：没布局的类型（`Invalid`）
+    // 也会得到 0 宽槽，那种情况下跳过读写等于把程序改坏。
+    if rgoc_types::layout::layout(cx.tt, typ).is_some_and(|l| l.size == 0) {
+        ld_x(asm, "x10", a.off);
+        check_nil_reg(cx, "x10", asm);
+        return;
+    }
     if d.size > 8 {
         // 聚合：`memcpy(dst, addr, size)`。
         addr(asm, d.off);
@@ -2208,6 +2275,14 @@ fn load(cx: &Ctx<'_>, dst: ValueId, addr_v: ValueId, typ: TypeId, asm: &mut Asm)
 /// 写内存（按源宽度）。
 fn store(cx: &Ctx<'_>, addr_v: ValueId, val: ValueId, asm: &mut Asm) {
     let (a, v) = (cx.slot(addr_v), cx.slot(val));
+    // 零大小值：没有字节要写。**必须提前返回** —— 否则会往 `rt_zerobase`
+    // （共享的零大小地址）或邻居槽里写 8 字节，把运行时数据踩坏。
+    // 判据同样看**类型布局**（见 `load`）。
+    if rgoc_types::layout::layout(cx.tt, cx.ty(val)).is_some_and(|l| l.size == 0) {
+        ld_x(asm, "x10", a.off);
+        check_nil_reg(cx, "x10", asm);
+        return;
+    }
     if v.size > 8 {
         ld_x(asm, "x0", a.off);
         check_nil_reg(cx, "x0", asm);
@@ -2499,7 +2574,16 @@ fn take_results(cx: &Ctx<'_>, dsts: &[ValueId], asm: &mut Asm) {
                 vi += 2;
             }
             _ => {
-                if s.size > 8 {
+                if s.size > 16 {
+                    // 被调方返回的是**堆地址**（见 `return_values`）⇒ 拷进本帧的槽。
+                    // ⚠️ 先取源（`x{xi}`）再设目的（`addr` 会用 `x9`、`rt_memcpy` 用 x0/x1）。
+                    asm.ins(&format!("mov x1, x{xi}"));
+                    addr(asm, s.off);
+                    asm.ins("mov x0, x9");
+                    load_imm(asm, "x2", i64::from(s.size));
+                    asm.ins("bl rt_memcpy");
+                    xi += 1;
+                } else if s.size > 8 {
                     st_x(asm, &format!("x{xi}"), s.off);
                     st_x(asm, &format!("x{}", xi + 1), s.off + 8);
                     xi += 2;
@@ -2935,7 +3019,29 @@ fn return_values(cx: &Ctx<'_>, vals: &[ValueId], asm: &mut Asm) {
                 vi += 2;
             }
             _ => {
-                if s.size > 8 {
+                if s.size > 16 {
+                    // **大聚合**（`> 16` 字节）：把值拷到堆上，返回它的**地址**。
+                    //
+                    // 为什么不能用「两个字」：`[1000]byte` 的返回值只搬前 16 字节，
+                    // 后面的字节留在调用方的旧槽里（`R-9-29`）。这条一直没露头，
+                    // 是因为 `bigmap.go` 两边**同时**被截断 ⇒ 比较仍然相等。
+                    //
+                    // 为什么不是「返回本帧地址」：`ret` 之后这块存储就死了
+                    // （下一条 `bl` 会压帧）。堆上是唯一活得过返回点的存储；
+                    // 代价是每次大聚合返回分配一次（bump 分配，不回收）。
+                    load_imm(asm, "x0", i64::from(s.size));
+                    load_imm(asm, "x1", 8);
+                    asm.ins("bl rt_arena_alloc");
+                    asm.ins("mov x10, x0");
+                    addr(asm, s.off);
+                    asm.ins("mov x1, x9");
+                    asm.ins("mov x0, x10");
+                    load_imm(asm, "x2", i64::from(s.size));
+                    asm.ins("bl rt_memcpy");
+                    // `rt_memcpy` 返回 dst
+                    asm.ins(&format!("mov x{xi}, x0"));
+                    xi += 1;
+                } else if s.size > 8 {
                     ld_x(asm, &format!("x{xi}"), s.off);
                     ld_x(asm, &format!("x{}", xi + 1), s.off + 8);
                     xi += 2;

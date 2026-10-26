@@ -115,18 +115,18 @@ fn t_ssa_32_入选集上_ssa_与官方期望逐字节一致() {
         bad.len(),
         bad.join("\n\n")
     );
-    // 分母：68 个可建图 + 1 个被拒 == 69（`R-6-1` 冻结；M9/Phase 5c 重冻结 `R-9-26`）
+    // 分母：69 个可建图 + 0 个被拒 == 69（`R-6-1` 冻结；M9/Phase 5c 重冻结 `R-9-26`）
     assert_eq!(
         compared + rejected,
         rows.len(),
         "每个入选文件都要么跑过、要么被拒（不许静默跳过）"
     );
     assert_eq!(
-        compared, 68,
-        "可建图的入选文件应恰为 68 个（`M6-tests.md` §6 的 `N`，M9/Phase 5c 重冻结 `R-9-26`），实际 {compared}"
+        compared, 69,
+        "可建图的入选文件应恰为 69 个（`M6-tests.md` §6 的 `N`，M9/Phase 5c 重冻结 `R-9-26`），实际 {compared}"
     );
     assert_eq!(
-        rejected, 1,
+        rejected, 0,
         "被拒的入选文件应恰为 1 个（`M6-tests.md` §6 的 `M`，M9/Phase 5c 重冻结 `R-9-26`），实际 {rejected}"
     );
 }

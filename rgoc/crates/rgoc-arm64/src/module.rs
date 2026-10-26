@@ -209,10 +209,29 @@ pub fn imeth_symbol(concrete_hash: u32, slot: usize) -> String {
 /// 接收者适配的一步（`x0` 是当前地址）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Step {
-    /// `x0 = *(void **)(x0 + off)`
+    /// `x0 = *(void **)(x0 + off)`（嵌入链上的指针字段）
     Load(u32),
     /// `x0 = x0 + off`
     Add(u32),
+    /// `x0 = *(T *)(x0 + off)`：把**标量接收者的值**读出来。
+    ///
+    /// # 为什么要带宽度（`R-9-27`）
+    ///
+    /// 原来这里一律发 `ldr x0, [x0]`（8 字节）。对 `func (v byte) M()` 就是
+    /// 从 1 字节的盒子里读 8 字节 —— 高 56 位是垃圾（实测 `method5.go` 的
+    /// `V byte` + 接口派发：`i.M(100)` 打出 `187650223333225`，解释器对、native 错）。
+    /// 宽度只能从**布局**来（`slot_of().size` 是 8，是槽宽不是值宽）。
+    ///
+    /// `width > 8` 只有 `string` 这一类 16 字节的「标量」：它的两个字都要读
+    /// （`x0` = data、`x1` = len）。
+    LoadScalar {
+        /// 字节偏移。
+        off: u32,
+        /// 值宽（1 / 2 / 4 / 8 / 16）。
+        width: u32,
+        /// 有符号 ⇒ 末尾 `sxt*`，否则 `uxt*`。
+        signed: bool,
+    },
 }
 
 /// `data`（指向动态类型的存储）→ 方法第 0 个实参的适配步骤。
@@ -261,7 +280,23 @@ fn recv_steps(
     );
     let agg = slot_of(tt, recv_ty).map(|s| s.class) == Some(SlotClass::Agg);
     if !is_ptr && !agg {
-        out.push(Step::Load(0));
+        // 值的**真实宽度**（不是槽宽）：`slot_of().size` 把标量都算成 8。
+        let width = layout(tt, recv_ty).map_or(8, |l| l.size);
+        let signed = !matches!(
+            isel::basic_of(tt, recv_ty),
+            Some(rgoc_const::basic::BasicId::Uint8)
+                | Some(rgoc_const::basic::BasicId::Uint16)
+                | Some(rgoc_const::basic::BasicId::Uint32)
+                | Some(rgoc_const::basic::BasicId::Uint64)
+                | Some(rgoc_const::basic::BasicId::Uint)
+                | Some(rgoc_const::basic::BasicId::Uintptr)
+                | Some(rgoc_const::basic::BasicId::Bool)
+        );
+        out.push(Step::LoadScalar {
+            off: 0,
+            width,
+            signed,
+        });
     }
     out
 }
@@ -393,10 +428,39 @@ fn method_entry_symbol(
         match st {
             Step::Load(off) => load_off(asm, *off, "ldr x0, [x0, x9]", "ldr x0, [x0, #"),
             Step::Add(off) => add_off(asm, *off),
+            Step::LoadScalar { off, width, signed } => load_scalar(asm, *off, *width, *signed),
         }
     }
     asm.ins(&format!("b {}", isel::fn_sym(func)));
     sym
+}
+
+/// 把标量接收者的**值**读进 `x0`（`x1` 只在 16 字节的 `string` 上用）。
+fn load_scalar(asm: &mut Asm, off: u32, width: u32, signed: bool) {
+    if off != 0 {
+        add_off(asm, off);
+    }
+    match width {
+        1 => {
+            asm.ins("ldrb w0, [x0]");
+            asm.ins(if signed { "sxtb x0, w0" } else { "uxtb x0, w0" });
+        }
+        2 => {
+            asm.ins("ldrh w0, [x0]");
+            asm.ins(if signed { "sxth x0, w0" } else { "uxth x0, w0" });
+        }
+        4 => {
+            asm.ins("ldr w0, [x0]");
+            asm.ins(if signed { "sxtw x0, w0" } else { "uxtw x0, w0" });
+        }
+        8 => asm.ins("ldr x0, [x0]"),
+        // `string`（`(ptr, len)` 两个字）：第二个字进 `x1`。
+        // 其它 >8 的标量不存在；真出现的话这条也只会多读一个字，不会静默截断。
+        _ => {
+            asm.ins("ldr x1, [x0, #8]");
+            asm.ins("ldr x0, [x0]");
+        }
+    }
 }
 
 /// `add x0, x0, #off`（超过 12 位立即数就走寄存器）。

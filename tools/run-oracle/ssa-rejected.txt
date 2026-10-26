@@ -9,8 +9,8 @@
 #  * 每行必须有码；码必须落在 §5 的白名单里
 #  * 由 `tools/run-oracle/ssa-classify.sh` 产出，**Task 39 冻结**（`R-6-1`）
 #
-# 冻结值：N=68 / M=1（2026-10-26，go1.27.1 语料 + 本仓 main 的构建器）。
-# 分布：FUNC-VALUE 1（方法值 —— Phase 4c 的唯一遗留）。
+# 冻结值：N=69 / M=0（2026-10-26，go1.27.1 语料 + 本仓 main 的构建器）。
+# 分布：**空** —— 入选的 69 个语料全部能建图（`M9/Phase 4c`）。
 #
 # # 三次重冻结（每次都是「实现让拒绝面收缩」，不是「把判据放宽」）
 #
@@ -23,9 +23,11 @@
 # | M9/Phase 3b（`R-9-14`） | 56 / 13 → 57 / 12 | type switch 实现（`alias1` 转绿）+ `IFACE-DYN` 整条下线 |
 # | M9/Phase 4a（`R-9-15`） | 57 / 12 → 60 / 9 | 无捕获的函数值（`FuncAddr` + 间接调用 + ctx ABI）：`func6` / `ken/litfun` / `ken/ptrfun` 转绿 |
 # | M9/Phase 4b（`R-9-16`） | 60 / 9 → 63 / 6 | 闭包（捕获按引用）：`closure1` / `closure2` / `ddd` 能建图；`CLOSURE` 码整条下线 |
+# | M9/Phase 4c（`R-9-30`） | 68 / 1 → 69 / 0 | 方法值实现：`method5` 能建图；`FUNC-VALUE` 码整条下线 |
 # | M9/Phase 5c（`R-9-26`） | 63 / 6 → 68 / 1 | defer/panic/recover 全通（5a–5c）：`closure4` / `defernil` / `method` / `nilptr2` / `print` 能建图且**与官方 `.out` 逐字节一致**；`DEFER` 码整条下线 |
 #
-# ⚠️ Phase 5c 到 **68**：只剩 1 条 = FUNC-VALUE（`method5`，方法值 —— Phase 4c）。
+# ⚠️ Phase 4c 到 **69 / 0**：拒绝面**空了**。这不等于「什么都能编译」—— `SsaCode`
+# 还留着 4 条（CHAN / DEFER / GENERIC / RANGE-STR），只是这 69 个语料用不到它们。
 #
 # `ddd.go` 曾在 N 里但语义错（`G-M9-05`：`sumD 16 0` + `panic: fail`）—— 已修
 # （`R-9-17`：间接调用/接口调用的**变参打包** + nil 指针接收者）。现在 68 个
@@ -35,4 +37,3 @@
 # 这份清单的**唯一权威**是 `rgoc-driver/tests/ssa_slice.rs` 的逐文件重跑：
 # 清单与实测差一行就红。改代码让某个文件能建图之后，必须回来改这里。
 
-go_source_code/test/method5.go	SSA-UNSUPPORTED-FUNC-VALUE	方法值（`x.M` 不调用）—— Phase 4c
