@@ -333,3 +333,83 @@ fn t_ssa_61_删链式死代码要到不动点() {
     );
     assert!(f.value_types.is_empty(), "值也要压实到空");
 }
+
+// ── `R-10-4`：分配不是纯表达式 ────────────────────────────────────────────
+
+/// `_ = new(int)` —— 结果没人用，但**分配本身有可观察效果**。
+///
+/// # 为什么这条必须红过（否则它是空话）
+///
+/// 加这条之前 `Instr::Make` 落到 `keep` 的兜底分支（「结果没人用就删」），
+/// 于是 `gc1.go` 的 1e5 次 `new([100]byte)` 在 `--opt=all` 下被全删：
+/// 统计行的 `heap` 是 0，而 `--opt=none` 下是 16 MiB。三层后果：
+///
+/// 1. **OOM 时机**：`for { _ = new([100]byte) }` 在 `RGOC_HEAP_MAX` 下必须 OOM，
+///    删掉分配之后 `C9` §6.1 的文本永远打不出来；
+/// 2. **地址唯一性**：`new(int) != new(int)` 是 Go 的语义（CSE 已正确排除
+///    `Make`，DCE 之前没有）；
+/// 3. **M10 的判据面**：`RGOC_GC_STRESS=1` 是「每次分配都收」。语料里的分配
+///    被删干净 ⇒ stress 态**空跑**，判据全绿而一次 GC 都没发生。
+#[test]
+fn t_ssa_61_没用的_new_必须留着() {
+    let mut fb = FnBuilder::new("f");
+    let t = fb.basic("int");
+    let pt = fb.ptr_to(t);
+    let e = fb.entry();
+    let p = fb.value(pt);
+    fb.instr(
+        e,
+        Instr::Make {
+            dst: p,
+            typ: pt,
+            len: None,
+            cap: None,
+        },
+    );
+    fb.term(e, Term::Return(Vec::new()));
+    let (mut f, tt) = fb.into_parts();
+    check(&mut f, &tt);
+    assert_eq!(
+        instrs(&f).len(),
+        1,
+        "`new(int)` 即使结果没人用也必须留（分配有副作用，R-10-4）：{}",
+        rgoc_ssa::dump::dump_func(&f, &tt)
+    );
+}
+
+/// `_ = make([]int, 3)` —— 同上，`make` 也是分配。
+#[test]
+fn t_ssa_61_没用的_make_必须留着() {
+    let mut fb = FnBuilder::new("f");
+    let t = fb.basic("int");
+    let st = fb.slice_of(t);
+    let e = fb.entry();
+    let n = fb.value(t);
+    let s = fb.value(st);
+    fb.instr(
+        e,
+        Instr::Const {
+            dst: n,
+            c: ConstVal::Int(3),
+            typ: t,
+        },
+    );
+    fb.instr(
+        e,
+        Instr::Make {
+            dst: s,
+            typ: st,
+            len: Some(n),
+            cap: None,
+        },
+    );
+    fb.term(e, Term::Return(Vec::new()));
+    let (mut f, tt) = fb.into_parts();
+    check(&mut f, &tt);
+    assert_eq!(
+        instrs(&f).len(),
+        2,
+        "`make([]int, 3)` 与它的长度操作数都该留（分配有副作用）：{}",
+        rgoc_ssa::dump::dump_func(&f, &tt)
+    );
+}

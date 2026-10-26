@@ -142,6 +142,21 @@ fn keep(i: &Instr, used: &BTreeSet<ValueId>, defs: &BTreeMap<ValueId, Def>) -> b
         // 空指针检查**没有结果**：它的全部意义就是「这里可能 panic」。
         // 删它 = 把 panic 变没（`nilptr2.go` 的 `&*p` 正是这样）。
         Instr::NilCheck { .. } => true,
+        // **分配永不删**（`R-10-4`）：`new(T)` 与 `make([]T, n)` 的可观察效果
+        // 不只是「返回一个地址」——
+        //
+        // ① **地址唯一性**：`new(int) != new(int)`。结果没人用确实比较不到，
+        //    但这条是「为什么它不该被当成纯表达式」的第一层理由。
+        // ② **OOM 时机**：`for { _ = new([100]byte) }` 在 `RGOC_HEAP_MAX` 下
+        //    必须 OOM。删掉分配 ⇒ 程序**跑得比 Go 更久**，而 `C9` §6.1 的
+        //    `out of memory` 文本就永远打不出来。
+        // ③ **M10 的判据面**：`RGOC_GC_STRESS=1` 是「每次分配都收」，语料里
+        //    的分配被删干净之后，stress 态就是**空跑** —— 判据看着绿，实际
+        //    一次 GC 都没发生（M9 的「探针打错靶」同一类错）。
+        //
+        // 实测（M10/Phase 0）：`gc1.go` 的 1e5 次 `new([100]byte)` 在
+        // `--opt=all` 下被全删（`heap=0`），`--opt=none` 下 `heap=16 MiB`。
+        Instr::Make { .. } => true,
         // 类型断言：**单值形态永不删** —— 它失败即 `rt_panic_assert`，那是
         // 可观察的（`_ = i.(J)` 在 nil 接口上必须 panic）。
         //
