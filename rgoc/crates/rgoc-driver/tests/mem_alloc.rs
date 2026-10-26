@@ -149,6 +149,51 @@ func main() {
 }
 
 #[test]
+fn new_出来的对象读字段_0_是零() {
+    // 判据 `T-HDR-01`（M10 前置，`R-10-1`）。
+    //
+    // # 这条判据为什么必须单独存在
+    //
+    // `rt_alloc` 的块形状是 `[+0 *TypeDesc][+8 data...]`（`C5` §11.1 的 `D-M9-1`）。
+    // 它**必须返回 `data`**（块首 + 8）—— 返回块首的话，Go 侧的指针就指到了对象头，
+    // 于是字段偏移 0 与 desc 槽重叠：
+    //
+    // * `p.a` 读出来是 **desc 指针**（实测 `187650506776800`）；
+    // * `need_zero` 的 memset 从 `块首+8` 起算，正好**漏掉**字段 0；
+    // * 对象头在第一次写字段时就被覆盖 ⇒ M10 的 GC 读不到 desc。
+    //
+    // 这条一直没被抓到，是因为 `含指针的类型要清零` 那条用例**先把每个字段都写了一遍**
+    // 再读（`p.n = 7; p.s = "ok"`）—— 它验的是「need_zero 这个参数传对了」，
+    // 不是「新对象读出来是零」。**判据只覆盖了正确实现那一面。**
+    let (out, code, _asm) = build_and_run(
+        "t_hdr_01",
+        r#"
+package main
+
+type S struct {
+	a int
+	b int
+}
+
+func main() {
+	p := new(S)
+	println(p.a, p.b)
+	q := new([2]int)
+	println(q[0], q[1])
+	var r *S
+	r = new(S)
+	println(r.a)
+}
+"#,
+    );
+    assert_eq!(code, 0);
+    assert_eq!(
+        out, "0 0\n0 0\n0\n",
+        "`new(T)` 读字段 0 必须是零值（不是对象头里的 desc 指针）"
+    );
+}
+
+#[test]
 fn 零大小类型的_new_不给独立地址() {
     // `new([0]int)` 与 `new(struct{})` 都该拿到 `rt_zerobase`（`zerosize.go` 的要求），
     // 而不是各分配一块。判据：跑通 + 两次 new 的指针相等（Go 允许比较 `*[0]int`）。

@@ -431,7 +431,9 @@ void *rt_alloc(const TypeDesc *desc, i64 need_zero) {
     if (need_zero != 0) {
         rt_memset(p + 8, 0, size);
     }
-    return p;
+    /* 返回 **data**（`p + 8`），不是块首：Go 侧的指针必须指到值上，
+     * 否则字段偏移 0 会与对象头重叠（`M9` 的 `D-M9-1` 从没真正生效）。 */
+    return p + 8;
 }
 
 /* ── 接口：装箱、itab 与断言（M9/Task 29–33）── */
