@@ -15,9 +15,11 @@
 ## 当前状态（2026-10-26）
 - **M0–M3 完成；M4/M5 部分兑现；M6–M9 全部收口**（M9 尾巴已清：`open_gaps` 0 / `closed_gaps` 4）
 - **M10（精确 STW GC）进行中**：三件套已出并拍板（块头 16 B / 逐位点 `sp_idx` / map 进托管堆）。
-  **Phase 0 收口**（Task 1–5）+ **Phase 1 前半**（Task 6–9：chunk 对齐 / 位图 / 16 字节块头 /
-  三种托管分配入口）。读数 **229 suite / 2205 passed / 0 failed / 2 ignored**；语料 69/0/0；
-  三态各 69/0/0。下一步 = Task 10–13（free list / 标记 / 清扫 / `rt_gc` + 全局根）
+  **Phase 0 收口**（Task 1–5）+ **Phase 1 收口**（Task 6–19：托管堆 / 位图 / 16 字节块头 /
+  三种分配入口 / free list / 标记 / 清扫 / `rt_gc` 只扫全局根）。
+  读数 **230 suite / 2213 passed / 0 failed / 2 ignored**；语料 **off/on 各 69/0/0**；
+  变异 **9/9 全红**。下一步 = **Phase 2**（Task 20–32：`Liveness` 前移 → 帧记录链 →
+  扫帧链 → defer/panic/map/闭包/数组五类根 → 精确性 → stress 69/0/0）
 - M9 终态读数：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（**拒绝面为空**）；2184 passed
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
@@ -33,6 +35,16 @@
 - `STACK-MAP v1`：`sp b<block>:<idx> off=<字下标> live=<n> ptrs=<hex>`；bit i ↔ `fp - frame_size + 8i`
 - **统计行语法冻结**（`C12` §5.2，12 字段）：`gc: collections= allocs= frees= live= heap= chunks= rss= kinds=<5 个逗号> bad_sp= bad_ptr= bad_desc= mode=<on|off|stress>`。
   全字段**总是出现**（`R-10-2`）；`mode` 是 `R-10-3` 追加的**装置判据**
+- ⚠️ **判据没牙的三个层次**（M10 Phase 1 踩全了）：① 被测代码**没执行**
+  （`R-10-4` DCE 删 `Make`；`R-10-11` 函数级 effect 摘要说 `new`/`make` 纯 ⇒
+  整个 `churn()` 调用被删）；② 执行了但**没可观察效果**（`R-10-12`：块被回收
+  ≠ 块被复用）；③ **形状不对**（first-fit 装不进 ⇒ 跳过那块）。
+  **三者都只能靠变异实测发现**，读代码看不出来
+- ⚠️ **`R-10-9` 块大小必须自证**（`+8` 的 bit35..63 = `blk>>4`）：不能按
+  `kind+n+desc` 算 —— 非法 desc 时算不出，sweep 会走到块中间
+- ⚠️ **`R-10-12` free list 必须排在 bump 之前**，否则复用形同虚设
+- ⚠️ **`R-10-10` `RGOC_GC_STRESS` 是间隔不是开关**：`=1` 每次收（O(n²)，
+  1e5 次分配的语料跑不完），语料用 `=64`
 - ⚠️ **`R-10-4`：DCE 不许删 `Instr::Make`**（`new`/`make` 有分配副作用）。
   修之前 `gc1.go` 的 1e5 次 `new([100]byte)` 在 `--opt=all` 下被全删（`heap=0`）
   ⇒ **stress 态退化成空跑**。CSE 早就正确排除了 `Make`，只有 DCE 漏了
