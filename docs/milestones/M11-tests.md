@@ -179,8 +179,8 @@ M11 的判据是**同一份脚本两边跑**，不是「各写一遍单测」。
 | ID | 判据 | 红了说明什么 |
 |---|---|---|
 | `T-GCORP-01` | **7 个 `N'` 三层一致**：native vs 解释器 vs 官方 `go run`（stdout / stderr / 退出码）| 主判据 |
-| `T-GCORP-02` | **12 个 `M'` 仍拒绝**：退出码 1 + `SSA-UNSUPPORTED-CHAN` 或 `TYP-UNSUPPORTED-IMPORT-FORM` | 拒绝面被误放宽 |
-| `T-GCORP-03` | **`M'` 不 panic**：12 个的退出码**没有 101**（`F3` 的回归判据）| 效果摘要又跑到 `unsupported()` 前面 |
+| `T-GCORP-02` | **12 个 `M'` 仍拒绝**：退出码 1 + stderr 非空（拒绝必须有理由）| 拒绝面被误放宽。⚠️ **不匹配具体诊断码**：`chan-rejected.txt` 第三列写的是码（`TYP-UNSUPPORTED-IMPORT-FORM`），而 stderr 渲染的是人话（`unsupported import form: "flag"`）—— 断码会变成「测渲染格式」，那是 `C8` 的事 |
+| `T-GCORP-03` | **并发语料不 panic**：`M'` 12 个全是 rc=1（守既有面）+ **`N'` 7 个的退出码没有 101**（`F3` 的回归判据）| 效果摘要又跑到 `unsupported()` 前面。⚠️ **靶子修正**：初稿只查 `M'` 的 12 个，但那 12 个**本来就全是 rc=1**（走 import/check 路径，到不了 `effect.rs`）；实测 rc=101 的是 `N'` 里的 **6 个**（`select`/`select4`/`select6`/`select8`/`sendstmt`/`sieve1`）|
 | `T-GCORP-04` | **69 个 M5 语料零回归**：`run-native.sh` 三态仍各 69/0/0 | 并发改动污染了单线程通路 |
 
 ---

@@ -106,62 +106,64 @@
 
 ---
 
-# Phase 0 · 契约与装置（Task 1–7）
+# Phase 0 · 契约与装置（Task 1–7）—— ✅ 已完成（2026-10-27）
 
 ### Task 1: 修拒绝面（`F3`）
 
 **Files:**
 - Modify: `rgoc/crates/rgoc-ssa/src/effect.rs`、`rgoc/crates/rgoc-ssa/src/build.rs`
 
-- [ ] **Step 1: 写会红的判据** `go_corpus.rs::t_gcorp_03_m_prime_不 panic`：
-  12 个 `M'` 逐个 `build`，断言退出码 **1**（不是 101）且 stderr 含
-  `SSA-UNSUPPORTED-CHAN` 或 `TYP-UNSUPPORTED-IMPORT-FORM`。
-  当前 `select.go` / `sieve1.go` / `sendstmt.go` 会红（实测 rc=101）。
-- [ ] **Step 2: 定位**：`effect.rs::scan_stmt` 对 `Stmt::Go/Send/Select` 是
+- [x] **Step 1: 写会红的判据** `go_corpus.rs::t_gcorp_03_并发语料不_panic`。
+  ⚠️ **靶子修正（实测）**：初稿写「12 个 `M'` 的退出码没有 101」，但那 12 个
+  本来就全是 rc=1（走 `import`/`check` 路径，**到不了** `effect.rs`）；真正
+  rc=101 的是 **`N'` 里的 6 个**：`select` / `select4` / `select6` / `select8` /
+  `sendstmt` / `sieve1`。判据两半都查（`M'` 守既有面、`N'` 查 `F3`），并用
+  `catch_unwind` 逐个跑 —— 否则第一个 panic 就打死测试进程，只能看到一个文件。
+- [x] **Step 2: 定位**：`effect.rs::scan_stmt` 对 `Stmt::Go/Send/Select` 是
   `unreachable!()`，而**效果摘要在 `unsupported()` 之前算**（`build` 的调用序）。
-- [ ] **Step 3: 修法二选一**（选哪个写进 commit）：
+- [x] **Step 3: 修法二选一**（选哪个写进 commit）：
   a. 把 `unsupported()` 前移到效果摘要之前；
   b. `effect.rs` 对这三条**不 panic**（记 `writes_all = true; may_panic = true`），
      让拒绝面继续由 `unsupported()` 负责。
   建议 **b**：效果摘要是**保守近似**，它对任何语句都该有定义；`unreachable!`
   把「预扫描漏了」当成不可达，而预扫描的顺序是调用方的约定，不是类型系统的保证。
-- [ ] **Step 4**: 12 个全绿 + 69 个单线程语料零回归。
-- [ ] **Step 5: Commit** `fix(ssa): go/select/send 由 panic 改成干净拒绝（Task 1，F3）`
+- [x] **Step 4**: 12 个全绿 + 69 个单线程语料零回归。
+- [x] **Step 5: Commit** `fix(ssa): go/select/send 由 panic 改成干净拒绝（Task 1，F3）`
 
 ### Task 2: `C11` 修订
 
 **Files:**
 - Modify: `docs/contracts/C11-concurrency.md`
 
-- [ ] **Step 1**: §7 开头那句「多核抢占、真锁、真 park/unpark」改成
+- [x] **Step 1**: §7 开头那句「多核抢占、真锁、真 park/unpark」改成
   「M11a–c 是 **M:1 协作式**（与 §2 同构），`lock` 留位给 M11e」——
   并说明「**布局**与**执行策略**是两件事」（§7 自己已经这么讲，只是开头那句自相矛盾）。
-- [ ] **Step 2**: §9（变更记录）加一条，引用 `M11-design.md` `D-M11-7`。
-- [ ] **Step 3: Commit** `docs(m11): C11 §7 措辞修正（M11a–c 是 M:1）`
+- [x] **Step 2**: §9（变更记录）加一条，引用 `M11-design.md` `D-M11-7`。
+- [x] **Step 3: Commit** `docs(m11): C11 §7 措辞修正（M11a–c 是 M:1）`
 
 ### Task 3: `C5` / `C9` 的增补
 
 **Files:**
 - Modify: `docs/contracts/C5-abi.md`、`docs/contracts/C9-values-and-output.md`
 
-- [ ] **Step 1**: `C5` §7 补「**序言栈检查**」：`frame_size > 0` 且非 `off_stack`
+- [x] **Step 1**: `C5` §7 补「**序言栈检查**」：`frame_size > 0` 且非 `off_stack`
   的函数，`sub sp` 之后 `cmp sp, g_stack_lo` + `b.lo`（4 条指令），冷路径
   `bl rt_panic_stack_overflow`。
-- [ ] **Step 2**: `C5` §6.1（寄存器表）补一句「`d8..d15` 是 callee-saved，
+- [x] **Step 2**: `C5` §6.1（寄存器表）补一句「`d8..d15` 是 callee-saved，
   `rt_switch` 必须保存」—— 否则「没有寄存器根」会被误读成「不用管浮点寄存器」。
-- [ ] **Step 3**: `C9` §5 的退出码表补两行：栈溢出、goroutine 数超限（都是 2）。
-- [ ] **Step 4: Commit** `docs(m11): C5 序言栈检查 + C9 两条新文本（Task 3）`
+- [x] **Step 3**: `C9` §5 的退出码表补两行：栈溢出、goroutine 数超限（都是 2）。
+- [x] **Step 4: Commit** `docs(m11): C5 序言栈检查 + C9 两条新文本（Task 3）`
 
 ### Task 4: 装置 `run-native-chan.sh`
 
 **Files:**
 - Create: `tools/run-oracle/run-native-chan.sh`
 
-- [ ] **Step 1**: 沿 `run-native.sh` 的骨架（slug 产物名、`timeout`、三栏汇总）。
-- [ ] **Step 2**: `N'` 清单**算出来**：`chan-input.txt − chan-rejected.txt`
+- [x] **Step 1**: 沿 `run-native.sh` 的骨架（slug 产物名、`timeout`、三栏汇总）。
+- [x] **Step 2**: `N'` 清单**算出来**：`chan-input.txt − chan-rejected.txt`
   （`T-GDEV-01` 断言这一点，不抄第二份清单）。
-- [ ] **Step 3**: `M'` 的跑法：只 `build`，断言退出码 1（`T-GCORP-02/03`）。
-- [ ] **Step 4: Commit** `test(m11): 并发语料装置（Task 4）`
+- [x] **Step 3**: `M'` 的跑法：只 `build`，断言退出码 1（`T-GCORP-02/03`）。
+- [x] **Step 4: Commit** `test(m11): 并发语料装置（Task 4）`
 
 ### Task 5: 判据骨架（七个测试文件）
 
@@ -169,28 +171,28 @@
 - Create: `rgoc/crates/rgoc-driver/tests/go_stack.rs` / `go_sched.rs` /
   `go_chan.rs` / `go_select.rs` / `go_exit.rs` / `go_root.rs` / `go_corpus.rs`
 
-- [ ] **Step 1**: 每个文件先放**一条**会红的判据（`T-STK-03` 溢出、
+- [x] **Step 1**: 每个文件先放**一条**会红的判据（`T-STK-03` 溢出、
   `T-GO-03` FIFO、`T-CHAN-01` 同步、`T-SEL-01` 求值、`T-EXIT-01` 死锁、
   `T-GROOT-01` 挂起栈、`T-GCORP-03` 不 panic）。
-- [ ] **Step 2**: 共用装置 `support/go_probe.rs`：`build_and_run_chan(name, src, env)`，
+- [x] **Step 2**: 共用装置 `support/go_probe.rs`：`build_and_run_chan(name, src, env)`，
   把「native / 解释器 / 官方」三次跑的结果包成 `Triple { native, interp, oracle }`
   并给出 `assert_same()`。
-- [ ] **Step 3: Commit** `test(m11): 判据骨架与三层差分装置（Task 5）`
+- [x] **Step 3: Commit** `test(m11): 判据骨架与三层差分装置（Task 5）`
 
 ### Task 6: 变异脚本骨架
 
 **Files:**
 - Create: `scripts/mutation-m11.sh`（沿 `mutation-m10.sh`，含 `probe` / `probe_rs`）
 
-- [ ] **Step 1**: 先把 `M-M11-01`（不存 `d8..d15`）与 `M-M11-07`（`closed` 顺序）
+- [x] **Step 1**: 先把 `M-M11-01`（不存 `d8..d15`）与 `M-M11-07`（`closed` 顺序）
   两条放进去 —— 它们分别对应「切换」与「状态机」两个最贵的面。
-- [ ] **Step 2: Commit** `test(m11): 变异脚本骨架（Task 6）`
+- [x] **Step 2: Commit** `test(m11): 变异脚本骨架（Task 6）`
 
 ### Task 7: Phase 0 收口
 
-- [ ] **Step 1**: `M'` 12/12 干净拒绝；69 个单线程语料三态仍 69/0/0；
+- [x] **Step 1**: `M'` 12/12 干净拒绝；69 个单线程语料三态仍 69/0/0；
   四条门禁全绿。
-- [ ] **Step 2: Commit** `chore(m11): Phase 0 收口`
+- [x] **Step 2: Commit** `chore(m11): Phase 0 收口`
 
 ---
 

@@ -153,3 +153,54 @@ fn t_gcorp_03_并发语料不_panic() {
         "`zerosize.go` 的诊断里应出现 `SSA-UNSUPPORTED-CHAN`，实际：\n{err}"
     );
 }
+
+// ── 装置判据（`T-GDEV-01/03`）────────────────────────────────────────────
+//
+// `T-GDEV-02`（三栏相加 == 分母）由 `run-native-chan.sh` **自己**断言 ——
+// 在 Rust 里重算一遍只会得到第二套口径。
+
+/// `T-GDEV-01`：`N'` 与 `M'` 是全集的一个**划分**（不重不漏）。
+///
+/// 这条验的是**清单之间**的一致性，不是脚本。脚本自己算差集；这里验的是
+/// 「两份事实源能不能构成划分」—— 抄错一个路径、把某个文件同时写进两边、
+/// 或者全集里漏掉一行，都会在这里红。
+#[test]
+fn t_gdev_01_并发清单是全集的一个划分() {
+    let all = read_list("chan-input.txt");
+    let rej = read_list("chan-rejected.txt");
+    let ok = chan_ok();
+
+    assert_eq!(
+        all.len(),
+        19,
+        "`chan-input.txt` 应为 19（test/chan/*.go 全部）"
+    );
+    assert_eq!(
+        rej.len(),
+        12,
+        "`chan-rejected.txt` 应为 12（冻结，`T-GDEV-03`）"
+    );
+    assert_eq!(ok.len(), 7, "`N'` 应为 19 − 12 = 7");
+
+    // 不重：`N'` 与 `M'` 无交集。
+    for p in &ok {
+        assert!(!rej.contains(p), "`{p}` 同时出现在 N' 与 M' 里");
+    }
+    // 不漏：两半加起来就是全集。
+    let mut union: Vec<String> = ok.iter().chain(rej.iter()).cloned().collect();
+    union.sort();
+    let mut sorted_all = all.clone();
+    sorted_all.sort();
+    assert_eq!(union, sorted_all, "N' ∪ M' 应等于全集（不多不少）");
+}
+
+/// `T-GDEV-03`：`chan-rejected.txt` 的行数**冻结**。
+///
+/// 变了说明语料性质变了 —— 要么我们多支持了一个 import（那要改的是
+/// `M11-design.md` §1.3 的范围），要么官方换了用例（那要重审 19 个的分母）。
+/// 两种情况都必须**人看一眼**，不能静默通过。
+#[test]
+fn t_gdev_03_拒面行数冻结() {
+    let rej = read_list("chan-rejected.txt");
+    assert_eq!(rej.len(), 12, "拒面行数变了：{rej:?}");
+}

@@ -1,0 +1,176 @@
+#!/bin/bash
+# scripts/mutation-m11.sh —— M11 的变异探针（`M11-tests.md` §9 的 15 条）。
+#
+# 用法（容器内）：bash scripts/mutation-m11.sh [--strict]
+#
+#   --strict   锚点不命中算 MISS（失败）。Phase 0 用缺省（PENDING），
+#              Phase 1 起每个 Task 收口都用 `--strict`。
+#
+# # 为什么 Phase 0 的锚点是 PENDING 而不是 MISS
+#
+# `M-M11-01`（`rt_switch` 不存 `d8..d15`）与 `M-M11-07`（`send` 的 `closed`
+# 检查挪后）要改的代码**还不存在** —— `rt_switch` 在 Task 9、`hchan` 的四操作
+# 在 Task 17–19。所以 Phase 0 的期望是「脚本骨架能跑、能如实报锚点缺失」，
+# 不是「变异变红」。
+#
+# ⚠️ 但 **PENDING 不是通过**。Phase 1 收口（Task 15）起必须 `--strict` ——
+# 那时 `rt_switch` 已经存在，锚点不命中就说明「改的那段代码变了」，是真错。
+#
+# # 为什么变异必须实证（沿 M10 的口径）
+#
+# 「测试全绿」有两种可能：**代码对**，或者**判据恒真**。M10 抓到 4 条假绿，
+# 全部是「判据没牙」；M9 抓到 3 条。M11 的 15 条变异里至少 4 条（`M-M11-05`
+# 参数深拷贝 / `M-M11-09` select 求值 / `M-M11-13` 只扫当前 G / `M-M11-15`
+# Sudog 回 arena）是「实现对了但判据没测到」的高危形态。
+#
+# # 纪律（M9/M10 踩过的，全部照抄）
+#
+# 1. **同一调用内完成变异与恢复**（容器 `/tmp` 调用即焚）。
+# 2. **恢复之后必须 `touch`**：`mv` 从备份恢复会保留备份的 mtime，而变异期间
+#    编出的 `.rlib` 更新 ⇒ cargo 认为源码没变、继续用变异版。
+# 3. **改 Rust 源码的探针必须 `cargo clean -p`**（绑定挂载 mtime 只到整秒）。
+# 4. **锚点也要核**：替换不命中就是 MISS（M9 踩过：签名写错、替换没命中、
+#    测试照绿）。
+#
+# # 这里 15 条（Phase 0 只有前两条，其余随各自 Task 加进来）
+#
+# | 变异 | 期望红的判据 | 加进来的 Task |
+# |---|---|---|
+# | `M-M11-01` `rt_switch` 不保存 `d8..d15` | `T-STK-01` | 9 |
+# | `M-M11-02` 保存区 160 → 144（漏一对）| `T-STK-01` | 9 |
+# | `M-M11-03` 序言不发栈检查 | `T-STK-03` | 10 |
+# | `M-M11-04` 栈检查对 `off_stack` 帧也发 | `T-STK-05` | 10 |
+# | `M-M11-05` `go` 只拷指针不拷值 | `T-GO-04` | 12 |
+# | `M-M11-06` 就绪队列改成队头插入 | `T-GO-03` | 12 |
+# | `M-M11-07` `send` 的 `closed` 检查挪到「buf 未满」之后 | `T-CHAN-03` | 19 |
+# | `M-M11-08` `close` 只唤醒 `recvq` 不唤醒 `sendq` | `T-CHAN-04` | 19 |
+# | `M-M11-09` `select` 阶段①只求值第一个 case | `T-SEL-01` | 22 |
+# | `M-M11-10` `select` 不撤销（只删 winner 的 sudog）| `T-SEL-04` | 24 |
+# | `M-M11-11` 死锁判定漏「有就绪 G」| `T-EXIT-05` | 26 |
+# | `M-M11-12` `main` 返回后等 goroutine | `T-EXIT-02` | 27 |
+# | `M-M11-13` `mark_roots` 只扫当前 G 的链 | `T-GROOT-01` | 33 |
+# | `M-M11-14` `rt_gc_force_off` 空实现 | `T-GROOT-04` | 31 |
+# | `M-M11-15` `Sudog` 改回 arena | `T-CHAN-08` | 18 |
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT/rgoc" || { echo "进不去 $ROOT/rgoc" >&2; exit 2; }
+
+RT="../runtime/native/aarch64-unknown-linux-gnu/rt.c"
+
+STRICT=0
+[ "${1:-}" = "--strict" ] && STRICT=1
+
+red=0
+green=0
+pending=0
+miss=0
+report=""
+
+# 用法：_probe_body <名字> <文件> <旧串> <新串> <锚点缺失时算什么> <cargo test 参数…>
+#
+# 「锚点缺失时算什么」：`strict` ⇒ MISS（失败）；`pending` ⇒ PENDING（未实现）。
+_probe_body() {
+  local name="$1" file="$2" old="$3" new="$4" on_missing="$5"
+  shift 5
+  local bak="$file.m11bak"
+  cp "$file" "$bak"
+  if ! MF="$file" MO="$old" MN="$new" python3 -c '
+import os, pathlib, sys
+
+p = pathlib.Path(os.environ["MF"])
+s = p.read_text(encoding="utf-8")
+old = os.environ["MO"]
+new = os.environ["MN"]
+if old not in s:
+    sys.exit(3)
+p.write_text(s.replace(old, new, 1), encoding="utf-8")
+'; then
+    mv "$bak" "$file"
+    touch "$file"
+    if [ "$on_missing" = "pending" ]; then
+      report="$report
+  PENDING $name  <<< 锚点还不存在（代码未实现，Phase 0 预期）"
+      pending=$((pending + 1))
+    else
+      report="$report
+  MISS    $name  <<< 锚点没命中（改的那段代码已经变了）"
+      miss=$((miss + 1))
+    fi
+    return
+  fi
+
+  local out
+  out="$(cargo test "$@" 2>&1 | grep -E '^test result' | tail -1)"
+  mv "$bak" "$file"
+  touch "$file"
+  if printf '%s' "$out" | grep -q 'FAILED'; then
+    report="$report
+  RED     $name  [$out]"
+    red=$((red + 1))
+  else
+    report="$report
+  GREEN   $name  [$out]  <<< 判据没牙"
+    green=$((green + 1))
+  fi
+}
+
+# Phase 0 用：锚点缺失 ⇒ PENDING（未实现）。
+probe_pending() {
+  local name="$1" file="$2" old="$3" new="$4"
+  shift 4
+  _probe_body "$name" "$file" "$old" "$new" pending "$@"
+}
+
+# Phase 1 起用：锚点缺失 ⇒ MISS（真错）。
+probe() {
+  local name="$1" file="$2" old="$3" new="$4"
+  shift 4
+  _probe_body "$name" "$file" "$old" "$new" strict "$@"
+}
+
+# 改 Rust 源码的探针：恢复后必须 `cargo clean -p`。
+probe_rs() {
+  local name="$1" file="$2" old="$3" new="$4" crate="$5"
+  shift 5
+  probe "$name" "$file" "$old" "$new" "$@"
+  cargo clean -p "$crate" >/dev/null 2>&1
+}
+
+if [ "$STRICT" -eq 1 ]; then
+  PROBE=probe
+  MODE="strict（锚点缺失算 MISS）"
+else
+  PROBE=probe_pending
+  MODE="phase0（锚点缺失算 PENDING）"
+fi
+
+# ── M-M11-01：`rt_switch` 不保存 `d8..d15` ────────────────────────────
+# 浮点寄存器不保存 ⇒ 跨切换的浮点值串味。`T-STK-01` 用**可区分值**填满
+# `x19..x28` 与 `d8..d15`（0/1 看不出「没保存」和「保存对了」的区别）。
+$PROBE "M-M11-01 rt_switch 不存 d8..d15" "$RT" \
+  '    stp d8, d9, [sp, #96]' \
+  '    /* 变异：不保存 d8/d9 */' \
+  -p rgoc-driver --test go_stack t_stk_01
+
+# ── M-M11-07：`send` 的 `closed` 检查挪到「buf 未满」之后 ──────────────
+# `C11` §3.2 的 ⚠️：`closed` 检查必须**排第一**。挪到后面 ⇒ 往已关闭的有缓冲
+# 通道发送会**静默塞进缓冲**，而不是 `panic: send on closed channel`。
+$PROBE "M-M11-07 send 的 closed 检查挪后" "$RT" \
+  '    if (c->closed != 0) {
+        rt_panic_send_closed();
+    }' \
+  '    /* 变异：closed 检查挪到 buf 判断之后 */' \
+  -p rgoc-driver --test go_chan t_chan_03
+
+echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
+[ -n "$report" ] && echo "$report"
+
+# 判定：GREEN 与 MISS 一律算失手；PENDING 只在 phase0 模式允许。
+if [ "$green" -ne 0 ] || [ "$miss" -ne 0 ]; then
+  exit 1
+fi
+if [ "$STRICT" -eq 1 ] && [ "$pending" -ne 0 ]; then
+  exit 1
+fi
+exit 0

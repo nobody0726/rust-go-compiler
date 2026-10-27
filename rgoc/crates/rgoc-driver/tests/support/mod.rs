@@ -4,4 +4,5 @@
 //! 而不是 `tests/support.rs`（那会变成第 N 个测试二进制，跑一遍空测试）。
 
 pub mod gc_probe;
+pub mod go_probe;
 pub mod native_harness;
