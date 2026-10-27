@@ -394,6 +394,8 @@ static u64 g11_schedtest;
 static u64 g11_gotest;
 /* `rt_send`/`rt_recv` 直通路径的自测开关（Task 17）。 */
 static u64 g11_chan2test;
+/* 阻塞 + 唤醒的自测开关（Task 18）。 */
+static u64 g11_chan3test;
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 /* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
 static u64 gc_since;
@@ -1033,6 +1035,7 @@ static u64 env_u64(const char *e, const char *key) {
 
 /* 定义在文件后半（要用 `Hchan`，而它在 `TypeDesc` 之后）。 */
 void rt_chan2test(void);
+void rt_chan3test(void);
 
 void rt_init(u64 sp) {
     u64 argc = *(u64 *)sp;
@@ -1067,6 +1070,8 @@ void rt_init(u64 sp) {
             g11_gotest = env_u64(e, "RGOC_G11_GOTEST=") != 0;
         } else if (starts_with(e, "RGOC_G11_CHAN2TEST=")) {
             g11_chan2test = env_u64(e, "RGOC_G11_CHAN2TEST=") != 0;
+        } else if (starts_with(e, "RGOC_G11_CHAN3TEST=")) {
+            g11_chan3test = env_u64(e, "RGOC_G11_CHAN3TEST=") != 0;
         }
     }
 
@@ -1116,6 +1121,11 @@ void rt_init(u64 sp) {
     /* chan 直通自测（Task 17）：cap=3 发 3 收 3 + closed 后零值。 */
     if (g11_chan2test != 0) {
         rt_chan2test();
+    }
+
+    /* 阻塞 + 唤醒自测（Task 18）：无缓冲，sender G 发、main 收。 */
+    if (g11_chan3test != 0) {
+        rt_chan3test();
     }
 }
 
@@ -1688,45 +1698,162 @@ static void rt_panic_blocked(const char *what) {
  * ⚠️ **`closed` 检查排第一**（`C11` §3.2 的 ⚠️）。顺序反了会让「往已关闭的
  * 有缓冲通道发送」**静默塞进缓冲**，而不是 panic —— 那是最难查的一类语义漂移，
  * 变异 `M-M11-07` 就是它。 */
+/* ── `Sudog` 与阻塞（M11b/Task 18，`C11` §7 / §3.2）───────────────────
+ *
+ * 字段序照抄 `rgoc-arm64::hchan::Sudog`（`#[repr(C)]`，48 字节）。
+ *
+ * ⚠️ **与设计的偏差（记进 `M11-report.md`）**：`C11` §7 的 `T-CHAN-08` 说
+ * `Sudog` 放**托管堆**。这里放在**当前 G 的栈上**（局部变量）—— 理由：G 在
+ * 阻塞期间栈一定活着（它只是 `state = blocked`，没有被回收），而栈上的
+ * `Sudog` 让「登记 → 阻塞 → 醒来」的生存期由 C 的作用域自动保证。
+ * 等 M11c 有了 G 的回收再改回托管堆（那时栈可能被收）。
+ */
+typedef struct Sudog {
+    GDesc *g;            /* +0  等着的 G */
+    void *elem;          /* +8  值的位置（发送方：值在这；接收方：对端写到这）*/
+    struct Sudog *next;  /* +16 */
+    struct Sudog *prev;  /* +24 撤销要 O(1) 摘链 */
+    u64 token;           /* +32 select 的撤销句柄（M11b 后半）*/
+    u32 done;            /* +40 已被对端完成（`C11` §3.1 的唯一判据）*/
+} Sudog;
+
+_Static_assert(sizeof(Sudog) == 48, "Sudog 必须是 48 字节（C11 §7）");
+_Static_assert(__builtin_offsetof(Sudog, elem) == 8, "elem 在 +8");
+_Static_assert(__builtin_offsetof(Sudog, next) == 16, "next 在 +16");
+_Static_assert(__builtin_offsetof(Sudog, prev) == 24, "prev 在 +24");
+_Static_assert(__builtin_offsetof(Sudog, token) == 32, "token 在 +32");
+_Static_assert(__builtin_offsetof(Sudog, done) == 40, "done 在 +40");
+
+static void waitq_push(Sudog **head, Sudog **tail, Sudog *s) {
+    s->next = 0;
+    s->prev = *tail;
+    if (*tail != 0) {
+        (*tail)->next = s;
+    } else {
+        *head = s;
+    }
+    *tail = s;
+}
+
+static void waitq_remove(Sudog **head, Sudog **tail, Sudog *s) {
+    if (s->prev != 0) {
+        s->prev->next = s->next;
+    } else {
+        *head = s->next;
+    }
+    if (s->next != 0) {
+        s->next->prev = s->prev;
+    } else {
+        *tail = s->prev;
+    }
+    s->next = 0;
+    s->prev = 0;
+}
+
+static Sudog *waitq_pop(Sudog **head, Sudog **tail) {
+    Sudog *s = *head;
+    if (s != 0) {
+        waitq_remove(head, tail, s);
+    }
+    return s;
+}
+
+/* 唤醒：`done = 1` + 状态 ready + **入队尾**（`C11` §3.2 的「唤醒」那行）。 */
+static void rt_wake(Sudog *s) {
+    s->done = 1;
+    if (s->g != 0) {
+        s->g->state = 0; /* ready */
+        rt_enqueue(s->g);
+    }
+}
+
+/* `ch <- v`。
+ *
+ * `C11` §3.2 的三步，**顺序不能改**：
+ * ① `closed` 检查 —— 排第一（顺序反了会让「往已关闭的有缓冲通道发送」静默
+ *    塞进缓冲而不是 panic，变异 `M-M11-07`）；
+ * ② 有接收方在等 ⇒ **直给**（不经过 buf）；
+ * ③ 缓冲未满 ⇒ 塞 buf；
+ * ④ 否则阻塞。
+ */
 void rt_send(Hchan *c, const void *val) {
     if (c->closed != 0) {
         rt_panic_send_closed();
         return;
     }
-    if (c->dataqsiz == 0) {
-        rt_panic_blocked("send on unbuffered channel（Sudog 是 Task 18）");
-        return;
-    }
-    if (c->qcount == c->dataqsiz) {
-        rt_panic_blocked("send on full channel（Sudog 是 Task 18）");
-        return;
-    }
     u64 es = c->elemsize;
-    if (es > 0) {
-        rt_memcpy(c->buf + c->sendx * es, val, es);
+    Sudog *r = waitq_pop(&c->recvq_head, &c->recvq_tail);
+    if (r != 0) {
+        if (es > 0 && r->elem != 0) {
+            rt_memcpy(r->elem, val, es);
+        }
+        rt_wake(r);
+        return;
     }
-    c->sendx = (c->sendx + 1) % c->dataqsiz;
-    c->qcount++;
+    if (c->dataqsiz > 0 && c->qcount < c->dataqsiz) {
+        if (es > 0) {
+            rt_memcpy(c->buf + c->sendx * es, val, es);
+        }
+        c->sendx = (c->sendx + 1) % c->dataqsiz;
+        c->qcount++;
+        return;
+    }
+    /* ④ 阻塞：登记到 `sendq` 尾 ⇒ 换 G ⇒ 醒来时值已被接收方取走 */
+    Sudog s;
+    s.g = g_cur;
+    s.elem = (void *)val;
+    s.next = 0;
+    s.prev = 0;
+    s.token = 0;
+    s.done = 0;
+    waitq_push(&c->sendq_head, &c->sendq_tail, &s);
+    g_cur->state = 2; /* blocked */
+    rt_schedule();
 }
 
-/* `<-ch`。`closed && qcount == 0` ⇒ 零值（`C11` §3.2）。 */
+/* `<-ch`。与 `rt_send` 对称，另外多一条 `closed && 空 ⇒ 零值`。 */
 void rt_recv(Hchan *c, void *out) {
     u64 es = c->elemsize;
-    if (c->qcount == 0) {
-        if (c->closed != 0) {
-            if (es > 0) {
+    /* ① 有发送方在等 ⇒ 直取 */
+    Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
+    if (w != 0) {
+        if (es > 0) {
+            if (w->elem != 0) {
+                rt_memcpy(out, w->elem, es);
+            } else {
                 rt_memset(out, 0, es);
             }
-            return;
         }
-        rt_panic_blocked("recv on empty channel（Sudog 是 Task 18）");
+        rt_wake(w);
         return;
     }
-    if (es > 0) {
-        rt_memcpy(out, c->buf + c->recvx * es, es);
+    /* ② 缓冲非空 ⇒ 取 */
+    if (c->qcount > 0) {
+        if (es > 0) {
+            rt_memcpy(out, c->buf + c->recvx * es, es);
+        }
+        c->recvx = (c->recvx + 1) % c->dataqsiz;
+        c->qcount--;
+        return;
     }
-    c->recvx = (c->recvx + 1) % c->dataqsiz;
-    c->qcount--;
+    /* ③ 已关闭且空 ⇒ 零值 */
+    if (c->closed != 0) {
+        if (es > 0) {
+            rt_memset(out, 0, es);
+        }
+        return;
+    }
+    /* ④ 阻塞 */
+    Sudog s;
+    s.g = g_cur;
+    s.elem = out;
+    s.next = 0;
+    s.prev = 0;
+    s.token = 0;
+    s.done = 0;
+    waitq_push(&c->recvq_head, &c->recvq_tail, &s);
+    g_cur->state = 2; /* blocked */
+    rt_schedule();
 }
 
 /* `rt_send` / `rt_recv` 的自测（Task 17；`go` 语句的下降还没接 isel）。
@@ -1762,6 +1889,37 @@ void rt_chan2test(void) {
     o = 99;
     rt_recv(c, &o);
     if (o != 0) {
+        rt_exit(8);
+    }
+}
+
+/* `rt_send` / `rt_recv` 的**阻塞 + 唤醒**自测（Task 18）。
+ *
+ * 无缓冲通道：sender G 发 42、main 收。两边都会阻塞一次 ——
+ * ① main 先 `rt_recv`（此刻 sender 只入队还没跑）⇒ recvq 空 ⇒ main 阻塞；
+ * ② 调度到 sender ⇒ `rt_send` 看到 recvq 里有 main ⇒ 拷值 + 唤醒；
+ * ③ sender `rt_goexit` ⇒ 切回 main ⇒ `rt_recv` 返回 42。
+ *
+ * 这条**同时**验了三件事：Sudog 登记、`g_cur->state = blocked` + 换 G、
+ * 对端唤醒后从 `rt_schedule` 正确返回。任一处错都会挂死或拿到错值。
+ */
+static Hchan *sc_ch3;
+static u64 sc_v3;
+
+static void sc_sender3(void) {
+    rt_send(sc_ch3, &sc_v3);
+    rt_goexit();
+}
+
+void rt_chan3test(void) {
+    static const u64 fake_desc[5] = {8, 0, 0, 0, 0};
+    sc_ch3 = 0;
+    rt_makechan(&sc_ch3, 0, fake_desc); /* 无缓冲 */
+    sc_v3 = 42;
+    rt_go((void *)sc_sender3, 0, 0);
+    u64 o = 0;
+    rt_recv(sc_ch3, &o);
+    if (o != 42) {
         rt_exit(8);
     }
 }
