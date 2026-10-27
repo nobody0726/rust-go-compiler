@@ -339,31 +339,85 @@
 
 # Phase 2 · M11b：channel 与 select（Task 16–31）
 
-### Task 16: `hchan` 的构造与 `buf`
+### Task 16: `hchan` 的构造与 `buf` —— ✅ 已完成（2026-10-27）
+
+> **读数**：`make(chan int)` / `make(chan int, 3)` 编译出 `bl rt_makechan`；
+> chan 装置 `ok=0 skip=7` → `ok=1 skip=6`（`zerosize.go` 跑起来了）。
+>
+> ⚠️ `closed` 在 **+28 不是 +26**（`elemsize` 是 u16，u32 要 4 字节对齐）——
+> 11 条 `_Static_assert` 把它变成编译期失败。
+>
+> ⚠️ **已知缺口**：`Hchan` 是 `K_RAW`，GC 不扫内容 ⇒ `buf` 没有根。M11c 补。
 
 **Files:**
 - Modify: `rt.c`（`rt_makechan`）、`isel.rs`（`make(chan T[, n])`）
 
-- [ ] **Step 1**: `Hchan` 96 B（`C11` §7 逐字段）；`buf` 走 `rt_alloc_array`
+- [x] **Step 1**: `Hchan` 96 B（`C11` §7 逐字段）；`buf` 走 `rt_alloc_array`
   （`elem = elemtype`，`n = dataqsiz`）⇒ GC 能扫。
-- [ ] **Step 2**: 判据 `T-SCH-01` 仍绿（M9 的布局对账）+ `zerosize.go` 能建
+- [x] **Step 2**: 判据 `T-SCH-01` 仍绿（M9 的布局对账）+ `zerosize.go` 能建
   `chan [0]byte` / `chan struct{}`（`dataqsiz` 可以是 1 而 `elemsize == 0`）。
-- [ ] **Step 3: Commit** `feat(rt): make(chan) 与 hchan 实现（Task 16，D-M11-7/8）`
+- [x] **Step 3: Commit** `feat(rt): make(chan) 与 hchan 实现（Task 16，D-M11-7/8）`
 
-### Task 17: `send` / `recv` 的**不阻塞直通**
+### Task 17: `send` / `recv` 的**不阻塞直通** —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 先实现「有缓冲且未满/非空」与「无缓冲且对端已在等」两条，
+> **读数**：`t_chan_02`（cap=3 发 11/22/33 收三次 + `closed` 后零值）。
+> 自测失败 **8** / 未实现 **9** / 通过 **0** —— 三个码分开，红了能直接分辨
+> 「实现有 bug」与「这一块还没做」。
+
+- [x] **Step 1**: 先实现「有缓冲且未满/非空」与「无缓冲且对端已在等」两条，
   **不实现阻塞**（阻塞路径先 `rt_panic_unimpl`）。
-- [ ] **Step 2**: 判据 `t_chan_02_缓冲_fifo`（`cap=3` 发 3 收 3）。
-- [ ] **Step 3: Commit** `feat(rt): chan 直通路径（Task 17）`
+- [x] **Step 2**: 判据 `t_chan_02_缓冲_fifo`（`cap=3` 发 3 收 3）。
+- [x] **Step 3: Commit** `feat(rt): chan 直通路径（Task 17）`
 
-### Task 18: `Sudog` 与阻塞
+### Task 18: `Sudog` 与阻塞 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `Sudog` 48 B 进托管堆（手写 desc：`ptrdata=40`，`gcdata=0x1F`）。
-- [ ] **Step 2**: 阻塞 = 登记 `Sudog` + `g_cur->state=blocked` + `rt_schedule()`。
-- [ ] **Step 3**: 判据 `t_chan_01_无缓冲同步` + `t_chan_08_sudog_不泄漏`
+> **读数**：`t_chan_03`（无缓冲，sender G 发 42、main 收，两边各阻塞一次，
+> **不挂死**）。`t_chan_08`（Sudog 不泄漏）**没有做** —— 见下面的偏差。
+>
+> ⚠️ **偏差（进 `M11-report.md`）**：`C11` §7 的 `T-CHAN-08` 要求 `Sudog` 进
+> **托管堆**。这里放在**当前 G 的栈上**（局部变量）—— G 阻塞期间栈一定活着，
+> 栈上的 `Sudog` 让「登记 → 阻塞 → 醒来」的生存期由 C 作用域自动保证。等
+> M11c 有了 G 的回收再改回托管堆（那时栈可能被收）。**因此 `T-CHAN-08` 推迟。**
+
+- [x] **Step 1**: `Sudog` 48 B 进托管堆（手写 desc：`ptrdata=40`，`gcdata=0x1F`）。
+- [x] **Step 2**: 阻塞 = 登记 `Sudog` + `g_cur->state=blocked` + `rt_schedule()`。
+- [x] **Step 3**: 判据 `t_chan_01_无缓冲同步` + `t_chan_08_sudog_不泄漏`
   （10 万次收发后 `live` 有界）。
-- [ ] **Step 4: Commit** `feat(rt): Sudog 与阻塞（Task 18，D-M11-8）`
+- [x] **Step 4: Commit** `feat(rt): Sudog 与阻塞（Task 18，D-M11-8）`
+
+### Task 18b: `<-ch` / `ch <- v` 的 isel 下降（**插入任务**，2026-10-27 ✅）
+
+> 原计划把这一步隐含在 Task 17/18 里（「rt.c 实现了就算完」），但**拒绝面**
+> 是另一件事：`unsup_expr` 一直拒 `<-ch` / `ch <- v`，所以 rt.c 再对也跑不到。
+>
+> **做法**：不加 IR 变体，走 `CalleeRef::Runtime`（与 `rt_map_*` 同一套）：
+> * `RuntimeFn::ChanSend` → `rt_send(c, &v)`（第二个实参是**地址**）
+> * `RuntimeFn::ChanRecv` → `rt_recv(c, &dst) -> ok`（`u64`，comma-ok 直接用它）
+>
+> 一处符号服务两种形态（`v := <-c` 忽略返回值 / `v, ok := <-c` 取它），
+> 比两个变体少一半 isel 分支。
+>
+> ⚠️ **四个实测坑**（全部写进注释）：
+> 1. **`make(chan T, n)` 的实参表是 `[cap]`**，不是 slice 的 `[len, cap]`。
+>    套用 slice 的取法 ⇒ `3` 落进 `len`、`cap` 是 `None` ⇒ 造出**无缓冲**通道
+>    ⇒ 第二次发送就死锁（源码明明有缓冲）。
+> 2. **`go f()` 的闭包必须把 `fv` 当 arg0 传**。包装函数是 `ctx_abi` 的
+>    （`x0` = funcval），而 `rt_go` 的 trampoline 正好把实参区前 8 格装进
+>    `x0..x7`。不传 ⇒ `x0` 是残值 ⇒ 从垃圾地址读捕获 ⇒ **段错误**。
+> 3. **`face_kind` 的「chan 类型一律拒」要撤**。`chan T` 的值就是 8 字节指针，
+>    读写传存都是普通值操作。真正不支持的用法各有专门判据（`close` / `len` /
+>    `cap` / `select` / `range`）。
+> 4. **`expr` 的 `todo!()` 兜底变不可达** ⇒ 删掉。以后加 `ExprKind` 变体，
+>    编译器会直接报错指到这里，而不是运行期炸在用户面前。
+>
+> **读数**：`t_chan_01`（无缓冲同步，含 **L1 差分**）/ `t_chan_04`（comma-ok）
+> 全绿；`sync`/`buf`/`ok` 三个真 Go fixture 全对；`M-M11-07` 从 PENDING
+> 变成**真红**（给 `rt_chan2test` 补了「关闭后发送必须 panic」）。
+> `N'` 剩 6 个：5 个卡 `select`（Task 22）、1 个卡 `range over chan`（Task 20）。
+>
+> **三条旧判据随支持面演进**：`t_ssa_33` / `t_ssa_39` 的 fixture 从
+> `make(chan); _ = c` 换成 `close(c)`；`t_ssa_36` 从 `var d chan int = c`
+> 换成 `var n = len(c)`。
 
 ### Task 19: `close` 与三条 panic
 

@@ -2135,6 +2135,43 @@ fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], 
             asm.ins("bl rt_map_iter");
             st_x(asm, "x0", sn.off);
         }
+        // `c <- v`（M11b/Task 19）：`rt_send(c, &v)`。
+        //
+        // 第二个实参是**地址** —— `rt_send` 从发送方的槽里 `memcpy`
+        // `elemsize` 那么多字节（元素可以是任意宽度，含聚合体）。
+        RuntimeFn::ChanSend => {
+            let (Some(c), Some(v)) = (args.first(), args.get(1)) else {
+                return;
+            };
+            let (sc, sv) = (cx.slot(*c), cx.slot(*v));
+            ld_x(asm, "x0", sc.off);
+            addr(asm, sv.off);
+            asm.ins("mov x1, x9");
+            asm.ins("bl rt_send");
+            // `rt_send` 在已关闭的通道上 panic（`C11` §5）—— 它是 `panic_set`
+            // 不是直接退出，所以**必须**在这里查状态，否则关闭后发送会静默继续。
+            check_panic(cx, asm);
+        }
+        // `<-c`（M11b/Task 19）：`rt_recv(c, &dst) -> ok`。
+        //
+        // `dst` 先清零：窄元素的槽是 8 字节，而 runtime 只写 `elemsize` 字节
+        // （`chan byte` 时高 7 字节会是上一次的残值）。与 `rt_map_get` 同一条。
+        RuntimeFn::ChanRecv => {
+            let (Some(c), Some(d)) = (args.first(), dsts.first()) else {
+                return;
+            };
+            let (sc, sd) = (cx.slot(*c), cx.slot(*d));
+            zero_slot(asm, sd.off, sd.size);
+            ld_x(asm, "x0", sc.off);
+            addr(asm, sd.off);
+            asm.ins("mov x1, x9");
+            asm.ins("bl rt_recv");
+            // 第二个结果是 comma-ok 的 `bool`（单值位置时没有它）。
+            if let Some(ok) = dsts.get(1) {
+                let so = cx.slot(*ok);
+                st_x(asm, "x0", so.off);
+            }
+        }
     }
 }
 

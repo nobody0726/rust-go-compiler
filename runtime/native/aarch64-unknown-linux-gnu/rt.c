@@ -1667,6 +1667,8 @@ void rt_makechan(Hchan **out, u64 dataqsiz, const void *elemtype) {
  */
 
 void panic_set(const char *m, u64 n); /* 定义在文件后半 */
+/* `rt_panicking` 同样在后半，而 `rt_chan2test` 要用它查「发送有没有 panic」。 */
+i64 rt_panicking(void);
 
 /* `panic: send on closed channel` —— `C11` §5 的文本，**不带** `runtime error:`。 */
 static void rt_panic_send_closed(void) {
@@ -1777,6 +1779,13 @@ static void rt_wake(Sudog *s) {
  * ④ 否则阻塞。
  */
 void rt_send(Hchan *c, const void *val) {
+    if (c == 0) {
+        /* nil 通道：**永远阻塞**（Go 规范）。直接标记 blocked 再让调度器
+         * 判死锁 —— 与真的挂上去等价，且不需要一张「无主队列」。 */
+        g_cur->state = 2;
+        rt_schedule();
+        return;
+    }
     if (c->closed != 0) {
         rt_panic_send_closed();
         return;
@@ -1811,8 +1820,17 @@ void rt_send(Hchan *c, const void *val) {
     rt_schedule();
 }
 
-/* `<-ch`。与 `rt_send` 对称，另外多一条 `closed && 空 ⇒ 零值`。 */
-void rt_recv(Hchan *c, void *out) {
+/* `<-ch`。与 `rt_send` 对称，另外多一条 `closed && 空 ⇒ 零值`。
+ *
+ * 返回 **1 = 真的收到值**，**0 = 已关闭且空**（Go 的 comma-ok 语义）。
+ * 单值形态忽略它（`C11` §3.2 的最后一格要求 `out` 是零值）。 */
+u64 rt_recv(Hchan *c, void *out) {
+    if (c == 0) {
+        /* nil 通道：永远阻塞（同 `rt_send`）。`T-EXIT-01` 的 fixture 就是它。 */
+        g_cur->state = 2;
+        rt_schedule();
+        return 0; /* 不可达（死锁会先退出） */
+    }
     u64 es = c->elemsize;
     /* ① 有发送方在等 ⇒ 直取 */
     Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
@@ -1825,7 +1843,7 @@ void rt_recv(Hchan *c, void *out) {
             }
         }
         rt_wake(w);
-        return;
+        return 1;
     }
     /* ② 缓冲非空 ⇒ 取 */
     if (c->qcount > 0) {
@@ -1834,14 +1852,14 @@ void rt_recv(Hchan *c, void *out) {
         }
         c->recvx = (c->recvx + 1) % c->dataqsiz;
         c->qcount--;
-        return;
+        return 1;
     }
     /* ③ 已关闭且空 ⇒ 零值 */
     if (c->closed != 0) {
         if (es > 0) {
             rt_memset(out, 0, es);
         }
-        return;
+        return 0;
     }
     /* ④ 阻塞 */
     Sudog s;
@@ -1854,6 +1872,9 @@ void rt_recv(Hchan *c, void *out) {
     waitq_push(&c->recvq_head, &c->recvq_tail, &s);
     g_cur->state = 2; /* blocked */
     rt_schedule();
+    /* 醒来 = 对端已经把值写进 `out` 并唤醒我们（`rt_wake` 只在**完成之后**调）
+     * ⇒ 一定是「真的收到值」。 */
+    return 1;
 }
 
 /* `rt_send` / `rt_recv` 的自测（Task 17；`go` 语句的下降还没接 isel）。
@@ -1891,6 +1912,22 @@ void rt_chan2test(void) {
     if (o != 0) {
         rt_exit(8);
     }
+    /* 关闭后 **send** ⇒ 必须 panic（`C11` §5 的 `panic: send on closed
+     * channel`）。
+     *
+     * ⚠️ **`closed` 检查必须排在「buf 未满」之前**：顺序反了的话这一发会
+     * **静默塞进缓冲**（`qcount` 0 → 1），而 `rt_panicking()` 仍是 0 ——
+     * 变异 `M-M11-07` 抓的就是它。
+     *
+     * `panic_set` 只置状态不退出（`recover` 可能救回来），所以这里自己查，
+     * 与 isel 的 `check_panic` 同一个口径。
+     *
+     * ⚠️ **查完必须立刻退出**：`g_panicking` 会一直挂着，而 `main` 里任何一次
+     * `check_panic` 都会把它变成「真的 panic」⇒ 退出 2。自测模式本来就是个
+     * 夹具（成功也 `rt_exit`），在这里收尾最干净。 */
+    v = 44;
+    rt_send(c, &v);
+    rt_exit(rt_panicking() != 0 ? 0 : 8);
 }
 
 /* `rt_send` / `rt_recv` 的**阻塞 + 唤醒**自测（Task 18）。

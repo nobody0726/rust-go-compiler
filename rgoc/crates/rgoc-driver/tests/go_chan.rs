@@ -26,7 +26,6 @@ func main() {
 "#;
 
 #[test]
-#[ignore = "`<-ch` / `ch <- v` 的 isel 下降还没做（Task 19）：现在被 unsup_expr 拒"]
 fn t_chan_01_无缓冲同步() {
     let t = go_probe::probe("chan01", SYNC, &[("RGOC_GC", "0")])
         .expect("应能编译并跑起来（M11b 之后）");
@@ -90,4 +89,37 @@ fn t_chan_03_阻塞与唤醒() {
             .unwrap_or_else(|e| panic!("chan 阻塞自测失败（8 = 值不对）：\n{e}"));
     assert_eq!(out.exit, 0, "阻塞 + 唤醒应干净退出");
     assert!(out.stderr.is_empty(), "自测不该有输出：{:?}", out.stderr);
+}
+
+/// `T-CHAN-04`：**`v, ok := <-c` 的 comma-ok**（`C11` §3.2 最后一格）。
+///
+/// # 为什么这条必须单独存在
+///
+/// `rt_recv` 返回 `u64`（1 = 真的收到值，0 = 已关闭且空），而**单值形态会
+/// 忽略它**。如果 isel 把返回值接错了槽（或者 `zero_slot` 没做），症状是
+/// 「`ok` 恒为 true」—— 而所有单值用例都照样绿。
+///
+/// 判据用两段：`ok == true`（有值）与 `ok == false`（关闭且空）。只查前者
+/// 会被「恒 true」骗过。
+const COMMA_OK: &str = r#"
+package main
+
+func main() {
+	c := make(chan int, 1)
+	c <- 7
+	v, ok := <-c
+	println(v, ok)
+}
+"#;
+
+#[test]
+fn t_chan_04_comma_ok() {
+    let t = go_probe::probe("chan04", COMMA_OK, &[("RGOC_GC", "0")]).expect("应能编译并跑起来");
+    t.assert_l1("chan04");
+    assert_eq!(
+        t.native.stdout, "7 true\n",
+        "`v, ok := <-c`（有值）应为 `7 true`：实际 {:?}",
+        t.native.stdout
+    );
+    assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
 }

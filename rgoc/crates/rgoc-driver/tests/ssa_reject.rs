@@ -233,9 +233,12 @@ fn t_ssa_33_chan_现在由_ssa_层拒() {
     // 没有入口」—— 它当时是一条守卫：上游一旦放行就会红。
     // M8/Task 14 正是那次放行（`HIR-UNSUPPORTED-CHAN` 已下线），所以这里改成
     // 判「入口打开了、SSA 侧的码真的接住了」：SSA 不实现并发（`M8-design.md` §1.3）。
+    // ⚠️ fixture 换过：`c := make(chan int); _ = c` 在 M11b/Task 16/19 之后
+    // **能编译了**（`make(chan)` 分配、chan 值是普通指针）。换成 `close(c)`
+    // —— 它仍然被拒（`BuiltinKind::Close`，Task 20 才做）。
     let p = fixture(
         "chan",
-        "package main\n\nfunc main() {\n\tc := make(chan int)\n\t_ = c\n}\n",
+        "package main\n\nfunc main() {\n\tc := make(chan int)\n\tclose(c)\n}\n",
     );
     let out = run(&p);
     assert_eq!(out.exit, 1, "chan 在 SSA 面必须被拒：{out:?}");

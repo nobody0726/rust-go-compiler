@@ -453,8 +453,12 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         // 实参表达式仍要扫：`go f(ch)` 里的 `ch` 是 chan 类型，得拒。
         Stmt::Go { call } => unsup_expr(tt, call),
         //
-        // `send` / `select` 仍拒：它们要 `hchan`，那是 M11b 的事。
-        Stmt::Send { .. } => Some((SsaCode::Chan, "`ch <- v` 发送".to_string())),
+        // `ch <- v`（M11b/Task 19）：**放行** —— `rt_send` 已经实现（阻塞/唤醒
+        // 在 Task 18）。通道表达式与右值仍要扫：里面可能有别的拒绝面
+        // （`select` 里的 chan、`len(c)` 之类）。
+        //
+        // `select` 仍拒：三阶段试探是 M11b 后半（Task 22）。
+        Stmt::Send { chan, value } => unsup_expr(tt, chan).or_else(|| unsup_expr(tt, value)),
         Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
         Stmt::Range { x, body, kind, .. } => match kind {
             RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
@@ -559,19 +563,20 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             }
         }
     }
-    if let Some(code) = face_kind(tt, e.typ) {
-        return Some((
-            code,
-            "chan 类型出现在表达式里（并发语义属宿主面）".to_string(),
-        ));
-    }
+    // ⚠️ **原来这里有一条「`e.typ` 是 chan ⇒ 一律拒」**。M11b/Task 19 起
+    // 撤掉了：`chan T` 的值本身就是一个 8 字节指针（`*Hchan`），读它、传它、
+    // 存进结构体字段都是**普通的值操作**，没有任何「并发语义」。
+    //
+    // 真正不支持的 chan **用法**各自有专门的判据，撤掉这条不会漏：
+    // * `close(c)` —— `BuiltinKind::Close`（Task 20）
+    // * `len(c)` / `cap(c)` —— 下面 `Builtin` 分支显式查（要读 `Hchan` 的字段）
+    // * `select` / `range c` —— `unsup_stmt` 的 `Select` / `RangeKind::Chan`
+    // * 转换到 chan 类型、`new(chan T)` —— 仍走 `face_kind`
     match &e.kind {
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => None,
-        // `<-ch`：M6 既不建图也不执行（`SSA-UNSUPPORTED-CHAN`），出现即错。
-        // 通道表达式本身也要扫（里面可能有别的拒绝面）。
-        ExprKind::Recv { ch, .. } => {
-            unsup_expr(tt, ch).or(Some((SsaCode::Chan, "`<-ch` 接收操作".to_string())))
-        }
+        // `<-ch`（M11b/Task 19）：**放行** —— `rt_recv` 已实现。
+        // 通道表达式本身仍要扫（里面可能有别的拒绝面）。
+        ExprKind::Recv { ch, .. } => unsup_expr(tt, ch),
         ExprKind::Field { base, .. } => unsup_expr(tt, base),
         ExprKind::Index { base, index, .. } => {
             unsup_expr(tt, base).or_else(|| unsup_expr(tt, index))
@@ -585,9 +590,10 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
         ExprKind::Deref(x) | ExprKind::AddrOf(x) => unsup_expr(tt, x),
         ExprKind::Addr(p) => unsup_place(tt, p),
         ExprKind::Unary { op, x } => {
-            if *op == rgoc_hir::UnOp::Recv {
-                return Some((SsaCode::Chan, "`<-ch` 接收操作".to_string()));
-            }
+            // `<-ch` 在这里**不**拒（M11b/Task 19 起支持）—— 只扫操作数。
+            // 保留这个 `if` 的形状是因为 `UnOp::Recv` 仍在枚举里（`op` 是
+            // 通配 `_` 会漏掉未来加的一元运算）。
+            let _ = op;
             unsup_expr(tt, x)
         }
         ExprKind::Binary { x, y, .. } => unsup_expr(tt, x).or_else(|| unsup_expr(tt, y)),
@@ -645,6 +651,18 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
         ExprKind::Builtin { kind, args, .. } => match kind {
             // `recover()` 走 `rt_recover`（M9/Phase 5）
             BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
+            // `len(c)` / `cap(c)`：要读 `Hchan` 的 `qcount` / `dataqsiz`，
+            // 而 isel 的 `builtin` 只认 string/slice/array/map ⇒ 不拦就会生成
+            // 一段「把 chan 指针当 slice 头读」的代码（不崩，但读的是垃圾）。
+            //
+            // ⚠️ 它们是**可支持**的（`ldr` 两个偏移而已），只是还没做 ——
+            // 归 Task 20（与 `close` 一起）。用同一个 `SsaCode::Chan`，
+            // 因为对用户来说都是「chan 操作还没到」。
+            BuiltinKind::Len | BuiltinKind::Cap
+                if args.first().is_some_and(|a| face_kind(tt, a.typ).is_some()) =>
+            {
+                Some((SsaCode::Chan, "len/cap 作用在 chan 上".to_string()))
+            }
             _ => args.iter().find_map(|a| unsup_expr(tt, a)),
         },
     }
@@ -926,10 +944,14 @@ fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
     match s {
         // `go` 的实参要扫：`go f(&x)` 里的 `&x` 会让 `x` 逃逸。
         Stmt::Go { call } => scan_expr(tt, call, sc),
-        Stmt::Send { .. } | Stmt::Select { .. } => {
+        // `ch <- v`：两边都要扫（`&x` 逃逸、函数字面量的捕获）。
+        Stmt::Send { chan, value } => {
+            scan_expr(tt, chan, sc);
+            scan_expr(tt, value, sc);
+        }
+        Stmt::Select { .. } => {
             // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+            unreachable!("select 应由 unsupported() 在建图前拒掉")
         }
         Stmt::Assign { lhs, rhs, .. } => {
             for p in lhs {
@@ -1043,10 +1065,8 @@ fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
 
 fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
     match &e.kind {
-        ExprKind::Recv { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
-        }
+        // `<-ch`：通道表达式要扫（`<-*p` 之类会让 `p` 的根成根）。
+        ExprKind::Recv { ch, .. } => scan_expr(tt, ch, sc),
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         // 函数字面量：记下目标（`MakeClosure` 要取它捕获的槽的地址）
         ExprKind::FuncLit(fid) => sc.lits.push(*fid),
@@ -1707,10 +1727,10 @@ fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
     }
     fn stmt(s: &Stmt, out: &mut BTreeSet<String>) {
         match s {
-            Stmt::Send { .. } | Stmt::Select { .. } => {
-                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-                // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-                unreachable!("send/select 应由 unsupported() 在建图前拒掉")
+            // `ch <- v` 的载荷是表达式，装不下语句 ⇒ 没有 goto。
+            Stmt::Send { .. } => {}
+            Stmt::Select { .. } => {
+                unreachable!("select 应由 unsupported() 在建图前拒掉")
             }
             Stmt::Branch {
                 kind: BranchKind::Goto,
@@ -1798,10 +1818,13 @@ impl Def<'_> {
             Stmt::Go { call } => {
                 self.expr(call);
             }
-            Stmt::Send { .. } | Stmt::Select { .. } => {
-                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-                // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-                unreachable!("send/select 应由 unsupported() 在建图前拒掉")
+            // `ch <- v`：两边都要在这里求值（`Def` 这一遍只收集值）。
+            Stmt::Send { chan, value } => {
+                self.expr(chan);
+                self.expr(value);
+            }
+            Stmt::Select { .. } => {
+                unreachable!("select 应由 unsupported() 在建图前拒掉")
             }
             Stmt::Assign { lhs, op, rhs } => {
                 for e in rhs {
@@ -1981,10 +2004,9 @@ impl Def<'_> {
 
     fn expr(&mut self, e: &Expr) {
         match &e.kind {
-            ExprKind::Recv { .. } => {
-                // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-                unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
-            }
+            // `<-ch`（M11b/Task 19）：这一遍只算「哪些槽被读过」（确定赋值
+            // 分析）—— 通道表达式要读，接收的结果是**新值**不是槽读。
+            ExprKind::Recv { ch, .. } => self.expr(ch),
             ExprKind::Const(_) | ExprKind::Nil | ExprKind::Global(_) => {}
             ExprKind::Slot(s) => self.read(*s),
             ExprKind::Field { base, .. } => self.expr(base),
@@ -3033,6 +3055,16 @@ impl Fb<'_> {
             // `comma_ok` 必须由 HIR 的那一位驱动，**不能**按「左边有两个目标」
             // 推断 —— `v, ok = f()` 的 `f` 是真多值调用，而 `m[k]` 只是在
             // 这一位为真时才多产一个 `bool`。
+            // `v, ok := <-c`（M11b/Task 19）：`ok == false` 只在「已关闭且空」
+            // 时为假（Go 规范）—— `rt_recv` 的返回值正好是这个语义。
+            ExprKind::Recv { ch, comma_ok: true } => {
+                let c = self.expr(ch);
+                let dst = self.new_value(e.typ);
+                let bt = self.bool_ty();
+                let od = self.new_value(bt);
+                self.chan_call(RuntimeFn::ChanRecv, vec![c], vec![dst, od]);
+                vec![dst, od]
+            }
             ExprKind::Index {
                 base,
                 index,
@@ -3623,6 +3655,28 @@ impl Fb<'_> {
         });
     }
 
+    /// chan 操作的公共出口（`rt_send` / `rt_recv`，M11b/Task 19）。
+    ///
+    /// 与 `map_call` 的差别只有 `may_panic`：`rt_send` 在已关闭的通道上
+    /// **panic**（`C11` §5），`rt_recv` 不会。`writes_all` 两者都要 ——
+    /// 它们都可能阻塞换 G，而换 G 之后别的 goroutine 可能写了任何堆根。
+    fn chan_call(&mut self, f: RuntimeFn, args: Vec<ValueId>, dsts: Vec<ValueId>) {
+        let eff = Effect {
+            writes: Vec::new(),
+            writes_all: true,
+            may_panic: f == RuntimeFn::ChanSend,
+            may_call_back: false,
+            prints: false,
+        };
+        self.emit(Instr::Call {
+            dsts,
+            callee: CalleeRef::Runtime(f),
+            args,
+            dots: false,
+            effect: eff,
+        });
+    }
+
     fn expr(&mut self, e: &Expr) -> ValueId {
         match &e.kind {
             ExprKind::Const(c) => {
@@ -3929,6 +3983,17 @@ impl Fb<'_> {
             //
             // 单值形态**会 panic**（失败即 `rt_panic_assert`），所以 `ok == None`
             // 不是「省一个结果」，而是「失败即终止」。
+            // `<-ch`（M11b/Task 19）：走 `rt_recv(&dst, ch)` 的**输出参数**形状。
+            //
+            // 返回值（x0）是「是否真的收到值」—— 单值形态忽略它（`closed && 空`
+            // 时 `dst` 已被写成零值，`C11` §3.2 的最后一格），comma-ok 形态在
+            // `expr_multi` 里取它。
+            ExprKind::Recv { ch, .. } => {
+                let c = self.expr(ch);
+                let dst = self.new_value(e.typ);
+                self.chan_call(RuntimeFn::ChanRecv, vec![c], vec![dst]);
+                dst
+            }
             ExprKind::TypeAssert { x, to, comma_ok } => {
                 let xv = self.expr(x);
                 let dst = self.new_value(*to);
@@ -3995,11 +4060,22 @@ impl Fb<'_> {
                     n => todo!("{n} 结果的内建出现在单值位置"),
                 }
             }
-            // `make([]T, len[, cap])`：`len` / `cap` 的求值顺序 == 源码顺序。
-            // `make(map)` / `make(chan)` 到不了这里（拒绝面先拦）。
-            ExprKind::Make { args, .. } => {
-                let len = args.first().map(|a| self.expr(a));
-                let cap = args.get(1).map(|a| self.expr(a));
+            // `make([]T, len[, cap])` / `make(chan T[, cap])` / `make(map[K]V[, hint])`。
+            // 求值顺序 == 源码顺序（Go 规范）。
+            //
+            // ⚠️ **`chan` 的实参表是 `[cap]`，不是 `[len, cap]`**（`C11` §3.1）。
+            // 直接套 slice 的「第一个是 len」会让 `make(chan int, 3)` 的 `3`
+            // 落进 `len`，而 `cap` 是 `None` ⇒ `rt_makechan(…, 0, …)` ⇒ 造出
+            // **无缓冲**通道 ⇒ 第二次发送就死锁（实测症状：`fatal error:
+            // all goroutines are asleep - deadlock!`，而源码明明有缓冲）。
+            ExprKind::Make { kind, args } => {
+                let (len, cap) = match kind {
+                    MakeKind::Chan => (None, args.first().map(|a| self.expr(a))),
+                    MakeKind::Slice | MakeKind::Map => (
+                        args.first().map(|a| self.expr(a)),
+                        args.get(1).map(|a| self.expr(a)),
+                    ),
+                };
                 let dst = self.new_value(e.typ);
                 self.emit(Instr::Make {
                     dst,
@@ -4046,11 +4122,14 @@ impl Fb<'_> {
                 let addr = self.addr_of(root);
                 self.store_root(root, addr, v);
                 addr
-            }
-            other => todo!(
-                "M6/Task 27–31：表达式 `{}` 的构建还没实现",
-                expr_kind_name(other)
-            ),
+            } // ⚠️ **没有兜底分支** —— 这是刻意的。
+              //
+              // 原来这里是 `other => todo!("表达式 ... 的构建还没实现")`。M11b/Task 19
+              // 补上 `Recv` 之后，`ExprKind` 的**每一个变体都有实现了**，兜底变成
+              // 不可达（`unreachable_patterns` 警告）。
+              //
+              // 删掉它比留着好：以后加一个 `ExprKind` 变体，编译器会**直接报错**
+              // 指向这里，而不是让程序在运行期 `todo!()` 炸在一个用户看得见的地方。
         }
     }
 
@@ -5998,6 +6077,14 @@ impl Fb<'_> {
             // `go` 只负责启动它。这样 `Instr::Go` 的 `args` 永远是空的，
             // `rt_go` 只收到「一个无参函数」。
             Stmt::Go { call } => self.stmt_defer_like(call, true),
+            // `ch <- v`（M11b/Task 19）：两个实参都是**地址** —— `rt_send` 要
+            // 从发送方的槽里 `memcpy` 元素宽度那么多字节（元素类型可以是
+            // 任意宽度，包括聚合体）。
+            Stmt::Send { chan, value } => {
+                let c = self.expr(chan);
+                let v = self.expr(value);
+                self.chan_call(RuntimeFn::ChanSend, vec![c, v], Vec::new());
+            }
             // `defer`（`M9/Phase 5b`）：实参**现在**求值、装进盒子，
             // 调用体放进合成的包装函数（见 `synth_defer_wrapper`）。
             Stmt::Defer { call } => self.stmt_defer_like(call, false),
@@ -6080,9 +6167,22 @@ impl Fb<'_> {
             captures: caps.iter().map(|(v, _)| *v).collect(),
         });
         if is_go {
+            // ⚠️ **捕获了变量时必须把 `fv` 当第 0 个实参传**。
+            //
+            // 包装函数是 `ctx_abi` 的（`x0` = funcval 指针，捕获从 `[x0, #8+8i]`
+            // 读）。`rt_go` 的 trampoline 把实参区的前 8 格装进 `x0..x7` 再
+            // `blr` —— 所以「ctx 就是 arg0」这条正好对上。
+            //
+            // 不传的后果（实测）：`x0` 是上一个函数的残值 ⇒ 包装函数从垃圾
+            // 地址读捕获 ⇒ **段错误**（`go func(){ println(<-c) }()`）。
+            let args = if caps.is_empty() {
+                Vec::new()
+            } else {
+                vec![fv]
+            };
             self.emit(Instr::Go {
                 callee: CalleeRef::Func(wid),
-                args: Vec::new(),
+                args,
                 effect: eff,
             });
         } else {
@@ -6415,10 +6515,15 @@ fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut Loo
         // `go` 的实参效果要算；`go` 本身的效果由 `Instr::Go` 的 `effect` 字段
         // 表达（`Fb` 建图时已传），不在这里重复。
         Stmt::Go { call } => eff_expr(tt, sr, call, e),
-        Stmt::Send { .. } | Stmt::Select { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+        // `ch <- v`：两边都要算效果，而且它**可能阻塞换 G** ⇒ 保守按「有调用」
+        // 处理（`calls = true`）—— 换 G 之后别的 goroutine 可能写了任何堆根。
+        Stmt::Send { chan, value } => {
+            eff_expr(tt, sr, chan, e);
+            eff_expr(tt, sr, value, e);
+            e.calls = true;
+        }
+        Stmt::Select { .. } => {
+            unreachable!("select 应由 unsupported() 在建图前拒掉")
         }
         Stmt::Assign { lhs, rhs, .. } => {
             for x in rhs {
@@ -6528,9 +6633,10 @@ fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut Loo
 
 fn eff_expr(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, x: &Expr, e: &mut LoopEffects) {
     match &x.kind {
-        ExprKind::Recv { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+        // `<-ch` 可能阻塞换 G ⇒ 与 `ch <- v` 同一条保守规则。
+        ExprKind::Recv { ch, .. } => {
+            eff_expr(tt, sr, ch, e);
+            e.calls = true;
         }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         ExprKind::Field { base, .. } => eff_expr(tt, sr, base, e),

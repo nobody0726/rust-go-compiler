@@ -980,6 +980,18 @@ impl Exec<'_> {
                             None => self.write(nd, Value::Int(0)),
                         }
                     }
+                    // chan 的收发（M11b/Task 19）在 SSA 求值器里**不支持**：
+                    // M8 的并发语义只落在 HIR 面（`--via=hir`）。
+                    //
+                    // 与 `Instr::Go` 同一条口径：返回明确的运行期错误，而不是
+                    // panic 到宿主。`--via=ssa` 的语料里没有并发程序（M6 起就
+                    // 如此），所以这条实际不会触发 —— 但它保证「加进来也不会
+                    // 崩在解释器内部」。
+                    R::ChanSend | R::ChanRecv => {
+                        return Err(Halt::Runtime(
+                            "SSA 求值器不支持 chan 收发（并发只在 HIR 面）".to_string(),
+                        ));
+                    }
                 }
                 Ok(None)
             }

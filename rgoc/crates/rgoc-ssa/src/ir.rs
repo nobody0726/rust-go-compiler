@@ -563,6 +563,20 @@ pub enum RuntimeFn {
     MapDel,
     /// `rt_map_iter(m, idx, kout, vout) -> u64`（0 = 结束）
     MapIter,
+    /// `rt_send(c, val)` —— `c <- v`（M11b/Task 19）。`val` 是值的**地址**。
+    ///
+    /// # 为什么是 runtime 而不是 `Instr::Send`
+    ///
+    /// 它与 `rt_map_set` 同形（两个实参、无返回值），加一个 IR 变体只会多出
+    /// 十几处 `match` 而换不到任何东西。**唯一的语义差别**（可能阻塞换 G）
+    /// 在 C 侧，IR 看不见。
+    ChanSend,
+    /// `rt_recv(c, out) -> ok` —— `<-c`（M11b/Task 19）。写 `*out`，返回
+    /// 「是否真的收到值」（`closed && 空` ⇒ 0）。
+    ///
+    /// 返回 `ok` 而不是两个变体：**同一个符号**同时服务 `v := <-c` 与
+    /// `v, ok := <-c` —— 前者忽略返回值，后者取它。
+    ChanRecv,
     /// `rt_recover(out)` —— 写 16 字节接口到 `out`（`M9/Phase 5`）。
     ///
     /// # 为什么是 runtime 而不是内建
@@ -574,12 +588,14 @@ pub enum RuntimeFn {
 
 impl RuntimeFn {
     /// 全部（顺序进 `dump` 与守卫测试）。
-    pub const ALL: [RuntimeFn; 6] = [
+    pub const ALL: [RuntimeFn; 8] = [
         RuntimeFn::MapMake,
         RuntimeFn::MapGet,
         RuntimeFn::MapSet,
         RuntimeFn::MapDel,
         RuntimeFn::MapIter,
+        RuntimeFn::ChanSend,
+        RuntimeFn::ChanRecv,
         RuntimeFn::Recover,
     ];
 
@@ -592,6 +608,8 @@ impl RuntimeFn {
             RuntimeFn::MapSet => "rt_map_set",
             RuntimeFn::MapDel => "rt_map_del",
             RuntimeFn::MapIter => "rt_map_iter",
+            RuntimeFn::ChanSend => "rt_send",
+            RuntimeFn::ChanRecv => "rt_recv",
             RuntimeFn::Recover => "rt_recover",
         }
     }
@@ -605,6 +623,8 @@ impl RuntimeFn {
             RuntimeFn::MapSet => "map_set",
             RuntimeFn::MapDel => "map_del",
             RuntimeFn::MapIter => "map_iter",
+            RuntimeFn::ChanSend => "chan_send",
+            RuntimeFn::ChanRecv => "chan_recv",
             RuntimeFn::Recover => "recover",
         }
     }

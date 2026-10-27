@@ -188,12 +188,13 @@ $PROBE_RS "M-M11-04 检查条件写反" "crates/rgoc-arm64/src/isel.rs" \
 # ── M-M11-07：`send` 的 `closed` 检查挪到「buf 未满」之后 ──────────────
 # `C11` §3.2 的 ⚠️：`closed` 检查必须**排第一**。挪到后面 ⇒ 往已关闭的有缓冲
 # 通道发送会**静默塞进缓冲**，而不是 `panic: send on closed channel`。
-$PROBE_P "M-M11-07 send 的 closed 检查挪后" "$RT" \
-  '    if (c->closed != 0) {
-        rt_panic_send_closed();
-    }' \
-  '    /* 变异：closed 检查挪到 buf 判断之后 */' \
-  -p rgoc-driver --test go_chan t_chan_03
+# ⚠️ 变异写成「条件收窄」而不是「整块搬走」：`qcount == dataqsiz` 让**未满的
+# 有缓冲通道**跳过 closed 检查 —— 语义上等价于「检查挪到 buf 满之后」，
+# 但只改一行，锚点不会因为缩进变化而失配。
+$PROBE "M-M11-07 send 的 closed 检查挪后" "$RT" \
+  '    if (c->closed != 0) {' \
+  '    if (c->closed != 0 && c->qcount == c->dataqsiz) {' \
+  -p rgoc-driver --test go_chan t_chan_02
 
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"
