@@ -1002,9 +1002,31 @@ __asm__(
      * 才有地方落。80 是 16 的倍数 ⇒ 对齐不破。 */
     "    add  sp, sp, #80\n"
     "    blr  x9\n"
-    "    bl   rt_goexit\n" /* 被调方返回 ⇒ 本 G 结束 */
+    "    bl   rt_gorets\n" /* 被调方返回 ⇒ 查 panic / 结束本 G */
     "    brk  #1\n"
     ".size rt_go_trampoline, .-rt_go_trampoline\n");
+
+/* 新 G 的被调方返回了（`rt_go_trampoline` 的收尾）。
+ *
+ * ⚠️ **必须先查 panic 状态**：G 里未 `recover` 的 panic 要终止**整个程序**
+ * （Go 规范），而不是「那个 G 悄悄结束」。
+ *
+ * 不查的症状（实测 `t_chan_07`）：子 G panic 之后照常 `rt_goexit`，主 G 还在
+ * `<-done` 上等它 ⇒ 报 `fatal error: all goroutines are asleep - deadlock!`，
+ * 与**真正的死锁**无法区分。而正确输出是 `panic: send on closed channel`。
+ *
+ * ⚠️ 这条**不是** `recover` 的替代：G 里如果 `recover` 掉了，`g_panicking`
+ * 已经是 0，走不到这里。 */
+i64 rt_panicking(void);
+void rt_print_panic(void);
+
+void rt_gorets(void) {
+    if (rt_panicking() != 0) {
+        rt_print_panic();
+        rt_exit(2);
+    }
+    rt_goexit();
+}
 
 /* `rt_go` 的自测（Task 12；`go` 语句在 Task 13 才放开）。
  *
@@ -1670,15 +1692,24 @@ void panic_set(const char *m, u64 n); /* 定义在文件后半 */
 /* `rt_panicking` 同样在后半，而 `rt_chan2test` 要用它查「发送有没有 panic」。 */
 i64 rt_panicking(void);
 
-/* `panic: send on closed channel` —— `C11` §5 的文本，**不带** `runtime error:`。 */
-static void rt_panic_send_closed(void) {
-    const char *m = "panic: send on closed channel";
+/* `C11` §5 的三条 chan panic。
+ *
+ * ⚠️ 文本**不带** `panic: ` 前缀 —— `rt_print_panic` 自己写那 7 个字节。
+ * 带上就会输出 `panic: panic: close of closed channel`（实测踩过）。
+ *
+ * 也**不带** `runtime error: ` 前缀（那是 `rt_fatal_*` 家族的形状，
+ * 表示「不可 recover」；这三条是可以被 `recover` 的）。 */
+static void rt_panic_text(const char *m) {
     u64 n = 0;
     while (m[n] != 0) {
         n++;
     }
     panic_set(m, n);
 }
+
+static void rt_panic_send_closed(void) { rt_panic_text("send on closed channel"); }
+static void rt_panic_close_closed(void) { rt_panic_text("close of closed channel"); }
+static void rt_panic_close_nil(void) { rt_panic_text("close of nil channel"); }
 
 /* Task 18 之前：阻塞路径直接退出 9。
  *
@@ -1760,13 +1791,28 @@ static Sudog *waitq_pop(Sudog **head, Sudog **tail) {
     return s;
 }
 
-/* 唤醒：`done = 1` + 状态 ready + **入队尾**（`C11` §3.2 的「唤醒」那行）。 */
-static void rt_wake(Sudog *s) {
-    s->done = 1;
+/* 把挂着的 G 置 ready 并**入队尾**（`C11` §3.2 的「唤醒」那行）。
+ *
+ * ⚠️ **不动 `done`** —— 它由调用方决定，而这两个调用方语义不同：
+ *
+ * * `rt_wake_done`：对端**真的完成了传输**（值已拷走 / 已写进 `out`）⇒
+ *   `done = 1`，被唤醒方从 `rt_schedule()` 回来就**直接返回**。
+ * * `rt_wake_retry`：**`close` 唤醒** ⇒ `done` 保持 0，被唤醒方要**重走**
+ *   一遍自己的循环（recv 去拿零值、send 去 panic）。
+ *
+ * ⚠️ 合成一个「都置 done」的版本是**实测踩过的 bug**：`close` 之后阻塞中的
+ * 发送方会以为自己发成功了 —— 症状是 `c <- v` 在已关闭的通道上**静默成功**，
+ * `println("BAD")` 真的打了出来（`t_chan_07` 抓到的就是这个）。 */
+static void rt_wake_retry(Sudog *s) {
     if (s->g != 0) {
         s->g->state = 0; /* ready */
         rt_enqueue(s->g);
     }
+}
+
+static void rt_wake_done(Sudog *s) {
+    s->done = 1;
+    rt_wake_retry(s);
 }
 
 /* `ch <- v`。
@@ -1786,38 +1832,57 @@ void rt_send(Hchan *c, const void *val) {
         rt_schedule();
         return;
     }
-    if (c->closed != 0) {
-        rt_panic_send_closed();
-        return;
-    }
     u64 es = c->elemsize;
-    Sudog *r = waitq_pop(&c->recvq_head, &c->recvq_tail);
-    if (r != 0) {
-        if (es > 0 && r->elem != 0) {
-            rt_memcpy(r->elem, val, es);
+    /* ⚠️ **必须是循环，不是「一次尝试」**。
+     *
+     * 阻塞醒来有两种原因（`C11` §3.2 的 close 那一行）：
+     * ① 有接收方取走了值（`s.done == 1`）⇒ 发送**已经完成**，返回；
+     * ② 通道被 `close` 了（`s.done == 0`）⇒ **必须重新走一遍**，让
+     *    `closed` 检查在本 G 里 panic。
+     *
+     * 只写一次尝试的话，②会静默「当成发成功了」—— 而 Go 的语义是
+     * `panic: send on closed channel`，且要 panic 在**发送方**的栈上
+     * （defer 在那里）。 */
+    for (;;) {
+        /* ① `closed` 检查排第一（`C11` §3.2 的 ⚠️，变异 `M-M11-07`）。 */
+        if (c->closed != 0) {
+            rt_panic_send_closed();
+            return;
         }
-        rt_wake(r);
-        return;
-    }
-    if (c->dataqsiz > 0 && c->qcount < c->dataqsiz) {
-        if (es > 0) {
-            rt_memcpy(c->buf + c->sendx * es, val, es);
+        /* ② 有接收方在等 ⇒ 直给（不经过 buf） */
+        Sudog *r = waitq_pop(&c->recvq_head, &c->recvq_tail);
+        if (r != 0) {
+            if (es > 0 && r->elem != 0) {
+                rt_memcpy(r->elem, val, es);
+            }
+            rt_wake_done(r);
+            return;
         }
-        c->sendx = (c->sendx + 1) % c->dataqsiz;
-        c->qcount++;
-        return;
+        /* ③ 缓冲未满 ⇒ 塞 buf */
+        if (c->dataqsiz > 0 && c->qcount < c->dataqsiz) {
+            if (es > 0) {
+                rt_memcpy(c->buf + c->sendx * es, val, es);
+            }
+            c->sendx = (c->sendx + 1) % c->dataqsiz;
+            c->qcount++;
+            return;
+        }
+        /* ④ 阻塞：登记到 `sendq` 尾 ⇒ 换 G */
+        Sudog s;
+        s.g = g_cur;
+        s.elem = (void *)val;
+        s.next = 0;
+        s.prev = 0;
+        s.token = 0;
+        s.done = 0;
+        waitq_push(&c->sendq_head, &c->sendq_tail, &s);
+        g_cur->state = 2; /* blocked */
+        rt_schedule();
+        if (s.done != 0) {
+            return; /* ① 值已被接收方取走 */
+        }
+        /* ② 被 close 唤醒 ⇒ 循环回去 panic */
     }
-    /* ④ 阻塞：登记到 `sendq` 尾 ⇒ 换 G ⇒ 醒来时值已被接收方取走 */
-    Sudog s;
-    s.g = g_cur;
-    s.elem = (void *)val;
-    s.next = 0;
-    s.prev = 0;
-    s.token = 0;
-    s.done = 0;
-    waitq_push(&c->sendq_head, &c->sendq_tail, &s);
-    g_cur->state = 2; /* blocked */
-    rt_schedule();
 }
 
 /* `<-ch`。与 `rt_send` 对称，另外多一条 `closed && 空 ⇒ 零值`。
@@ -1832,49 +1897,83 @@ u64 rt_recv(Hchan *c, void *out) {
         return 0; /* 不可达（死锁会先退出） */
     }
     u64 es = c->elemsize;
-    /* ① 有发送方在等 ⇒ 直取 */
-    Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
-    if (w != 0) {
-        if (es > 0) {
-            if (w->elem != 0) {
-                rt_memcpy(out, w->elem, es);
-            } else {
+    /* 同 `rt_send`：**循环**。被 close 唤醒时 `s.done == 0`，要回去走
+     * 「先排空 buf，再拿零值」那条路。 */
+    for (;;) {
+        /* ① 有发送方在等 ⇒ 直取 */
+        Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
+        if (w != 0) {
+            if (es > 0) {
+                if (w->elem != 0) {
+                    rt_memcpy(out, w->elem, es);
+                } else {
+                    rt_memset(out, 0, es);
+                }
+            }
+            rt_wake_done(w);
+            return 1;
+        }
+        /* ② 缓冲非空 ⇒ 取（**排空 buf 优先于零值**） */
+        if (c->qcount > 0) {
+            if (es > 0) {
+                rt_memcpy(out, c->buf + c->recvx * es, es);
+            }
+            c->recvx = (c->recvx + 1) % c->dataqsiz;
+            c->qcount--;
+            return 1;
+        }
+        /* ③ 已关闭且空 ⇒ 零值 + `ok = false` */
+        if (c->closed != 0) {
+            if (es > 0) {
                 rt_memset(out, 0, es);
             }
+            return 0;
         }
-        rt_wake(w);
-        return 1;
-    }
-    /* ② 缓冲非空 ⇒ 取 */
-    if (c->qcount > 0) {
-        if (es > 0) {
-            rt_memcpy(out, c->buf + c->recvx * es, es);
+        /* ④ 阻塞 */
+        Sudog s;
+        s.g = g_cur;
+        s.elem = out;
+        s.next = 0;
+        s.prev = 0;
+        s.token = 0;
+        s.done = 0;
+        waitq_push(&c->recvq_head, &c->recvq_tail, &s);
+        g_cur->state = 2; /* blocked */
+        rt_schedule();
+        if (s.done != 0) {
+            /* 醒来 = 对端已经把值写进 `out` 并唤醒我们。 */
+            return 1;
         }
-        c->recvx = (c->recvx + 1) % c->dataqsiz;
-        c->qcount--;
-        return 1;
+        /* 被 close 唤醒 ⇒ 循环回去拿零值 */
     }
-    /* ③ 已关闭且空 ⇒ 零值 */
+}
+
+/* `close(c)`（M11b/Task 19，`C11` §3.2 的 close 那两行）。
+ *
+ * ⚠️ **唤醒 recvq / sendq 的「全部」**，而且**只唤醒不代替它们做事**：
+ * * recvq 的 G 醒来后重走 `rt_recv` ⇒ 先排空 buf、再拿零值（`C11` §3.2）；
+ * * sendq 的 G 醒来后重走 `rt_send` ⇒ 看到 `closed` ⇒ 在**自己的** G 里
+ *   panic（defer 在它那儿，不在 close 的调用方）。
+ *
+ * 一次性「替它们写入零值」也能过简单用例，但那样 `recover()` 抓不到 ——
+ * panic 会发生在 close 的调用方栈上，语义就错了。 */
+void rt_close(Hchan *c) {
+    if (c == 0) {
+        rt_panic_close_nil();
+        return;
+    }
     if (c->closed != 0) {
-        if (es > 0) {
-            rt_memset(out, 0, es);
-        }
-        return 0;
+        rt_panic_close_closed();
+        return;
     }
-    /* ④ 阻塞 */
-    Sudog s;
-    s.g = g_cur;
-    s.elem = out;
-    s.next = 0;
-    s.prev = 0;
-    s.token = 0;
-    s.done = 0;
-    waitq_push(&c->recvq_head, &c->recvq_tail, &s);
-    g_cur->state = 2; /* blocked */
-    rt_schedule();
-    /* 醒来 = 对端已经把值写进 `out` 并唤醒我们（`rt_wake` 只在**完成之后**调）
-     * ⇒ 一定是「真的收到值」。 */
-    return 1;
+    c->closed = 1;
+    Sudog *s;
+    while ((s = waitq_pop(&c->recvq_head, &c->recvq_tail)) != 0) {
+        rt_wake_retry(s);
+    }
+    while ((s = waitq_pop(&c->sendq_head, &c->sendq_tail)) != 0) {
+        rt_wake_retry(s);
+    }
 }
 
 /* `rt_send` / `rt_recv` 的自测（Task 17；`go` 语句的下降还没接 isel）。
@@ -4356,4 +4455,3 @@ u64 rt_gc_alloc_bytes(void) { return gc_alloc_bytes; }
 u64 rt_gc_bad_sp(void) { return gc_bad_sp; }
 u64 rt_gc_bad_ptr(void) { return gc_bad_ptr; }
 u64 rt_gc_bad_desc(void) { return gc_bad_desc; }
-

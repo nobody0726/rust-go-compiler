@@ -419,12 +419,39 @@
 > `make(chan); _ = c` 换成 `close(c)`；`t_ssa_36` 从 `var d chan int = c`
 > 换成 `var n = len(c)`。
 
-### Task 19: `close` 与三条 panic
+### Task 19: `close` 与三条 panic —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `closed` 检查**排第一**（`C11` §3.2 的 ⚠️）；三条 panic 文本。
-- [ ] **Step 2**: `close` 唤醒 `recvq` **全部** + `sendq` **全部**。
-- [ ] **Step 3**: 判据 `t_chan_03_closed_排第一` + `t_chan_04_close_后排空`。
-- [ ] **Step 4: Commit** `feat(rt): close 与三条 panic（Task 19）`
+> **读数**：`t_chan_05`（`close` 后 `len`/`cap` 不变、先排空 buf 再零值，含
+> **L1 差分**）/ `t_chan_06`（三条 panic 文本**逐字节**）/ `t_chan_07`（阻塞中
+> 的发送方被 `close` 唤醒后在**自己的 G** 里 panic）。
+>
+> **`rt_send` / `rt_recv` 改成循环**（不是「一次尝试」）：阻塞醒来有两种原因 ——
+> ① 对端真的完成了传输（`s.done == 1`）⇒ 直接返回；② 被 `close` 唤醒
+> （`s.done == 0`）⇒ **重走一遍**，让 `closed` 检查/零值路径在本 G 里生效。
+>
+> ⚠️ **两个实测 bug**（都由 `t_chan_07` 抓到）：
+> 1. **`rt_wake` 无条件置 `done = 1`** ⇒ `close` 唤醒的发送方以为自己发成功了
+>    ⇒ `c <- v` 在已关闭的通道上**静默成功**。拆成 `rt_wake_done`（传输完成）
+>    与 `rt_wake_retry`（`close` 唤醒，不动 `done`）。
+> 2. **G 内未 `recover` 的 panic 被吞掉** ⇒ 子 G 照常 `rt_goexit`，主 G 还在等
+>    它的 `done` ⇒ 报 `all goroutines are asleep - deadlock!`，与**真死锁**
+>    无法区分。新增 `rt_gorets`：trampoline 收尾先查 `rt_panicking()`，
+>    非 0 就 `rt_print_panic()` + `rt_exit(2)`（`T-EXIT-03` 的雏形）。
+>
+> ⚠️ **`panic_set` 的文本不带 `panic: ` 前缀** —— `rt_print_panic` 自己写那
+> 7 个字节。带上会输出 `panic: panic: close of closed channel`（实测踩过）。
+>
+> ⚠️ **`M-M11-08` 第一版跑绿了**：`t_chan_07` 的 fixture 里子 G 还没被调度过
+> 就 `close` 了，`sendq` 是空的 —— 变异「不唤醒 sendq」自然无影响。加
+> `ready <- 1` 会合握手让子 G **先阻塞**（M:1 不抢占保证它会一路跑到 `c <- 1`）。
+> **「变异绿」的第三种成因：夹具没走到被变异的那条路径。**
+>
+> 顺带 `len(c)` / `cap(c)` 也做了（`Hchan` 的 `+0` / `+8`，nil 通道走 `cbz` 兜 0）。
+
+- [x] **Step 1**: `closed` 检查**排第一**（`C11` §3.2 的 ⚠️）；三条 panic 文本。
+- [x] **Step 2**: `close` 唤醒 `recvq` **全部** + `sendq` **全部**。
+- [x] **Step 3**: 判据 `t_chan_03_closed_排第一` + `t_chan_04_close_后排空`。
+- [x] **Step 4: Commit** `feat(rt): close 与三条 panic（Task 19）`
 
 ### Task 20: `len` / `cap` / nil 通道
 

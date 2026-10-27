@@ -191,10 +191,27 @@ $PROBE_RS "M-M11-04 检查条件写反" "crates/rgoc-arm64/src/isel.rs" \
 # ⚠️ 变异写成「条件收窄」而不是「整块搬走」：`qcount == dataqsiz` 让**未满的
 # 有缓冲通道**跳过 closed 检查 —— 语义上等价于「检查挪到 buf 满之后」，
 # 但只改一行，锚点不会因为缩进变化而失配。
+#
+# ⚠️ 锚点**必须带上下两行**：`rt_send` 改成循环后它的缩进是 8 格，而
+# `rt_close` 里也有一模一样的 4 格 `if (c->closed != 0) {` —— 只写那一行会
+# 误伤 `rt_close`（变异「关闭不查重复」而不是「发送不查关闭」）。
 $PROBE "M-M11-07 send 的 closed 检查挪后" "$RT" \
-  '    if (c->closed != 0) {' \
-  '    if (c->closed != 0 && c->qcount == c->dataqsiz) {' \
-  -p rgoc-driver --test go_chan t_chan_02
+  '        if (c->closed != 0) {
+            rt_panic_send_closed();' \
+  '        if (c->closed != 0 && c->qcount == c->dataqsiz) {
+            rt_panic_send_closed();' \
+  -p rgoc-driver --test go_chan t_chan_06
+
+# ── M-M11-08：`close` 只唤醒 `recvq` 不唤醒 `sendq` ────────────────────
+# 挂在 `sendq` 上的 G 永远醒不过来 ⇒ 死锁（或者主 G 返回后悄悄丢掉它）。
+# `t_chan_06` 的 ① 不覆盖这条（它是「已关闭后再发」而不是「阻塞中被关闭」），
+# 所以这里打 `t_chan_07`（阻塞的发送方被 close 唤醒后 panic）。
+$PROBE "M-M11-08 close 不唤醒 sendq" "$RT" \
+  '    while ((s = waitq_pop(&c->sendq_head, &c->sendq_tail)) != 0) {
+        rt_wake_retry(s);
+    }' \
+  '    /* 变异 M-M11-08：不唤醒 sendq */' \
+  -p rgoc-driver --test go_chan t_chan_07
 
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"

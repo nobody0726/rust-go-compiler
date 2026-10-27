@@ -2896,6 +2896,18 @@ fn builtin(
             }
             Ok(())
         }
+        // `close(c)`（M11b/Task 19）：`rt_close` 自己处理三个 panic
+        // （`close of nil` / `close of closed`），所以这里要查状态。
+        BuiltinKind::Close => {
+            let Some(a) = args.first() else {
+                return Ok(());
+            };
+            let sa = cx.slot(*a);
+            ld_x(asm, "x0", sa.off);
+            asm.ins("bl rt_close");
+            check_panic(cx, asm);
+            Ok(())
+        }
         // `len` / `cap`：字符串读第二个字；数组是**常量**（长度在类型里）。
         // `copy`/`delete`/`clear`/`close`/`recover` 在 M6 的拒绝面里，走不到这里。
         BuiltinKind::Len | BuiltinKind::Cap => {
@@ -2917,6 +2929,22 @@ fn builtin(
                 let off = if b == BuiltinKind::Cap { 16 } else { 8 };
                 ld_x(asm, "x10", sa.off + off);
                 st_x(asm, "x10", sd.off);
+            } else if chan_elem(cx.tt, t).is_some() {
+                // `len(c)` = `Hchan.qcount`（+0）、`cap(c)` = `Hchan.dataqsiz`（+8）。
+                // nil 通道两者都是 0（Go 规范）—— `cbz` 分支兜住，否则会读
+                // 地址 0。
+                let (sa, sd) = (cx.slot(*a), cx.slot(*d));
+                ld_x(asm, "x10", sa.off);
+                let done = format!(".Lchan_lc{}", asm.fresh_label());
+                let zero = format!(".Lchan_lc_zero{}", asm.fresh_label());
+                asm.ins(&format!("cbz x10, {zero}"));
+                let off = if b == BuiltinKind::Cap { 8 } else { 0 };
+                asm.ins(&format!("ldr x11, [x10, #{off}]"));
+                asm.ins(&format!("b {done}"));
+                asm.label(&zero);
+                asm.ins("mov x11, xzr");
+                asm.label(&done);
+                st_x(asm, "x11", sd.off);
             } else if map_kv(cx.tt, t).is_some() {
                 // `len(m)`：`MapObj.count` 在 +0（M9/Task 19）。`cap` 对 map 不可见，
                 // 检查器已经拒了 `cap(m)`，走不到那一支。

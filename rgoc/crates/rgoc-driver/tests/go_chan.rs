@@ -123,3 +123,167 @@ fn t_chan_04_comma_ok() {
     );
     assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
 }
+
+/// `T-CHAN-05`：**`close` 之后「先排空 buf，再拿零值」**（`C11` §3.2 的 close 那行）。
+///
+/// # 为什么这条要一次查五件事
+///
+/// `close` 的语义是「不再有新值，但**已有的值还能读**」。所以 `close` 之后：
+/// * `len(c)` 仍是缓冲里剩下的个数（**不是** 0）；
+/// * `cap(c)` 不变；
+/// * 前两次 `<-c` 拿到 `1 true` / `2 true`（真值 + ok）；
+/// * 第三次拿到 `0 false`（零值 + ok 为假）。
+///
+/// 少查任何一条都会漏掉一整类错：只查「零值」的话，把 buf 直接丢弃也能过。
+const CLOSE_DRAIN: &str = r#"
+package main
+
+func main() {
+	c := make(chan int, 2)
+	c <- 1
+	c <- 2
+	close(c)
+	println(len(c), cap(c))
+	for i := 0; i < 3; i++ {
+		v, ok := <-c
+		println(v, ok)
+	}
+}
+"#;
+
+#[test]
+fn t_chan_05_close_后先排空再零值() {
+    let t = go_probe::probe("chan05", CLOSE_DRAIN, &[("RGOC_GC", "0")]).expect("应能编译并跑起来");
+    t.assert_l1("chan05");
+    assert_eq!(
+        t.native.stdout, "2 2\n1 true\n2 true\n0 false\n",
+        "`close` 后必须先排空 buf 再拿零值：实际 {:?}",
+        t.native.stdout
+    );
+    assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
+}
+
+/// `T-CHAN-06`：**三条 chan panic 的文本逐字节**（`C11` §5）。
+///
+/// # 为什么文本要逐字节
+///
+/// `C9` §4.5 冻结了 panic 的输出形状：`panic: <文本>\n` 进 stderr、退出 2。
+/// 三条 chan panic 的 `<文本>` 分别是 `send on closed channel` /
+/// `close of closed channel` / `close of nil channel`。
+///
+/// ⚠️ 实现里**不能**把 `panic: ` 写进文本 —— `rt_print_panic` 自己加那 7 个
+/// 字节。带上就会输出 `panic: panic: close of closed channel`（实测踩过）。
+///
+/// 这条用 `assert_eq!` 整串比而不是 `contains`：多一个前缀、少一个换行都要红。
+#[test]
+fn t_chan_06_三条_panic_文本() {
+    // ① 往已关闭的通道发送（缓冲未满 —— 检查必须排第一）
+    let send_closed = r#"
+package main
+
+func main() {
+	c := make(chan int, 2)
+	close(c)
+	c <- 1
+}
+"#;
+    // ② 重复关闭
+    let close_closed = r#"
+package main
+
+func main() {
+	c := make(chan int)
+	close(c)
+	close(c)
+}
+"#;
+    // ③ 关闭 nil 通道
+    let close_nil = r#"
+package main
+
+func main() {
+	var c chan int
+	close(c)
+}
+"#;
+    for (name, src, want) in [
+        ("chan06a", send_closed, "panic: send on closed channel\n"),
+        ("chan06b", close_closed, "panic: close of closed channel\n"),
+        ("chan06c", close_nil, "panic: close of nil channel\n"),
+    ] {
+        let out = support::native_harness::build_and_run_env(name, src, &[])
+            .unwrap_or_else(|e| panic!("`{name}` 应能编译并跑起来：\n{e}"));
+        assert_eq!(out.exit, 2, "`{name}` 的 panic 应退出 2：{:?}", out.stderr);
+        assert_eq!(
+            out.stderr, want,
+            "`{name}` 的 panic 文本必须逐字节相同（`C11` §5）：实际 {:?}",
+            out.stderr
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "`{name}` panic 前不该有输出：{:?}",
+            out.stdout
+        );
+    }
+}
+
+/// `T-CHAN-07`：**阻塞中的发送方被 `close` 唤醒 ⇒ 在它自己的 G 里 panic**。
+///
+/// # 为什么这条与 `T-CHAN-06` 的 ① 不同
+///
+/// ① 是「已经关闭，然后再发」—— `rt_send` 的 `closed` 检查直接命中。
+/// 这条是「**先阻塞**，再被 `close` 唤醒」—— 走的是「醒来发现 `done == 0` ⇒
+/// 循环回去重试 ⇒ 这次才看到 `closed`」那条路。
+///
+/// 两条路都必要：只测 ① 的话，`rt_send` 的阻塞分支写成「醒来就当成发成功了」
+/// 也照样绿（变异 `M-M11-08` 把 `close` 的 `sendq` 唤醒删掉，症状就是这条挂死）。
+///
+/// # 为什么需要 `ready` 这个会合握手
+///
+/// ⚠️ **第一版没有它，变异 `M-M11-08` 跑绿了**：子 G 还没被调度过就
+/// `close(c)` 了，`sendq` 是**空的** —— 于是 `close` 唤不唤醒 `sendq`
+/// 根本不影响结果，子 G 后面自己撞上 `closed` 检查。
+///
+/// `ready <- 1` 保证子 G 真的走到了 `c <- 1` 并**阻塞**：
+/// M:1 不抢占 ⇒ 子 G 发完 `ready` 会继续往下跑（主 G 只是被**入队**，
+/// 还没被切换过去），直到 `c <- 1` 阻塞才让出。主 G 这时才 `close`，
+/// `sendq` 里躺着那个子 G。
+const SEND_BLOCKED_CLOSED: &str = r#"
+package main
+
+func main() {
+	c := make(chan int)
+	ready := make(chan int)
+	done := make(chan int)
+	go func() {
+		ready <- 1
+		c <- 1
+		println("BAD")
+		done <- 1
+	}()
+	<-ready
+	close(c)
+	<-done
+}
+"#;
+
+#[test]
+fn t_chan_07_阻塞发送被_close_唤醒后_panic() {
+    let out = support::native_harness::build_and_run_env("chan07", SEND_BLOCKED_CLOSED, &[])
+        .expect("应能编译并跑起来");
+    assert_eq!(
+        out.exit, 2,
+        "阻塞中的发送方被 close 唤醒后必须 panic（退出 2）：实际 exit={} stderr={:?}",
+        out.exit, out.stderr
+    );
+    assert!(
+        out.stderr.contains("panic: send on closed channel"),
+        "panic 文本不对：{:?}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "panic 前不该有输出（`done <- 1` 不该跑到）：{:?}",
+        out.stdout
+    );
+}

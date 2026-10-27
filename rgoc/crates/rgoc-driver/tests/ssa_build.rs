@@ -2412,12 +2412,16 @@ fn t_ssa_36_初始化式里的不支持面要带码拒绝() {
         "init-chan",
         // `main` **不碰** chan：这样唯一该被拒的就是初始化式。
         //
-        // ⚠️ **这个 fixture 已经换过两次**（`make(chan)` 的支持面在推进）：
+        // ⚠️ **这个 fixture 已经换过三次**（chan 的支持面在推进）：
         // ① `var c = make(chan int)` —— M11b/Task 16 放行；
-        // ② `var d chan int = c` —— M11b/Task 19 放行（chan 值就是普通指针）。
-        // 现在用 `len(c)`：它要读 `Hchan` 的 `qcount`，isel 的 `builtin` 不认
-        // chan ⇒ 仍拒（Task 20 会支持它，那时这条还要再换一次）。
-        "package main\n\nvar c = make(chan int)\n\nvar n = len(c)\n\nfunc main() {\n\tprintln(1)\n}\n",
+        // ② `var d chan int = c` —— Task 19 放行（chan 值就是普通指针）；
+        // ③ `var n = len(c)` —— Task 19 放行（读 `Hchan.qcount`）。
+        // 现在用 `new(chan int)`：`new` 的元素类型是 chan ⇒ 仍走 `face_kind`
+        // 的拒绝（`*chan int` 的 desc 还没有，M11c 再说）。
+        //
+        // **规律**：这条判据要的是「初始化式里的拒绝带码」，具体是哪一条
+        // 无所谓 —— 所以每放开一格就换一个仍然被拒的形态。
+        "package main\n\nvar p = new(chan int)\n\nfunc main() {\n\tprintln(1)\n}\n",
     );
     let out = build(&program, &mut tt);
     assert_eq!(out.rejected.len(), 1, "一条拒绝：{:?}", out.rejected);

@@ -648,23 +648,17 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
             MakeKind::Map | MakeKind::Slice => args.iter().find_map(|a| unsup_expr(tt, a)),
         },
         ExprKind::New(t) => face_kind(tt, *t).map(|code| (code, "`new` 的元素类型".to_string())),
-        ExprKind::Builtin { kind, args, .. } => match kind {
-            // `recover()` 走 `rt_recover`（M9/Phase 5）
-            BuiltinKind::Close => Some((SsaCode::Chan, "close（chan 操作）".to_string())),
-            // `len(c)` / `cap(c)`：要读 `Hchan` 的 `qcount` / `dataqsiz`，
-            // 而 isel 的 `builtin` 只认 string/slice/array/map ⇒ 不拦就会生成
-            // 一段「把 chan 指针当 slice 头读」的代码（不崩，但读的是垃圾）。
-            //
-            // ⚠️ 它们是**可支持**的（`ldr` 两个偏移而已），只是还没做 ——
-            // 归 Task 20（与 `close` 一起）。用同一个 `SsaCode::Chan`，
-            // 因为对用户来说都是「chan 操作还没到」。
-            BuiltinKind::Len | BuiltinKind::Cap
-                if args.first().is_some_and(|a| face_kind(tt, a.typ).is_some()) =>
-            {
-                Some((SsaCode::Chan, "len/cap 作用在 chan 上".to_string()))
-            }
-            _ => args.iter().find_map(|a| unsup_expr(tt, a)),
-        },
+        // 内建调用（M11b/Task 19 起**没有**任何一条内建在 SSA 面被拒了）：
+        // `close(c)` 走 `rt_close`、`len(c)`/`cap(c)` 读 `Hchan` 的字段
+        // （`+0` qcount / `+8` dataqsiz）、`recover()` 走 `rt_recover`。
+        //
+        // 只扫实参 —— 里面可能有别的拒绝面。
+        //
+        // ⚠️ 这里原来是 `match kind { Close => 拒, _ => 扫实参 }`。最后一条
+        // 拒绝撤掉后 clippy 报「match 可以换成它自己的 body」—— 换掉是对的：
+        // 以后再加「内建级别的拒绝」时重新引入 `match` 即可，而现在留一个
+        // 单臂 match 只会让下一个人以为「这里还有别的分支」。
+        ExprKind::Builtin { args, .. } => args.iter().find_map(|a| unsup_expr(tt, a)),
     }
 }
 

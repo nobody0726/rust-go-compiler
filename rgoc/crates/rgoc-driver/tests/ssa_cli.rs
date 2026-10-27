@@ -195,11 +195,11 @@ fn t_ssa_39_via_ssa_的拒绝面退出码是_1() {
     // M9/Phase 2 把 fixture 从 map 换成 chan（map 已实现）：判据的形状没变，
     // 仍然是「静态拒绝 ⇒ 1、stdout 空、stderr 带稳定码」。
     //
-    // ⚠️ M11b/Task 16/19 之后 `make(chan)` 与 chan 值的读写都能编译了 ⇒
-    // 换成 `close(c)`（仍被拒，Task 20 才做）。
+    // ⚠️ M11b/Task 16/19 之后 `make(chan)` / chan 值读写 / `close` / `len` 都能
+    // 编译了 ⇒ 换成 `select`（Task 22 才做）。
     let o = run_via(
         "via-reject",
-        "package main\n\nfunc main() {\n\tc := make(chan int)\n\tclose(c)\n}\n",
+        "package main\n\nfunc main() {\n\tc := make(chan int)\n\tselect {\n\tcase <-c:\n\t}\n}\n",
         Via::Ssa,
     );
     assert_eq!(o.exit, 1, "拒绝 ⇒ 退出码 1：{:?}", o.stderr);
