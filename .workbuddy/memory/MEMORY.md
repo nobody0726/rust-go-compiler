@@ -20,17 +20,37 @@
   长跑 100 MB ⇒ `live=1040B` / `heap=17MB` / `chunks=1` / `rss=2772KB`。
   账在 `docs/milestones/M10-manifest.json`（`manifest_m10.rs` 对账，含
   「长跑读数必须能复现」），复盘在 `M10-report.md`
-- **M11（native 并发）已开工**：三件套定稿（`M11-design.md` 535+ 行 /
-  `M11-tests.md` / `M11-plan.md` Task 0–46，四个 Phase）；三件事已拍板
-  （栈 64 KiB 但**溢出深度实测钉住** `T-STK-06` / a-b 阶段接受 `mode=off` /
-  `C11` §7 措辞改）。**Task 0（`G-M10-06`）已完成**，下一步 = Phase 0（Task 1–7）。
-  M11 只做 a/b/c；d（定时器）/e（多线程）/f（并发 GC）明确不做。
-  ⚠️ M11 范围外的**不要顺手做**：`U-M11-01..08` 八条白名单。
+- **M11（native 并发）已收口**（2026-10-27，只做 a/b/c）：七条门禁 `GO-1..GO-7` 全绿。
+  读数 **242 suite / 2278 passed / 0 failed / 2 ignored**；69 单个语料三态各 69/0/0；
+  7 个并发语料三态各 7/0/0（`M'` 12/12）；三层差分 7/7；变异 **16/16 全红**；
+  **溢出深度实测 N=452**（64 KiB 栈）。账在 `M11-manifest.json`（`manifest_m11.rs`
+  对账 + 三态复现），复盘在 `M11-report.md`。M11d/e/f 明确不做。
+  ⚠️ 白名单 **10 条**（计划 8 条 + 实测窄化 `U-M11-09` select 的 comma-ok /
+  `U-M11-10` go 的聚合浮点实参）—— 范围外**不要顺手做**。
 - M9 终态：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（拒绝面为空）
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
+## M11 硬约束（改并发/切换前必读）
+- **`g_frames` 是「**当前 G** 的链头」**，不是全局唯一链：`rt_schedule` 两条赋值
+  （`prev->frames = g_frames` / `g_frames = next->frames`）。序言/尾声**不改**
+  ⇒ M10 的 14 条栈根判据原样有效
+- ⚠️ **扫根要遍历所有 gdesc（三种状态都扫）**，不只当前 G：挂起 G 的栈上有活值。
+  另外 `go` 的**实参区**在新 G 栈顶、**不在帧记录里** ⇒ 自成一类根
+  （`gdesc.argbytes` + 按字保守标 + trampoline 读完就清零）。漏它 = 闭包块被收
+  ⇒ trampoline 调 `[fv+8]` 撞 **nil 检查 panic**（不是「读到垃圾」！）
+- ⚠️ **`gc_pause != 0` 时自动触发与 stress 钩子都跳过**：只在 pause 里分配的程序
+  （纯 select 循环）**一次 GC 都不跑** ⇒ 判据会恒真（`live=0` 永远 ≤ 阈值）
+- ⚠️ **序言栈检查要在界内报错**：`stack_lo` 之下留一页（`G_STACK_SLACK`）+ 冷路径
+  `mov sp, x9`。否则 panic 路径自己的栈帧落在映射外 ⇒ **SIGSEGV 而不是退出 2**
+  （`main` 没事只因为它的 `stack_lo` 比真栈底高 4 MiB）
+- ⚠️ **不能在自己栈上 `munmap` 自己**：退出的 G 进僵尸**链表**，由下一个调
+  `rt_schedule` 的 G 收尸；`gdesc` 槽回 `g_free` 并整体清零（`frames`/`wait` 是悬空指针）
+- `Hchan` 是 `K_OBJECT`（`chan_desc`：字 2 = buf、字 7..10 = recvq/sendq）；
+  `WaitSet` 是 `K_RAW` ⇒ 里面的 `Hchan*` 要在 `mark_all_g_stacks` 里逐个标
+- **`mark_frames(head)` 收参数**（每个 G 一条链）；只扫 `g_frames` 就是变异 `M-M11-13`
+
 ## M10 硬约束（改 GC 前必读）
-- **`C12` §4 是地基**：八类根 / 帧记录 `{prev, fi, sp_idx}` 三个字 / 位序
+- **`C12` §4 是地基**：十类根（M11c 增第 9「其它 G 的栈」/第 10「go 实参区」）/ 帧记录 `{prev, fi, sp_idx}` 三个字 / 位序
   `bit i ↔ fp - frame_size + 8i` / `sp_off` 是**字下标**不是位偏移
 - ⚠️ **`is_safepoint` 是穷尽匹配**（不留 `_ => false`）：新增 `Instr` 变体会
   编译失败 —— 那是故意的。漏一条 = 那个分配点没有位点 = 扫到错的字。

@@ -900,12 +900,24 @@
 - [x] **Step 2**: 三处文档回写。
 - [x] **Step 3: Commit** `docs(m11): GAP-01 与文档回写（Task 45）`
 
-### Task 46: 收尾
+### Task 46: 收尾 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 台账收口（`.superpowers/sdd/M11-plan/progress.md`）；
-  项目记忆 `MEMORY.md` 更新（M11 的硬事实：切换保存区 160 B / `mode` 翻转 /
-  `g_frames` 跟 G 走 / **Task 0 查出的位图机制一句话** / 实测栈溢出深度 N）。
-- [ ] **Step 2: Commit + push** `chore(m11): 收尾（Task 46）`
+> **读数**：
+> * **台账**：M11 没有另开 `.superpowers/sdd/M11-plan/progress.md` —— 本文件
+>   （`M11-plan.md`）**就是**逐 Task 的台账，每个 Task 下面那段「> 读数」是
+>   边做边写的，不是事后补的。
+> * **项目记忆** `.workbuddy/memory/MEMORY.md`：新增「M11 硬约束」一节
+>   （`g_frames` 跟 G 走 / 扫所有 gdesc + 实参区自成一类根 / `gc_pause` 期间
+>   **连 stress 钩子都跳过** / 溢出要在界内报错 / 不能在自己栈上 munmap）；
+>   `C12` §4 的描述从「八类根」改「十类根」；白名单从 8 条改 10 条。
+> * **当日日志** `.workbuddy/memory/2026-10-27.md`：追加 M11c + Phase 4 的
+>   四个真 bug、两次「判据没牙」、交付物清单。
+>
+> ⚠️ 记忆里**不写**「溢出深度 452」这种具体数字以外的过程细节 —— 数字会变，
+> 机制不会；数字留在 `M11-manifest.json`（由 `manifest_m11.rs` 对账）。
+
+- [x] **Step 1**: 台账 + 项目记忆 + 当日日志。
+- [x] **Step 2: Commit + push** `chore(m11): 收尾（Task 46）`
 
 ---
 
