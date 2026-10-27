@@ -20,8 +20,12 @@
   长跑 100 MB ⇒ `live=1040B` / `heap=17MB` / `chunks=1` / `rss=2772KB`。
   账在 `docs/milestones/M10-manifest.json`（`manifest_m10.rs` 对账，含
   「长跑读数必须能复现」），复盘在 `M10-report.md`
-- 下一步 = **M11**（native 并发：goroutine / 栈 / 调度 / select / 定时器）。
-  ⚠️ 进 M11 前必须查清 `G-M10-06`（live-in 位图为什么会让四个语料坏掉）
+- **M11（native 并发）已开工**：三件套定稿（`M11-design.md` 535+ 行 /
+  `M11-tests.md` / `M11-plan.md` Task 0–46，四个 Phase）；三件事已拍板
+  （栈 64 KiB 但**溢出深度实测钉住** `T-STK-06` / a-b 阶段接受 `mode=off` /
+  `C11` §7 措辞改）。**Task 0（`G-M10-06`）已完成**，下一步 = Phase 0（Task 1–7）。
+  M11 只做 a/b/c；d（定时器）/e（多线程）/f（并发 GC）明确不做。
+  ⚠️ M11 范围外的**不要顺手做**：`U-M11-01..08` 八条白名单。
 - M9 终态：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（拒绝面为空）
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
 
@@ -37,8 +41,16 @@
 - ⚠️ **`gc_alloc` 在 stress 下分配前跑 GC** ⇒「已分配但还没发布」的块看不见。
   两条出路：`gc_pin`（中间还要再分配一次，如 `map_new`）/
   `gc_pause`（一次分配 + 立即发布，如 `rt_alloc_escaped`）
-- ⚠️ **位图是 live-out 的保守超集，不是精确 live-in**（`R-10-21`）：真 live-in
-  会让 `defernil`/`print`/`nilptr2`/`method5` 全坏，机制待查（`G-M10-06`）。
+- ⚠️ **位图是 live-out 的保守超集，不是精确 live-in**（`R-10-21`）：这是**策略
+  选择**（多标=泄漏一轮 / 漏标=活对象被回收，代价不对等），不是「live-in 不可行」。
+  原先「真 live-in 会让四个语料全坏」的根因已查清 = `rt_defer_push` 的缺口，见下。
+- ⚠️ **`rt_defer_push` 的分配必须 `gc_pause`**（`R-10-24`，`C12` §6.1）：
+  `rt_arena_alloc` 走 `gc_alloc`，stress 钩子在**分配之前**跑 GC，而此刻新
+  `DeferRec` 还没挂 `g_defer_top`、`Defer` 又不是 safepoint（`sp_idx` 停在
+  `MakeClosure` 位点）⇒ 闭包块的唯一根是那张位图。守卫 `t_gc_12` 断言顺序
+  `gc_pause++` < 分配 < `g_defer_top = r;` < `gc_pause--`（只查「出现」不够）。
+  踩过：去掉它 + 真 live-in ⇒ 闭包被回收 ⇒ 地址被下一个闭包复用 ⇒
+  `rt_deferrun` 调到别人的闭包 ⇒ panic 且 `recover()` 救不回来。
   代价是「扫到已死指针」是常态 ⇒ `bad_ptr` 只计真错
 - ⚠️ **`bad_ptr` 的口径**：只计「解析不到块首」与「块头非法」。别把
   「指向已回收的块」加回去 —— 那会让探针恒非 0、然后没人看
