@@ -306,11 +306,34 @@
 - [x] **Step 3**: `t_go_05_确定性`（5 个 G 的 fixture 跑两次逐字节相同）。
 - [x] **Step 4: Commit** `test(m11): 调度三规则的另外三条（Task 14）`
 
-### Task 15: Phase 1 收口
+### Task 15: Phase 1 收口 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `GO-1` 五条全绿；`GO-2` 五条全绿；69 个语料零回归；
+> **`GO-1`（栈与切换）全绿**：`t_stk_01`（18 个 callee-saved 切一圈不变）/
+> `t_stk_03`（溢出 rc=2 + 真实字节数）/ `t_stk_04`（序言成对检查）/
+> `t_stk_05`（`nilptr2` 不误报）。
+>
+> **`GO-2`（调度三规则）**：`t_go_01`（调度骨架 FIFO）/ `t_go_02`（`rt_go`
+> 启动）/ `t_go_04`（M:1）/ `t_go_05`（确定性）全绿。`T-GO-02`（不抢占）推到
+> M11b —— M11a 没有 channel，`main` 无法等 G 跑起来。
+>
+> **变异**：`M-M11-01..04` **4/4 红**（`--strict`），`M-M11-07` PENDING（M11b）。
+> ⚠️ 两条锚点一开始都错了：`M-M11-01` 是 Phase 0 凭设计文档写的
+> （`stp d8, d9` 单空格，实现是双空格）⇒ MISS；`M-M11-02` 只改 `sub sp`
+> 不改 `add sp` ⇒ **跑绿了**（栈余量吸收了 16 字节）。改成 `add sp` 少 16
+> 才红。**「变异绿」要先分辨是判据没牙还是变异不够狠。**
+>
+> **读数**：69 语料三态各 69/0/0；chan 装置 `ok=0 skip=7 bad=0 / 7` +
+> `M' 12/12`；fmt/check/clippy/test 全绿（**2247 passed**）。
+>
+> **已知缺口（进 `M11-report.md`）**：
+> ① `rt_go` 存在新栈上的闭包指针**没有根**（`g_cur->sp` 不在 `g_frames` 链上）
+> —— M11a 靠 `mode=off` 兜着，M11c 补；
+> ② `go` 只支持 `CalleeRef::Func` + ≤8 个非浮点实参（`CG-UNSUPPORTED-GO-ARGS`）；
+> ③ `T-GO-02`（不抢占）与 `T-GO-03`（真 Go 源码的 FIFO）在 M11b。
+
+- [x] **Step 1**: `GO-1` 五条全绿；`GO-2` 五条全绿；69 个语料零回归；
   变异 `M-M11-01..04` 全红。
-- [ ] **Step 2: Commit** `chore(m11): Phase 1 收口（M11a）`
+- [x] **Step 2: Commit** `chore(m11): Phase 1 收口（M11a）`
 
 ---
 

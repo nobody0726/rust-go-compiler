@@ -139,9 +139,13 @@ probe_rs() {
 
 if [ "$STRICT" -eq 1 ]; then
   PROBE=probe
-  MODE="strict（锚点缺失算 MISS）"
+  PROBE_RS=probe_rs
+  PROBE_P=probe_pending   # 还没实现的（M11b 的 hchan）仍走 pending
+  MODE="strict（锚点缺失算 MISS；M11b 的两条除外）"
 else
   PROBE=probe_pending
+  PROBE_RS=probe_pending
+  PROBE_P=probe_pending
   MODE="phase0（锚点缺失算 PENDING）"
 fi
 
@@ -149,14 +153,42 @@ fi
 # 浮点寄存器不保存 ⇒ 跨切换的浮点值串味。`T-STK-01` 用**可区分值**填满
 # `x19..x28` 与 `d8..d15`（0/1 看不出「没保存」和「保存对了」的区别）。
 $PROBE "M-M11-01 rt_switch 不存 d8..d15" "$RT" \
-  '    stp d8, d9, [sp, #96]' \
-  '    /* 变异：不保存 d8/d9 */' \
+  'stp  d8,  d9,  [sp, #96]' \
+  '/* 变异 M-M11-01：不保存 d8/d9 */' \
+  -p rgoc-driver --test go_stack t_stk_01
+
+# ── M-M11-02：恢复时 `add sp` 少 16（漏一对）──────────────────────────
+# ⚠️ 第一次写的是「只改 `sub sp, #160` → `#144`」，**跑绿了** —— 因为栈上
+# 有余量，保存区短 16 字节没造成可观测的影响（`stp d14,d15,[sp,#144]` 写到
+# 了 `sub` 范围之外，但那是调用方的栈，还没被用到）。
+# 改成 `add sp, sp, #160` → `#144`：恢复后 sp 少 16 ⇒ 每个调用返回都错位 ⇒ 必崩。
+$PROBE "M-M11-02 恢复时 add sp 少 16" "$RT" \
+  'add  sp, sp, #160' \
+  'add  sp, sp, #144' \
+  -p rgoc-driver --test go_stack t_stk_01
+
+# ── M-M11-03：序言不发栈检查 ──────────────────────────────────────────
+# 删掉 `cmp sp, x9` ⇒ `t_stk_04` 数不到检查（`cmps == 0`）。
+# 这条改的是 **Rust 源码** ⇒ 必须 `cargo clean -p`（绑定挂载 mtime 只到整秒）。
+$PROBE_RS "M-M11-03 序言不发栈检查" "crates/rgoc-arm64/src/isel.rs" \
+  '        asm.ins("cmp sp, x9");' \
+  '        // 变异：不发栈检查' \
+  rgoc-arm64 \
+  -p rgoc-driver --test go_stack t_stk_04
+
+# ── M-M11-04：检查条件写反（`b.hs` → `b.lo`）──────────────────────────
+# 正常程序（`sp >= stack_lo`）会**误报溢出** ⇒ `t_stk_01` 直接 rc=2。
+# 等价于「检查写错」—— 比「对 off_stack 也发」更容易做，且抓的是同一类错。
+$PROBE_RS "M-M11-04 检查条件写反" "crates/rgoc-arm64/src/isel.rs" \
+  '        asm.ins(&format!("b.hs .Lso_{}", cx.fi_index));' \
+  '        asm.ins(&format!("b.lo .Lso_{}", cx.fi_index));' \
+  rgoc-arm64 \
   -p rgoc-driver --test go_stack t_stk_01
 
 # ── M-M11-07：`send` 的 `closed` 检查挪到「buf 未满」之后 ──────────────
 # `C11` §3.2 的 ⚠️：`closed` 检查必须**排第一**。挪到后面 ⇒ 往已关闭的有缓冲
 # 通道发送会**静默塞进缓冲**，而不是 `panic: send on closed channel`。
-$PROBE "M-M11-07 send 的 closed 检查挪后" "$RT" \
+$PROBE_P "M-M11-07 send 的 closed 检查挪后" "$RT" \
   '    if (c->closed != 0) {
         rt_panic_send_closed();
     }' \
