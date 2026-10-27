@@ -461,7 +461,9 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         Stmt::Send { chan, value } => unsup_expr(tt, chan).or_else(|| unsup_expr(tt, value)),
         Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
         Stmt::Range { x, body, kind, .. } => match kind {
-            RangeKind::Chan => Some((SsaCode::Chan, "range over chan".to_string())),
+            // `range c`（M11b/Task 20）：**放行** —— 下降成
+            // `for { v, ok := <-c; if !ok { break }; body }`。
+            RangeKind::Chan => unsup_expr(tt, x).or_else(|| unsup_block(tt, body)),
             // range over map 支持了（`rt_map_iter` 的一步一个下标）。
             RangeKind::Map => unsup_expr(tt, x).or_else(|| unsup_block(tt, body)),
             RangeKind::Str => Some((
@@ -5015,6 +5017,170 @@ impl Fb<'_> {
         self.mem = es.1;
     }
 
+    /// `for v := range c`（M11b/Task 20）。
+    ///
+    /// 语义就是 `for { v, ok := <-c; if !ok { break }; body }`。
+    ///
+    /// # 为什么 `v` / `ok` 是 **header 的局部值**而不是槽
+    ///
+    /// `fresh_slot` 会把槽标成 `promoted`，于是回边要把它当 header 的
+    /// **参数**传（phi）—— 那就得进 `layout.slots`，而 preheader 那条边还
+    /// 拿不出值（`base.0` 里没有），`args_for` 会缺参数、`V1` 拒。
+    ///
+    /// 放在 header 里当局部值就绕开了：body 的**唯一前驱**是 header，
+    /// 所以 `v_tmp` 支配 body，不需要任何 phi。
+    ///
+    /// # `for i := range c` 的 `i` 在 **`key`** 位置
+    ///
+    /// 语法上单变量是 `KeyValueExpr` 的 key，而**语义上**它拿的是收到的值
+    /// （Go 规范：`range c` 只有一个变量，就是值）。所以 `target = value.or(key)`。
+    ///
+    /// ⚠️ 只写 `value` 的后果（实测）：`Filter` 里 `for i := range in` 的 `i`
+    /// 从来没被写过 ⇒ 体里读它时 `s3 既不提升也没有根` panic。
+    fn stmt_range_chan(
+        &mut self,
+        key: Option<&Place>,
+        value: Option<&Place>,
+        x: &Expr,
+        body: &HirBlock,
+        label: Option<&str>,
+    ) {
+        // ⚠️ **`for i := range c` 的 `i` 落在 `key` 位置**（语法上它是
+        // `KeyValueExpr` 的 key）。语义上它拿的是**收到的值**（Go 规范：
+        // `range c` 只有一个变量，就是值）。所以两个位置都要认。
+        let target = value.or(key);
+        let ch = self.expr(x);
+        let elem = self
+            .chan_elem_ty(x.typ)
+            .expect("`range c` 的 `x` 一定是 chan 类型");
+
+        // 循环体的副作用（与 `stmt_range` 同一套：可能换 G ⇒ 保守写所有堆根）
+        let mut eff = scan_loop_effects(self.tt, &self.slot_root, body, None);
+        if let Some(Place::Slot(s)) = target {
+            eff.slots.insert(*s);
+        }
+        let carried: Vec<SlotId> = eff
+            .slots
+            .iter()
+            .copied()
+            .filter(|s| self.val.contains_key(s))
+            .collect();
+        let mut wroots: BTreeSet<RootId> = eff.roots.clone();
+        if eff.calls {
+            for i in 0..self.globals.len() {
+                wroots.insert(RootId(i as u32));
+            }
+        }
+        if eff.heap || eff.calls {
+            let h = self.heap_root();
+            wroots.insert(h);
+        }
+        let layout = ParamLayout {
+            slots: carried,
+            roots: wroots.into_iter().collect(),
+        };
+
+        // ── preheader → header
+        let base = (self.val.clone(), self.mem.clone());
+        let header = self.new_block();
+        let hstate = self.layout_params(header, &layout);
+        let pre_args = self.args_for(self.cur, &layout, &base.0, &base.1);
+        self.set_term(Term::Goto {
+            to: header,
+            args: pre_args,
+        });
+        self.cur = header;
+        self.terminated = false;
+        let hs = Self::state_with(&base, (hstate.0.clone(), hstate.1.clone()));
+        self.val = hs.0;
+        self.mem = hs.1;
+
+        // ── header：收一个值，`ok` 当条件
+        let v_tmp = self.new_value(elem);
+        let bt = self.bool_ty();
+        let ok_tmp = self.new_value(bt);
+        self.chan_call(RuntimeFn::ChanRecv, vec![ch], vec![v_tmp, ok_tmp]);
+
+        let body_b = self.new_block();
+        let exit_b = self.new_block();
+        let exit_state = self.layout_params(exit_b, &layout);
+        let pass = layout
+            .slots
+            .iter()
+            .map(|s| hstate.0[s])
+            .chain(layout.roots.iter().map(|r| hstate.1[r]))
+            .collect();
+        self.set_term(Term::If {
+            cond: ok_tmp,
+            then_: (body_b, Vec::new()),
+            else_: (exit_b, pass),
+        });
+
+        // ── body
+        let idx = self.regions.len();
+        self.regions.push(Region::Loop(LoopCtx {
+            label: label.map(ToString::to_string),
+            layout: layout.clone(),
+            break_target: Some(exit_b),
+            break_pending: Vec::new(),
+            continues: Vec::new(),
+        }));
+        let bstate = (self.val.clone(), self.mem.clone());
+        self.cur = body_b;
+        self.terminated = false;
+        self.val = bstate.0;
+        self.mem = bstate.1;
+        if let Some(p) = target {
+            self.write_place(p, v_tmp);
+        }
+        self.stmts(&body.stmts);
+        let body_falls = !self.terminated;
+        let Region::Loop(ctx) = self.regions.remove(idx) else {
+            unreachable!("刚压进去的是 Loop")
+        };
+
+        // ── latch：只有一条 `goto header`（没有计数器要加）
+        let need_latch = body_falls || !ctx.continues.is_empty();
+        let mut latch: Option<BlockId> = None;
+        let cont_target = if need_latch {
+            let l = self.new_block();
+            latch = Some(l);
+            l
+        } else {
+            header
+        };
+        for c in &ctx.continues {
+            let args = self.args_for(c.block, &layout, &c.val, &c.mem);
+            self.blocks[c.block.index()].term = Term::Goto {
+                to: cont_target,
+                args,
+            };
+        }
+        if body_falls {
+            let tail = self.cur;
+            let (cv, cm) = (self.val.clone(), self.mem.clone());
+            if let Some(l) = latch {
+                self.blocks[tail.index()].term = Term::Goto {
+                    to: l,
+                    args: Vec::new(),
+                };
+                self.cur = l;
+                self.terminated = false;
+                self.val = cv.clone();
+                self.mem = cm.clone();
+            }
+            let args = self.args_for(cont_target, &layout, &cv, &cm);
+            self.blocks[cont_target.index()].term = Term::Goto { to: header, args };
+        }
+
+        // ── 出口
+        self.cur = exit_b;
+        self.terminated = false;
+        let es = Self::state_with(&base, exit_state);
+        self.val = es.0;
+        self.mem = es.1;
+    }
+
     fn stmt_range(
         &mut self,
         key: Option<&Place>,
@@ -5034,14 +5200,21 @@ impl Fb<'_> {
             self.stmt_range_map(key, value, x, body, label);
             return;
         }
+        // `range c`（M11b/Task 20）：与 map 一样是**另一套形状**（没有下标、
+        // 没有长度、退出条件来自 `rt_recv` 的 `ok`），单独走一个方法。
+        if matches!(kind, RangeKind::Chan) {
+            self.stmt_range_chan(key, value, x, body, label);
+            return;
+        }
         match kind {
             RangeKind::Array | RangeKind::Slice | RangeKind::Int => {}
             RangeKind::Str => {
                 unreachable!("range over str 应由 unsupported() 在建图前拒掉")
             }
             RangeKind::Map => unreachable!("上面已经分派走了"),
-            RangeKind::Chan | RangeKind::Func => {
-                unreachable!("range over chan/func 应由 unsupported() 在建图前拒掉")
+            RangeKind::Chan => unreachable!("上面已经分派走了"),
+            RangeKind::Func => {
+                unreachable!("range over func 应由 unsupported() 在建图前拒掉")
             }
         }
         // 数组的底座必须是**地址**（`Instr::Index` 的 `base` 是「元素 0 的地址」，
@@ -5333,6 +5506,21 @@ impl Fb<'_> {
         }
         let (a, r) = self.spill_addr(x);
         (a, r.unwrap_or_else(|| self.heap_root()))
+    }
+
+    /// `chan T` 的元素类型（剥命名 / 别名）。`range c` 要它来定 `v_tmp`。
+    fn chan_elem_ty(&self, t: TypeId) -> Option<TypeId> {
+        use rgoc_types::typ::Type;
+        let mut cur = t;
+        for _ in 0..64 {
+            match self.tt.type_of(cur) {
+                Type::Chan { elem, .. } => return Some(*elem),
+                Type::Named(id) => cur = self.tt.named_underlying(*id),
+                Type::Alias(id) => cur = self.tt.alias_rhs(*id),
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// 数组类型的长度（`[n]T` / `*[n]T` / 具名都剥到 `Type::Array`）。

@@ -213,6 +213,26 @@ $PROBE "M-M11-08 close 不唤醒 sendq" "$RT" \
   '    /* 变异 M-M11-08：不唤醒 sendq */' \
   -p rgoc-driver --test go_chan t_chan_07
 
+# ── M-M11-16：`rt_recv` 的「已关闭且空」返回 1 而不是 0 ──────────────────
+# `ok` 恒为真 ⇒ `range c` 在 close 之后**永不退出**（挂死）；`v, ok := <-c`
+# 也恒为 true。打 `t_chan_05` 而不是 `t_chan_09`：后者会**挂死**，而 cargo
+# test 没有超时兜底（`run-native-chan.sh` 才有）—— 用输出断言就能抓到的
+# 形态，不要用「靠超时」的形态。
+$PROBE "M-M11-16 关闭且空时 ok 恒为真" "$RT" \
+  '        if (c->closed != 0) {
+            if (es > 0) {
+                rt_memset(out, 0, es);
+            }
+            return 0;
+        }' \
+  '        if (c->closed != 0) {
+            if (es > 0) {
+                rt_memset(out, 0, es);
+            }
+            return 1;
+        }' \
+  -p rgoc-driver --test go_chan t_chan_05
+
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"
 

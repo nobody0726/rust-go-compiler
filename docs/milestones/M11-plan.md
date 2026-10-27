@@ -453,12 +453,37 @@
 - [x] **Step 3**: 判据 `t_chan_03_closed_排第一` + `t_chan_04_close_后排空`。
 - [x] **Step 4: Commit** `feat(rt): close 与三条 panic（Task 19）`
 
-### Task 20: `len` / `cap` / nil 通道
+### Task 20: `len` / `cap` / nil 通道 / `range c` —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `len` 数 `buf`、**不数** `sendq`；nil 通道 `<-c`/`c <- v`
+> **读数**：`t_chan_09`（`for v := range c` 取完 buf 再退出，含 L1 差分）；
+> chan 装置 **`ok=2 skip=5`** —— **`sieve1.go` 真的跑起来了**（rc=0，无输出
+> 即通过：它只在质数不对时打印）。
+>
+> `len` / `cap` 在 Task 19 就一起做了（`Hchan` 的 `+0` / `+8`，nil 走 `cbz`）。
+> nil 通道的收发在 Task 18b 就做了（`c == 0` ⇒ blocked + 调度 ⇒ 死锁判定）。
+>
+> **`range c` 走 `stmt_range_chan`**（与 `stmt_range_map` 同一形状的独立方法）：
+> `for { v, ok := <-c; if !ok { break }; body }`。
+>
+> ⚠️ **`v` / `ok` 必须是 header 的局部值，不能用 `fresh_slot`**：`fresh_slot`
+> 会把槽标成 `promoted`，于是回边要把它当 header 参数传（phi）—— 那就得进
+> `layout.slots`，而 preheader 那条边还拿不出值（`base.0` 里没有），
+> `args_for` 会缺参数、`V1` 拒。放 header 里当局部值就绕开了（body 的唯一
+> 前驱是 header ⇒ 支配）。
+>
+> ⚠️ **`for i := range c` 的 `i` 在 HIR 里落在 `key` 位置**（语法上单变量是
+> `KeyValueExpr` 的 key），而语义上它拿的是**值** ⇒ `target = value.or(key)`。
+> 只写 `value` 的后果：`i` 从来没被写过 ⇒ 体里读它时 panic
+> 「槽 s3 既不提升也没有根」。
+>
+> ⚠️ **`go_stmt` 的实参搬运不能用 `ldr x10, [x29, #off]`**：`ldur` 的立即数
+> 只有 ±256，`Filter` 的帧到 264 字节就链接失败（`index must be an integer in
+> range [-256, 255]`）。改走 `ld_x`（它内部按偏移大小选 `add` / `movz+add`）。
+
+- [x] **Step 1**: `len` 数 `buf`、**不数** `sendq`；nil 通道 `<-c`/`c <- v`
   **永久阻塞且不登记**（`C11` §3.4）。
-- [ ] **Step 2**: 判据 `t_chan_05_len_cap` + `t_chan_07_nil_永久阻塞`（死锁）。
-- [ ] **Step 3: Commit** `feat(rt): len/cap 与 nil 通道（Task 20）`
+- [x] **Step 2**: 判据 `t_chan_05_len_cap` + `t_chan_07_nil_永久阻塞`（死锁）。
+- [x] **Step 3: Commit** `feat(rt): len/cap 与 nil 通道（Task 20）`
 
 ### Task 21: `range` over chan
 

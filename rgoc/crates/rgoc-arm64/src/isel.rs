@@ -2561,7 +2561,11 @@ fn go_stmt(
     }
     for (i, a) in args.iter().enumerate() {
         let s = cx.slot(*a);
-        asm.ins(&format!("ldr x10, [x29, #{}]", s.off));
+        // ⚠️ **必须走 `ld_x`**（它内部按偏移大小选 `add` / `movz+add`）。
+        // 直接发 `ldr x10, [x29, #off]` 会被 `ldur` 的 ±256 立即数上限卡住 ——
+        // 实测 `Filter`（`sieve1.go`）的帧一到 264 字节就链接失败：
+        // `index must be an integer in range [-256, 255]`。
+        ld_x(asm, "x10", s.off);
         asm.ins(&format!("str x10, [sp, #{}]", 8 * i));
     }
     let sym = cx.tt_fn_name(*fid);

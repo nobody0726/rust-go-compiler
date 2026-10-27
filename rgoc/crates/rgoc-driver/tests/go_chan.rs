@@ -287,3 +287,45 @@ fn t_chan_07_阻塞发送被_close_唤醒后_panic() {
         out.stdout
     );
 }
+
+/// `T-CHAN-09`：**`for v := range c`**（M11b/Task 20）。
+///
+/// # 为什么这条必须查「循环真的进了、值真的对、真的退出了」
+///
+/// `range c` 下降成 `for { v, ok := <-c; if !ok { break }; body }`，三个地方
+/// 任一写错都不会崩，只会**少循环几次**：
+/// * 退出条件写成常量 true ⇒ 挂死（`timeout` 才抓得到）；
+/// * 退出条件写成常量 false ⇒ 一次都不进（`sum == 0`）；
+/// * `v` 写错槽（⚠️ **`for v := range c` 的 `v` 在 HIR 里落在 `key` 位置**）
+///   ⇒ 编译期就 panic「槽既不提升也没有根」。
+///
+/// 所以判据同时钉：三次打印、`sum` 的正确值、以及**正常退出**（`exit == 0`）。
+const RANGE_CHAN: &str = r#"
+package main
+
+func main() {
+	c := make(chan int, 3)
+	c <- 10
+	c <- 20
+	c <- 30
+	close(c)
+	sum := 0
+	for v := range c {
+		sum += v
+		println(v)
+	}
+	println("sum", sum)
+}
+"#;
+
+#[test]
+fn t_chan_09_range_over_chan() {
+    let t = go_probe::probe("chan09", RANGE_CHAN, &[("RGOC_GC", "0")]).expect("应能编译并跑起来");
+    t.assert_l1("chan09");
+    assert_eq!(
+        t.native.stdout, "10\n20\n30\nsum 60\n",
+        "`range c` 应按 FIFO 取完 buf 再退出：实际 {:?}",
+        t.native.stdout
+    );
+    assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
+}
