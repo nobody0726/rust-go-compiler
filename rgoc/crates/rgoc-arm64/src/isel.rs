@@ -631,6 +631,13 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
 /// 一条指令。
 fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
     match ins {
+        // ⚠️ **未实现**（Task 12 的下一步）。用 `unimplemented!` 而不是发空：
+        // `unsupported()` 现在仍然拒 `go`，所以走不到这里；但 Task 13 放开
+        // `go` 时如果忘了写这段下降，`unimplemented!` 会**立刻炸**，而发空
+        // 会静默生成「实参没拷」的代码 —— 那种错不崩、只是算错。
+        Instr::Go { .. } => {
+            unimplemented!("Task 12：`Instr::Go` 的下降（实参深拷贝 + rt_go）")
+        }
         Instr::Const { dst, c, typ } => konst(cx, *dst, c, *typ, asm),
         Instr::Copy { dst, src } => copy(cx, *dst, *src, asm),
         Instr::Bin {

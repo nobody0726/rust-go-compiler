@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rgoc_types::TypeTable;
 
 use crate::cfg::Cfg;
-use crate::ir::{Block, BlockId, Effect, Instr, Module, SsaFunc, Term, ValueId};
+use crate::ir::{Block, BlockId, CalleeRef, Effect, Instr, Module, SsaFunc, Term, ValueId};
 use crate::verify::{VerifyError, verify};
 
 /// 开关（`--opt=all|none|fold,dce,…`）。
@@ -234,6 +234,17 @@ pub(crate) fn instr_uses(i: &mut Instr, g: &mut impl FnMut(&mut ValueId)) {
             g(addr);
             g(val);
         }
+        Instr::Go { callee, args, .. } => {
+            match callee {
+                CalleeRef::Indirect(v) => g(v),
+                CalleeRef::Method { recv, .. } => g(recv),
+                CalleeRef::Iface { recv, .. } => g(recv),
+                CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
+            }
+            for a in args {
+                g(a);
+            }
+        }
         Instr::Call { callee, args, .. } => {
             // 三种被调方各带一个「值操作数」：`Indirect(fv)` / `Method { recv }`。
             // 漏掉 `recv` 的后果是**双重**的：`dce` 会以为那个地址值没人用而删掉它，
@@ -317,6 +328,7 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
+        Instr::Go { .. } => Vec::new(),
         Instr::Call { dsts, .. } => dsts.clone(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
         Instr::Defer { .. } => Vec::new(),
@@ -347,6 +359,7 @@ fn dsts_of_mut(i: &mut Instr) -> Vec<&mut ValueId> {
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![dst],
+        Instr::Go { .. } => Vec::new(),
         Instr::Call { dsts, .. } => dsts.iter_mut().collect(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![dst],
         Instr::Defer { .. } => Vec::new(),

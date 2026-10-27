@@ -405,8 +405,8 @@ impl Instr {
             | Instr::Store { dst, .. } => vec![*dst],
             Instr::Call { dsts, .. } => dsts.clone(),
             Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
-            // `defer` 不定义任何值
-            Instr::Defer { .. } => Vec::new(),
+            // `defer` / `go` 都不定义任何值
+            Instr::Defer { .. } | Instr::Go { .. } => Vec::new(),
             // 空指针检查只读地址，不产值
             Instr::NilCheck { .. } => Vec::new(),
             // 捕获是**操作数**不是定义（它们在 `uses` 里）
@@ -462,6 +462,17 @@ impl Instr {
                     CalleeRef::Indirect(v) => out.push(*v),
                     CalleeRef::Method { recv, .. } => out.push(*recv),
                     // 接口值也是被读的（`tab` / `data` 两个字都在里面）
+                    CalleeRef::Iface { recv, .. } => out.push(*recv),
+                    CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
+                }
+                out.extend(args.iter().copied());
+            }
+            // `go` 与 `Call` 读同一套：被调方 + 实参。差别在 isel —— `go` 要
+            // 把实参**深拷贝**到新 G 的栈上，`Call` 留在调用方帧里。
+            Instr::Go { callee, args, .. } => {
+                match callee {
+                    CalleeRef::Indirect(v) => out.push(*v),
+                    CalleeRef::Method { recv, .. } => out.push(*recv),
                     CalleeRef::Iface { recv, .. } => out.push(*recv),
                     CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
                 }
@@ -810,6 +821,28 @@ pub enum Instr {
         /// 副作用摘要。
         effect: Effect,
     },
+    /// 启动一个 goroutine（`go f(args)`，M11/Task 12）。
+    ///
+    /// # 为什么不复用 `Call` 加一个标志位
+    ///
+    /// 三件事都不同（`M11-design.md` §3.6）：
+    /// 1. `Call` 有返回值、调用方**等**结果；`go` 没有返回值、**不等**；
+    /// 2. `go` 的实参要**深拷贝到新 G 的栈**上（`Call` 的实参留在调用方帧里）；
+    /// 3. `go` 之后当前 G **继续跑**（`C11` §2.1 的「不抢占」）。
+    ///
+    /// 合成一个变体会让 `isel` 里到处是 `if is_go { … }`，而其中一处漏判的
+    /// 后果是「实参没拷」—— 表现为被调方读到调用方栈上的旧值，**不崩、只是算错**。
+    ///
+    /// ⚠️ 实参区字节数**不入 IR**：它由 `args` 的类型算出来（`Ctx::ty`）。
+    /// 存一份就多一个可能与类型不一致的字段。
+    Go {
+        /// 被调方。
+        callee: CalleeRef,
+        /// 实参（**深拷贝**到新 G 的栈）。
+        args: Vec<ValueId>,
+        /// 副作用摘要。
+        effect: Effect,
+    },
     /// 取一个**具名函数**的地址（`f := g`，`M9/Task 37`）。
     ///
     /// 结果是 `func(...)` 类型的值 —— 运行期就是一个函数指针（`fn` 在偏移 0）。
@@ -961,6 +994,7 @@ pub fn kind_of_instr(i: &Instr) -> &'static str {
         Instr::Load { .. } => "load",
         Instr::Store { .. } => "store",
         Instr::Call { .. } => "call",
+        Instr::Go { .. } => "go",
         Instr::FuncAddr { .. } => "funcaddr",
         Instr::Defer { .. } => "defer",
         Instr::NilCheck { .. } => "nil-check",

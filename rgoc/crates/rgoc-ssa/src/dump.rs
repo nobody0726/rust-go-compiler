@@ -191,6 +191,9 @@ fn render_instr(i: &Instr) -> String {
             v(*addr),
             v(*val)
         ),
+        Instr::Go { callee, args, .. } => {
+            format!("go {}({})", render_callee(callee), vs(args))
+        }
         Instr::Call {
             dsts,
             callee,

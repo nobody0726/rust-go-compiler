@@ -564,6 +564,12 @@ impl Exec<'_> {
         let ins = &m.funcs[fi].blocks[bi.index()].instrs[ii];
 
         match ins {
+            // `go` 在 SSA 求值器里**不支持**：M8 的并发语义只落在 HIR 面
+            // （`--via=hir`），`--via=ssa` 一直是「拒绝面为空」的那个 —— 加这条
+            // 之后 `go` 语句会在这里返回一个明确的错误，而不是 panic。
+            Instr::Go { .. } => Err(Halt::Runtime(
+                "SSA 求值器不支持 `go`（并发只在 HIR 面）".to_string(),
+            )),
             Instr::Const { dst, c, typ } => {
                 let v = const_ssa(c, *typ, tt)?;
                 self.write(*dst, v);

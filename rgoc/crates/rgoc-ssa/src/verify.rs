@@ -128,6 +128,7 @@ fn dsts_of(i: &Instr) -> Vec<ValueId> {
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
         | Instr::Store { dst, .. } => vec![*dst],
+        Instr::Go { .. } => Vec::new(),
         Instr::Call { dsts, .. } => dsts.clone(),
         Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => vec![*dst],
         Instr::Defer { .. } => Vec::new(),
@@ -245,6 +246,15 @@ fn uses_of(i: &Instr) -> Vec<ValueId> {
     let mut out = Vec::new();
     match i {
         Instr::Const { .. } | Instr::AddrOf { .. } => {}
+        Instr::Go { callee, args, .. } => {
+            match callee {
+                CalleeRef::Indirect(v) => out.push(*v),
+                CalleeRef::Method { recv, .. } => out.push(*recv),
+                CalleeRef::Iface { recv, .. } => out.push(*recv),
+                CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
+            }
+            out.extend(args.iter().copied());
+        }
         Instr::Copy { src, .. } => out.push(*src),
         Instr::Bin { lhs, rhs, .. } => {
             out.push(*lhs);

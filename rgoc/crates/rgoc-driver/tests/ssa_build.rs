@@ -755,6 +755,8 @@ fn def_block(f: &SsaFunc, v: ValueId) -> BlockId {
         }
         for ins in &b.instrs {
             let dst = match ins {
+                // `go` 没有 dst
+                Instr::Go { .. } => continue,
                 Instr::Const { dst, .. }
                 | Instr::Copy { dst, .. }
                 | Instr::Bin { dst, .. }
@@ -1825,6 +1827,8 @@ fn stores(f: &SsaFunc) -> Vec<(RootId, ValueId, ValueId)> {
 /// 某个值的定义指令（`None` = 块参数 / 越界）。
 fn def_instr(f: &SsaFunc, v: ValueId) -> Option<&Instr> {
     instrs(f).into_iter().find(|i| match i {
+        // `go` 没有 dst ⇒ 不可能是任何值的定义点
+        Instr::Go { .. } => false,
         Instr::Load { dst, .. }
         | Instr::TypeAssert { dst, .. }
         | Instr::FuncAddr { dst, .. }

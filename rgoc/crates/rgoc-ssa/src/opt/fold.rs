@@ -46,7 +46,7 @@ pub fn run(f: &mut SsaFunc, tt: &TypeTable) {
         for b in &mut f.blocks {
             for ins in &mut b.instrs {
                 if let Some((c, typ)) = try_fold(ins, &consts, tt) {
-                    let dst = dst_of(ins);
+                    let Some(dst) = dst_of(ins) else { continue };
                     *ins = Instr::Const { dst, c, typ };
                     changed = true;
                 }
@@ -86,17 +86,17 @@ fn const_map(f: &SsaFunc) -> BTreeMap<ValueId, ConstVal> {
     m
 }
 
-fn dst_of(i: &Instr) -> ValueId {
+fn dst_of(i: &Instr) -> Option<ValueId> {
     match i {
         // 断言的主结果（`ok` 不进 fold：它没有可折叠的运算）
-        Instr::TypeAssert { dst, .. } => *dst,
-        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => *dst,
+        Instr::TypeAssert { dst, .. } => Some(*dst),
+        Instr::FuncAddr { dst, .. } | Instr::CapturePtr { dst, .. } => Some(*dst),
         // `defer` 没有 dst。`try_fold` 永远不会折它，所以这个返回值没人用 ——
         // 给 `fv` 只是为了让 match 穷尽。
-        Instr::Defer { fv } => *fv,
+        Instr::Defer { fv } => Some(*fv),
         // 同上：`nil-check` 没有 dst，`try_fold` 也不折它
-        Instr::NilCheck { addr } => *addr,
-        Instr::MakeClosure { dst, .. } => *dst,
+        Instr::NilCheck { addr } => Some(*addr),
+        Instr::MakeClosure { dst, .. } => Some(*dst),
         Instr::Const { dst, .. }
         | Instr::Copy { dst, .. }
         | Instr::Bin { dst, .. }
@@ -109,8 +109,10 @@ fn dst_of(i: &Instr) -> ValueId {
         | Instr::Composite { dst, .. }
         | Instr::Make { dst, .. }
         | Instr::Load { dst, .. }
-        | Instr::Store { dst, .. } => *dst,
-        Instr::Call { dsts, .. } => dsts.first().copied().unwrap_or_default(),
+        | Instr::Store { dst, .. } => Some(*dst),
+        Instr::Call { dsts, .. } => dsts.first().copied(),
+        // `go` 没有可折的 dst —— `try_fold` 永不折它
+        Instr::Go { .. } => None,
     }
 }
 

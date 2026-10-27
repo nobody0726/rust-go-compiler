@@ -213,6 +213,7 @@ fn dst_of(i: &Instr) -> Option<ValueId> {
         // `nil-check` 也没有 dst（同上）
         Instr::NilCheck { .. } => return None,
         // `Call` 由调用方特判（多结果），走到这里说明有人漏了
+        Instr::Go { .. } => return None,
         Instr::Call { .. } => return None,
     })
 }

@@ -407,6 +407,8 @@ fn is_safepoint(i: &Instr, f: &SsaFunc, tt: &TypeTable) -> bool {
         // `Call`：用户函数、方法、内建。`append` 会 `rt_append_one` /
         // `rt_append_dots`（扩容时分配），`println` 会调出去。
         Instr::Call { .. } => true,
+        // `go`：`rt_go` 要 mmap 新栈、拷实参（`M11-design.md` §3.6）⇒ 分配。
+        Instr::Go { .. } => true,
         // `make` / `new`：`rt_makeslice` / `rt_alloc`。
         Instr::Make { .. } => true,
         // 闭包：`rt_alloc_closure`。

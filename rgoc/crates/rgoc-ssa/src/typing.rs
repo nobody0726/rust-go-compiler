@@ -295,7 +295,8 @@ pub fn check_instr(f: &SsaFunc, i: &Instr, tt: &TypeTable) -> Result<(), String>
         | Instr::Index { .. }
         | Instr::Slice { .. }
         | Instr::Store { .. }
-        | Instr::Call { .. } => Ok(()),
+        | Instr::Go { .. } => Ok(()),
+        Instr::Call { .. } => Ok(()),
     }
 }
 
