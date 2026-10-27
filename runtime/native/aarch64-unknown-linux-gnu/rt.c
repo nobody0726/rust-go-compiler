@@ -475,7 +475,7 @@ typedef struct GDesc {
     struct GDesc *qnext; /* +40 就绪队列后继 */
     u32 state;           /* +48 0=ready 1=running 2=blocked 3=exited */
     u32 id;              /* +52 单调递增（调试与确定性） */
-    u64 pad;             /* +56 */
+    u64 argbytes;        /* +56 `go` 的实参字节数（≤ 64；见 `rt_go`） */
 } GDesc;                 /* 64 字节 */
 
 /* `M11-design.md` §4.4：goroutine 数的硬上限。 */
@@ -493,6 +493,8 @@ typedef struct GDesc {
  */
 static GDesc g_descs[G_MAX];
 static GDesc *g_cur;
+static GDesc *g_main;      /* `main` 那个 G（它的栈是进程栈，**不许 munmap**） */
+static GDesc *g_free;      /* 回收来的空槽（用 `qnext` 串起来） */
 static u32 g_next_id;
 static u32 g_count;
 
@@ -511,8 +513,26 @@ static void rt_fatal_too_many_g(void) {
     rt_exit(2);
 }
 
-/* 分配一个**空的** gdesc（栈由调用方填）。 */
+/* 分配一个**空的** gdesc（栈由调用方填）。
+ *
+ * # 为什么要回收（M11c/Task 36）
+ *
+ * `G_MAX = 1024` 是「**同时**存活」的上限，不是「一生总数」。语料里
+ * `for i := 0; i < 100000; i++ { go f(); <-done }` 这种「依次创建、依次退出」
+ * 是完全正常的写法 —— 只增不减的话第 1025 个就撞 `too many goroutines`。
+ * 所以退出的 G 的槽挂到 `g_free` 上，下次优先复用。
+ *
+ * ⚠️ 复用的槽必须**整体清零**（`*g = (GDesc){0}`）：`frames` 还指着一条已经被
+ * munmap 的栈，`wait` 还指着一个可能被收掉的 `WaitSet` —— 留着就是悬空指针，
+ * 而 `mark_all_g_stacks` 会去读它们。 */
 static GDesc *rt_gdesc_new(void) {
+    if (g_free != 0) {
+        GDesc *g = g_free;
+        g_free = g->qnext;
+        *g = (GDesc){0};
+        g->id = ++g_next_id;
+        return g;
+    }
     if (g_count >= G_MAX) {
         rt_fatal_too_many_g();
     }
@@ -526,19 +546,48 @@ static GDesc *rt_gdesc_new(void) {
 
 /* 给一个 gdesc 配一块 `mmap` 的栈（`D-M11-2`）。
  *
- * 返回值仍是那个 gdesc；`sp` 指向栈顶（**16 对齐**，AAPCS64 要求）。 */
+ * 返回值仍是那个 gdesc；`sp` 指向栈顶（**16 对齐**，AAPCS64 要求）。
+ *
+ * ⚠️ **映射长度就是 `G_STACK_BYTES`，不额外多要**（M11c/Task 36 改的）：
+ * 早先写的是 `G_STACK_BYTES + 16` 再「把栈顶向下对齐到 16」，那让
+ * `munmap` 的长度变成 65552 —— 而 `munmap` 会把长度**向上取整到页**，
+ * 于是多还掉一页（那一页可能是别人的映射）。`G_STACK_BYTES` 是 16 的倍数、
+ * `mmap` 返回页对齐 ⇒ 栈顶本来就是 16 对齐，那 16 字节纯属多余。 */
 static void rt_gstack_alloc(GDesc *g) {
-    u64 total = G_STACK_BYTES + 16;
-    i64 r = sys6(SYS_mmap, 0, (i64)total, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    i64 r = sys6(SYS_mmap, 0, (i64)G_STACK_BYTES, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
     if (r < 0) {
         rt_fatal_oom(heap_limit);
     }
-    /* 栈顶**向下**对齐：`mmap` 返回页对齐，加 total 之后可能不是 16 的倍数。 */
-    u64 hi = ((u64)r + total) & ~(u64)15;
-    u64 lo = hi - G_STACK_BYTES;
-    g->stack_hi = (u64 *)hi;
-    g->stack_lo = (u64 *)lo;
-    g->sp = (u64 *)hi;
+    g->stack_hi = (u64 *)((u64)r + G_STACK_BYTES);
+    g->stack_lo = (u64 *)r;
+    g->sp = g->stack_hi;
+}
+
+/* 还掉一个已退出 G 的栈并把槽挂回 `g_free`（M11c/Task 36）。
+ *
+ * ⚠️ **不能在 `rt_goexit` 里直接调**：那一刻还跑在**要被还掉的那块栈**上 ——
+ * munmap 之后下一条指令就在空洞里，`rc=139`。所以调用点只在
+ * 「已经切到别的 G 的栈上」之后（`rt_schedule` 的队头，见那里的注）。
+ *
+ * ⚠️ `main` 的栈是进程栈（内核给的 8 MiB），**不是 mmap 的** ⇒ 不能还。
+ * 用 `g_main` 判，而不是「`stack_lo` 看起来像不像进程栈」那种猜法。 */
+static void rt_g_reclaim(GDesc *g) {
+    if (g == g_main) {
+        g->frames = 0;
+        g->wait = 0;
+        g->argbytes = 0;
+        return;
+    }
+    sys3(SYS_munmap, (i64)g->stack_lo, (i64)G_STACK_BYTES, 0);
+    g->frames = 0;
+    g->wait = 0;
+    g->argbytes = 0;
+    g->sp = 0;
+    g->stack_lo = 0;
+    g->stack_hi = 0;
+    g->state = 3;
+    g->qnext = g_free;
+    g_free = g;
 }
 
 /* 切到 `g`（只更新「当前 G」与序言读的那个下界）。
@@ -829,6 +878,12 @@ __asm__(
 static GDesc *g_ready_head;
 static GDesc *g_ready_tail;
 
+/* 已退出、等着**收尸**（munmap 栈 + 槽回 `g_free`）的 G（`M11c/Task 36`）。
+ *
+ * 为什么不是单个指针：连着两个 G 各自「建了就退」时，后者会把前者覆盖掉，
+ * 前者的 64 KiB 就永远泄漏。 */
+static GDesc *g_zombies;
+
 /* 入**队尾**（`GO-2` 的 FIFO）。改成队头插入就是变异 `M-M11-06`。 */
 static void rt_enqueue(GDesc *g) {
     g->state = 0; /* ready */
@@ -855,6 +910,31 @@ static GDesc *rt_dequeue(void) {
     return g;
 }
 
+/* 收尸（`M11c/Task 36`）：把**除当前 G 之外**的僵尸全部还掉。
+ *
+ * ⚠️ 当前 G 可能在名单里 —— `rt_goexit` 刚把自己挂上就调 `rt_schedule`，而
+ * 那一刻还跑在**它自己的栈**上。munmap 掉正在用的栈 = 下一条指令就踩空洞。
+ * 所以「当前 G」原样挂回去，等下一次别人调 `rt_schedule` 时再收。
+ *
+ * 调用点只有一处（`rt_schedule` 的队头）：那里保证「跑在 `g_cur` 的栈上」，
+ * 而所有僵尸都是**别的** G。 */
+static void rt_reap(void) {
+    GDesc *keep = 0;
+    GDesc *z = g_zombies;
+    g_zombies = 0;
+    while (z != 0) {
+        GDesc *next = z->qnext;
+        if (z == g_cur) {
+            z->qnext = keep;
+            keep = z;
+        } else {
+            rt_g_reclaim(z);
+        }
+        z = next;
+    }
+    g_zombies = keep;
+}
+
 /* 死锁（`C9` §5 的文本，逐字节）。
  *
  * ⚠️ Task 26 会补「三条条件各自必要」的判定（`T-EXIT-05`：有就绪 G 时**不**
@@ -875,6 +955,12 @@ static void rt_fatal_deadlock(void) {
  * `sp` 就丢了（`rt_switch` 会把当前 sp 存进 `prev->sp`，但没人再读它）。
  */
 void rt_schedule(void) {
+    /* 先收尸：上一个（或上几个）退出的 G 的栈与槽。
+     *
+     * 放在 `rt_dequeue` **之前**是刻意的：`rt_reap` 不碰就绪队列，也不切栈，
+     * 它只是「还一块别人的内存」。放这儿的好处是它一定在「已经换到自己的栈」
+     * 之后（本函数由 `g_cur` 调用，`g_cur` 的栈当然是自己的）。 */
+    rt_reap();
     GDesc *next = rt_dequeue();
     if (next == 0) {
         rt_fatal_deadlock();
@@ -905,10 +991,12 @@ void rt_schedule(void) {
 
 /* 当前 G 结束。**永不返回**。
  *
- * 不释放栈：M11a 没有 G 的回收（`rt_goexit` 只标记 exited）。栈的回收要等
- * M11c 之后 —— 现在 `mmap` 的 64 KiB 在进程退出时由内核收回。 */
+ * 栈与 `gdesc` 槽由**下一个**调 `rt_schedule` 的 G 收（`rt_reap`）—— 这里
+ * 还跑在自己的栈上，不能 `munmap` 它（`M11c/Task 36`）。 */
 void rt_goexit(void) {
     g_cur->state = 3; /* exited */
+    g_cur->qnext = g_zombies;
+    g_zombies = g_cur;
     rt_schedule();
     rt_exit(9); /* 走不到 */
 }
@@ -1020,6 +1108,19 @@ void rt_go(void *fn, const void *args, u64 argbytes) {
     }
     *(u64 *)(sa + 28) = (u64)fn; /* 实参区之后就是 fn */
     g->sp = sa;
+    /* 实参区是**根**（`T-GROOT-02` 的另一半）：`go` 的实参里有指针 ——
+     * 闭包（`fv` 在 arg0）与「按值传的指针/切片」都是。它们在**新 G 的栈顶**，
+     * 而那块区域不在任何帧记录里（trampoline 还没建帧）⇒ 不给根就会被收掉。
+     *
+     * 实测症状：`go func(){ <-c }()` + 2 万次分配 ⇒ trampoline 拿到的 `fv`
+     * 已经被回收并清零 ⇒ 调 `[fv+8]` 时 nil 检查 panic
+     * （`panic: runtime error: invalid memory address or nil pointer dereference`），
+     * 而 `RGOC_GC=0` 下一切正常。
+     *
+     * ⚠️ 这里是**保守**的：整块实参区按字标，不区分哪个是指针。`go` 的实参
+     * 最多 8 个字（`G_GO_ARGBYTES`），代价是「像地址的整数多留一轮」——
+     * 与「漏标 ⇒ 用已回收的对象」代价不对等（`R-10-21` 同一条理由）。 */
+    g->argbytes = n;
     /* 入队**队尾**，不切走当前 G（`C11` §2.1 的「不抢占」）。 */
     rt_enqueue(g);
 }
@@ -1036,6 +1137,14 @@ __asm__(
     "    ldp  x4, x5, [sp, #32]\n"
     "    ldp  x6, x7, [sp, #48]\n"
     "    ldr  x9, [sp, #64]\n" /* fn */
+    /* 实参已经进了 x0..x7 ⇒ 把实参区**清零**：它从此不再是根（`rt_go` 把
+     * 字节数记在 `gdesc.argbytes` 里，GC 会按它标这块区域）。不清零的话，
+     * 这个 G 的帧会一路往下长、覆盖到这里 —— 那些栈值被当成「实参」保守地
+     * 标活，泄漏一轮。 */
+    "    stp  xzr, xzr, [sp, #0]\n"
+    "    stp  xzr, xzr, [sp, #16]\n"
+    "    stp  xzr, xzr, [sp, #32]\n"
+    "    stp  xzr, xzr, [sp, #48]\n"
     /* 跳到栈顶（实参区 + fn + pad = 80），再 `blr` —— 被调方的 `stp x29,x30`
      * 才有地方落。80 是 16 的倍数 ⇒ 对齐不破。 */
     "    add  sp, sp, #80\n"
@@ -1158,6 +1267,7 @@ void rt_init(u64 sp) {
         m->stack_lo = (u64 *)(sp - (4UL * 1024UL * 1024UL));
         m->state = 1; /* running */
         rt_gset_current(m);
+        g_main = m;
     }
 
     /* M11a 自测（`T-STK-01`）：`RGOC_G11_SELFTEST=1` 时验一遍 `rt_switch`
@@ -1677,13 +1787,42 @@ _Static_assert(__builtin_offsetof(Hchan, lock) == 88, "lock 在 +88");
  * 与 `buf` 都是托管堆块，而 stress 钩子在**分配之前**跑 GC —— 此刻它们还没
  * 发布到任何可达位置。
  *
- * ⚠️ **已知缺口（进 `M11-report.md`）**：`Hchan` 是 `K_RAW`，GC **不扫它的
- * 内容** ⇒ `buf` 那个指针没有根（`elemtype` 在 rodata，不需要）。M11b 的
- * a/b 阶段强制 `mode=off`（`D-M11-12`）所以碰不到；M11c 要么把 `Hchan` 换成
- * 带 desc 的类型，要么在 `mark_roots` 里扫一张 chan 链表。 */
+ * ⚠️ **`Hchan` 的 `buf` 曾经没有根**（M11b 的已知缺口，`M11-report.md` 记过）：
+ * `Hchan` 是 `K_RAW` ⇒ GC 不扫它的内容 ⇒ 有缓冲的通道一旦只被栈槽引用，
+ * 它的缓冲块（`K_ARRAY`，装着元素里的指针）会被收掉。M11c/Task 33 把它换成
+ * **带 desc 的 `K_OBJECT`**（见下面的 `chan_desc`）—— 比「在 `mark_roots` 里
+ * 扫一张 chan 链表」好在：链表本身也要维护、还会把**所有**通道都标活（泄漏），
+ * 而 desc 只标真正可达的那些。 */
 /* 两个分配入口定义在文件后半（ / ）。 */
 void *rt_alloc_raw(u64 bytes);
 void *rt_alloc_array(const TypeDesc *elem, u64 cap);
+void *rt_alloc(const TypeDesc *desc, i64 need_zero);
+
+/* `Hchan` 的 GC desc（`C12` §2.3）。位序：bit `i` ↔ 第 `i` 个字（+8i）。
+ *
+ * ```text
+ *   字 2  (+16)  buf          —— 有缓冲通道的环形数组
+ *   字 7  (+56)  recvq_head   ┐
+ *   字 8  (+64)  recvq_tail   │ 指向 `Sudog`，而 `Sudog` **内嵌在 `WaitSet`**
+ *   字 9  (+72)  sendq_head   │ 里 ⇒ 标到的是那个 `WaitSet` 块（`resolve_block`
+ *   字 10 (+80)  sendq_tail   ┘ 处理块内指针）。也有嵌在 C 栈上的（`rt_send`
+ *                               的局部变量）—— 不在堆里，`mark_ptr` 直接忽略。
+ * ```
+ *
+ * `ptrdata = 88`（到 `lock` 为止）；`lock` 是留位给 M11e 的整数，不扫。 */
+static const u8 chan_gcdata[2] = {0x84, 0x07};
+
+static const TypeDesc chan_desc = {
+    .size = 96,
+    .ptrdata = 88,
+    .hash = 0,
+    .kind = 0,
+    .flags = 0,
+    .pad = 0,
+    .gcdata = chan_gcdata,
+    .elem = 0,
+    .methods = 0,
+};
 
 void rt_makechan(Hchan **out, u64 dataqsiz, const void *elemtype) {
     /* `elemsize` 从 desc 的 `size` 读（`TypeDesc.size` 在 **+0**，`rgoc-meta`
@@ -1694,7 +1833,7 @@ void rt_makechan(Hchan **out, u64 dataqsiz, const void *elemtype) {
      * 需要的元素宽度。 */
     u64 elemsize = elemtype != 0 ? (u64)(*(const u32 *)elemtype) : 0;
     gc_pause++;
-    Hchan *c = (Hchan *)rt_alloc_raw(sizeof(Hchan));
+    Hchan *c = (Hchan *)rt_alloc(&chan_desc, 0);
     c->qcount = 0;
     c->dataqsiz = dataqsiz;
     c->elemsize = (u16)elemsize;
@@ -2159,7 +2298,12 @@ u64 rt_select_wait(void *token) {
             k->reg = 1;
         }
         /* 全是 nil 通道 ⇒ 一个都没登记 ⇒ 永远阻塞（Go 规范）*/
+        /* 阻塞前把 `WaitSet` 挂到 gdesc 上（`T-GROOT-03`）：别的 G 跑 GC 时
+         * 要靠它把 `WaitSet` 与里面的 `Hchan *` 标活。醒来立刻摘掉 ——
+         * 留着就是一条悬空指针（块被收掉后 `mark_all_g_stacks` 会去读它）。 */
+        g_cur->wait = w;
         rt_block_forever();
+        g_cur->wait = 0;
         /* ── 醒来：先找**已完成**的那个（`done == 1` ⇒ 对端已经搬完值） */
         i64 done = -1;
         for (u64 i = 0; i < w->n; i++) {
@@ -2636,11 +2780,14 @@ static u8 *mark_frame(u8 *fp) {
     return (u8 *)prev;
 }
 
-/* 走完整条帧链。链是**从新到旧**的（每帧的 `prev` 指向它的调用者）。
+/* 走完一条帧链。链是**从新到旧**的（每帧的 `prev` 指向它的调用者）。
  *
- * 用**局部游标**遍历，`g_frames` 只读 —— 它是链头，写它等于把链剪断。 */
-static void mark_frames(void) {
-    u8 *fp = (u8 *)g_frames;
+ * 用**局部游标**遍历，链头只读 —— 写它等于把链剪断。
+ *
+ * ⚠️ 链头是**参数**（M11c/Task 33）：每个 G 一条链，`g_frames` 只是「当前
+ * 那个 G 的」。只扫 `g_frames` 就是变异 `M-M11-13`。 */
+static void mark_frames(void *head) {
+    u8 *fp = (u8 *)head;
     while (fp != 0) {
         fp = mark_frame(fp);
     }
@@ -2680,12 +2827,69 @@ static void gc_pin_pop(void) {
     }
 }
 
-/* 扫根（`C12` §4.1）：**全局** / **栈** / **defer 链**。
+/* 扫**所有** G 的栈（`C12` §4.1 第 9 类，M11c/Task 33 / `D-M11-11`）。
  *
- * 还差的三类在 Task 25–26 接（map 槽 / 闭包捕获 / 数组元素）—— 那三类是
+ * # 为什么必须扫所有 gdesc，而不只是当前那个
+ *
+ * 挂起的 G 的栈上有活值：它正等着被唤醒，而唤醒后要用那些值。漏扫**不会立刻
+ * 崩** —— 要等 GC 把对象收掉、块被别的分配覆盖、醒来读到垃圾。所以判据必须
+ * 「先阻塞、再 churn、再唤醒、最后读值」四步走完（`T-GROOT-01`）。
+ *
+ * # 三种状态都扫
+ *
+ * * `blocked`：栈上等着唤醒后用的值（本类的主角）；
+ * * `ready`：已入队未运行（`T-GROOT-02`）—— 它的栈同样是活的；
+ * * `exited`：栈已经没人用了，但 `frames` 必然是 0（`rt_goexit` 之前所有帧
+ *   都已 `epilogue` 摘链），扫一遍是空操作。**不特判**是为了少一条「状态判断
+ *   写反」的机会。
+ *
+ * # 当前 G 的链头从 `g_frames` 拿
+ *
+ * `g_cur->frames` 是**上次切走时**的旧值 —— 当前 G 之后又进出了很多帧。所以
+ * 先同步一次。GC 只在分配点的 safepoint 跑（单线程、不抢占），写它没有竞争。
+ *
+ * # `WaitSet` 为什么要单独标（`T-GROOT-03`）
+ *
+ * 它是 `K_RAW`（`rt_alloc_raw`）⇒ `scan_block` 不看它的内容 ⇒ 里面的
+ * `Hchan *` 一个都不是根。所以这里按 `WaitSet` 的布局逐个标。 */
+static void mark_all_g_stacks(void) {
+    g_cur->frames = g_frames;
+    for (u32 i = 0; i < g_count; i++) {
+        GDesc *g = &g_descs[i];
+        if (g->frames != 0) {
+            mark_frames(g->frames);
+        }
+        /* `go` 的实参区（`T-GROOT-02`）：它在新 G 的栈顶、不在任何帧记录里，
+         * 而 `fv`（arg0）指向闭包块。按字节数保守地标（见 `rt_go` 的注）。
+         *
+         * 地址由 `rt_go` 的布局决定：`stack_hi - G_GO_FRAME + G_SWITCH_SAVE`。
+         * `sc_mkg` 造的 G 没有实参区（`argbytes == 0`）⇒ 跳过。 */
+        if (g->argbytes != 0) {
+            u8 *base = (u8 *)g->stack_hi - G_GO_FRAME + G_SWITCH_SAVE;
+            u64 n = g->argbytes > G_GO_ARGBYTES ? G_GO_ARGBYTES : g->argbytes;
+            for (u64 k = 0; k + 8 <= n; k += 8) {
+                void *q;
+                rt_memcpy(&q, base + k, 8);
+                mark_ptr(q);
+            }
+        }
+        WaitSet *w = (WaitSet *)g->wait;
+        if (w == 0) {
+            continue;
+        }
+        mark_ptr(w);
+        for (u64 k = 0; k < w->n && k < SEL_MAX; k++) {
+            mark_ptr(w->cases[k].c);
+        }
+    }
+}
+
+/* 扫根（`C12` §4.1）：**所有 G 的栈** / **全局** / **defer 链** / **pin**。
+ *
+ * 还差的几类在 Task 25–26 接（map 槽 / 闭包捕获 / 数组元素）—— 那几类是
  * **由被标记的块自己带出来的**（`scan_block` 按 kind 扫），不需要在这里列。 */
 static void mark_roots(void) {
-    mark_frames();
+    mark_all_g_stacks();
     mark_defer();
     for (u64 i = 0; i < gc_npin; i++) {
         mark_ptr(gc_pin[i]);
@@ -3891,6 +4095,9 @@ void rt_panic_div_zero(void) {
     }
     panic_set(m, n);
 }
+
+static u64 sb_str(char *b, u64 n, const char *s);
+static u64 sb_u64(char *b, u64 n, u64 v);
 
 void rt_panic_nil(void) {
     const char *m =
