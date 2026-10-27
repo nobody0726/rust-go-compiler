@@ -17,6 +17,8 @@ mod support;
 use support::go_probe;
 
 const SUSPENDED: &str = r#"
+package main
+
 func churn() {
 	for i := 0; i < 20000; i++ {
 		_ = new([64]byte)

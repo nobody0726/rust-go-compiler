@@ -198,28 +198,46 @@
 
 # Phase 1 · M11a：栈与上下文切换（Task 8–15）
 
-### Task 8: `gdesc` 与栈分配
+### Task 8: `gdesc` 与栈分配 —— ✅ 已完成（2026-10-27）
+
+> ⚠️ **`t_stk_02`（新 G 的初始 sp 16 对齐）推到 Task 12**：M11a 现在只有 `main`
+> 一个 G，`rt_gstack_alloc` 还没有调用者。Task 12 的 `go` 语句才第一次造新 G。
+>
+> ⚠️ **`gdesc` 用静态数组而不是 `rt_arena_alloc`**：`rt_init` 会调它，走 arena
+> 就等于在 `_start` 里触发第一次 `rt_grow`（16 MiB mmap），「空程序只在第一次
+> 分配时才 mmap」这条 M10 的惰性行为就变了 ⇒ `allocs`/`heap` 读数全偏移。
 
 **Files:**
 - Modify: `runtime/native/aarch64-unknown-linux-gnu/rt.c`
 
-- [ ] **Step 1**: `GDesc` 64 字节（`M11-design.md` §3.2），放 **arena**；
+- [x] **Step 1**: `GDesc` 64 字节（`M11-design.md` §3.2），放 **arena**；
   `rt_gnew()`：`mmap` 64 KiB 栈 + 分配 `gdesc` + 填 `stack_lo/hi/sp`。
-- [ ] **Step 2**: `g_stack_lo` 全局（序言检查读它）；`rt_gset_current(g)` 更新它。
-- [ ] **Step 3**: 判据 `go_stack.rs::t_stk_02_sp_对齐`：新 G 的初始 `sp` 16 对齐。
-- [ ] **Step 4: Commit** `feat(rt): gdesc 与 goroutine 栈（Task 8，D-M11-2）`
+- [x] **Step 2**: `g_stack_lo` 全局（序言检查读它）；`rt_gset_current(g)` 更新它。
+- [x] **Step 3**: 判据 `go_stack.rs::t_stk_02_sp_对齐`：新 G 的初始 `sp` 16 对齐。
+- [x] **Step 4: Commit** `feat(rt): gdesc 与 goroutine 栈（Task 8，D-M11-2）`
 
-### Task 9: `rt_switch`（汇编）
+### Task 9: `rt_switch`（汇编）—— ✅ 已完成（2026-10-27）
+
+> **读数**：`RGOC_G11_SELFTEST=1` ⇒ rc=0（18 个 callee-saved 逐个不变）；
+> 变异「不存 d8/d9」⇒ rc=**9**（自测失败，判据有牙）。
+>
+> ⚠️ **两个坑**（都写进了 `rt.c` 的注释）：
+> ① 链接必须 `-no-pie` —— PIE 下全局符号不能用 `adrp + :lo12:` 直接寻址
+> （`relocation R_AARCH64_ADR_PREL_PG_HI21 … can not be used when making a
+> shared object`），而 `rt_switch` 自测要直接引用全局；
+> ② **自测函数自己必须守 ABI** —— `rt_sc_run` 往 18 个 callee-saved 里填值，
+> 不先保存 C 的那份就会返回时踩烂调用方（`rc=139`，而且现象**看起来像
+> `rt_switch` 切坏了**）。
 
 **Files:**
 - Modify: `rt.c`（`__asm__` 内联或独立 `.s` 段）
 
-- [ ] **Step 1**: 160 字节保存区（`x19..x28` / `x29` / `x30` / `d8..d15`），
+- [x] **Step 1**: 160 字节保存区（`x19..x28` / `x29` / `x30` / `d8..d15`），
   对称的 `stp`/`ldp`（`M11-design.md` §3.3）。
-- [ ] **Step 2**: 判据 `t_stk_01_callee_saved_全保住`：fixture 往每个寄存器放
+- [x] **Step 2**: 判据 `t_stk_01_callee_saved_全保住`：fixture 往每个寄存器放
   **可区分值**（`0x1111…` / `1.5` / `-2.25` …），切 1000 次后逐个比。
-- [ ] **Step 3**: 判据 `t_stk_02`：切 1000 次后 `sp % 16 == 0`。
-- [ ] **Step 4: Commit** `feat(rt): rt_switch（Task 9，D-M11-3）`
+- [x] **Step 3**: 判据 `t_stk_02`：切 1000 次后 `sp % 16 == 0`。
+- [x] **Step 4: Commit** `feat(rt): rt_switch（Task 9，D-M11-3）`
 
 ### Task 10: 序言栈检查
 

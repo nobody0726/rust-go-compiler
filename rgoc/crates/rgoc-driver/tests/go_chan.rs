@@ -14,6 +14,8 @@ mod support;
 use support::go_probe;
 
 const SYNC: &str = r#"
+package main
+
 func main() {
 	c := make(chan int)
 	go func() {

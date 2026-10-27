@@ -11,6 +11,8 @@ mod support;
 use support::go_probe;
 
 const DEADLOCK: &str = r#"
+package main
+
 func main() {
 	var c chan int
 	<-c

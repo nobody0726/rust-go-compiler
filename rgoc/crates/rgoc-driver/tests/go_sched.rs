@@ -15,6 +15,8 @@ mod support;
 use support::go_probe;
 
 const FIFO: &str = r#"
+package main
+
 func main() {
 	done := make(chan bool)
 	for i := 0; i < 5; i++ {

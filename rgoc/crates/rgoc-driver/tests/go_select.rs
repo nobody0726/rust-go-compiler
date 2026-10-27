@@ -11,6 +11,8 @@ mod support;
 use support::go_probe;
 
 const EVAL_ONCE: &str = r#"
+package main
+
 var n = 0
 
 func f(c chan int) chan int {

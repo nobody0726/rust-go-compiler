@@ -385,6 +385,9 @@ static u64 gc_stress;                            /* 1 = 每次分配前先收 */
  * `gc_pause` 解决「一次分配 + 立即发布」。 */
 static u64 gc_pause;
 static u64 gc_stats;                             /* 1 = 退出时打一行 */
+/* M11a 的 `rt_switch` 自测开关（`T-STK-01`）。缺省关：它切一次栈，
+ * 对正常程序没有意义，只在判据里开。 */
+static u64 g11_selftest;
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 /* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
 static u64 gc_since;
@@ -422,6 +425,368 @@ static u64 parse_u64(const char *s) {
     return any ? v : 0;
 }
 
+/* ════════════════════════════════════════════════════════════════════
+ * goroutine 描述符与栈（M11a/Task 8，`M11-design.md` §3.2）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * # `D-M11-2`：每个 G 一块**固定**栈，`mmap` 拿
+ *
+ * 64 KiB 是**实测钉住**的数字，不是估算（`M11-design.md` §2.4 ① 修正过一版：
+ * 初稿写「帧深上限 1000 × 每帧几百字节 ⇒ 够 1000 层」，算一下就知道不成立）。
+ * 溢出深度由 `T-STK-06` 实测并进 manifest。
+ *
+ * # `D-M11-3`：切换保存区压在**被挂起 G 自己的栈**上
+ *
+ * 20 个 8 字节槽（`x19..x28` / `x29` / `x30` / `d8..d15`）= 160 字节。
+ * 存进 `gdesc.regs[]` 的话 GC 就必须扫寄存器槽 ⇒ `t_gc_10`（没有寄存器根）
+ * 直接失效 —— 而那条守卫**不许为 M11 改**。
+ */
+#define G_STACK_BYTES (64 * 1024)
+#define G_SWITCH_SAVE 160
+
+/* `C5` §7.4：序言 `adrp/add/ldr` 它做栈下界比较。
+ * ⚠️ **全局而不是寄存器** —— 用寄存器会让 `t_gc_10` 红。 */
+u64 *g_stack_lo;
+
+typedef struct GDesc {
+    u64 *sp;             /* +0  挂起时的栈顶（切换点） */
+    u64 *stack_lo;       /* +8  栈低地址 */
+    u64 *stack_hi;       /* +16 栈高地址（初始 sp） */
+    void *frames;        /* +24 本 G 的 g_frames 链头（M11c 起用） */
+    void *wait;          /* +32 select 的 WaitSet（阻塞时） */
+    struct GDesc *qnext; /* +40 就绪队列后继 */
+    u32 state;           /* +48 0=ready 1=running 2=blocked 3=exited */
+    u32 id;              /* +52 单调递增（调试与确定性） */
+    u64 pad;             /* +56 */
+} GDesc;                 /* 64 字节 */
+
+/* `M11-design.md` §4.4：goroutine 数的硬上限。 */
+#define G_MAX 1024
+
+/* ⚠️ **静态数组，不走 `rt_arena_alloc`**。
+ *
+ * 两个理由，第二个是硬的：
+ *
+ * ① 设计里说「`gdesc` 放 arena（永不回收，量小）」—— 静态数组是同一效果；
+ * ② **`rt_init` 会调它**。走 arena 就等于在 `_start` 里触发第一次 `rt_grow`
+ *    （16 MiB 的 mmap），于是「空程序也只在第一次分配时才 mmap」这条 M10 的
+ *    惰性行为变了 ⇒ `allocs` / `heap` 的读数全部偏移，会打破 M10 的判据。
+ *    64 KiB 的 `.bss` 不进文件、也不占物理页（碰过才占）。
+ */
+static GDesc g_descs[G_MAX];
+static GDesc *g_cur;
+static u32 g_next_id;
+static u32 g_count;
+
+/* 分配一个**空的** gdesc（栈由调用方填）。
+ *
+ * 上限检查在 Task 29（`runtime error: too many goroutines (limit 1024)`）；
+ * M11a 只有 `main` 一个 G，走不到那里。 */
+static GDesc *rt_gdesc_new(void) {
+    if (g_count >= G_MAX) {
+        /* Task 29 会换成 `C9` §5 的文本 + 退出 2。 */
+        rt_fatal_oom(heap_limit);
+    }
+    GDesc *g = &g_descs[g_count];
+    g_count++;
+    /* 静态数组只在 `.bss` 里清零一次，复用的槽要手动清。 */
+    *g = (GDesc){0};
+    g->id = ++g_next_id;
+    return g;
+}
+
+/* 给一个 gdesc 配一块 `mmap` 的栈（`D-M11-2`）。
+ *
+ * 返回值仍是那个 gdesc；`sp` 指向栈顶（**16 对齐**，AAPCS64 要求）。 */
+static void rt_gstack_alloc(GDesc *g) {
+    u64 total = G_STACK_BYTES + 16;
+    i64 r = sys6(SYS_mmap, 0, (i64)total, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    if (r < 0) {
+        rt_fatal_oom(heap_limit);
+    }
+    /* 栈顶**向下**对齐：`mmap` 返回页对齐，加 total 之后可能不是 16 的倍数。 */
+    u64 hi = ((u64)r + total) & ~(u64)15;
+    u64 lo = hi - G_STACK_BYTES;
+    g->stack_hi = (u64 *)hi;
+    g->stack_lo = (u64 *)lo;
+    g->sp = (u64 *)hi;
+}
+
+/* 切到 `g`（只更新「当前 G」与序言读的那个下界）。
+ *
+ * ⚠️ **不切 `sp`** —— `sp` 的切换是 `rt_switch` 的事（Task 9）。这里只维护
+ * 元数据，所以它可以在 `_start` 里安全调用。 */
+static void rt_gset_current(GDesc *g) {
+    g_cur = g;
+    g_stack_lo = g->stack_lo;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * 上下文切换（M11a/Task 9，`M11-design.md` §3.3 / `D-M11-3`）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * `void rt_switch(u64 **save_sp, u64 *new_sp)`
+ *
+ * # 为什么保存区是 160 字节
+ *
+ * `x19..x28`（10）+ `x29` + `x30` + `d8..d15`（8）= 20 个 8 字节槽。
+ * AAPCS64 规定 `x19..x28` / `v8..v15` 是 callee-saved，而 `rt_switch` 是
+ * 被 `bl` **调用**的 —— 不保存就违反 ABI，G 之间会串味（`C5` §6.1 的注）。
+ *
+ * # 为什么压进**被挂起 G 自己的栈**而不是 `gdesc.regs[]`
+ *
+ * 存进 `gdesc` 的话 GC 就必须扫那 20 个槽 ⇒ `t_gc_10`（没有寄存器根）失效，
+ * 而那条守卫**不许为 M11 改**。压在栈上则「值仍然全在栈里」⇒ M10 的根协议
+ * 一个字都不用动（`M11-design.md` §2.2 的方案 B）。
+ *
+ * # 为什么用顶层 `__asm__` 而不是内联汇编
+ *
+ * 内联汇编的 clobber 列表要写全 20 个寄存器，而编译器仍可能在函数序言/尾声
+ * 插入对它们的访问 —— 那种错误只在开了优化时露。顶层汇编块是**整个函数**，
+ * 没有这个问题。
+ */
+void rt_switch(u64 **save_sp, u64 *new_sp);
+
+__asm__(
+    ".text\n"
+    ".globl rt_switch\n"
+    ".type rt_switch, %function\n"
+    ".balign 4\n"
+    "rt_switch:\n"
+    "    sub  sp, sp, #160\n"
+    "    stp  x19, x20, [sp, #0]\n"
+    "    stp  x21, x22, [sp, #16]\n"
+    "    stp  x23, x24, [sp, #32]\n"
+    "    stp  x25, x26, [sp, #48]\n"
+    "    stp  x27, x28, [sp, #64]\n"
+    "    stp  x29, x30, [sp, #80]\n"
+    "    stp  d8,  d9,  [sp, #96]\n"
+    "    stp  d10, d11, [sp, #112]\n"
+    "    stp  d12, d13, [sp, #128]\n"
+    "    stp  d14, d15, [sp, #144]\n"
+    "    mov  x9, sp\n"
+    "    str  x9, [x0]\n"
+    "    mov  sp, x1\n"
+    "    ldp  x19, x20, [sp, #0]\n"
+    "    ldp  x21, x22, [sp, #16]\n"
+    "    ldp  x23, x24, [sp, #32]\n"
+    "    ldp  x25, x26, [sp, #48]\n"
+    "    ldp  x27, x28, [sp, #64]\n"
+    "    ldp  x29, x30, [sp, #80]\n"
+    "    ldp  d8,  d9,  [sp, #96]\n"
+    "    ldp  d10, d11, [sp, #112]\n"
+    "    ldp  d12, d13, [sp, #128]\n"
+    "    ldp  d14, d15, [sp, #144]\n"
+    "    add  sp, sp, #160\n"
+    "    ret\n"
+    ".size rt_switch, .-rt_switch\n");
+
+/* ── 自测装置（`T-STK-01`）────────────────────────────────────────────
+ *
+ * 目标：切出去、再切回来，`x19..x28` 与 `d8..d15` 逐个不变。
+ *
+ * 为什么必须用汇编验：C 语言**看不到**寄存器分配，编译器可以随时复用它们。
+ * 所以「填值 + 比对」只能是汇编，「切换」也只能是汇编 —— 只有「构造 B 栈」
+ * 与「判成败」可以用 C。
+ *
+ * B 栈的构造（`rt_switch` 的契约决定）：
+ *
+ * ```text
+ *   [sa + 0 .. sa + 160)   20 个槽：x19,x20,…,x29,x30,d8,…,d15
+ *   sa[11] = rt_sc_b       ← 恢复后 `ret` 跳这里（x30 在 #88 = 槽 11）
+ *   sa + 160 = B 的初始 sp
+ * ```
+ */
+#define SC_STACK_WORDS 128 /* 1 KiB，够一个保存区 + 余量 */
+
+/* ⚠️ 这几个**不能** `static`：下面的顶层汇编块要用 `adrp/add :lo12:` 直接
+ * 引用它们，而 `static` 符号在 `.o` 里是 local —— 汇编块引用不到（实测
+ * `undefined reference to sc_save_a`）。
+ *
+ * ⚠️ **必须 16 对齐**：`rt_switch` 用 `stp/ldp` 以 `sp` 为基址，而 AAPCS64
+ * 要求那类访问的 `sp` **16 字节对齐**。`u64[]` 默认只保证 8 —— 实测不写
+ * `aligned(16)` 会段错误（`rc=139`）。`SC_STACK_WORDS` 是 128（1024 B，16 的
+ * 倍数），所以 `top = base + 128`、`sa = top - 20` 也都是 16 对齐。 */
+u64 sc_b_stack[SC_STACK_WORDS] __attribute__((aligned(16)));
+u64 *sc_b_sp;
+u64 *sc_save_a;
+u64 *sc_save_b;
+i64 sc_fail;
+
+void rt_sc_run(void);
+void rt_sc_b(void);
+
+i64 rt_switch_selftest(void) {
+    u64 *top = sc_b_stack + SC_STACK_WORDS;
+    u64 *sa = top - 20;
+    for (u64 i = 0; i < 20; i++) {
+        sa[i] = 0;
+    }
+    sa[11] = (u64)rt_sc_b; /* x30 */
+    sc_b_sp = sa;
+    sc_fail = 0;
+    rt_sc_run();
+    return sc_fail;
+}
+
+__asm__(
+    ".text\n"
+    /* B 的入口：切回 A，然后把 A 的 `rt_switch` 之后的代码接着跑。 */
+    ".globl rt_sc_b\n"
+    ".type rt_sc_b, %function\n"
+    ".balign 4\n"
+    "rt_sc_b:\n"
+    "    adrp x0, sc_save_b\n"
+    "    add  x0, x0, :lo12:sc_save_b\n"
+    "    adrp x1, sc_save_a\n"
+    "    add  x1, x1, :lo12:sc_save_a\n"
+    "    ldr  x1, [x1]\n"
+    "    bl   rt_switch\n"
+    "    brk  #1\n" /* 不该回来 */
+    ".size rt_sc_b, .-rt_sc_b\n"
+    /* 填可区分值 → 切到 B → 切回来 → 逐个比对。失败置 sc_fail = 1。 */
+    ".globl rt_sc_run\n"
+    ".type rt_sc_run, %function\n"
+    ".balign 4\n"
+    "rt_sc_run:\n"
+    "    stp  x29, x30, [sp, #-16]!\n"
+    "    mov  x29, sp\n"
+    /* ⚠️ **必须先把 C 的 callee-saved 存起来**（`x19..x28` + `d8..d15`）。
+     *
+     * 这个函数要往这 18 个寄存器里填「可区分值」再比对 —— 而它们按 AAPCS64
+     * 是 **callee-saved**：不保存就返回，调用方（C）用它们存的局部变量会全
+     * 变成 0x1111 这类垃圾。实测症状是 `rc=139`（C 的返回地址被踩），
+     * 而且**看起来像是 `rt_switch` 切坏了** —— 实际是自测函数自己没守 ABI。 */
+    "    sub  sp, sp, #160\n"
+    "    stp  x19, x20, [sp, #0]\n"
+    "    stp  x21, x22, [sp, #16]\n"
+    "    stp  x23, x24, [sp, #32]\n"
+    "    stp  x25, x26, [sp, #48]\n"
+    "    stp  x27, x28, [sp, #64]\n"
+    "    stp  d8,  d9,  [sp, #80]\n"
+    "    stp  d10, d11, [sp, #96]\n"
+    "    stp  d12, d13, [sp, #112]\n"
+    "    stp  d14, d15, [sp, #128]\n"
+    /* 填 x19..x28：0x1111, 0x2222, …, 0xAAAA */
+    "    movz x19, #0x1111\n"
+    "    movz x20, #0x2222\n"
+    "    movz x21, #0x3333\n"
+    "    movz x22, #0x4444\n"
+    "    movz x23, #0x5555\n"
+    "    movz x24, #0x6666\n"
+    "    movz x25, #0x7777\n"
+    "    movz x26, #0x8888\n"
+    "    movz x27, #0x9999\n"
+    "    movz x28, #0xAAAA\n"
+    /* 填 d8..d15：把整数位模式直接装进浮点寄存器（不经浮点运算） */
+    "    movz x9, #0x0101\n"
+    "    fmov d8, x9\n"
+    "    movz x9, #0x0202\n"
+    "    fmov d9, x9\n"
+    "    movz x9, #0x0303\n"
+    "    fmov d10, x9\n"
+    "    movz x9, #0x0404\n"
+    "    fmov d11, x9\n"
+    "    movz x9, #0x0505\n"
+    "    fmov d12, x9\n"
+    "    movz x9, #0x0606\n"
+    "    fmov d13, x9\n"
+    "    movz x9, #0x0707\n"
+    "    fmov d14, x9\n"
+    "    movz x9, #0x0808\n"
+    "    fmov d15, x9\n"
+    /* 切到 B，再从 B 切回来 */
+    "    adrp x0, sc_save_a\n"
+    "    add  x0, x0, :lo12:sc_save_a\n"
+    "    adrp x1, sc_b_sp\n"
+    "    add  x1, x1, :lo12:sc_b_sp\n"
+    "    ldr  x1, [x1]\n"
+    "    bl   rt_switch\n"
+    /* 回来了：逐个比对（x9/x10 是 caller-saved，可以随便用） */
+    "    movz x9, #0x1111\n"
+    "    cmp  x19, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x2222\n"
+    "    cmp  x20, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x3333\n"
+    "    cmp  x21, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x4444\n"
+    "    cmp  x22, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x5555\n"
+    "    cmp  x23, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x6666\n"
+    "    cmp  x24, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x7777\n"
+    "    cmp  x25, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x8888\n"
+    "    cmp  x26, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0x9999\n"
+    "    cmp  x27, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    movz x9, #0xAAAA\n"
+    "    cmp  x28, x9\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d8\n"
+    "    movz x10, #0x0101\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d9\n"
+    "    movz x10, #0x0202\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d10\n"
+    "    movz x10, #0x0303\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d11\n"
+    "    movz x10, #0x0404\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d12\n"
+    "    movz x10, #0x0505\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d13\n"
+    "    movz x10, #0x0606\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d14\n"
+    "    movz x10, #0x0707\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    fmov x9, d15\n"
+    "    movz x10, #0x0808\n"
+    "    cmp  x9, x10\n"
+    "    b.ne .Lsc_bad\n"
+    "    b    .Lsc_done\n"
+    ".Lsc_bad:\n"
+    "    adrp x9, sc_fail\n"
+    "    add  x9, x9, :lo12:sc_fail\n"
+    "    mov  x10, #1\n"
+    "    str  x10, [x9]\n"
+    ".Lsc_done:\n"
+    /* 恢复 C 的 callee-saved（**必须**，见上面的注） */
+    "    ldp  x19, x20, [sp, #0]\n"
+    "    ldp  x21, x22, [sp, #16]\n"
+    "    ldp  x23, x24, [sp, #32]\n"
+    "    ldp  x25, x26, [sp, #48]\n"
+    "    ldp  x27, x28, [sp, #64]\n"
+    "    ldp  d8,  d9,  [sp, #80]\n"
+    "    ldp  d10, d11, [sp, #96]\n"
+    "    ldp  d12, d13, [sp, #112]\n"
+    "    ldp  d14, d15, [sp, #128]\n"
+    "    add  sp, sp, #160\n"
+    "    ldp  x29, x30, [sp], #16\n"
+    "    ret\n"
+    ".size rt_sc_run, .-rt_sc_run\n");
+
 void rt_init(u64 sp) {
     u64 argc = *(u64 *)sp;
     char **argv = (char **)(sp + 8);
@@ -447,7 +812,35 @@ void rt_init(u64 sp) {
         } else if (starts_with(e, "RGOC_GC_THRESHOLD=")) {
             /* `0` 有意义（= 每次分配失败都收），所以不设下限。 */
             gc_threshold = parse_u64(e + 18);
+        } else if (starts_with(e, "RGOC_G11_SELFTEST=")) {
+            g11_selftest = parse_u64(e + 18) != 0;
         }
+    }
+
+    /* ── M11a：`main` 也是一个 G（Task 8）───────────────────────────
+     *
+     * `main` 用**进程栈**（内核给的 8 MiB），不是我们 `mmap` 的 64 KiB ——
+     * `_start` 的 `sp` 已经在用它了，换栈要改生成的汇编（`M11-design.md`
+     * §3.2 的图描述的是新 G 的栈）。
+     *
+     * `stack_lo` 取「入口 `sp` 往下 8 MiB」，与内核默认 `rlimit` 一致。
+     * 这是**近似**（`ulimit -s` 可变），但比「不检查」好：深递归会明确报
+     * `goroutine stack exceeded` 而不是段错误。精确的溢出深度由 `T-STK-06`
+     * 在**新 G 的 64 KiB 栈**上实测钉住。 */
+    {
+        GDesc *m = rt_gdesc_new();
+        m->sp = (u64 *)sp;
+        m->stack_hi = (u64 *)sp;
+        m->stack_lo = (u64 *)(sp - (8UL * 1024UL * 1024UL));
+        m->state = 1; /* running */
+        rt_gset_current(m);
+    }
+
+    /* M11a 自测（`T-STK-01`）：`RGOC_G11_SELFTEST=1` 时验一遍 `rt_switch`
+     * 的 callee-saved 对称性。失败退出 **9**（不是 2 —— 那是运行期错误的码，
+     * 而 9 只可能来自自测，便于判据区分「切换坏了」与「程序自己坏了」）。 */
+    if (g11_selftest != 0 && rt_switch_selftest() != 0) {
+        rt_exit(9);
     }
 }
 

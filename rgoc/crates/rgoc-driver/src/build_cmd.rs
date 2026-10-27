@@ -280,8 +280,19 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
     }
 
     // ⑧ 链接（`-nostartfiles` 与 `-Wl,-s` 都是**必需**，`C5` §2.5 / §3）
+    //
+    // ⚠️ **`-no-pie` 也是必需的**（M11/Task 9 加）。clang 在 Linux 上默认
+    // 走 PIE，而 PIE 下全局符号不能用 `adrp x9, sym; add x9, x9, :lo12:sym`
+    // 直接寻址（必须走 GOT）—— 实测报
+    // `relocation R_AARCH64_ADR_PREL_PG_HI21 … can not be used when making
+    // a shared object`。`rt.c` 的顶层汇编块（`rt_switch` 自测）要直接引用
+    // 全局，所以产物必须是**非 PIE 的静态 ELF**。
+    //
+    // 这与「freestanding、无 libc、`-nostartfiles`」是同一个方向：产物本来
+    // 就没有动态段，PIE 只是链接器的默认值，不是需求。
     let link = Command::new("clang")
         .arg("-nostartfiles")
+        .arg("-no-pie")
         .arg("-Wl,-s")
         .arg("-o")
         .arg(&out)
