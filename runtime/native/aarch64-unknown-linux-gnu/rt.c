@@ -392,6 +392,8 @@ static u64 g11_selftest;
 static u64 g11_schedtest;
 /* `rt_go` 的自测开关（Task 12）。 */
 static u64 g11_gotest;
+/* `rt_send`/`rt_recv` 直通路径的自测开关（Task 17）。 */
+static u64 g11_chan2test;
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 /* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
 static u64 gc_since;
@@ -1028,6 +1030,10 @@ static u64 env_u64(const char *e, const char *key) {
     return parse_u64(e + n);
 }
 
+
+/* 定义在文件后半（要用 `Hchan`，而它在 `TypeDesc` 之后）。 */
+void rt_chan2test(void);
+
 void rt_init(u64 sp) {
     u64 argc = *(u64 *)sp;
     char **argv = (char **)(sp + 8);
@@ -1059,6 +1065,8 @@ void rt_init(u64 sp) {
             g11_schedtest = env_u64(e, "RGOC_G11_SCHEDTEST=") != 0;
         } else if (starts_with(e, "RGOC_G11_GOTEST=")) {
             g11_gotest = env_u64(e, "RGOC_G11_GOTEST=") != 0;
+        } else if (starts_with(e, "RGOC_G11_CHAN2TEST=")) {
+            g11_chan2test = env_u64(e, "RGOC_G11_CHAN2TEST=") != 0;
         }
     }
 
@@ -1103,6 +1111,11 @@ void rt_init(u64 sp) {
     /* `rt_go` 自测（Task 12）：手工启动一个 G，期望输出 `A\n`。 */
     if (g11_gotest != 0) {
         rt_gotest();
+    }
+
+    /* chan 直通自测（Task 17）：cap=3 发 3 收 3 + closed 后零值。 */
+    if (g11_chan2test != 0) {
+        rt_chan2test();
     }
 }
 
@@ -1636,6 +1649,123 @@ void rt_makechan(Hchan **out, u64 dataqsiz, const void *elemtype) {
      * 槽在栈上 ⇒ GC 顺着帧记录扫得到它。 */
     *out = c;
 }
+
+/* ── hchan 的四操作（M11b/Task 17–19，`C11` §3.2 四张表）───────────────
+ *
+ * Task 17 只做**不阻塞**的两条：缓冲未满的 `send`、缓冲非空的 `recv`。
+ * 阻塞（`recvq` / `sendq` / `Sudog`）是 Task 18。
+ */
+
+void panic_set(const char *m, u64 n); /* 定义在文件后半 */
+
+/* `panic: send on closed channel` —— `C11` §5 的文本，**不带** `runtime error:`。 */
+static void rt_panic_send_closed(void) {
+    const char *m = "panic: send on closed channel";
+    u64 n = 0;
+    while (m[n] != 0) {
+        n++;
+    }
+    panic_set(m, n);
+}
+
+/* Task 18 之前：阻塞路径直接退出 9。
+ *
+ * 用 **9** 而不是 2：`2` 是「跑错了」（`C9` §5），而这是「还没实现」。
+ * 判据据此能分辨「实现有 bug」与「这一块还没做」。 */
+static void rt_panic_blocked(const char *what) {
+    rt_write(2, "rgoc: ", 6);
+    u64 k = 0;
+    while (what[k] != 0) {
+        k++;
+    }
+    rt_write(2, what, k);
+    rt_write(2, "\n", 1);
+    rt_exit(9);
+}
+
+/* `ch <- v`。
+ *
+ * ⚠️ **`closed` 检查排第一**（`C11` §3.2 的 ⚠️）。顺序反了会让「往已关闭的
+ * 有缓冲通道发送」**静默塞进缓冲**，而不是 panic —— 那是最难查的一类语义漂移，
+ * 变异 `M-M11-07` 就是它。 */
+void rt_send(Hchan *c, const void *val) {
+    if (c->closed != 0) {
+        rt_panic_send_closed();
+        return;
+    }
+    if (c->dataqsiz == 0) {
+        rt_panic_blocked("send on unbuffered channel（Sudog 是 Task 18）");
+        return;
+    }
+    if (c->qcount == c->dataqsiz) {
+        rt_panic_blocked("send on full channel（Sudog 是 Task 18）");
+        return;
+    }
+    u64 es = c->elemsize;
+    if (es > 0) {
+        rt_memcpy(c->buf + c->sendx * es, val, es);
+    }
+    c->sendx = (c->sendx + 1) % c->dataqsiz;
+    c->qcount++;
+}
+
+/* `<-ch`。`closed && qcount == 0` ⇒ 零值（`C11` §3.2）。 */
+void rt_recv(Hchan *c, void *out) {
+    u64 es = c->elemsize;
+    if (c->qcount == 0) {
+        if (c->closed != 0) {
+            if (es > 0) {
+                rt_memset(out, 0, es);
+            }
+            return;
+        }
+        rt_panic_blocked("recv on empty channel（Sudog 是 Task 18）");
+        return;
+    }
+    if (es > 0) {
+        rt_memcpy(out, c->buf + c->recvx * es, es);
+    }
+    c->recvx = (c->recvx + 1) % c->dataqsiz;
+    c->qcount--;
+}
+
+/* `rt_send` / `rt_recv` 的自测（Task 17；`go` 语句的下降还没接 isel）。
+ *
+ * `cap = 3` 发 3 收 3，断言 FIFO 顺序；再置 `closed` 断言 recv 拿到零值。
+ * 失败退出 **8**（与 9「未实现」、2「跑错了」都分开）。 */
+void rt_chan2test(void) {
+    /* 一个最小的 int desc：`size = 8`（+0），其余全 0 ⇒ 不扫指针。 */
+    static const u64 fake_desc[5] = {8, 0, 0, 0, 0};
+    Hchan *c = 0;
+    rt_makechan(&c, 3, fake_desc);
+    u64 v = 11;
+    rt_send(c, &v);
+    v = 22;
+    rt_send(c, &v);
+    v = 33;
+    rt_send(c, &v);
+    u64 o = 0;
+    rt_recv(c, &o);
+    if (o != 11) {
+        rt_exit(8);
+    }
+    rt_recv(c, &o);
+    if (o != 22) {
+        rt_exit(8);
+    }
+    rt_recv(c, &o);
+    if (o != 33) {
+        rt_exit(8);
+    }
+    /* 关闭后 recv ⇒ 零值 */
+    c->closed = 1;
+    o = 99;
+    rt_recv(c, &o);
+    if (o != 0) {
+        rt_exit(8);
+    }
+}
+
 
 
 /* 值相等（定义在文件后半；`rt_iface_eq` 在它之前就要用）。 */
