@@ -1,0 +1,307 @@
+{
+  "stage": "M11",
+  "name": "native 并发运行时（M:1 协作式调度 / hchan / select / 多 G 根扫描）",
+  "generated_at": "2026-10-27T00:00:00Z",
+  "filled_at": "2026-10-27T00:00:00Z",
+  "fill_task": "M11-plan.md Task 41（按实测数字填；由 rgoc-driver/tests/manifest_m11.rs 对账）",
+  "status": "已收口 —— 七条门禁 GO-1..GO-7 全部 pass；242 suite / 2278 passed / 0 failed / 2 ignored；69 个单线程语料三态各 69/0/0；7 个并发语料三态各 7/0/0（M' 12/12 每态）；变异 16/16 全红；溢出深度实测 N=452",
+  "scope": "把 M8/M9 只有解释器的并发语义搬到 native：每个 goroutine 一块固定 64 KiB 栈（mmap）、`rt_switch`（顶层汇编，160 字节 callee-saved 保存区）、M:1 协作式调度（就绪队列 FIFO、不抢占）、`go` 语句、`hchan` 四操作（96 字节布局冻结）+ 阻塞/唤醒 + 三条 panic、`select` 三阶段、死锁与退出码、GC 在**多 G** 下的根扫描（帧记录链跟 G 走 + 扫所有 gdesc + `go` 实参区）、goroutine 的栈与 gdesc 回收。**不含**：多线程/GMP（U-M11-01）、抢占（02）、定时器（03）、栈增长（04）、步数预算（05）、`-race`（06）、select 随机（07）、并发 GC（08）。",
+  "docs": {
+    "design": "docs/milestones/M11-design.md（D-M11-1..12 / GO-1..GO-7 / §2 方案比较 / §3 栈与切换 / §4 判据与装置）",
+    "tests": "docs/milestones/M11-tests.md（T-STK / T-GO / T-CHAN / T-SEL / T-EXIT / T-GROOT / T-GCORP 各族 + §9 变异 + §10 不变式）",
+    "plan": "docs/milestones/M11-plan.md（Task 0–46；进度台账 .superpowers/sdd/M11-plan/progress.md，不入库）",
+    "report": "docs/milestones/M11-report.md",
+    "contracts": [
+      "docs/contracts/C11-concurrency.md（并发语义：M:1 / 不抢占 / FIFO / select 三阶段 / hchan 布局；M11 增 §7 native 侧镜像）",
+      "docs/contracts/C12-heap-and-gc.md（M11c 增 §4.1 第 9/10 类根与 §4.1.1；§4.2 `g_frames` 语义；§5.1 stress 间隔口径）",
+      "docs/contracts/C9-values-and-output.md（§5 死锁 / panic 文本与退出码）"
+    ]
+  },
+  "crates": [
+    {
+      "name": "rgoc-ssa",
+      "role": "`Instr::Go { callee, args, effect }`（13 个 match 点）；`RuntimeFn::ChanSend/ChanRecv/SelectBegin/SelectAdd/SelectWait`（`ALL` 11 条）；`live.rs` 的 `is_safepoint` 穷尽匹配必须为 `Go`/`Select*` 回答"
+    },
+    {
+      "name": "rgoc-arm64",
+      "role": "`isel` 下降 `Go`/`ChanSend`/`ChanRecv`/`Select*`/`Close`/`make(chan)`/`len`/`cap`；序言栈检查（+ 冷路径 `mov sp, x9`）；`CgCode::GoArgs`"
+    },
+    {
+      "name": "runtime/native/aarch64-unknown-linux-gnu/rt.c",
+      "role": "GDesc / g_descs（静态 1024 槽，退出后回收复用）/ `rt_gstack_alloc`（64 KiB + 一页余量）/ `rt_switch` / `rt_schedule`（FIFO + 帧链跟 G 走 + 收尸）/ `rt_go` + trampoline / `Hchan` + `Sudog` + `WaitSet` / `rt_send`/`rt_recv`/`rt_close`/`rt_select_*` / `mark_all_g_stacks` / `chan_desc`"
+    }
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/test（只读；corpus-manifest.sha256 锁定）",
+    "native": {
+      "file": "tools/run-oracle/run-selected.txt",
+      "count": 69,
+      "states": ["off", "on", "stress"],
+      "counts": { "off": "69/0/0", "on": "69/0/0", "stress": "69/0/0" },
+      "note": "`run-native.sh --gc=off|on|stress`；stress = 每 64 次分配收一次（C12 §5.1 的**间隔**口径，M11c 修正过一次注释与实现不一致）"
+    },
+    "chan": {
+      "input": { "file": "tools/run-oracle/chan-input.txt", "count": 19 },
+      "rejected": { "file": "tools/run-oracle/chan-rejected.txt", "count": 12 },
+      "native_accepted": 7,
+      "states": ["off", "on", "stress"],
+      "counts": { "off": "7/0/0", "on": "7/0/0", "stress": "7/0/0" },
+      "rejected_kept": "12/12（每态都干净拒绝，rc=1）",
+      "note": "`N'` = chan-input − chan-rejected，**算出来**（T-GDEV-01）；`M'` 行数冻结（T-GDEV-03）"
+    },
+    "interp_chan": {
+      "command": "run-chan.sh tools/run-oracle/chan-input.txt",
+      "counts": "ok=7 skip=12 bad=0 / 19",
+      "note": "解释器侧（M8 的装置）**复跑不改**：7 个入选 + 12 个静态拒绝"
+    }
+  },
+  "measured": {
+    "workspace": "242 suite / 2278 passed / 0 failed / 2 ignored",
+    "corpus_native_three_states": "off 69/0/0 · on 69/0/0 · stress 69/0/0",
+    "corpus_chan_three_states": "off 7/0/0 · on 7/0/0 · stress 7/0/0（每态 M' 12/12）",
+    "corpus_interp_chan": "ok=7 skip=12 bad=0 / 19",
+    "mutations": "16/16 全红（scripts/mutation-m11.sh --strict；RED 16 / GREEN 0 / PENDING 0 / MISS 0）",
+    "three_layer": "7 个 N' 的 native vs 解释器 vs 官方（静默成功）三层一致（t_gcorp_01）",
+    "stack_overflow_depth": {
+      "fixture": "go_stack.rs::t_stk_06 —— 新 G（64 KiB）上递归 rec(n)，二分找边界",
+      "stack_bytes": 65536,
+      "slack_bytes": 4096,
+      "frame_bytes_approx": 144,
+      "depth_ok": 452,
+      "depth_overflow": 453,
+      "reproducible": true,
+      "note": "N=452 是二分实测的边界：452 层退出 0 且打印 452，453 层退出 2 + 溢出文本；453 跑两次逐字节相同 ⇒「64 KiB 够用」是实测不是估算"
+    },
+    "many_g": {
+      "fixture": "t_groot_07 —— 10 万个 G 依次 go + `<-done`（不是同时）",
+      "goroutines": 100000,
+      "gdesc_slots": 1024,
+      "collections": 300,
+      "allocs": 300001,
+      "frees": 299994,
+      "live_bytes": 288,
+      "heap_committed": 17039872,
+      "chunks": 1,
+      "rss_kb": 2852,
+      "note": "栈真的 munmap（不还的话 RSS 是几百 MB）；gdesc 槽复用（否则第 1025 个就撞 too many goroutines）"
+    },
+    "select_waitset": {
+      "fixture": "t_chan_08 —— 5000 次阻塞 select 发送 + 末尾 2000 次 new（把最后一次 GC 顶出来）",
+      "collections": 2,
+      "frees": 6026,
+      "live_bytes": 176,
+      "note": "`rt_select_begin` 的分配在 `gc_pause` 里 ⇒ 只做 select 的程序**一次 GC 都不会跑**（第一版判据因此是假绿：live=0 而 heap 涨到 170 MB）"
+    }
+  },
+  "gate": [
+    {
+      "id": "GO-1",
+      "name": "栈与切换",
+      "status": "pass",
+      "evidence": "go_stack.rs::t_stk_01（callee-saved 20 槽对称）/ t_stk_02（帧大小都是 16 的倍数 + 序言 `stp …, #-16`）/ t_stk_03（溢出文本 + 退出 2）/ t_stk_04（`cmp sp, x9` 与 `b.hs` 与 `bl rt_panic_stack_overflow` 三样成对）/ t_stk_05（`nilptr2.go` 的 128 MiB 帧不查）/ t_stk_06（溢出深度实测 452）/ t_stk_07（12000 字节大帧溢出也干净退出 2）",
+      "gap": "—"
+    },
+    {
+      "id": "GO-2",
+      "name": "调度三规则（M:1 / 不抢占 / FIFO）",
+      "status": "pass",
+      "evidence": "go_sched.rs::t_go_01（C 自测 A\\nB\\n）/ t_go_02（rt_go 启动新 G）/ t_go_03（Go 源码形态：5 个 G 打印 01234）/ t_go_04（`.s` 与 `rt.c` 里没有 clone/pthread/futex）/ t_go_05（同一程序两次输出一致）/ t_go_06（实参在 go 时刻拷贝）",
+      "gap": "—"
+    },
+    {
+      "id": "GO-3",
+      "name": "hchan 四操作",
+      "status": "pass",
+      "evidence": "go_chan.rs::t_chan_01..07 + t_chan_09 + t_chan_10；go_select.rs::t_chan_08（WaitSet 不泄漏）。11 条 `_Static_assert` 钉住 96 字节布局；`t_sch_01` 与 Rust 侧 `hchan.rs` 对账",
+      "gap": "—"
+    },
+    {
+      "id": "GO-4",
+      "name": "select 三阶段",
+      "status": "pass",
+      "evidence": "go_select.rs::t_sel_01（求值一次）/ t_sel_02（走 default 也求值）/ t_sel_03（多就绪取源码第一个）/ t_sel_04（撤销其余登记）/ t_sel_05（空 select 立即死锁）",
+      "gap": "`case v, ok := <-c` 的 comma-ok 形态不支持（U-M11-09，见 open_gaps）"
+    },
+    {
+      "id": "GO-5",
+      "name": "死锁与退出",
+      "status": "pass",
+      "evidence": "go_exit.rs::t_exit_01（死锁文本逐字节 + stdout 为空）/ t_exit_02（main 返回即退出，不等 G）/ t_exit_03（G 内 panic 退出 2）/ t_exit_04（1024 个 G 上限的文本）",
+      "gap": "`T-EXIT-03`「不跑其它 G 的 defer」与 `T-EXIT-05`「三条死锁条件各自必要」按计划并入 Phase 2 时被 `t_exit_02/04` 的形态覆盖，**没有单独立条**（见 open_gaps G-M11-03）"
+    },
+    {
+      "id": "GO-6",
+      "name": "多 G 根扫描（M11c）",
+      "status": "pass",
+      "evidence": "go_root.rs::t_groot_01（挂起 G 的栈是根）/ t_groot_02（就绪 G 的实参是根）/ t_groot_03（select 阻塞期间 GC 不坏）/ t_groot_05（翻开关：mode=stress + collections>0 + 与 off 态逐字节相同）/ t_groot_06（多 G 超集扫描：stress 与 off 逐字节相同 + bad_ptr=0）/ t_groot_07（10 万 G 栈不泄漏）",
+      "gap": "`T-GROOT-04`（a/b 阶段强制 mode=off）**退役**：`rt_gc_force_off` 从来没接线，a/b 的对照靠装置侧 `RGOC_GC=0`"
+    },
+    {
+      "id": "GO-7",
+      "name": "语料",
+      "status": "pass",
+      "evidence": "go_corpus.rs::t_gcorp_01（7 个 N' 三层一致）/ t_gcorp_03（N' 无 rc=101）/ t_gcorp_04（`go` 不再是拒绝原因）/ t_gcorp_05（三态逐字节相同）/ t_gdev_01（N' 是全集的一个划分）/ t_gdev_03（拒面行数冻结）；装置 run-native.sh / run-native-chan.sh / run-chan.sh",
+      "gap": "—"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U-M11-01",
+      "what": "多线程 / GMP / 真并行",
+      "code": null,
+      "exit": null,
+      "test_id": "t_go_04_m1_只有一个线程",
+      "evidence": "`.s` 与 `rt.c` 里不出现 `clone`/`pthread`/`futex`；`g_cur` 是唯一「当前 G」"
+    },
+    {
+      "id": "U-M11-02",
+      "what": "抢占",
+      "code": null,
+      "exit": 124,
+      "test_id": null,
+      "evidence": "`for {}` 在 G 里烧到装置侧 `timeout`（退出 124），不是「被切走」；`rt_schedule` 只在阻塞点与 `rt_goexit` 被调用"
+    },
+    {
+      "id": "U-M11-03",
+      "what": "定时器 / `time` 包",
+      "code": "TYP-UNSUPPORTED-IMPORT-FORM",
+      "exit": 1,
+      "test_id": "t_gcorp_03",
+      "evidence": "`import \"time\"` 仍被检查面拒（`chan-rejected.txt` 里的 11 个 stdlib import 之一）"
+    },
+    {
+      "id": "U-M11-04",
+      "what": "栈增长 / 栈复制",
+      "code": null,
+      "exit": 2,
+      "test_id": "t_stk_03",
+      "evidence": "固定 64 KiB + 序言检查 ⇒ `runtime error: goroutine stack exceeded 65536 bytes`；`stackmap` 不需要重定位"
+    },
+    {
+      "id": "U-M11-05",
+      "what": "步数预算（native）",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "只有解释器有 `--max-steps`；native 副作用靠装置侧墙钟超时"
+    },
+    {
+      "id": "U-M11-06",
+      "what": "`-race`",
+      "code": null,
+      "exit": null,
+      "test_id": "t_go_04_m1_只有一个线程",
+      "evidence": "单线程线性化，没有数据竞争可言"
+    },
+    {
+      "id": "U-M11-07",
+      "what": "select 的均匀随机",
+      "code": null,
+      "exit": null,
+      "test_id": "t_sel_03",
+      "evidence": "多就绪取**源码顺序第一个**（`C11` §4.3，与解释器一致）；官方 Go 是均匀随机，所以 L1（vs 解释器）才是主判据"
+    },
+    {
+      "id": "U-M11-08",
+      "what": "并发 GC / 写屏障",
+      "code": null,
+      "exit": null,
+      "test_id": "t_groot_06",
+      "evidence": "STW + 单线程：`rt_gc` 只在分配点同步跑；`C12` 的 `U-M10-04` 不变"
+    },
+    {
+      "id": "U-M11-09",
+      "what": "`case v, ok := <-c` 的 comma-ok 形态",
+      "code": "SSA-UNSUPPORTED-CHAN",
+      "exit": 1,
+      "test_id": null,
+      "evidence": "实测 `build` ⇒ rc=1 + `SSA-UNSUPPORTED-CHAN: func#0 — case v, ok := <-c（select 里的 comma-ok）`；`build.rs::stmt_select` 只取 `value.or(key)` 当目标、不产出 `ok` 布尔"
+    },
+    {
+      "id": "U-M11-10",
+      "what": "`go` 的实参：聚合体与浮点",
+      "code": "CG-UNSUPPORTED-GO-ARGS",
+      "exit": 1,
+      "test_id": "t_gcorp_03",
+      "evidence": "`isel::go_stmt` 只接受 `CalleeRef::Func` + ≤ 8 个非浮点实参（聚合实参按 `C5` §6.1 是指针，而 `go` 之后调用方的帧可能被复用）"
+    }
+  ],
+  "open_gaps": [
+    {
+      "id": "G-M11-01",
+      "what": "`go`/`select` 的存在不再强制关 GC，但**并发语料的 GC 覆盖率低**",
+      "detail": "7 个 `N'` 里只有 `sieve1` 在 stress 下有真实回收（105 次 / 76 块）；其余 6 个分配太少 ⇒ `t_gcorp_05` 对它们是弱判据。强判据在 `t_groot_05/06`（断言 `collections>0`）。修法（未做）：给每个 `N'` 补一条「churn 版」变体。"
+    },
+    {
+      "id": "G-M11-02",
+      "what": "`go` 实参区的根是**保守**的",
+      "detail": "整块 ≤ 64 字节按字标，不区分哪个是指针 ⇒ 「像地址的整数」会多留一轮（`R-10-21` 的同一取舍）。精确化要把「哪些实参是指针」从 SSA 传到运行期（`RuntimeFn::Go` 加一张位图），代价不划算。"
+    },
+    {
+      "id": "G-M11-03",
+      "what": "`T-EXIT-03` / `T-EXIT-05` 没有单独立条",
+      "detail": "`t_exit_02`（main 返回即退出）与 `t_exit_04`（G 数上限）覆盖了它们的**行为面**，但「不跑其它 G 的 defer」与「三条死锁条件各自必要」没有各自独立的形态。M11-report 的「判据的牙」一节记了这条。"
+    },
+    {
+      "id": "G-M11-04",
+      "what": "`M-M11-05`（`go` 实参不深拷贝）与 `M-M11-10`（`select` 不撤销）两条变异没落地",
+      "detail": "M-M11-05：`MakeClosure` 的捕获是 ValueId 而不是槽地址，改「不拷贝」要改 IR 语义，不是一行文本。M-M11-10：变异后 `t_sel_04` 是**挂死**而不是干净失败，而 `cargo test` 没有超时兜底。两条的正面覆盖分别由 `t_go_06` / `t_sel_04` 承担。"
+    },
+    {
+      "id": "G-M11-05",
+      "what": "`t_groot_03`（`WaitSet` 保活）在 Go 源码层面观察不到",
+      "detail": "`select` 的通道一定也在栈槽里（`rt_select_add` 的实参就是从槽里读的）⇒ 「`WaitSet` 单独保活」无法构造。这条判据实际验的是「GC 在 select 阻塞期间跑」这条路不坏（不崩 / bad_ptr=0 / 输出不变）。"
+    }
+  ],
+  "closed_gaps": [
+    {
+      "id": "G-M11-01",
+      "what": "挂起 G 的栈上没有根（M10 的 `mark_frames` 只扫一条链）",
+      "closed_at": "M11/Task 33",
+      "resolution": "`g_frames` 变成「当前 G 的链头」（`rt_schedule` 两条赋值）+ `mark_all_g_stacks` 遍历所有 gdesc。`t_groot_01` 从 `#[ignore]` 转正，实现前**先跑红**（native 输出空 / 解释器 42）。"
+    },
+    {
+      "id": "G-M11-02",
+      "what": "`go f(p)` 的实参区没有根 ⇒ 闭包块被回收并清零 ⇒ trampoline 撞 nil 检查 panic",
+      "closed_at": "M11/Task 33",
+      "resolution": "`gdesc.argbytes`（用掉原来的 `pad`）+ `mark_all_g_stacks` 按字保守标 + trampoline 读完实参就清零那块。定位靠「panic 时的 `allocs` 读数 = 20005 = 全部已完成的分配」把范围锁到 send 之后。`t_groot_02` + 变异 `M-M11-14` 双向钉住。"
+    },
+    {
+      "id": "G-M11-03",
+      "what": "`Hchan` 是 `K_RAW` ⇒ 有缓冲通道的 `buf` 没有根",
+      "closed_at": "M11/Task 33",
+      "resolution": "`Hchan` 换成带 desc 的 `K_OBJECT`（`chan_desc`：字 2 = buf、字 7..10 = recvq/sendq 头尾），比「扫一张 chan 链表」精确（链表会把所有通道都标活）。"
+    },
+    {
+      "id": "G-M11-04",
+      "what": "goroutine 的栈与 gdesc 槽不回收 ⇒ 第 1025 个 G 撞 `too many goroutines`、10 万个 G 吃 6.4 GiB 虚拟地址",
+      "closed_at": "M11/Task 36",
+      "resolution": "退出的 G 进僵尸链表，由**下一个**调 `rt_schedule` 的 G 收尸（`munmap` + 槽回 `g_free`）；`rt_gdesc_new` 优先复用并整体清零。`t_groot_07` + 变异 `M-M11-17`。"
+    },
+    {
+      "id": "G-M11-05",
+      "what": "溢出报错在**新 G** 上从来没生效过（SIGSEGV 而不是退出 2）",
+      "closed_at": "M11/Task 40",
+      "resolution": "序言检查是「`sp` 掉到界外才报」，而 `rt_panic_stack_overflow` 自己有栈帧 ⇒ 它的写入落在 `stack_lo` 之下。修法：`stack_lo` 之下留一页（`G_STACK_SLACK`）+ 冷路径 `mov sp, x9`。`t_stk_06`（452 层）+ `t_stk_07`（12000 字节大帧）+ 变异 `M-M11-18`。"
+    },
+    {
+      "id": "G-M11-06",
+      "what": "`C12` §5.1 说 `RGOC_GC_STRESS=<n>` 是「每 n 次」，代码存的是布尔",
+      "closed_at": "M11/Task 38",
+      "resolution": "改成真间隔。实测证据：`STRESS=1000` + 30 万分配跑出 `collections=300000`；改完 `groot07` 的 GC 次数 300000 → 300，语料三态仍全绿。"
+    },
+    {
+      "id": "G-M11-07",
+      "what": "三条「台账打勾但没写测试」的判据",
+      "closed_at": "M11/Task 40–41",
+      "resolution": "`t_stk_02`（帧大小 16 倍数）/ `t_stk_06`（溢出深度实测）/ `t_go_03`（就绪队列 FIFO 的 Go 源码形态，一直 `#[ignore]` 着）。补实现时 `t_stk_06` 立刻抓到 `G-M11-05`。"
+    }
+  ],
+  "deferred_gaps": [
+    {
+      "id": "G-M11-D01",
+      "what": "`T-STK-06` 的「`sieve1.go` 的递归深度 < N 有富余」只做了粗判",
+      "detail": "判据取的是 `N >= 100` 的下界 + `sieve1` 在 64 KiB 下跑得通（`t_gcorp_01/05`），没有逐帧累加算出 `sieve1` 的实际深度。要精确算得给每个函数发帧大小表 —— 属于「测量工具」而非实现，留到需要时做。"
+    }
+  ]
+}

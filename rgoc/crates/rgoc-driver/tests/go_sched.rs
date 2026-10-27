@@ -33,7 +33,6 @@ func main() {
 "#;
 
 #[test]
-#[ignore = "M11b 实现后启用（Task 31 收口）：现在还没有 go 语句"]
 fn t_go_03_就绪队列_fifo() {
     let t =
         go_probe::probe("go03", FIFO, &[("RGOC_GC", "0")]).expect("应能编译并跑起来（M11b 之后）");

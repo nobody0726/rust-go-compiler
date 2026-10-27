@@ -341,3 +341,53 @@ fn t_stk_07_大帧溢出也报错() {
     );
     assert!(stdout.is_empty(), "溢出前不应有半截输出：{stdout:?}");
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-STK-02 新 G 的初始 sp 16 对齐（`Task 9` 的台账打勾但没写测试）
+// ════════════════════════════════════════════════════════════════════
+
+/// `sp` 的 16 对齐从两条不变量来，两条都在这条判据里查：
+///
+/// 1. **帧大小是 16 的倍数** —— 每次 `sub sp, sp, #imm` 的 `imm % 16 == 0`；
+/// 2. **切换保存区 160 字节**（20 × 8，也是 16 的倍数）—— 常量在 `rt.c`。
+///
+/// 加起来：`main` 从 16 对齐的 `_start` 栈顶开始，只做 16 的倍数的加减 ⇒
+/// 任何 G 的 `sp` 在任何时刻都 16 对齐。
+///
+/// # 为什么做成**静态**判据
+///
+/// 动态面**不可能**单独红：AArch64 的 `stp/ldp` 用 `sp` 作基址时，`sp` 不
+/// 16 对齐会直接抛 **SP alignment fault** —— 那种错会让**每一个**并发判据都
+/// 崩，根本不需要单独立一条。所以这条查的是**生成器**：它有没有可能造出
+/// 非 16 倍数的帧。
+#[test]
+fn t_stk_02_sp_对齐() {
+    let out = support::native_harness::build_and_run_env("stk02", MIN, &[])
+        .expect("最小程序应能编译并跑起来");
+    let mut bad: Vec<String> = Vec::new();
+    let mut seen = 0usize;
+    for line in out.asm.lines() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("sub sp, sp, #") else {
+            continue;
+        };
+        seen += 1;
+        let imm: u64 = rest
+            .parse()
+            .unwrap_or_else(|_| panic!("`sub sp` 的立即数不是纯数字（大帧走寄存器？）：{t}"));
+        if imm % 16 != 0 {
+            bad.push(format!("帧大小 {imm} 不是 16 的倍数：{t}"));
+        }
+    }
+    assert!(seen > 0, "一行 `sub sp, sp, #imm` 都没扫到 ⇒ 判据是空转的");
+    assert!(
+        bad.is_empty(),
+        "帧大小不是 16 的倍数 ⇒ 切到新 G 之后 `sp` 会歪（SP alignment fault）：\n{}",
+        bad.join("\n")
+    );
+    // 序言里那条固定的 `stp x29, x30, [sp, #-16]!` 就是「减 16」，也要在。
+    assert!(
+        out.asm.matches("stp x29, x30, [sp, #-16]!").count() > 0,
+        "序言没有 `stp x29, x30, [sp, #-16]!`"
+    );
+}

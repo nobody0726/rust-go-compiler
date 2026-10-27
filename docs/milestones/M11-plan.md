@@ -823,18 +823,35 @@
 - [x] **Step 1**: 四条门禁 + 三套语料（读数见上）。
 - [x] **Step 2: Commit** `chore(m11): 全量回归 + 补 T-STK-06/07（Task 40）`
 
-### Task 41: `M11-manifest.json`
+### Task 41: `M11-manifest.json` —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 门禁 `GO-1..GO-7` 逐条证据、白名单 `U-M11-01..08`、
-  `corpus_lists`（7/12）、`measured`（三层读数、G 数、栈用量）、
-  `open_gaps` / `closed_gaps`。
-- [ ] **Step 2: Commit** `docs(m11): manifest（Task 41）`
+> **读数**：`docs/milestones/M11-manifest.json` —— 7 条门禁逐条证据 / **10 条**
+> 白名单（计划写 8 条，实际多两条：`U-M11-09` select 的 comma-ok、`U-M11-10`
+> `go` 的聚合/浮点实参）/ `corpus_lists`（69 与 19−12=7 都**算出来**）/
+> `measured`（`stack_overflow_depth` 452 / `many_g` 10 万 / `select_waitset`
+> 5000 次）/ 5 条 `open_gaps` / 7 条 `closed_gaps` / 1 条 `deferred_gaps`。
+>
+> ⚠️ 白名单**不减只增**：计划里的 `U-M11-01..08` 是全不做的那八件事，而
+> M11c 收口时又暴露了两处窄化（comma-ok 的 select、`go` 的聚合实参），
+> 一起如实记进去 —— 「没做」也要有号码，否则下一个人会以为是 bug。
 
-### Task 42: `manifest_m11.rs`
+- [x] **Step 1**: 七个门禁 + 白名单 + 语料 + measured + gaps。
+- [x] **Step 2: Commit** `docs(m11): manifest + 对账（Task 41/42）`
 
-- [ ] **Step 1**: 沿 `manifest_m10.rs` 的结构；**M11 特有的一条**：
-  `measured.corpus.three_states` 必须能**从一次真实跑**里复现（7/0/0）。
-- [ ] **Step 2: Commit** `test(m11): manifest 对账（Task 42）`
+### Task 42: `manifest_m11.rs` —— ✅ 已完成（2026-10-27）
+
+> **读数**：3 条全绿。
+> * `t_manifest_11_真清单必须自洽`：门禁集合 / 状态与证据 / 白名单 10 条 /
+>   语料计数**与路径列算出来的一致**（含 `input − rejected = N'`）/
+>   `depth_overflow == depth_ok + 1` 等自洽项；
+> * `t_manifest_11_并发语料三态必须能复现`（**M11 特有**）：7 个 `N'` × 三态
+>   **真跑一遍**，ok 数从清单读（不硬编码 7），三态 `stdout`/`stderr`/退出码
+>   逐字节相同；
+> * `t_manifest_11_合成反例都必须红`：12 个改坏的清单逐个**指名道姓**报错
+>   （否则「对账通过」只说明对账函数什么都没查）。
+
+- [x] **Step 1**: 沿 `manifest_m10.rs` 的结构 + 三态复现。
+- [x] **Step 2: Commit**（与 Task 41 同一提交）
 
 ### Task 43: 变异笔记
 
