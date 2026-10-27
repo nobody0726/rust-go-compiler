@@ -1225,7 +1225,14 @@ void rt_init(u64 sp) {
                 gc_on = 0;
             }
         } else if (starts_with(e, "RGOC_GC_STRESS=")) {
-            gc_stress = parse_u64(e + 15) != 0;
+            /* ⚠️ 存的是**间隔**（`C12` §5.1「每 n 次」），不是开关。
+             *
+             * 第一版写的是 `parse_u64(...) != 0` —— 于是 `STRESS=64` 与
+             * `STRESS=1` 完全等价（每次分配都收）。症状是**看不出错**：
+             * 判据只断言 `collections > 0`，两种口径都满足；但 `groot07`
+             * 的 30 万次分配变成 30 万次 GC（每次扫全堆），慢到没法用在
+             * 语料上。实测读数：`STRESS=1000` + 30 万分配 ⇒ `collections=300000`。 */
+            gc_stress = parse_u64(e + 15);
         } else if (starts_with(e, "RGOC_GC_STATS=")) {
             gc_stats = parse_u64(e + 14) != 0;
         } else if (starts_with(e, "RGOC_GC_THRESHOLD=")) {
