@@ -212,3 +212,92 @@ fn t_sel_05_空_select_直接死锁() {
     );
     assert!(out.stdout.is_empty(), "stdout={:?}", out.stdout);
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-CHAN-08 `WaitSet` 不泄漏（M11c/Task 37 的变异靶子）
+// ════════════════════════════════════════════════════════════════════
+
+/// 5000 次「阻塞的 select 发送」⇒ 5000 个 `WaitSet`（每个 ~2.5 KiB），
+/// 末尾再 churn 一轮把最后一次 GC 顶出来。
+///
+/// # 为什么末尾必须有 churn（第一版没有，是**假绿**）
+///
+/// `rt_select_begin` 的分配在 `gc_pause` 里（`R-10-18`：中间不能收）—— 而
+/// `gc_pause != 0` 时**连自动触发和 stress 钩子都跳过**。于是「只做 select」
+/// 的程序里一次 GC 都不会跑：`collections=0` / `live=0`，`live <= 1MiB`
+/// 恒真，判据什么也没验（实测踩过：60000 次 select、live=0、heap 涨到 170 MB）。
+/// 末尾那轮 `new` 在 `gc_pause` 之外，把 `gc_since` 顶过阈值 ⇒ 真正扫一次。
+///
+/// # 判据形态
+///
+/// * `collections > 0`：真的收过（否则后两条无意义）；
+/// * `frees >= 4000`：那 5000 个 `WaitSet` 基本都被回收了 —— 这条比 `live`
+///   更贴靶子（`live` 只看最后一次清扫的残量）；
+/// * `live <= 1 MiB`：残量有界。
+///
+/// 三条一起才挡得住变异 `M-M11-15`（`WaitSet` 改走 `rt_arena_alloc`）：
+/// arena 块**永不回收**也**永不计入 `frees`**，且会被算进 `live`
+/// （5000 × 2576 ≈ 12.9 MiB）。
+const WAITSET_LOOP: &str = r#"
+package main
+
+func main() {
+	c := make(chan int)
+	go func() {
+		for {
+			<-c
+		}
+	}()
+	for i := 0; i < 5000; i++ {
+		select {
+		case c <- i:
+		}
+	}
+	for i := 0; i < 2000; i++ {
+		_ = new([64]byte)
+	}
+	println("ok")
+}
+"#;
+
+#[test]
+fn t_chan_08_waitset_不泄漏() {
+    let out = support::native_harness::build_and_run_env(
+        "chan08",
+        WAITSET_LOOP,
+        &[("RGOC_GC_STATS", "1"), ("RGOC_GC_THRESHOLD", "65536")],
+    )
+    .expect("应能编译并跑起来");
+    assert_eq!(
+        out.exit, 0,
+        "退出码 {}（stderr {:?}）",
+        out.exit, out.stderr
+    );
+    assert_eq!(out.stdout, "ok\n", "stdout={:?}", out.stdout);
+    let line = out
+        .stderr
+        .lines()
+        .find(|l| l.starts_with("gc: "))
+        .unwrap_or_else(|| panic!("没有统计行：{:?}", out.stderr));
+    let field = |k: &str| -> u64 {
+        let pat = format!("{k}=");
+        line.split(' ')
+            .find_map(|kv| kv.strip_prefix(&pat))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("统计行里没有 `{k}`：{line}"))
+    };
+    let (coll, frees, live) = (field("collections"), field("frees"), field("live"));
+    assert!(
+        coll > 0,
+        "一次 GC 都没跑 ⇒ 这条判据什么也没验（`select` 的分配都在 `gc_pause` 里，\
+         末尾的 churn 没顶过阈值？）：{line}"
+    );
+    assert!(
+        frees >= 4000,
+        "只回收了 {frees} 块（期望 ≥ 4000，5000 个 `WaitSet`）⇒ `WaitSet` 进了 arena？：{line}"
+    );
+    assert!(
+        live <= 1024 * 1024,
+        "live={live} 字节 ⇒ `WaitSet` 攒着没回收：{line}"
+    );
+}

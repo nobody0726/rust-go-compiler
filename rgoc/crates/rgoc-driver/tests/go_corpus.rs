@@ -250,6 +250,71 @@ fn t_gcorp_04_go_不再是拒绝原因() {
     // 这条判据的主旨（`N'` 不 panic）由 ① ② 两段保证，没丢。
 }
 
+/// `T-GCORP-05`（M11c/Task 35）：**7 个 `N'` 的三态逐字节相同**。
+///
+/// # 为什么三态要在这条判据里，而不是只靠 `run-native-chan.sh`
+///
+/// 装置脚本证明的是「一次构建、跑三次」这件事能跑通；这条证明的是**每一个**
+/// `N'` 在 `off` / `on` / `stress` 下的 `stdout` / `stderr` / 退出码三样
+/// **完全一样**。两者不重复：脚本的汇总行只数「有输出 / 空跑」，看不出
+/// 「`stress` 态少打了一个字节」。
+///
+/// # 为什么 `stderr` 也要比
+///
+/// `C9` §5 的 panic / 死锁文本只进 stderr。只比 stdout 的话，「`stress` 态
+/// 打了一行 panic 但 stdout 碰巧一样」会漏过去。
+///
+/// ⚠️ 三态都**不设** `RGOC_GC_STATS` —— 统计行进 stderr，设了就三态必然不同
+/// （`mode=off` / `on` / `stress`），那是**预期**的差异，不是判据要抓的东西。
+#[test]
+fn t_gcorp_05_并发语料三态() {
+    let ok = chan_ok();
+    assert_eq!(ok.len(), 7, "`N'` 应为 7");
+    let mut bad: Vec<String> = Vec::new();
+    for rel in &ok {
+        let src = std::fs::read_to_string(repo_root().join(rel))
+            .unwrap_or_else(|e| panic!("读不到 `{rel}`：{e}"));
+        let slug = rel.rsplit('/').next().unwrap_or(rel).replace(".go", "");
+        let mut seen: Option<(String, String, i32)> = None;
+        for (tag, env) in [
+            ("off", vec![("RGOC_GC", "0")]),
+            ("on", vec![]),
+            ("stress", vec![("RGOC_GC_STRESS", "8")]),
+        ] {
+            let out =
+                support::native_harness::build_and_run_env(&format!("g5{slug}{tag}"), &src, &env)
+                    .unwrap_or_else(|e| panic!("`{rel}` 的 {tag} 态跑不起来：\n{e}"));
+            if out.exit != 0 {
+                bad.push(format!(
+                    "{rel} [{tag}]: 退出码 {}（stderr {:?}）",
+                    out.exit, out.stderr
+                ));
+            }
+            match &seen {
+                None => seen = Some((out.stdout, out.stderr, out.exit)),
+                Some((o, e, x)) => {
+                    if out.stdout != *o {
+                        bad.push(format!(
+                            "{rel} [{tag}]: stdout {:?} ≠ off 态 {:?}",
+                            out.stdout, o
+                        ));
+                    }
+                    if out.stderr != *e {
+                        bad.push(format!(
+                            "{rel} [{tag}]: stderr {:?} ≠ off 态 {:?}",
+                            out.stderr, e
+                        ));
+                    }
+                    if out.exit != *x {
+                        bad.push(format!("{rel} [{tag}]: 退出码 {} ≠ off 态 {}", out.exit, x));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "并发语料三态不一致：\n{}", bad.join("\n"));
+}
+
 /// `T-GCORP-01`：**7 个 `N'` 三层一致**（`M11-tests.md` 的主判据）。
 ///
 /// # 三层

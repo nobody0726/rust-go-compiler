@@ -49,8 +49,10 @@
 # | `M-M11-11` 死锁判定漏「有就绪 G」| `T-EXIT-05` | 26 |
 # | `M-M11-12` `main` 返回后等 goroutine | `T-EXIT-02` | 27 |
 # | `M-M11-13` `mark_roots` 只扫当前 G 的链 | `T-GROOT-01` | 33 |
-# | `M-M11-14` `rt_gc_force_off` 空实现 | `T-GROOT-04` | 31 |
-# | `M-M11-15` `Sudog` 改回 arena | `T-CHAN-08` | 18 |
+# | `M-M11-14` `go` 实参区不登记为根（原「`force_off` 空实现」，已退役）| `T-GROOT-02` | 33 |
+# | `M-M11-15` `Sudog`/`WaitSet` 改回 arena | `T-CHAN-08` | 37 |
+# | `M-M11-16` 「已关闭且空」的 `ok` 恒真 | `T-CHAN-05` | 19 |
+# | `M-M11-17` 退出的 G 不还栈 | `T-GROOT-07` | 36 |
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -299,6 +301,44 @@ $PROBE "M-M11-12 go 之后立刻切走" "$RT" \
     rt_schedule();
 }' \
   -p rgoc-driver --test go_exit t_exit_02
+
+# ── M-M11-13：只扫**当前** G 的帧链（多 G 扫根退化成单 G）────────────────
+# `mark_all_g_stacks` 的循环只跑一次、并且取 `g_cur` —— 这就是 M10 的行为。
+# `t_groot_01` 的挂起 G 是 `g_descs[1]`，它的栈上有 `p` ⇒ 被收 ⇒ 输出空。
+$PROBE "M-M11-13 只扫当前 G 的帧链" "$RT" \
+  '    for (u32 i = 0; i < g_count; i++) {
+        GDesc *g = &g_descs[i];' \
+  '    for (u32 i = 0; i < 1; i++) {
+        GDesc *g = g_cur;' \
+  -p rgoc-driver --test go_root t_groot_01
+
+# ── M-M11-14：`go` 的实参区不登记（新 G 的栈顶没有根）───────────────────
+# 这条替换掉初稿里的「`rt_gc_force_off` 空实现」：那个函数**从来没接线**
+# （`M11-plan.md` Task 34 的注），没有可变异的东西。而「实参区没根」是
+# Task 33 实测抓到的**真 bug** —— 用它当变异，靶子更实。
+# 症状：`go worker(p, done)` 之后 `p = nil`，闭包块被回收并清零 ⇒
+# trampoline 调 `[fv+8]` 时 nil 检查 panic。
+$PROBE "M-M11-14 go 实参区不登记为根" "$RT" \
+  '    g->argbytes = n;' \
+  '    g->argbytes = 0;' \
+  -p rgoc-driver --test go_root t_groot_02
+
+# ── M-M11-15：`WaitSet` 回 arena（`D-M11-8` 的反面）──────────────────────
+# arena 块**永不回收**也**不计入 frees**，而且被算进 `live`。
+# `t_chan_08` 的三条断言（collections>0 / frees≥4000 / live≤1MiB）里，
+# 后两条会红：5000 × 2576 ≈ 12.9 MiB 攒着。
+$PROBE "M-M11-15 WaitSet 回 arena" "$RT" \
+  '    WaitSet *w = (WaitSet *)rt_alloc_raw(sizeof(WaitSet));' \
+  '    WaitSet *w = (WaitSet *)rt_arena_alloc(sizeof(WaitSet), 8);' \
+  -p rgoc-driver --test go_select t_chan_08
+
+# ── M-M11-17：退出的 G 不还栈（`M11c/Task 36` 的反面）────────────────────
+# 10 万个 G × 64 KiB = 6.4 GiB 虚拟地址，RSS 被踩过的页撑到几百 MB。
+# `t_groot_07` 断言 `rss <= 64 MB` ⇒ 红。
+$PROBE "M-M11-17 退出的 G 不还栈" "$RT" \
+  '    sys3(SYS_munmap, (i64)g->stack_lo, (i64)G_STACK_BYTES, 0);' \
+  '    /* 变异 M-M11-17：不还栈 */' \
+  -p rgoc-driver --test go_root t_groot_07
 
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"
