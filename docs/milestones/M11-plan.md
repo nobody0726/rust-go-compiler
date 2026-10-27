@@ -4,6 +4,8 @@
 > `M11-tests.md`（`T-STK-*` / `T-GO-*` / `T-CHAN-*` / `T-SEL-*` / `T-EXIT-*` /
 > `T-GROOT-*` / `T-GCORP-*` / 15 条变异）。
 > 范围：**M11a / M11b / M11c**。M11d/e/f 不在本计划内（`M11-design.md` §1.3）。
+> **前置**：`Phase -1 / Task 0`（查清 `G-M10-06`）是硬门禁，没过不许开 Task 1
+> （`M11-design.md` §2.5，2026-10-27 拍板）。
 
 ---
 
@@ -18,6 +20,8 @@
 5. **单线程语料 69 个零回归**：每个 Phase 收尾都要跑 `run-native.sh` 三态。
 6. **每一步都要能回退**：chan 的四操作先「不阻塞直通」，再加阻塞。
 7. **判据先写、变异实证**：新增判据必须配一条变异；绿的变异先怀疑判据。
+8. **Task 0 是硬门禁**（2026-10-27 拍板）：`G-M10-06` 查清之前不开 Task 1。
+   这不是「先做一步顺手查一下」，是「查清才开工」—— 理由见 `M11-design.md` §2.5。
 
 ---
 
@@ -26,6 +30,74 @@
 - 阶段收口时只看三件事：**门禁读数**（`GO-*`）、**语料三层一致**、**变异全红**。
 - 每个 Phase 的 commit 必须写「为什么先前没抓到」（M9/M10 的惯例）。
 - `mode=` 的翻转（a/b → c）是**唯一**允许的判据翻转，且必须两侧都留判据。
+
+---
+
+# Phase -1 · 前置调查（Task 0）
+
+> **这一 Phase 不属于 M11 的实现范围**，它是 `M10` 留下的 `G-M10-06`。
+> 2026-10-27 拍板：**查清才能开工**（`M11-design.md` §2.5）。
+> 产出是「证据 + 一句机制说明」，不是代码功能。判据 `T-INV-01..05`。
+
+### Task 0: 查清 `G-M10-06`（真 live-in 位图为什么让四个语料坏掉）
+
+**Files:**
+- Modify（**临时**，查完按结论定稿）: `rgoc/crates/rgoc-ssa/src/live.rs`（第 330–339 行）
+- Modify: `docs/milestones/M10-manifest.json`（`deferred_gaps` → `closed_gaps`）
+- Modify: `docs/contracts/C12-gc.md`（若结论是「必须保留超集」则写成不变式）
+- Create: `scripts/g-m10-06-probe.md`（实验记录，**不是**脚本产物，是留档）
+
+- [ ] **Step 1: 先留原文副本，再动手。**
+  `cp rgoc/crates/rgoc-ssa/src/live.rs /tmp/live.rs.orig`。
+  ⚠️ **不许用 `git checkout` 复原** —— M10 Phase 0 踩过，未提交的改动会被一起丢掉。
+  复原一律 `cp` 回来 + **`touch`**（`mv`/`cp -p` 保留旧 mtime 会让 cargo 复用旧 rlib）。
+
+- [ ] **Step 2: 写复现装置（`T-INV-01`）。**
+  一个脚本，把 `set` 改成 `(after[ii] − ins.dsts()) ∪ ins.uses()`，`cargo clean -p
+  rgoc-ssa`，重编译，然后对四个语料逐个跑 `run-native.sh` 的单条通路，**把
+  stdout / stderr / rc 三样原样存下来**。四个语料名取自
+  `M10-manifest.json::deferred_gaps[0].what`：`defernil` / `print` / `nilptr2` / `method5`。
+
+- [ ] **Step 3: 记录失败形态，逐个填表。**
+  每个语料填：`改了之后 rc 从 ? 变成 ?` / `stdout 差在哪一行` / `是不是只在
+  stress 态坏`。⚠️ **四份都要留**，包括「改了没坏」的那个 —— 如果某个语料
+  其实没坏，那 manifest 的描述就是错的（`T-INV-01` 的注）。
+
+- [ ] **Step 4: 最小化（`T-INV-02`）。**
+  挑最小的那个语料，用「删到不再坏」的方式切出最小复现。目标是把病灶钉到
+  **一条指令**上（`MakeClosure` / `Convert` / `Bin` 三选一），并写出这条指令前后
+  的 `sp_idx`、位图、以及「GC 在哪一刻跑」。
+
+- [ ] **Step 5: 三条假设各自的判定实验（`T-INV-03`）。**
+  **必须三条都做**，不能「A 看起来对就收工」：
+
+  | 假设 | 判定实验 | 证实的样子 |
+  |---|---|---|
+  | **A** 被调方内部二次 GC | 给 `gc_alloc` 加探针，记录「本次 GC 时，触发方 `sp_idx` 对应的位点是否含本条指令的 `dst`」，且记录 dst 槽**当时的值**（0 / 新地址 / 旧地址）| GC 跑时 dst 槽**已是新地址** ⇒ A 成立（位图必须显式含 def）|
+  | **B** `sp_idx` 配对偏差 | 拿 `.stackmap` 的位点序列与 `.s` 里每条 `sp_idx` 的写入值**逐条对账**（M10 的 `nat7` 已有这个骨架）| 出现「写入值 ≠ 位点下标」⇒ B 成立（修 `sp_idx`，不改位图语义）|
+  | **C** 槽复用 | 在最小复现上，把 dst 槽**执行前**的值打印出来（不是猜），看它是否等于某个活对象的地址 | dst 槽旧值 = 活对象唯一引用 ⇒ C 成立（超集是**必须**的，写成不变式）|
+
+  ⚠️ **「三条都可能」不算结论**。恰好一条证实、两条证伪，且证伪要写理由
+  （例：「C 证伪：最小复现里 dst 槽执行前是 0」）。
+
+- [ ] **Step 6: 结论落地（`T-INV-04`）。**
+  - `M10-manifest.json`：`G-M10-06` 移出 `deferred_gaps` → `closed_gaps`，
+    `resolution` 写机制（一句话能让人复现的那种），或
+  - 若结论是「超集是必须的」：`C12` 加一条**显式不变式**（位图 = 执行前 ∪ 执行后，
+    并说明为什么不是 live-in），`G-M10-06` 进 `closed_gaps` 且 `resolution`
+    指向那条不变式。
+  - **`live.rs` 第 330–339 行那段注释：「机制没查清」必须删掉**，换成机制说明
+    + 一条能反向验证的判据 ID。
+
+- [ ] **Step 7: 复原 + 不回归（`T-INV-05`）。**
+  `cp /tmp/live.rs.orig` 回原位 + `touch` + `cargo clean -p rgoc-ssa`；
+  `run-native.sh` 三态各 69/0/0；四条 cargo 门禁全绿。
+
+- [ ] **Step 8: Commit** `docs(m10): 查清 G-M10-06 —— <一句话机制>（M11/Task 0）`
+
+> ⚠️ **Task 0 没过不许开 Task 1**（`M11-design.md` §2.5 的硬门禁）。
+> 如果 Step 5 三条假设全被证伪 —— 那不是失败，是「病灶在第四处」，
+> 回来改 §2.5 的假设表再查，**不许**带着「不知道」进 Phase 0。
 
 ---
 
@@ -151,7 +223,9 @@
 - [ ] **Step 2**: `rt_panic_stack_overflow()`：`runtime error: goroutine stack
   exceeded <N> bytes` + 退出 2（`C9` §5 新行）。
 - [ ] **Step 3**: 判据 `t_stk_03_溢出报错`（深递归 fixture）+ `t_stk_04_序言有检查`
-  （扫 `.s`）+ `t_stk_05_超大帧不查`（`nilptr2.go` 仍绿且 `.s` 里没有检查）。
+  （扫 `.s`）+ `t_stk_05_超大帧不查`（`nilptr2.go` 仍绿且 `.s` 里没有检查）
+  + **`t_stk_06_溢出深度实测`**（`§2.4 ①` 的修正：实测第 N 层溢出、N 可复现、
+  `sieve1.go` 的深度有富余；N 与 M 两个数字进 manifest 的 `measured`）。
 - [ ] **Step 4: Commit** `feat(arm64): 序言栈检查（Task 10，D-M11-4）`
 
 ### Task 11: 切换的最小闭环（单 G 来回切）
@@ -335,7 +409,9 @@
 - [ ] **Step 1**: `mark_roots` 增加「遍历所有 gdesc（ready/blocked/exited）→
   `mark_frames(g->frames)`」+ `mark_ptr(g->wait)`。
 - [ ] **Step 2**: 判据 `t_groot_01_挂起_G_的栈是根` + `t_groot_02_就绪_G` +
-  `t_groot_03_waitset_保活`。
+  `t_groot_03_waitset_保活` + **`t_groot_06_多G超集扫描不坏`**
+  （Task 0 结论的回归面：N 个 G 轮流阻塞/唤醒、stress 态跑 ⇒ 与 `off` 态逐字节相同、
+  `bad_ptr == 0`；每条 `bad_stale` 都能归因到「超集位图」）。
 - [ ] **Step 3: Commit** `feat(rt): 多 G 扫根（Task 33，D-M11-11）`
 
 ### Task 34: 翻 `mode` 开关
@@ -422,7 +498,7 @@
 
 - [ ] **Step 1**: 台账收口（`.superpowers/sdd/M11-plan/progress.md`）；
   项目记忆 `MEMORY.md` 更新（M11 的硬事实：切换保存区 160 B / `mode` 翻转 /
-  `g_frames` 跟 G 走）。
+  `g_frames` 跟 G 走 / **Task 0 查出的位图机制一句话** / 实测栈溢出深度 N）。
 - [ ] **Step 2: Commit + push** `chore(m11): 收尾（Task 46）`
 
 ---
@@ -431,10 +507,11 @@
 
 | 门禁 | 主要 Task | 判据 |
 |---|---|---|
-| `GO-1` 栈与切换 | 8–10, 15 | `T-STK-01..05` |
+| `GO-1` 栈与切换 | 8–10, 15 | `T-STK-01..06` |
 | `GO-2` 调度三规则 | 11–14 | `T-GO-01..05` |
 | `GO-3` `hchan` 四操作 | 16–21, 30 | `T-CHAN-01..09` |
 | `GO-4` `select` | 22–25 | `T-SEL-01..06` |
 | `GO-5` 死锁与退出 | 26–29 | `T-EXIT-01..05` |
 | `GO-6` 多 G 根 | 32–36 | `T-GROOT-01..06` |
 | `GO-7` 语料 | 1, 4, 31, 35, 40 | `T-GCORP-01..05` |
+| **前置**（非门禁）| **0** | `T-INV-01..05` |
