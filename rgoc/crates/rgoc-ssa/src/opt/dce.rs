@@ -139,6 +139,9 @@ fn keep(i: &Instr, used: &BTreeSet<ValueId>, defs: &BTreeMap<ValueId, Def>) -> b
         // `defer` 的**唯一效果就是登记**：它不定义值，`fv` 也可能没人再读
         // （登记完就只剩运行期的链）。删掉它就等于把 defer 变没了。
         Instr::Defer { .. } => true,
+        // `go` 的唯一效果就是**启动**（它不定义值）—— 删掉它 = 那个 goroutine
+        // 根本不存在。与 `Defer` 同一条理由：没有 dst 不等于没有效果。
+        Instr::Go { .. } => true,
         // 空指针检查**没有结果**：它的全部意义就是「这里可能 panic」。
         // 删它 = 把 panic 变没（`nilptr2.go` 的 `&*p` 正是这样）。
         Instr::NilCheck { .. } => true,

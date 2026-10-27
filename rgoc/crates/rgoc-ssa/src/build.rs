@@ -444,9 +444,16 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
             _ => unsup_expr(tt, call),
         },
         // M8 把这三条从 HIR 的拒绝面放进了**解释器**；SSA 侧仍拒（`SSA-UNSUPPORTED-CHAN`）。
-        // 这不是「忘了实现」，是 M6 的 IR 没有「等待」这个概念（`C4` 的 memory 模型里
-        // 没有阻塞点）—— 归 M11。
-        Stmt::Go { .. } => Some((SsaCode::Chan, "go 语句（并发语义只在解释器面）".to_string())),
+        //
+        // ⚠️ **M11/Task 13 起 `go` 不再拒绝** —— 它已经有完整的下降链
+        // （`Instr::Go` → `go_stmt` → `rt_go` → `rt_go_trampoline`）。
+        // 实参形态的窄化由 `isel::go_stmt` 用 `CG-UNSUPPORTED-GO-ARGS` 拦
+        // （那是 native 面唯一能拦住的地方 —— 这里看不到类型）。
+        //
+        // 实参表达式仍要扫：`go f(ch)` 里的 `ch` 是 chan 类型，得拒。
+        Stmt::Go { call } => unsup_expr(tt, call),
+        //
+        // `send` / `select` 仍拒：它们要 `hchan`，那是 M11b 的事。
         Stmt::Send { .. } => Some((SsaCode::Chan, "`ch <- v` 发送".to_string())),
         Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
         Stmt::Range { x, body, kind, .. } => match kind {
@@ -901,7 +908,9 @@ fn scan_block(tt: &TypeTable, b: &HirBlock, sc: &mut Scanned) {
 
 fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
     match s {
-        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+        // `go` 的实参要扫：`go f(&x)` 里的 `&x` 会让 `x` 逃逸。
+        Stmt::Go { call } => scan_expr(tt, call, sc),
+        Stmt::Send { .. } | Stmt::Select { .. } => {
             // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
             // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
             unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
@@ -1682,10 +1691,10 @@ fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
     }
     fn stmt(s: &Stmt, out: &mut BTreeSet<String>) {
         match s {
-            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+            Stmt::Send { .. } | Stmt::Select { .. } => {
                 // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
                 // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-                unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+                unreachable!("send/select 应由 unsupported() 在建图前拒掉")
             }
             Stmt::Branch {
                 kind: BranchKind::Goto,
@@ -1699,6 +1708,8 @@ fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
             | Stmt::Expr(_)
             | Stmt::Return(_)
             | Stmt::Defer { .. }
+            // `go` 不影响 goto 标签（它的实参是表达式，不含语句）
+            | Stmt::Go { .. }
             | Stmt::Empty => {}
             Stmt::If { then, els, .. } => {
                 walk(then, out);
@@ -1764,10 +1775,17 @@ impl Def<'_> {
 
     fn stmt(&mut self, s: &Stmt) {
         match s {
-            Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+            // `Def` 这一遍**只收集值**（不建图）。`go` 的实参要在这里求值，
+            // 否则 `Fb` 那一遍拿到的 `ValueId` 没有定义点（`V1` 会红）。
+            //
+            // ⚠️ 建图在 `Fb::stmt` —— 那里才发 `Instr::Go`。
+            Stmt::Go { call } => {
+                self.expr(call);
+            }
+            Stmt::Send { .. } | Stmt::Select { .. } => {
                 // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
                 // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-                unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+                unreachable!("send/select 应由 unsupported() 在建图前拒掉")
             }
             Stmt::Assign { lhs, op, rhs } => {
                 for e in rhs {
@@ -5959,9 +5977,14 @@ impl Fb<'_> {
                     self.do_goto(&name);
                 }
             },
+            // `go`（M11/Task 13）：与 `defer` **同一套包装** —— 把调用（含实参
+            // 求值、方法接收者、间接 funcval）打包成一个 `func()` 闭包，
+            // `go` 只负责启动它。这样 `Instr::Go` 的 `args` 永远是空的，
+            // `rt_go` 只收到「一个无参函数」。
+            Stmt::Go { call } => self.stmt_defer_like(call, true),
             // `defer`（`M9/Phase 5b`）：实参**现在**求值、装进盒子，
             // 调用体放进合成的包装函数（见 `synth_defer_wrapper`）。
-            Stmt::Defer { call } => self.stmt_defer(call),
+            Stmt::Defer { call } => self.stmt_defer_like(call, false),
             other => todo!(
                 "M6/Task 24–30：语句 `{}` 的构建还没实现",
                 stmt_kind_name(other)
@@ -5972,7 +5995,8 @@ impl Fb<'_> {
     /// `defer <call>` 的下降（`M9/Phase 5b`）。
     ///
     /// 三步：**求值实参**（现在）→ **装盒子** → **造闭包并登记**。
-    fn stmt_defer(&mut self, call: &Expr) {
+    /// `defer call` 与 `go call` 的**共用**建图（`is_go` 决定最后发哪条）。
+    fn stmt_defer_like(&mut self, call: &Expr, is_go: bool) {
         let (dc, args, rtypes, dots, eff, sig) = match &call.kind {
             ExprKind::Call {
                 callee,
@@ -6028,7 +6052,7 @@ impl Fb<'_> {
             let b = self.box_value(a, t);
             caps.push((b, t));
         }
-        let wid = synth_defer_wrapper(self.tt, dc, &caps, &rtypes, dots, eff, sig);
+        let wid = synth_defer_wrapper(self.tt, dc, &caps, &rtypes, dots, eff.clone(), sig);
         // `func()` 的静态类型：`MakeClosure` 的 dst 必须是签名类型（`V3` 查它）
         let tup = self.tt.add_tuple(Vec::new());
         let sid = self.tt.add_signature(None, tup, tup, false);
@@ -6039,7 +6063,15 @@ impl Fb<'_> {
             func: wid,
             captures: caps.iter().map(|(v, _)| *v).collect(),
         });
-        self.emit(Instr::Defer { fv });
+        if is_go {
+            self.emit(Instr::Go {
+                callee: CalleeRef::Func(wid),
+                args: Vec::new(),
+                effect: eff,
+            });
+        } else {
+            self.emit(Instr::Defer { fv });
+        }
     }
 
     /// 把一个值装进**新分配的**堆盒子，返回它的地址（`M9/Phase 5b`）。
@@ -6364,7 +6396,10 @@ fn eff_block(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, b: &HirBlock, e: &mu
 
 fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut LoopEffects) {
     match s {
-        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
+        // `go` 的实参效果要算；`go` 本身的效果由 `Instr::Go` 的 `effect` 字段
+        // 表达（`Fb` 建图时已传），不在这里重复。
+        Stmt::Go { call } => eff_expr(tt, sr, call, e),
+        Stmt::Send { .. } | Stmt::Select { .. } => {
             // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
             // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
             unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")

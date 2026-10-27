@@ -39,13 +39,23 @@ pub enum CgCode {
     ///
     /// 同 `U-M6-03`，上游先拒。
     MethodValue,
+    /// `go` 的实参形态超出 M11a 的窄化（`M11-design.md` §3.6）。
+    ///
+    /// 只有 `CalleeRef::Func` + **≤ 8 个非浮点实参**能下降：
+    /// 间接调用要解 funcval、方法要解 itab、第 9 个起要走 outgoing 区、
+    /// 浮点走 `d0..d7` 而 trampoline 不搬 —— 四条都不是 M11a 的范围。
+    ///
+    /// ⚠️ 这条**不是**「M6 先拒」那种：`go` 语句本身在 Task 13 就放开了，
+    /// 所以这是 native 面**唯一**能拦住这些形态的地方。发错的代码不会崩，
+    /// 只会让实参串位 —— 所以必须显式拒绝。
+    GoArgs,
 }
 
 impl CgCode {
     /// 全部码（**顺序即字典序**，`T-NAT-52` 用它枚举）。
     ///
     /// 新增一个变体而不更新这里 ⇒ `tests/diag.rs` 的计数测试立刻红。
-    pub const ALL: [Self; 2] = [Self::IndirectCall, Self::MethodValue];
+    pub const ALL: [Self; 3] = [Self::IndirectCall, Self::MethodValue, Self::GoArgs];
 
     /// 稳定的码文本（进 stderr 的就是这个）。
     #[must_use]
@@ -53,6 +63,7 @@ impl CgCode {
         match self {
             Self::IndirectCall => "CG-UNSUPPORTED-INDIRECT-CALL",
             Self::MethodValue => "CG-UNSUPPORTED-METHOD-VALUE",
+            Self::GoArgs => "CG-UNSUPPORTED-GO-ARGS",
         }
     }
 }

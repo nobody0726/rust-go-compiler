@@ -152,7 +152,8 @@ fn t_m9_15_slice_码不许再出现() {
         hits.is_empty(),
         "`CG-UNSUPPORTED-SLICE` 已下线（M9/Task 15），但仍在这些文件里出现：{hits:?}"
     );
-    assert_eq!(CgCode::ALL.len(), 2, "CgCode::ALL 应为 2 条");
+    // M11/Task 12 起是 3 条（加了 CG-UNSUPPORTED-GO-ARGS）
+    assert_eq!(CgCode::ALL.len(), 3, "CgCode::ALL 应为 3 条");
 }
 
 #[test]

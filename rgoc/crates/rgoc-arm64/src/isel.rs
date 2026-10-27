@@ -631,13 +631,13 @@ fn bind_params(cx: &Ctx<'_>, asm: &mut Asm) {
 /// 一条指令。
 fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
     match ins {
-        // ⚠️ **未实现**（Task 12 的下一步）。用 `unimplemented!` 而不是发空：
-        // `unsupported()` 现在仍然拒 `go`，所以走不到这里；但 Task 13 放开
-        // `go` 时如果忘了写这段下降，`unimplemented!` 会**立刻炸**，而发空
-        // 会静默生成「实参没拷」的代码 —— 那种错不崩、只是算错。
-        Instr::Go { .. } => {
-            unimplemented!("Task 12：`Instr::Go` 的下降（实参深拷贝 + rt_go）")
-        }
+        // `go f(args)`（M11a/Task 12）。
+        //
+        // 与 `call` 的三处不同（`M11-design.md` §3.6）：
+        // ① 没有结果值；② 实参**写到 sp 下的临时区**（`rt_go` 会把它拷进新 G
+        //    的栈）；③ 不 `check_panic` —— `go` 不等结果，被调方 panic 只影响
+        //    它自己那个 G。
+        Instr::Go { callee, args, .. } => go_stmt(cx, callee, args, asm)?,
         Instr::Const { dst, c, typ } => konst(cx, *dst, c, *typ, asm),
         Instr::Copy { dst, src } => copy(cx, *dst, *src, asm),
         Instr::Bin {
@@ -2440,6 +2440,66 @@ fn store(cx: &Ctx<'_>, addr_v: ValueId, val: ValueId, asm: &mut Asm) {
 }
 
 /// 调用。
+/// `go f(args)`（M11a/Task 12，`M11-design.md` §3.6）。
+///
+/// # 实参怎么走
+///
+/// 与普通调用**不同**：普通调用把实参放进 `x0..x7`（`pass_args`），而 `go`
+/// 要把它写进 `sp` 下的临时区，再 `rt_go(fn, &区, 字节数)` —— 因为新 G 的
+/// 栈是**另一块**，实参必须先落成一段可 `memcpy` 的字节。
+///
+/// 临时区的布局就是 `x0..x7` 的镜像（8 字节一格），`rt_go_trampoline` 用
+/// `ldp` 从新栈读回同样的偏移。两边**必须同序**，否则实参串位。
+///
+/// # ⚠️ M11a 的窄化（进 `M11-report.md`）
+///
+/// 只接受 `CalleeRef::Func`（具名函数）+ **≤ 8 个非浮点实参**：
+///
+/// * 间接调用 / 方法 / 接口：要先把 `funcval` 或 `itab` 解出来，M11b 再说；
+/// * 超过 8 个：第 9 个起走 outgoing 区，而新 G 的 outgoing 区还没有约定；
+/// * 浮点：走 `d0..d7`，trampoline 不搬它们（`fmov` 的搬运要按类型分派）。
+///
+/// 三条都返回 `CgCode::Chan`（静态拒绝、退出码 1），而不是生成错的代码 ——
+/// 那三条形态在 M11a 的语料里不出现（`sieve1.go` 的 `go generate(ch)` 是
+/// 单实参具名函数）。
+fn go_stmt(
+    cx: &Ctx<'_>,
+    callee: &CalleeRef,
+    args: &[ValueId],
+    asm: &mut Asm,
+) -> Result<(), CgCode> {
+    let CalleeRef::Func(fid) = callee else {
+        return Err(CgCode::GoArgs);
+    };
+    if args.len() > 8 {
+        return Err(CgCode::GoArgs);
+    }
+    for a in args {
+        if cx.class(*a) == SlotClass::Float {
+            return Err(CgCode::GoArgs);
+        }
+    }
+    let nbytes = args.len() * 8;
+    let bytes = (nbytes + 15) & !15;
+    if bytes > 0 {
+        asm.ins(&format!("sub sp, sp, #{bytes}"));
+    }
+    for (i, a) in args.iter().enumerate() {
+        let s = cx.slot(*a);
+        asm.ins(&format!("ldr x10, [x29, #{}]", s.off));
+        asm.ins(&format!("str x10, [sp, #{}]", 8 * i));
+    }
+    let sym = cx.tt_fn_name(*fid);
+    load_addr(asm, "x0", &sym);
+    asm.ins("mov x1, sp");
+    load_imm(asm, "x2", nbytes as i64);
+    asm.ins("bl rt_go");
+    if bytes > 0 {
+        asm.ins(&format!("add sp, sp, #{bytes}"));
+    }
+    Ok(())
+}
+
 fn call(
     cx: &Ctx<'_>,
     dsts: &[ValueId],

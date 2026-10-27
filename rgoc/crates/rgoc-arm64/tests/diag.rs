@@ -7,12 +7,16 @@
 use rgoc_arm64::diag::CgCode;
 
 #[test]
-fn 全部码恰好两条且顺序是字典序() {
+fn 全部码恰好三条且顺序是字典序() {
     // 写死条数：新增变体而不更新 `ALL` ⇒ 这里红（与 `SsaCode` 的计数测试同款）。
     //
     // M9/Phase 1 起是 **2** 条：`CG-UNSUPPORTED-SLICE` 下线了（切片真的被选择）。
     // 那条码连同它的判据一起删 —— 留一条永远不产出的码比删掉更糟。
-    assert_eq!(CgCode::ALL.len(), 2);
+    //
+    // M11/Task 12 起是 **3** 条：加 `CG-UNSUPPORTED-GO-ARGS`（`go` 的实参形态
+    // 超出 M11a 的窄化）。它与 `IndirectCall`/`MethodValue` 不同 —— 前两条是
+    // 「M6 先拒，native 见不到」，这条是 native 面**唯一**的拦截点。
+    assert_eq!(CgCode::ALL.len(), 3);
     let mut sorted = CgCode::ALL;
     sorted.sort();
     assert_eq!(sorted, CgCode::ALL, "ALL 必须是字典序");
