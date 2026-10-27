@@ -17,7 +17,7 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10）→ **M10** 🟡（**设计完成、待拍板**，2026-10-26：`D-M10-1..15` / `GC-1..GC-9` / Task 1–45） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10）→ **M10** ✅（2026-10-27，**GC-1..GC-9** 9/9；语料三态各 69/0/0；变异 20/20） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
 **一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6–M9 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial / M6 SSA-1..9 = 9/9 / M7 NAT-1..9 = 9/9 / M8 CON-1..9 = 9/9 / M9 MEM-1..SCH-1 = 10/10）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-meta` → `rgoc-ssa` → `rgoc-interp` → `rgoc-arm64` → `rgoc-driver`** **十三条**正式 crate（另 `rgoc-harness` 是测试装置、`xtask` 是构建脚本、`rgoc-hir-spike`/`rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 2184 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M9` 九份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **13 条**正式 crate（M7 加 `rgoc-arm64`、M9 加 `rgoc-meta`），workspace **2184 条测试全绿**。
@@ -43,11 +43,13 @@
 
 **收口后清掉的四个尾巴**（`closed_gaps` 4/4，`open_gaps` 现为空）：`G-M9-01` 是 `rgoc-check::expr::type_expr` 不认 `unsafe.Pointer` 这个限定名（「类型表达式 → `TypeId`」有两份实现，装载面认、检查面吞）⇒ 补 `Expr::Selector` 臂 + `unsafe_ptr.rs`（`R-9-41`）；`G-M9-04/05/06` 是三条**判据缺形态**（map 探测链 / 多捕获闭包 / panic 后调用方还有输出）⇒ 补 `T-MAP-10`、`t_func_05`、`t_exc_04`，三条变异随之从绿转红。变异现在 **12/12 全红**（脚本 8 条 + notes 4 条）。
 
-**M10（精确 STW GC）设计与计划已出**（2026-10-26，**未开工**）：`M10-design.md` / `M10-tests.md` / `M10-plan.md` 三件套齐备。要点：**单线程、精确到字、不移动**的 mark-sweep；托管堆与运行时 arena 分离（`D-M10-1`），**块头 8 → 16 字节**（`{desc|flags, n|kind}`，数组/闭包要「元素个数」），chunk **16 MiB 对齐**（`p >> 24` O(1) 判堆指针），**起始位图 + 页摘要**解析内部指针（`s[2:]` / `&a[i]`），根走**帧记录链**（每帧 24 字节 `{prev, fi, sp_idx}`，链头 `g_frames`，**逐位点**而非函数级并集 —— 否则是保守扫描），**没有寄存器根**（「每个值一个栈槽」的推论，写成守卫）。九条门禁 `GC-1..GC-9`，最强的一条是**三态语料**：`RGOC_GC=0` / 缺省 / `RGOC_GC_STRESS=1` 三态各 69/0/0。
+**M10（精确 STW GC）已收口**（2026-10-27）：单线程、精确到字、不移动的 mark-sweep。托管堆与 arena 分离（`D-M10-1`），**块头 16 字节**（`{desc|flags, n|kind|blk>>4}` —— 块大小必须**自证**，`R-10-9`），chunk **16 MiB 对齐**（`p >> 24` 判堆指针），**起始位图 + 页摘要**解析内部指针，根走**帧记录链**（每帧 `{prev, fi, sp_idx}` 三个字，链头 `g_frames`），**没有寄存器根**（写成守卫 `t_gc_10`）。契约 `C12` 已定稿。读数：九条门禁 9/9；**三态语料各 69/0/0**（`off` / `on` / `stress`，且 `on` 态真的收垃圾）；234 suite / 2231 passed；变异 20/20 全红；长跑 100 MB 累计分配压在 1 个 17 MB chunk、存活 1040 B、RSS 2.7 MB。
+
+⚠️ **M10 最容易踩的四个坑**（都写在 `C12` 与 `M10-report.md`）：① `is_safepoint` 必须与「会分配的指令」一一对应（漏了四次，现在**穷尽匹配**，新增 `Instr` 变体会编译失败）；② 起始位图的语义是「这里有一个块头」，**不区分活块与空闲块**（漏了就是假块首 ⇒ 拿旧 desc 扫垃圾 ⇒ 段错误）；③ 「已分配但还没发布」的块看不见（`gc_pin` / `gc_pause` 两条出路）；④ 位图是 live-**out** 的保守超集，不是精确 live-in（`R-10-21`，机制待查，`G-M10-06`）。
 
 设计期已发现并修掉一个 M9 的真 bug（`R-10-1`）：**`rt_alloc` 返回块首而非 data** ⇒ 对象头从未真正生效（`new(S)` 读字段 0 得到 desc 指针）。判据 `mem_alloc::new_出来的对象读字段_0_是零`，变异实证红。
 
-**待拍板三件事**（`M10-design.md` §2.4）：① 块头 16 字节 vs 侧表；② 逐位点帧记录 vs 函数级并集；③ map 存储进托管堆 vs 留在 arena（不回收）。
+**三件事已拍板**（`M10-design.md` §2.4，2026-10-26）：① 块头 **16 字节**（不是侧表）；② **逐位点**帧记录（不是函数级并集）；③ map 存储**进托管堆**。实测各有一处修正，见 `M10-manifest.json` 的 `measurement_deviations`。
 
 
 **执行期修掉的既有 bug**：`select` 子句里的无标签 `break` 会穿透到外层 `for`（官方 `33`、我们算出 `1`）—— `select` 不在 body 栈上，子句体是唯一能拦 break 的东西；修法是 `Body::Seq` 加 `breakable` 字段。
@@ -179,7 +181,10 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**尚未开始的 crate**：M9 的 runtime 与对象模型、M10 的 GC。
+**M11（native 并发）设计与计划已出**（2026-10-27，**待拍板、未开工**）：
+`M11-design.md` / `M11-tests.md` / `M11-plan.md` 三件套齐备。**只做 M11a/b/c**（栈与切换 / 调度与 chan+select / 多 G 根扫描），M11d（定时器）/ M11e（多线程）/ M11f（并发 GC）不在本次范围内。三条口径：① **M:1 协作式**（判据是「与解释器逐字节一致」，真并发下这条判据不存在）；② **切换把 callee-saved 压进被挂起 G 自己的栈** ⇒ M10 的 `t_gc_10`（没有寄存器根）一个字不用改；③ **M11a/b 强制关 GC**，只有 c 验证完「所有 G 的栈都能扫」才重开，开关是统计行的 `mode=`。七条门禁 `GO-1..GO-7`，最强的是**三层差分**（native / 解释器 / 官方 `go run`）。设计期已发现一个真 bug：`build` 对 `go`/`select`/`send` 是 **panic（rc=101）** 而不是干净拒绝（`F3`，Phase 0 第一件事）。
+
+**待拍板三件事**（`M11-design.md` §2.4）：① goroutine 栈 64 KiB（建议）vs 8 KiB vs 256 KiB；② 接受「a/b 阶段没有 GC、三态判据到 c 才有」吗；③ `C11` §7 的「多核抢占」措辞改成「M11a–c 是 M:1」。
 （M8 没有新 crate —— 并发落在既有 `rgoc-hir` / `rgoc-interp` / `rgoc-check` 里，见 §0 的 M8 段与 `docs/milestones/M8-report.md`。）
 （`rgoc-arm64` 已建：M7 的 native 代码生成，见 §0 的一句话状态与 `docs/milestones/M7-report.md`。）
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
