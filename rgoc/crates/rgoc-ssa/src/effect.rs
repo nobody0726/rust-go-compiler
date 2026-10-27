@@ -205,10 +205,47 @@ fn scan_block(cx: &Ctx, b: &HirBlock, s: &mut Summary, calls: &mut Vec<FuncId>) 
 
 fn scan_stmt(cx: &Ctx, st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match st {
-        Stmt::Go { .. } | Stmt::Send { .. } | Stmt::Select { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            // 走到这里 = 预扫描漏了，是实现 bug，不是「还没实现」（同 build_range 的先例）。
-            unreachable!("chan/go/select 应由 unsupported() 在建图前拒掉")
+        // `go` / `ch <- v` / `select`（M11 之前 SSA 面仍拒，`SSA-UNSUPPORTED-CHAN`）。
+        //
+        // ⚠️ 这里**不能** `unreachable!`（`F3` / M11/Task 1）。
+        //
+        // 原注释的前提是「由 `unsupported()` 在建图前拒掉」，但**调用顺序不是
+        // 这样**：`build.rs:60` 先跑 `effect::summarize`，`unsupported()` 在 647 行
+        // 才跑。于是任何含 `go`/`select`/`send` 的程序都会先撞到这里 ——
+        // 实测 6 个语料（`select.go` / `select4` / `select6` / `select8` /
+        // `sendstmt` / `sieve1`）都是 `rc=101`，而「预扫描漏了」这个前提从未成立。
+        //
+        // 效果摘要是**保守近似**，它对任何语句都必须有定义 —— 把「调用方约定」
+        // 当成「不可达」是错的。三条各自的保守口径：
+        //   * 并发语句可能让**任何**全局/堆被写（别的 goroutine）⇒ `writes_all`；
+        //   * 可能 panic（nil 通道、closed 通道）⇒ `may_panic`；
+        //   * 里面的调用表达式照常记进 `calls`（`go f()` 的 `f` 也是被调方）。
+        Stmt::Go { call } => {
+            s.writes_all = true;
+            s.may_panic = true;
+            scan_expr(cx, call, s, calls);
+        }
+        Stmt::Send { chan, value } => {
+            s.writes_all = true;
+            s.may_panic = true;
+            scan_expr(cx, chan, s, calls);
+            scan_expr(cx, value, s, calls);
+        }
+        Stmt::Select { clauses } => {
+            s.writes_all = true;
+            s.may_panic = true;
+            for c in clauses {
+                if let Some(ch) = &c.chan {
+                    scan_expr(cx, ch, s, calls);
+                }
+                if let Some(v) = &c.send_value {
+                    scan_expr(cx, v, s, calls);
+                }
+                for t in &c.recv_targets {
+                    scan_place_exprs(cx, t, s, calls);
+                }
+                scan_block(cx, &c.body, s, calls);
+            }
         }
         Stmt::Assign { lhs, rhs, .. } => {
             for e in rhs {
@@ -320,9 +357,13 @@ fn scan_stmt(cx: &Ctx, st: &Stmt, s: &mut Summary, calls: &mut Vec<FuncId>) {
 
 fn scan_expr(cx: &Ctx, e: &Expr, s: &mut Summary, calls: &mut Vec<FuncId>) {
     match &e.kind {
-        ExprKind::Recv { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            unreachable!("`<-ch` 应由 unsupported() 在建图前拒掉")
+        ExprKind::Recv { ch, .. } => {
+            // `<-ch`（M11 之前 SSA 面仍拒）。理由同 `scan_stmt` 的 `Go/Send/Select`：
+            // 效果摘要跑在 `unsupported()` **之前**，所以这里不是不可达。
+            // 保守：读通道 + 可能 panic（nil 通道永久阻塞在解释器里、SSA 面拒绝）。
+            s.writes_all = true;
+            s.may_panic = true;
+            scan_expr(cx, ch, s, calls);
         }
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => {}
         ExprKind::Field { base, .. } => scan_expr(cx, base, s, calls),
