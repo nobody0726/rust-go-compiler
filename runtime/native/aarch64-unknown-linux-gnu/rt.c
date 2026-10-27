@@ -1532,6 +1532,103 @@ typedef struct {
 
 _Static_assert(sizeof(TypeDesc) == 40, "TypeDesc 必须是 40 字节（C5 §10）");
 
+/* ════════════════════════════════════════════════════════════════════
+ * `hchan`（M11b/Task 16，`C11` §7 **布局冻结** / §3.2 四张表）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * 字段序**逐字照抄** `rgoc-arm64::hchan::Hchan`（那是 `t_sch_01` 对账的对象）：
+ *
+ * ```text
+ *   +0  qcount     len(c)
+ *   +8  dataqsiz   cap(c)
+ *   +16 buf        环形缓冲（托管堆；dataqsiz == 0 时为 0）
+ *   +24 elemsize   元素宽度（u16）
+ *   +26 (padding)  u32 的 4 字节对齐
+ *   +28 closed     单向 0 → 1
+ *   +32 elemtype   元素 desc（GC 扫缓冲元素时要它）
+ *   +40 sendx      环形发送下标
+ *   +48 recvx      环形接收下标
+ *   +56 recvq      Waitq { head, tail }
+ *   +72 sendq      Waitq { head, tail }
+ *   +88 lock       留位给 M11e（M11b 是 M:1，不用）
+ *   = 96 字节
+ * ```
+ *
+ * ⚠️ **`closed` 在 +28 而不是 +26**：`elemsize` 是 `u16`，而 `u32` 要 4 字节
+ * 对齐 ⇒ 中间有 2 字节 padding。`_Static_assert` 钉住这一点 —— 写错的话
+ * `closed` 会与 `elemsize` 的高 16 位重叠，症状是「关闭标记被元素宽度污染」。
+ */
+typedef struct Sudog Sudog;
+
+typedef struct Hchan {
+    u64 qcount;
+    u64 dataqsiz;
+    u8 *buf;
+    u16 elemsize;
+    u32 closed;
+    const void *elemtype;
+    u64 sendx;
+    u64 recvx;
+    Sudog *recvq_head;
+    Sudog *recvq_tail;
+    Sudog *sendq_head;
+    Sudog *sendq_tail;
+    u64 lock;
+} Hchan;
+
+_Static_assert(sizeof(Hchan) == 96, "Hchan 必须是 96 字节（C11 §7）");
+_Static_assert(__builtin_offsetof(Hchan, dataqsiz) == 8, "dataqsiz 在 +8");
+_Static_assert(__builtin_offsetof(Hchan, buf) == 16, "buf 在 +16");
+_Static_assert(__builtin_offsetof(Hchan, elemsize) == 24, "elemsize 在 +24");
+_Static_assert(__builtin_offsetof(Hchan, closed) == 28, "closed 在 +28（不是 +26）");
+_Static_assert(__builtin_offsetof(Hchan, elemtype) == 32, "elemtype 在 +32");
+_Static_assert(__builtin_offsetof(Hchan, sendx) == 40, "sendx 在 +40");
+_Static_assert(__builtin_offsetof(Hchan, recvx) == 48, "recvx 在 +48");
+_Static_assert(__builtin_offsetof(Hchan, recvq_head) == 56, "recvq 在 +56");
+_Static_assert(__builtin_offsetof(Hchan, sendq_head) == 72, "sendq 在 +72");
+_Static_assert(__builtin_offsetof(Hchan, lock) == 88, "lock 在 +88");
+
+/* `make(chan T[, n])`。
+ *
+ * ⚠️ **`gc_pause` 包住整段**（与 `rt_defer_push` 同源，`R-10-24`）：`Hchan`
+ * 与 `buf` 都是托管堆块，而 stress 钩子在**分配之前**跑 GC —— 此刻它们还没
+ * 发布到任何可达位置。
+ *
+ * ⚠️ **已知缺口（进 `M11-report.md`）**：`Hchan` 是 `K_RAW`，GC **不扫它的
+ * 内容** ⇒ `buf` 那个指针没有根（`elemtype` 在 rodata，不需要）。M11b 的
+ * a/b 阶段强制 `mode=off`（`D-M11-12`）所以碰不到；M11c 要么把 `Hchan` 换成
+ * 带 desc 的类型，要么在 `mark_roots` 里扫一张 chan 链表。 */
+/* 两个分配入口定义在文件后半（ / ）。 */
+void *rt_alloc_raw(u64 bytes);
+void *rt_alloc_array(const TypeDesc *elem, u64 cap);
+
+Hchan *rt_makechan(u64 elemsize, u64 dataqsiz, const void *elemtype) {
+    gc_pause++;
+    Hchan *c = (Hchan *)rt_alloc_raw(sizeof(Hchan));
+    c->qcount = 0;
+    c->dataqsiz = dataqsiz;
+    c->elemsize = (u16)elemsize;
+    c->closed = 0;
+    c->elemtype = elemtype;
+    c->sendx = 0;
+    c->recvx = 0;
+    c->recvq_head = 0;
+    c->recvq_tail = 0;
+    c->sendq_head = 0;
+    c->sendq_tail = 0;
+    c->lock = 0;
+    if (dataqsiz > 0 && elemsize > 0) {
+        c->buf = (u8 *)rt_alloc_array((const TypeDesc *)elemtype, dataqsiz);
+    } else {
+        /* `chan [0]byte` / `chan struct{}`：`elemsize == 0` ⇒ 不要缓冲，
+         * 但 `dataqsiz` 可以非 0（`zerosize.go` 就是这么用的）。 */
+        c->buf = 0;
+    }
+    gc_pause--;
+    return c;
+}
+
+
 /* 值相等（定义在文件后半；`rt_iface_eq` 在它之前就要用）。 */
 int rt_equal(const TypeDesc *d, const void *a, const void *b);
 _Static_assert(__builtin_offsetof(TypeDesc, gcdata) == 16, "gcdata 在 +16");
