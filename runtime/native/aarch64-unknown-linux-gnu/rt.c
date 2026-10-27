@@ -452,6 +452,22 @@ static u64 parse_u64(const char *s) {
 #define G_STACK_BYTES (64 * 1024)
 #define G_SWITCH_SAVE 160
 
+/* `stack_lo` **之下**留一页（`M11c/Task 41` 补，实测驱动）。
+ *
+ * # 为什么必须有
+ *
+ * 序言栈检查写的是 `cmp sp, stack_lo; b.hs 跳过` —— 也就是「`sp` 已经
+ * **掉到界外**才报错」。而报错要走 `bl rt_panic_stack_overflow`，那个 C 函数
+ * 自己有栈帧（`stp x29, x30, [sp, #-16]!`）⇒ 它的写入落在 `stack_lo` 之下。
+ * 如果那里没有映射，得到的是 **SIGSEGV（退出 -1 / 信号 11）**，而不是
+ * 「确定的文本 + 退出 2」—— `T-STK-06` 就是这么撞上的（452 层递归，rc=-1）。
+ *
+ * 生成代码的冷路径里还有一条 `mov sp, x9`（把 `sp` 抬回 `stack_lo`），所以
+ * 一页余量就够：无论那一帧有多大，panic 路径的栈都从 `stack_lo` 往下用。
+ *
+ * 代价是每个 G 多一页虚拟地址（碰了才算物理页）。 */
+#define G_STACK_SLACK 4096
+
 /* `C5` §7.4：序言 `adrp/add/ldr` 它做栈下界比较。
  * ⚠️ **全局而不是寄存器** —— 用寄存器会让 `t_gc_10` 红。 */
 u64 *g_stack_lo;
@@ -548,18 +564,25 @@ static GDesc *rt_gdesc_new(void) {
  *
  * 返回值仍是那个 gdesc；`sp` 指向栈顶（**16 对齐**，AAPCS64 要求）。
  *
- * ⚠️ **映射长度就是 `G_STACK_BYTES`，不额外多要**（M11c/Task 36 改的）：
- * 早先写的是 `G_STACK_BYTES + 16` 再「把栈顶向下对齐到 16」，那让
- * `munmap` 的长度变成 65552 —— 而 `munmap` 会把长度**向上取整到页**，
- * 于是多还掉一页（那一页可能是别人的映射）。`G_STACK_BYTES` 是 16 的倍数、
- * `mmap` 返回页对齐 ⇒ 栈顶本来就是 16 对齐，那 16 字节纯属多余。 */
+ * 布局（`M11c` 起，见 `G_STACK_SLACK`）：
+ *
+ * ```text
+ *   base            .. base + 4096           余量页（panic 路径的栈）
+ *   base + 4096     .. base + 4096 + 65536   可用栈（stack_lo .. stack_hi）
+ * ```
+ *
+ * ⚠️ **映射长度与 `munmap` 长度必须一致且是页的整数倍**：早先写的是
+ * `G_STACK_BYTES + 16` 再「把栈顶向下对齐到 16」，而 `munmap` 会把长度
+ * **向上取整到页** ⇒ 多还掉一页别人的映射。现在 `4096 + 65536 = 69632`
+ * 正好 17 页，一分不多一分不少。 */
 static void rt_gstack_alloc(GDesc *g) {
-    i64 r = sys6(SYS_mmap, 0, (i64)G_STACK_BYTES, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
+    u64 total = G_STACK_BYTES + G_STACK_SLACK;
+    i64 r = sys6(SYS_mmap, 0, (i64)total, PROT_READ_WRITE, MAP_PRIVATE_ANON, -1, 0);
     if (r < 0) {
         rt_fatal_oom(heap_limit);
     }
-    g->stack_hi = (u64 *)((u64)r + G_STACK_BYTES);
-    g->stack_lo = (u64 *)r;
+    g->stack_hi = (u64 *)((u64)r + total);
+    g->stack_lo = (u64 *)((u64)r + G_STACK_SLACK);
     g->sp = g->stack_hi;
 }
 
@@ -578,7 +601,11 @@ static void rt_g_reclaim(GDesc *g) {
         g->argbytes = 0;
         return;
     }
-    sys3(SYS_munmap, (i64)g->stack_lo, (i64)G_STACK_BYTES, 0);
+    sys3(
+        SYS_munmap,
+        (i64)g->stack_lo - (i64)G_STACK_SLACK,
+        (i64)(G_STACK_BYTES + G_STACK_SLACK),
+        0);
     g->frames = 0;
     g->wait = 0;
     g->argbytes = 0;

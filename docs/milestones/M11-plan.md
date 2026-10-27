@@ -797,11 +797,31 @@
 
 # Phase 4 · 收口（Task 40–46）
 
-### Task 40: 全量回归
+### Task 40: 全量回归 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 四条 cargo 门禁；`run-native.sh` 三态各 69/0/0；
-  `run-native-chan.sh` 三态各 7/0/0；`run-chan.sh`（解释器）仍 7/12/0。
-- [ ] **Step 2: Commit** `chore(m11): 全量回归（Task 40）`
+> **读数**：fmt / check / clippy 全绿；test **2276 passed / 0 failed / 3 ignored**；
+> `run-native.sh` 三态各 69/0/0；`run-native-chan.sh` 三态各 7/0/0（`M'` 12/12）；
+> `run-chan.sh chan-input.txt`（解释器）**ok=7 skip=12 bad=0 / 19**。
+>
+> ⚠️ **这一轮补上了一条「台账打了勾但没写测试」的判据**：`Task 10` 的 Step 3
+> 把 `t_stk_06_溢出深度实测` 打了 `[x]`，而 `go_stack.rs` 里根本没有它
+> （「推到 Task 12」之后就没人回来）。补实现时**立刻抓到两个真问题**：
+>
+> ① **溢出报错从来没在新 G 上生效过**：序言检查是「`sp` 掉到界外才报」，
+>    而 `rt_panic_stack_overflow` 自己有栈帧 ⇒ 它的写入落在 `stack_lo` 之下
+>    ⇒ **SIGSEGV（rc=-1）**。`main` 之所以没事，是因为它的 `stack_lo` 取
+>    「入口 `sp` − 4 MiB」（下面还有 4 MiB 真栈）。修法两条：`stack_lo` 之下
+>    留**一页**余量（`G_STACK_SLACK`）+ 冷路径 `mov sp, x9` 把 `sp` 抬回界内。
+> ② **溢出深度实测 = 452 层**（64 KiB，每帧 ~144 B）；`N+1 = 453` 溢出且
+>    两次跑逐字节相同 ⇒ 写进 manifest 的 `measured.stack_overflow_depth`。
+>
+> 新增 `t_stk_07_大帧溢出也报错`（12000 字节帧）+ 变异 `M-M11-18`
+> （去掉 `mov sp, x9`）。⚠️ `M-M11-18` 第一版拿 `t_stk_06` 当靶子时**是绿的**：
+> 小帧的越界量最多一帧（~144 B），一页余量兜住了 ⇒ 判据没牙。换成 12 KiB 帧后
+> 越界 6752 B > 4096 才真的露出来。**变异 16/16 全红**。
+
+- [x] **Step 1**: 四条门禁 + 三套语料（读数见上）。
+- [x] **Step 2: Commit** `chore(m11): 全量回归 + 补 T-STK-06/07（Task 40）`
 
 ### Task 41: `M11-manifest.json`
 

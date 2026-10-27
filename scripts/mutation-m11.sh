@@ -53,6 +53,7 @@
 # | `M-M11-15` `Sudog`/`WaitSet` 改回 arena | `T-CHAN-08` | 37 |
 # | `M-M11-16` 「已关闭且空」的 `ok` 恒真 | `T-CHAN-05` | 19 |
 # | `M-M11-17` 退出的 G 不还栈 | `T-GROOT-07` | 36 |
+# | `M-M11-18` 溢出冷路径不把 `sp` 抬回界内 | `T-STK-06` | 41 |
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -336,9 +337,26 @@ $PROBE "M-M11-15 WaitSet 回 arena" "$RT" \
 # 10 万个 G × 64 KiB = 6.4 GiB 虚拟地址，RSS 被踩过的页撑到几百 MB。
 # `t_groot_07` 断言 `rss <= 64 MB` ⇒ 红。
 $PROBE "M-M11-17 退出的 G 不还栈" "$RT" \
-  '    sys3(SYS_munmap, (i64)g->stack_lo, (i64)G_STACK_BYTES, 0);' \
+  '    sys3(
+        SYS_munmap,
+        (i64)g->stack_lo - (i64)G_STACK_SLACK,
+        (i64)(G_STACK_BYTES + G_STACK_SLACK),
+        0);' \
   '    /* 变异 M-M11-17：不还栈 */' \
   -p rgoc-driver --test go_root t_groot_07
+
+# ── M-M11-18：冷路径不把 `sp` 抬回界内（`T-STK-07` 的反面）──────────────
+# 去掉 `mov sp, x9` ⇒ 大帧（8 KiB，超过一页余量）溢出时
+# `rt_panic_stack_overflow` 的栈帧落在映射之外 ⇒ **SIGSEGV**（rc=-1）
+# 而不是「确定的文本 + 退出 2」。
+# ⚠️ 靶子是 `t_stk_07`（大帧），**不是** `t_stk_06`：后者每帧 ~144 字节，
+# 越界量最多一帧，`G_STACK_SLACK` 那一页就兜住了 —— 实测：
+# 拿 `t_stk_06` 当靶子时这条变异**是绿的**（判据没牙）。
+$PROBE_RS "M-M11-18 溢出冷路径不抬 sp" "crates/rgoc-arm64/src/isel.rs" \
+  '        asm.ins("mov sp, x9");' \
+  '        // 变异 M-M11-18：不抬 sp' \
+  rgoc-arm64 \
+  -p rgoc-driver --test go_stack t_stk_07
 
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"

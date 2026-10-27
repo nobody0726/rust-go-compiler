@@ -430,6 +430,14 @@ fn prologue(cx: &Ctx<'_>, fr: &Frame, asm: &mut Asm) {
         asm.ins("ldr x9, [x9]");
         asm.ins("cmp sp, x9");
         asm.ins(&format!("b.hs .Lso_{}", cx.fi_index));
+        // ⚠️ **把 `sp` 抬回 `stack_lo` 再报错**（`M11c/Task 41`，实测驱动）：
+        // 走到这里说明 `sp` 已经在界外，而 `rt_panic_stack_overflow` 自己有
+        // 栈帧（`stp x29, x30, [sp, #-16]!`）—— 不抬的话它的写入落在更下面，
+        // 一帧很大时（最坏 1 MiB，`STACK_FRAME_LIMIT`）会直接 SIGSEGV，
+        // 症状是 `rc=-1` 而不是「确定的文本 + 退出 2」。
+        // `stack_lo` 之下有一页余量（`rt.c` 的 `G_STACK_SLACK`），抬回来之后
+        // panic 路径就从 `stack_lo` 往下用那一页。
+        asm.ins("mov sp, x9");
         asm.ins("bl rt_panic_stack_overflow");
         asm.ins("brk #1");
         asm.label(&format!(".Lso_{}", cx.fi_index));

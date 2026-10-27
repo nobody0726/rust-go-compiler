@@ -180,3 +180,164 @@ fn t_stk_05_超大帧不查() {
         "所有函数都发了栈检查（{cmps} 条 / {funcs} 个函数）—— `off_stack` 的帧不该查"
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-STK-06 溢出深度实测（M11c/Task 41 补 —— `Task 10` 的台账写了它却没写测试）
+// ════════════════════════════════════════════════════════════════════
+
+/// 在**新 G 的 64 KiB 栈**上递归 `n` 层。
+///
+/// # 为什么必须是新 G
+///
+/// `main` 用的是**进程栈**（`stack_lo` 取入口 `sp - 4 MiB`，`t_stk_03` 就是
+/// 在它上面测的）。「64 KiB 够不够用」只能在新 G 上测 —— 而那要等 `go`
+/// 语句（Task 12）之后。所以 Task 10 的台账把这条推到 Task 12，然后……**没人
+/// 补**。`GO-1` 挂着一条没实现的判据而台账打勾，是「记一笔 ≠ 收口」的典型。
+fn depth_src(n: u32) -> String {
+    format!(
+        r#"
+package main
+
+func rec(n int) int {{
+	if n == 0 {{
+		return 0
+	}}
+	return rec(n-1) + 1
+}}
+
+func main() {{
+	c := make(chan int)
+	go func() {{
+		println(rec({n}))
+		c <- 1
+	}}()
+	<-c
+}}
+"#
+    )
+}
+
+fn run_depth(n: u32) -> (String, String, i32) {
+    build_then_run(&format!("stk06_{n}"), &depth_src(n))
+}
+
+/// 递归 fixture 在 64 KiB 下**实测**溢出发生在第 `N` 层；`N` 可复现。
+///
+/// # 判据
+///
+/// 1. `N` 层**不**溢出（退出 0 且打印 `N`）—— 少一层就够，说明边界确实在 N+1；
+/// 2. `N+1` 层溢出：退出 2 + `runtime error: goroutine stack exceeded 65536 bytes`；
+/// 3. `N+1` 再跑一次，结果**逐字节相同**（「实测」不是「大概」）；
+/// 4. `N ≥ 100`：留足富余（语料里递归最深的 `sieve1.go` 是 25 个 G 串成的链，
+///    每层帧都浅；`N` 若掉到两位数，64 KiB 这个选择就该重新讨论）。
+///
+/// `N` 写进 `M11-manifest.json` 的 `measured.stack_overflow_depth`。
+#[test]
+fn t_stk_06_溢出深度实测() {
+    // ① 倍增找到上界（帧 ~64 B ⇒ 大约 1000 层，从 128 起倍增省几轮）
+    let (mut ok, mut bad) = (1u32, 128u32);
+    while run_depth(bad).2 == 0 {
+        ok = bad;
+        bad *= 2;
+        assert!(bad <= 8192, "64 KiB 下 {ok} 层都没溢出 ⇒ 栈检查没生效？");
+    }
+    // ② 二分：`ok` 不溢出、`bad` 溢出，找相邻的那一对
+    while bad - ok > 1 {
+        let mid = ok + (bad - ok) / 2;
+        if run_depth(mid).2 == 0 {
+            ok = mid;
+        } else {
+            bad = mid;
+        }
+    }
+    let n = ok;
+
+    // ③ `n` 层：退出 0，打印 n
+    let (stdout, stderr, exit) = run_depth(n);
+    assert_eq!(exit, 0, "{n} 层应当**不**溢出：stderr={stderr:?}");
+    assert_eq!(stdout, format!("{n}\n"), "{n} 层的输出不对");
+
+    // ④ `n+1` 层：溢出，文本与数字都对
+    let (so2, se2, ex2) = run_depth(n + 1);
+    assert_eq!(ex2, 2, "{0} 层应溢出（退出 2），实际 {ex2}", n + 1);
+    assert!(
+        se2.contains("runtime error: goroutine stack exceeded 65536 bytes"),
+        "{0} 层的溢出文本不对（数字必须是新 G 的栈字节数 65536）：\n{se2}",
+        n + 1
+    );
+    assert!(so2.is_empty(), "{0} 层溢出前不应有半截输出：{so2:?}", n + 1);
+
+    // ⑤ 可复现：再跑一次，三样逐字节相同
+    let (so3, se3, ex3) = run_depth(n + 1);
+    assert_eq!(
+        (so3, se3, ex3),
+        (so2, se2, ex2),
+        "同一层数跑两次结果不同 ⇒ 「实测深度」不可复现"
+    );
+
+    // ⑥ 富余
+    assert!(n >= 100, "64 KiB 只够 {n} 层 ⇒ 余量太小，该重新讨论栈大小");
+
+    println!(
+        "T-STK-06: 64 KiB 下溢出深度 N = {n}（N+1 = {} 溢出）",
+        n + 1
+    );
+}
+
+/// **大帧**（12000 字节数组）在新 G 上递归 —— 溢出也必须干净报错。
+///
+/// # 为什么单独立一条（`T-STK-06` 的补充）
+///
+/// `T-STK-06` 的 fixture 每帧只有 ~144 字节，**越界量最多一帧**，所以
+/// 「`stack_lo` 之下那一页余量」（`G_STACK_SLACK`）就兜住了 —— 把冷路径的
+/// `mov sp, x9` 去掉，它照样绿（变异 `M-M11-18` 第一版就是这么绿的）。
+///
+/// 大帧才会露真章：`sub sp` 一次跳 12 KiB 越过 `stack_lo`，一页余量不够 ⇒
+/// `rt_panic_stack_overflow` 的栈帧落在映射外 ⇒ **SIGSEGV（rc=-1）**，而
+/// 不是「确定的文本 + 退出 2」。`C5` §7 允许栈上帧到 **1 MiB**
+/// （`STACK_FRAME_LIMIT`），所以这不是假想的形状。
+///
+/// # 为什么是 12000 这个数（不是「随手一个 8 KiB」）
+///
+/// 越界量 = `ceil(65536/F)*F - 65536`，其中 `F` 是帧大小 —— 它必须**大于**
+/// 余量页（4096）才验得到 `mov sp`。`F = 12000 + 48 = 12048` ⇒ 6 层越过，
+/// 越界 `6*12048 - 65536 = 6752 > 4096` ✓。
+/// 实测教训：第一版用 8 KiB，算出越界只有 **128 字节**（`8*8208 - 65536`）
+/// —— 一页余量兜住了，去掉 `mov sp` 判据照样绿（变异 `M-M11-18` 绿过一次）。
+/// 帧大小在 11605..13107 之间都给 6 层、越界都 > 4096，留了 ±400 的余量。
+const BIG_FRAME: &str = r#"
+package main
+
+func big(n int) int {
+	var buf [12000]byte
+	buf[0] = byte(n)
+	if n == 0 {
+		return 0
+	}
+	return big(n-1) + int(buf[0])
+}
+
+func main() {
+	c := make(chan int)
+	go func() {
+		println(big(40))
+		c <- 1
+	}()
+	<-c
+}
+"#;
+
+#[test]
+fn t_stk_07_大帧溢出也报错() {
+    let (stdout, stderr, exit) = build_then_run("stk07", BIG_FRAME);
+    assert_eq!(
+        exit, 2,
+        "8 KiB 帧的溢出必须退出 2（-1 = 被信号杀掉，说明 panic 路径自己踩到栈外）：\
+         stdout={stdout:?} stderr={stderr:?}"
+    );
+    assert!(
+        stderr.contains("runtime error: goroutine stack exceeded 65536 bytes"),
+        "溢出文本不对：\n{stderr}"
+    );
+    assert!(stdout.is_empty(), "溢出前不应有半截输出：{stdout:?}");
+}
