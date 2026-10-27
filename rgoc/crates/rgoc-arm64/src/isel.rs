@@ -405,6 +405,34 @@ fn prologue(cx: &Ctx<'_>, fr: &Frame, asm: &mut Asm) {
             load_imm(asm, "x10", i64::from(imm));
             asm.ins("sub sp, sp, x10");
         }
+        // ── 序言栈检查（`C5` §7.4 / `M11-design.md` §3.4，M11a/Task 10）──
+        //
+        // goroutine 的栈是**固定大小**（`D-M11-2`），溢出必须明确报错而不是
+        // 踩到别的 G 的栈。用「比较 + 条件跳转」而不是 guard page + SIGSEGV：
+        // freestanding 下要自己写 `rt_sigaction`、信号帧布局是内核 ABI、且
+        // 「明确报错」会从「确定」变成「大概率」（`D-M11-4`）。
+        //
+        // ⚠️ **只在 `frame_size > 0` 且非 `off_stack` 时发**：
+        //   * 空帧（`imm == 0`）不可能溢出；
+        //   * `off_stack` 的帧底在 mmap 块里、不在 `sp` 上，比较无意义 ——
+        //     它由 `rt_stack_frame_alloc` 的 OOM 路径管（`T-STK-05`）。
+        //     上面那个 `if fr.off_stack()` 分支**提前 return**，所以到这里
+        //     的必然是栈上帧。
+        //
+        // ⚠️ **`g_stack_lo` 用全局而不是寄存器**：用寄存器会让 `t_gc_10`
+        // （没有寄存器根）红 —— 那条守卫**不许为 M11 改**。
+        //
+        // 冷块内联在序言里（`b.hs` 正常跳过）：放函数尾要在 `epilogue` 里
+        // 再发一次，而 `epilogue` 有 return / panic 两个出口 —— 为 2 条指令
+        // 改两处，不划算。
+        asm.ins("adrp x9, g_stack_lo");
+        asm.ins("add x9, x9, :lo12:g_stack_lo");
+        asm.ins("ldr x9, [x9]");
+        asm.ins("cmp sp, x9");
+        asm.ins(&format!("b.hs .Lso_{}", cx.fi_index));
+        asm.ins("bl rt_panic_stack_overflow");
+        asm.ins("brk #1");
+        asm.label(&format!(".Lso_{}", cx.fi_index));
     }
     if cx.has_rec {
         write_rec(cx, asm);

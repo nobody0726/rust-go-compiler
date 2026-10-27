@@ -823,15 +823,21 @@ void rt_init(u64 sp) {
      * `_start` 的 `sp` 已经在用它了，换栈要改生成的汇编（`M11-design.md`
      * §3.2 的图描述的是新 G 的栈）。
      *
-     * `stack_lo` 取「入口 `sp` 往下 8 MiB」，与内核默认 `rlimit` 一致。
-     * 这是**近似**（`ulimit -s` 可变），但比「不检查」好：深递归会明确报
-     * `goroutine stack exceeded` 而不是段错误。精确的溢出深度由 `T-STK-06`
-     * 在**新 G 的 64 KiB 栈**上实测钉住。 */
+     * `stack_lo` 取「入口 `sp` 往下 **4 MiB**」，与内核默认 `rlimit`（8 MiB）
+     * **留一半余量**。
+     *
+     * ⚠️ 为什么不是 8 MiB（实测踩过）：`sp - 8 MiB` 正好落在栈底之外 ——
+     * 检查**来不及**触发，进程先踩到 guard page ⇒ `rc=139`，而判据期望的是
+     * `rc=2` + `goroutine stack exceeded`。取一半余量后，检查在还剩 4 MiB
+     * 时就会报错，既不会误报（正常程序用不到 4 MiB）也不会漏报。
+     *
+     * 这是**近似**（`ulimit -s` 可变），但比「不检查」好得多。精确的溢出深度
+     * 由 `T-STK-06` 在**新 G 的 64 KiB 栈**上实测钉住 —— 那条才是判据。 */
     {
         GDesc *m = rt_gdesc_new();
         m->sp = (u64 *)sp;
         m->stack_hi = (u64 *)sp;
-        m->stack_lo = (u64 *)(sp - (8UL * 1024UL * 1024UL));
+        m->stack_lo = (u64 *)(sp - (4UL * 1024UL * 1024UL));
         m->state = 1; /* running */
         rt_gset_current(m);
     }
@@ -2826,6 +2832,57 @@ void rt_panic_i64(i64 v) {
 }
 
 /* 三个检查点的出口（`M7-design.md` §3.9）。文案与 Go 的对应 panic 一致。 */
+/* goroutine 栈溢出（M11a/Task 10；`C9` §5 / `M11-design.md` §3.4）。
+ *
+ * ⚠️ **不可 `recover`**：栈已经不够了，展开 defer 会继续踩栈（`C11` §5 的
+ * 死锁/panic 都假设还有栈可用）。所以这里**不**走 `panic_set`，而是直接打
+ * stderr + 退出 2 —— 与 `rt_fatal_oom` 同一个形状。
+ *
+ * ⚠️ **`<N>` 必须是真的**：取当前 G 的 `stack_hi - stack_lo`，不是硬编码
+ * 65536。理由：`main` 用的是进程栈（M11a 阶段 4 MiB），新 G 才是 64 KiB
+ * （`D-M11-2`）—— 写死 65536 会让 `main` 的溢出报出一个假数字，而
+ * 「文本与真实限制一致」正是 `T-STK-03` 要钉的东西。
+ *
+ * ⚠️ **缓冲必须是静态的**：此刻 `sp` 已经在 `stack_lo` 之下，在栈上开
+ * `char buf[80]` 可能正好踩进 guard page（那才是真段错误）。`.bss` 里的
+ * 80 字节没有这个问题；单线程也不需要可重入。 */
+static char g_so_buf[96];
+
+void rt_panic_stack_overflow(void) {
+    const char *pre = "runtime error: goroutine stack exceeded ";
+    u64 n = 0;
+    while (pre[n] != 0) {
+        g_so_buf[n] = pre[n];
+        n++;
+    }
+    u64 v = 0;
+    if (g_cur != 0) {
+        /* ⚠️ 两个 `u64 *` 相减是**按元素个数**算的（C 的指针算术），
+         * 直接写得数会是「字节数 / 8」—— 实测把 4 MiB 报成了 512 KiB。
+         * 必须先转 `u64`。 */
+        v = (u64)g_cur->stack_hi - (u64)g_cur->stack_lo;
+    }
+    char d[24];
+    u64 k = 0;
+    if (v == 0) {
+        d[k++] = '0';
+    }
+    while (v > 0) {
+        d[k++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (k > 0) {
+        g_so_buf[n++] = d[--k];
+    }
+    const char *post = " bytes\n";
+    u64 i = 0;
+    while (post[i] != 0) {
+        g_so_buf[n++] = post[i++];
+    }
+    rt_write(2, g_so_buf, n);
+    rt_exit(2);
+}
+
 void rt_panic_div_zero(void) {
     const char *m = "runtime error: integer divide by zero";
     u64 n = 0;

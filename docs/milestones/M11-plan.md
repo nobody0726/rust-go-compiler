@@ -239,19 +239,33 @@
 - [x] **Step 3**: 判据 `t_stk_02`：切 1000 次后 `sp % 16 == 0`。
 - [x] **Step 4: Commit** `feat(rt): rt_switch（Task 9，D-M11-3）`
 
-### Task 10: 序言栈检查
+### Task 10: 序言栈检查 —— ✅ 已完成（2026-10-27）
+
+> **读数**：`t_stk_03`（溢出 rc=2 + 文本）/ `t_stk_04`（序言成对检查）/
+> `t_stk_05`（`nilptr2` 不误报）全绿。
+>
+> ⚠️ **`t_stk_06`（溢出深度实测）推到 Task 12**：现在只有 `main`，它用进程栈
+> （4 MiB）。「64 KiB 够不够 `sieve1.go`」要在**新 G 的 64 KiB 栈**上测 —— 那
+> 是 Task 12 的 `go` 语句之后的事。
+>
+> ⚠️ **两个实测修正**：
+> ① `stack_lo = sp - 8 MiB` **来不及**（正好在栈底之外，进程先踩 guard page
+> ⇒ rc=139）⇒ 改成 **4 MiB**（留一半余量）；
+> ② 溢出文本里的 `<N>` 必须**动态算**（`g_cur->stack_hi - stack_lo`），不能写死
+> 65536 —— 否则 `main` 的溢出会报一个假数字。而两个 `u64 *` 相减是**按元素
+> 个数**算的（C 的指针算术）⇒ 实测把 4 MiB 报成 512 KiB，必须先转 `u64`。
 
 **Files:**
 - Modify: `rgoc/crates/rgoc-arm64/src/isel.rs`（`prologue`）、`rt.c`（`rt_panic_stack_overflow`）
 
-- [ ] **Step 1**: `frame_size > 0 && !fr.off_stack()` 时发 4 条检查 + 冷路径。
-- [ ] **Step 2**: `rt_panic_stack_overflow()`：`runtime error: goroutine stack
+- [x] **Step 1**: `frame_size > 0 && !fr.off_stack()` 时发 4 条检查 + 冷路径。
+- [x] **Step 2**: `rt_panic_stack_overflow()`：`runtime error: goroutine stack
   exceeded <N> bytes` + 退出 2（`C9` §5 新行）。
-- [ ] **Step 3**: 判据 `t_stk_03_溢出报错`（深递归 fixture）+ `t_stk_04_序言有检查`
+- [x] **Step 3**: 判据 `t_stk_03_溢出报错`（深递归 fixture）+ `t_stk_04_序言有检查`
   （扫 `.s`）+ `t_stk_05_超大帧不查`（`nilptr2.go` 仍绿且 `.s` 里没有检查）
   + **`t_stk_06_溢出深度实测`**（`§2.4 ①` 的修正：实测第 N 层溢出、N 可复现、
   `sieve1.go` 的深度有富余；N 与 M 两个数字进 manifest 的 `measured`）。
-- [ ] **Step 4: Commit** `feat(arm64): 序言栈检查（Task 10，D-M11-4）`
+- [x] **Step 4: Commit** `feat(arm64): 序言栈检查（Task 10，D-M11-4）`
 
 ### Task 11: 切换的最小闭环（单 G 来回切）
 
