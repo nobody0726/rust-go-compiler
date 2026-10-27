@@ -272,11 +272,11 @@
 **Files:**
 - Modify: `rt.c`（`rt_schedule()` 的骨架 + `rt_goexit`）
 
-- [ ] **Step 1**: `rt_schedule()`：`g_cur->sp` 由 `rt_switch` 保存，
+- [x] **Step 1**: `rt_schedule()`：`g_cur->sp` 由 `rt_switch` 保存，
   从 `runq` 取下一个；队列空 ⇒ §3.9 的判定。
-- [ ] **Step 2**: 判据：一个 fixture 手工建两个 G（A 打印 1、B 打印 2），
+- [x] **Step 2**: 判据：一个 fixture 手工建两个 G（A 打印 1、B 打印 2），
   切一轮后输出 `1 2`（顺序由 FIFO 决定）。
-- [ ] **Step 3: Commit** `feat(rt): 调度骨架（Task 11）`
+- [x] **Step 3: Commit** `feat(rt): 调度骨架（Task 11）`
 
 ### Task 12: `Instr::Go` 与参数打包
 

@@ -388,6 +388,8 @@ static u64 gc_stats;                             /* 1 = 退出时打一行 */
 /* M11a 的 `rt_switch` 自测开关（`T-STK-01`）。缺省关：它切一次栈，
  * 对正常程序没有意义，只在判据里开。 */
 static u64 g11_selftest;
+/* 调度骨架的自测开关（`GO-2` 第一条）。 */
+static u64 g11_schedtest;
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 /* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
 static u64 gc_since;
@@ -787,6 +789,140 @@ __asm__(
     "    ret\n"
     ".size rt_sc_run, .-rt_sc_run\n");
 
+/* ════════════════════════════════════════════════════════════════════
+ * 调度骨架（M11a/Task 11，`M11-design.md` §3.5 / `C11` §2.1）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * 三条规则（`GO-2`）：**M:1**（一个 OS 线程）/ **不抢占**（`go` 不切走当前 G）/
+ * **就绪队列 FIFO**（队尾入、队头出）。
+ *
+ * 「不抢占」的落地很直接：`rt_schedule` 只在 `rt_goexit`（G 跑完）与阻塞点
+ * （`ch <-` / `<-ch` / `select` 无就绪）被调用。没有任何地方按时间片切。
+ */
+static GDesc *g_ready_head;
+static GDesc *g_ready_tail;
+
+/* 入**队尾**（`GO-2` 的 FIFO）。改成队头插入就是变异 `M-M11-06`。 */
+static void rt_enqueue(GDesc *g) {
+    g->state = 0; /* ready */
+    g->qnext = 0;
+    if (g_ready_tail == 0) {
+        g_ready_head = g;
+        g_ready_tail = g;
+    } else {
+        g_ready_tail->qnext = g;
+        g_ready_tail = g;
+    }
+}
+
+static GDesc *rt_dequeue(void) {
+    GDesc *g = g_ready_head;
+    if (g == 0) {
+        return 0;
+    }
+    g_ready_head = g->qnext;
+    if (g_ready_head == 0) {
+        g_ready_tail = 0;
+    }
+    g->qnext = 0;
+    return g;
+}
+
+/* 死锁（`C9` §5 的文本，逐字节）。
+ *
+ * ⚠️ Task 26 会补「三条条件各自必要」的判定（`T-EXIT-05`：有就绪 G 时**不**
+ * 能报死锁）。现在只有「队列空」这一条 —— M11a 还没有阻塞点，走不到这里。 */
+static void rt_fatal_deadlock(void) {
+    const char *m = "fatal error: all goroutines are asleep - deadlock!\n";
+    u64 n = 0;
+    while (m[n] != 0) {
+        n++;
+    }
+    rt_write(2, m, n);
+    rt_exit(2);
+}
+
+/* 换到下一个可跑的 G。
+ *
+ * 前置：当前 G **已经**入队（ready）、已 blocked、或已 exited —— 否则它的
+ * `sp` 就丢了（`rt_switch` 会把当前 sp 存进 `prev->sp`，但没人再读它）。
+ */
+void rt_schedule(void) {
+    GDesc *next = rt_dequeue();
+    if (next == 0) {
+        rt_fatal_deadlock();
+    }
+    GDesc *prev = g_cur;
+    rt_gset_current(next);
+    next->state = 1; /* running */
+    rt_switch(&prev->sp, next->sp);
+    /* 这里返回时，说明别的 G 切回了我 —— `g_cur` 已经由对方设好。 */
+}
+
+/* 当前 G 结束。**永不返回**。
+ *
+ * 不释放栈：M11a 没有 G 的回收（`rt_goexit` 只标记 exited）。栈的回收要等
+ * M11c 之后 —— 现在 `mmap` 的 64 KiB 在进程退出时由内核收回。 */
+void rt_goexit(void) {
+    g_cur->state = 3; /* exited */
+    rt_schedule();
+    rt_exit(9); /* 走不到 */
+}
+
+/* ── 调度骨架的自测（`GO-2` 的第一条）────────────────────────────────
+ *
+ * 手工建两个 G（A 打印 `A`、B 打印 `B`），各跑完就 `rt_goexit`；`main` 自己
+ * 也入队，跑完两个再回来。
+ *
+ * 期望输出恰好 `A\nB\n` —— **顺序**才是判据：倒序说明队头插入，乱序说明真的
+ * 并发了（`M11-design.md` §3.5）。这条在 Task 12 有 `go` 语句之后会被
+ * `t_go_03` 取代（那时用 Go 源码写同样的形状）。
+ */
+static void sc_g_a(void) {
+    rt_write(1, "A\n", 2);
+    rt_goexit();
+}
+static void sc_g_b(void) {
+    rt_write(1, "B\n", 2);
+    rt_goexit();
+}
+
+void rt_sc_tramp(void);
+
+static GDesc *sc_mkg(void (*fn)(void)) {
+    GDesc *g = rt_gdesc_new();
+    rt_gstack_alloc(g);
+    /* 在新栈顶构造 `rt_switch` 的入口状态：20 个槽 + `x30` = trampoline。
+     * `x19` 装「要跑的函数」—— `rt_sc_tramp` 第一件事就是 `blr x19`。 */
+    u64 *sa = g->stack_hi - 20;
+    for (u64 i = 0; i < 20; i++) {
+        sa[i] = 0;
+    }
+    sa[0] = (u64)fn;           /* x19 */
+    sa[11] = (u64)rt_sc_tramp; /* x30 */
+    g->sp = sa;
+    return g;
+}
+
+void rt_schedtest(void) {
+    rt_enqueue(sc_mkg(sc_g_a));
+    rt_enqueue(sc_mkg(sc_g_b));
+    rt_enqueue(g_cur); /* main 也在队列里 */
+    rt_schedule();
+}
+
+__asm__(
+    ".text\n"
+    ".globl rt_sc_tramp\n"
+    ".type rt_sc_tramp, %function\n"
+    ".balign 4\n"
+    "rt_sc_tramp:\n"
+    "    mov  x0, x19\n"
+    "    blr  x0\n"
+    "    bl   rt_goexit\n"
+    "    brk  #1\n" /* 不该回来 */
+    ".size rt_sc_tramp, .-rt_sc_tramp\n");
+
 void rt_init(u64 sp) {
     u64 argc = *(u64 *)sp;
     char **argv = (char **)(sp + 8);
@@ -814,6 +950,8 @@ void rt_init(u64 sp) {
             gc_threshold = parse_u64(e + 18);
         } else if (starts_with(e, "RGOC_G11_SELFTEST=")) {
             g11_selftest = parse_u64(e + 18) != 0;
+        } else if (starts_with(e, "RGOC_G11_SCHEDTEST=")) {
+            g11_schedtest = parse_u64(e + 19) != 0;
         }
     }
 
@@ -847,6 +985,12 @@ void rt_init(u64 sp) {
      * 而 9 只可能来自自测，便于判据区分「切换坏了」与「程序自己坏了」）。 */
     if (g11_selftest != 0 && rt_switch_selftest() != 0) {
         rt_exit(9);
+    }
+
+    /* 调度骨架自测（`GO-2`）：建两个 G 各打印一句、`main` 也入队，期望
+     * 输出恰好 `A\nB\n`。 */
+    if (g11_schedtest != 0) {
+        rt_schedtest();
     }
 }
 

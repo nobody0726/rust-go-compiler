@@ -531,7 +531,14 @@ fn t_sch_04_m9_不交_native_并发() {
             continue;
         };
         for (i, line) in text.lines().enumerate() {
-            for needle in ["rt_go", "rt_select"] {
+            // ⚠️ **M11 起 `rt_go*` 是允许的**（`M11-design.md` §3.5–§3.7）：
+            // `rt_goexit` / `rt_go_trampoline` / `rt_schedule` 都是调度骨架的
+            // 正常符号。这条守卫原本（M9）是「不交 native 并发」，M11 改了那个
+            // 前提 —— 所以它现在只防**还没做的** `select`（Task 22 之后再放开）。
+            //
+            // 为什么保留这条而不是删掉：它防的是「代码里悄悄出现一个没人设计的
+            // 并发符号」。删了就再没人看这件事；改白名单则每次放开都要人确认一次。
+            for needle in ["rt_select"] {
                 // 允许在注释里说明「不交」这件事（本文件自己就写了）
                 let is_comment = {
                     let t = line.trim_start();
