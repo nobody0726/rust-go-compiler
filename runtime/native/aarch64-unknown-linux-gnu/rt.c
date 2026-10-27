@@ -390,6 +390,8 @@ static u64 gc_stats;                             /* 1 = 退出时打一行 */
 static u64 g11_selftest;
 /* 调度骨架的自测开关（`GO-2` 第一条）。 */
 static u64 g11_schedtest;
+/* `rt_go` 的自测开关（Task 12）。 */
+static u64 g11_gotest;
 static u64 gc_threshold = 4UL * 1024UL * 1024UL; /* 自动触发阈值 */
 /* 上次 GC 之后**分配的数据字节**（`C12` §5.3）。自动触发看它。 */
 static u64 gc_since;
@@ -923,6 +925,109 @@ __asm__(
     "    brk  #1\n" /* 不该回来 */
     ".size rt_sc_tramp, .-rt_sc_tramp\n");
 
+/* ════════════════════════════════════════════════════════════════════
+ * `go` 语句的运行时（M11a/Task 12，`M11-design.md` §3.6）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * 新 G 的栈布局（从低到高）：
+ *
+ * ```text
+ *   sa + 0   .. sa + 160     rt_switch 的 20 个保存槽
+ *   sa + 160 .. sa + 224     实参区（x0..x7 各一格，共 64 字节）
+ *   sa + 224                 fn
+ *   sa + 232                 pad（让 sp 在 trampoline 里 16 对齐）
+ *   sa + 240 = stack_hi      栈顶
+ * ```
+ *
+ * `rt_switch` 切到 `sa` 后会 `add sp, sp, #160` ⇒ `sp = sa + 160`（实参区起点），
+ * 然后 `ret` 跳到 `x30`（`rt_go_trampoline`）。
+ *
+ * # 为什么实参区固定在栈顶而不是「跟普通调用的 outgoing 区同一套」
+ *
+ * 普通调用的 outgoing 区在**调用方**帧尾，被调方从 `[sp, #0]` 开始读 —— 两者
+ * 的**读法**完全一样（8 字节一格）。这里只是把那个区放在**新 G 的栈顶**，所以
+ * trampoline 的 `ldp` 与任何被调方的序言是同一个偏移。
+ *
+ * # ⚠️ M11a 的窄化：只支持 ≤ 8 个标量实参
+ *
+ * 聚合实参按 `C5` §6.1 是**指针**（指向调用方帧里的副本）—— 而那个帧在 `go`
+ * 之后可能被复用。深拷贝它要递归知道哪个格是指针，trampoline 不知道。
+ * 所以 `isel` 只接受 ≤ 8 个标量（`SSA-UNSUPPORTED-GO-ARGS`），这一条进
+ * `M11-report.md` 的窄化清单。
+ */
+#define G_GO_ARGBYTES 64
+#define G_GO_FRAME (G_SWITCH_SAVE + G_GO_ARGBYTES + 16) /* 240 */
+
+void rt_go_trampoline(void);
+
+void rt_go(void *fn, const void *args, u64 argbytes) {
+    GDesc *g = rt_gdesc_new();
+    rt_gstack_alloc(g);
+    u64 *sa = (u64 *)((u8 *)g->stack_hi - G_GO_FRAME);
+    for (u64 i = 0; i < 20; i++) {
+        sa[i] = 0;
+    }
+    sa[11] = (u64)rt_go_trampoline; /* x30 */
+    u64 *a = sa + 20;               /* 实参区 */
+    for (u64 i = 0; i < 8; i++) {
+        a[i] = 0;
+    }
+    u64 n = argbytes > G_GO_ARGBYTES ? G_GO_ARGBYTES : argbytes;
+    if (n > 0) {
+        rt_memcpy(a, args, n);
+    }
+    *(u64 *)(sa + 28) = (u64)fn; /* 实参区之后就是 fn */
+    g->sp = sa;
+    /* 入队**队尾**，不切走当前 G（`C11` §2.1 的「不抢占」）。 */
+    rt_enqueue(g);
+}
+
+__asm__(
+    ".text\n"
+    ".globl rt_go_trampoline\n"
+    ".type rt_go_trampoline, %function\n"
+    ".balign 4\n"
+    "rt_go_trampoline:\n"
+    /* sp 指向实参区（`rt_switch` 的 `add sp, #160` 之后） */
+    "    ldp  x0, x1, [sp, #0]\n"
+    "    ldp  x2, x3, [sp, #16]\n"
+    "    ldp  x4, x5, [sp, #32]\n"
+    "    ldp  x6, x7, [sp, #48]\n"
+    "    ldr  x9, [sp, #64]\n" /* fn */
+    /* 跳到栈顶（实参区 + fn + pad = 80），再 `blr` —— 被调方的 `stp x29,x30`
+     * 才有地方落。80 是 16 的倍数 ⇒ 对齐不破。 */
+    "    add  sp, sp, #80\n"
+    "    blr  x9\n"
+    "    bl   rt_goexit\n" /* 被调方返回 ⇒ 本 G 结束 */
+    "    brk  #1\n"
+    ".size rt_go_trampoline, .-rt_go_trampoline\n");
+
+/* `rt_go` 的自测（Task 12；`go` 语句在 Task 13 才放开）。
+ *
+ * 用调度骨架那两个 C 函数当被调方 —— 它们签名是 `void(void)`，`argbytes = 0`。
+ * 期望输出恰好 `A\n`。 */
+void rt_gotest(void) {
+    rt_go((void *)sc_g_a, 0, 0);
+    rt_enqueue(g_cur);
+    rt_schedule();
+}
+
+/* `key` **含**结尾的 `=`；返回它后面那个数字。
+ *
+ * # 为什么要有这个（而不是继续写 `parse_u64(e + N)`
+ *
+ * 硬编码偏移已经**数错两次**：`RGOC_G11_SCHEDTEST=` 写成 20（实际 19）、
+ * `RGOC_G11_GOTEST=` 写成 15（实际 16）。两次的症状一样 —— 读到 `=` 或 `\0`，
+ * `parse_u64` 返回 0，开关**静默失效**（自测不跑，看起来像「通过了」）。
+ * 用 `strlen` 算就再也不会错。 */
+static u64 env_u64(const char *e, const char *key) {
+    u64 n = 0;
+    while (key[n] != 0) {
+        n++;
+    }
+    return parse_u64(e + n);
+}
+
 void rt_init(u64 sp) {
     u64 argc = *(u64 *)sp;
     char **argv = (char **)(sp + 8);
@@ -949,9 +1054,11 @@ void rt_init(u64 sp) {
             /* `0` 有意义（= 每次分配失败都收），所以不设下限。 */
             gc_threshold = parse_u64(e + 18);
         } else if (starts_with(e, "RGOC_G11_SELFTEST=")) {
-            g11_selftest = parse_u64(e + 18) != 0;
+            g11_selftest = env_u64(e, "RGOC_G11_SELFTEST=") != 0;
         } else if (starts_with(e, "RGOC_G11_SCHEDTEST=")) {
-            g11_schedtest = parse_u64(e + 19) != 0;
+            g11_schedtest = env_u64(e, "RGOC_G11_SCHEDTEST=") != 0;
+        } else if (starts_with(e, "RGOC_G11_GOTEST=")) {
+            g11_gotest = env_u64(e, "RGOC_G11_GOTEST=") != 0;
         }
     }
 
@@ -991,6 +1098,11 @@ void rt_init(u64 sp) {
      * 输出恰好 `A\nB\n`。 */
     if (g11_schedtest != 0) {
         rt_schedtest();
+    }
+
+    /* `rt_go` 自测（Task 12）：手工启动一个 G，期望输出 `A\n`。 */
+    if (g11_gotest != 0) {
+        rt_gotest();
     }
 }
 

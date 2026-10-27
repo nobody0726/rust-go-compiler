@@ -77,3 +77,29 @@ fn t_go_01_调度骨架_fifo() {
     );
     assert_eq!(out.exit, 0, "stderr={:?}", out.stderr);
 }
+
+/// `T-GO-02`（Phase 1 形态）：**`rt_go` 能启动一个新 G 并跑完**。
+///
+/// # 为什么这条与 `t_go_01` 分开
+///
+/// `t_go_01` 验的是「调度」（队列 FIFO、`rt_goexit`）；这条验的是「**启动**」——
+/// 新 G 的栈布局（实参区 + fn + 160 字节保存区）、`rt_go_trampoline` 的
+/// `ldp`/`blr`/`rt_goexit`。任一处偏移算错都会让 G 跑飞，而 `t_go_01` 用的是
+/// 手工构造的栈（`sc_mkg`），**绕过了 `rt_go` 那段布局代码**。
+///
+/// # 为什么现在还不能用 Go 源码写
+///
+/// `go` 语句在 Task 13 才放开（`unsup_stmt` 仍拒 `Stmt::Go`）。所以自测在
+/// `rt.c` 的 `rt_gotest`：手工调 `rt_go(sc_g_a, 0, 0)`，期望输出 `A`。
+/// Task 13 之后这条会被 `t_go_03`（真 Go 源码）取代。
+#[test]
+fn t_go_02_rt_go_能启动新_g() {
+    let out = support::native_harness::build_and_run_env("go02", MIN, &[("RGOC_G11_GOTEST", "1")])
+        .expect("`rt_go` 自测应能跑起来");
+    assert_eq!(
+        out.stdout, "A\n",
+        "`rt_go` 应启动一个新 G 并跑完（新栈布局或 trampoline 算错了）：实际 {:?}",
+        out.stdout
+    );
+    assert_eq!(out.exit, 0, "stderr={:?}", out.stderr);
+}
