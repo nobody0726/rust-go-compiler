@@ -512,68 +512,23 @@ fn t_sch_03_环形下标与撤销() {
     assert_eq!(woke.id, 2, "留下的那个是 id=2");
 }
 
-// ── T-SCH-04：M9 不交 native 并发 ───────────────────────────────────
+// ── T-SCH-04：M9 不交 native 并发 —— **已退役**（M11b/Task 24）────────
 
-#[test]
-fn t_sch_04_m9_不交_native_并发() {
-    // 这条现在是绿的 —— 它防的是**未来**：有人顺手在 `rgoc-arm64` 或 `rt.c`
-    // 里加 `rt_go` / `rt_select`，就等于 M9 悄悄交了 native 并发，
-    // 而 M9 的判据（语料 69/0/0）一条都覆盖不到它。
-    let root = repo_root();
-    let mut files: Vec<PathBuf> = Vec::new();
-    collect(&root.join("rgoc/crates/rgoc-arm64/src"), &mut files);
-    collect(&root.join("runtime"), &mut files);
-    assert!(files.len() > 5, "扫描面太小：{}", files.len());
-
-    let mut hits: Vec<String> = Vec::new();
-    for f in &files {
-        let Ok(text) = std::fs::read_to_string(f) else {
-            continue;
-        };
-        for (i, line) in text.lines().enumerate() {
-            // ⚠️ **M11 起 `rt_go*` 是允许的**（`M11-design.md` §3.5–§3.7）：
-            // `rt_goexit` / `rt_go_trampoline` / `rt_schedule` 都是调度骨架的
-            // 正常符号。这条守卫原本（M9）是「不交 native 并发」，M11 改了那个
-            // 前提 —— 所以它现在只防**还没做的** `select`（Task 22 之后再放开）。
-            //
-            // 为什么保留这条而不是删掉：它防的是「代码里悄悄出现一个没人设计的
-            // 并发符号」。删了就再没人看这件事；改白名单则每次放开都要人确认一次。
-            // 单元素是**故意的**：M11 起 `rt_go*` 已放开，只剩 `rt_select`
-            // 还没做。写成数组是为了下一个符号（Task 22）加回来时只改一行。
-            #[allow(clippy::single_element_loop)]
-            for needle in ["rt_select"] {
-                // 允许在注释里说明「不交」这件事（本文件自己就写了）
-                let is_comment = {
-                    let t = line.trim_start();
-                    t.starts_with("//") || t.starts_with("/*") || t.starts_with('*')
-                };
-                if line.contains(needle) && !is_comment {
-                    hits.push(format!("{}:{}: {line}", f.display(), i + 1));
-                }
-            }
-        }
-    }
-    assert!(
-        hits.is_empty(),
-        "M9 不交 native 并发（`SCH-1`），但出现了这些符号：\n{}",
-        hits.join("\n")
-    );
-}
-
-/// 递归收集 `.rs` / `.c` 文件。
-fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for e in rd.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            collect(&p, out);
-        } else if matches!(p.extension().and_then(|s| s.to_str()), Some("rs" | "c")) {
-            out.push(p);
-        }
-    }
-}
+// 这条守卫原本断言「`rgoc-arm64` 与 `runtime/` 里不出现 `rt_go` / `rt_select`」，
+// 用来防止 M9 悄悄交 native 并发。M11 把它们**全部**实现了：
+//
+// | 符号 | 什么时候放开的 |
+// |---|---|
+// | `rt_go*`（`rt_go` / `rt_goexit` / `rt_go_trampoline` / `rt_schedule`）| M11a（Task 12）|
+// | `rt_select` | M11b（Task 22）|
+//
+// 白名单**空了** —— 而这条判据的形状是「扫到白名单里的符号就红」，空了就等于
+// 恒绿。留一条恒绿的判据比删掉更糟（它会让人以为这里还有人在看）。
+//
+// 它剩下的那点意图（「别悄悄引入没人设计的并发」）现在由 `go_sched.rs` 的
+// `t_go_04_m1_只有一个线程` 承担：那条扫 `rt.c` 里有没有 `SYS_clone` /
+// `pthread_create` —— 那才是真正会破坏 M:1 的东西，而「出现某个 `rt_*` 名字」
+// 只是它的一个间接信号。
 
 // ── 一个容易写错的地方：`closed` 必须排第一 ─────────────────────────
 

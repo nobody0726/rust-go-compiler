@@ -459,7 +459,29 @@ fn unsup_stmt(tt: &TypeTable, s: &Stmt) -> Option<(SsaCode, String)> {
         //
         // `select` 仍拒：三阶段试探是 M11b 后半（Task 22）。
         Stmt::Send { chan, value } => unsup_expr(tt, chan).or_else(|| unsup_expr(tt, value)),
-        Stmt::Select { .. } => Some((SsaCode::Chan, "select 语句".to_string())),
+        // `select`（M11b/Task 22）：**放行** —— 三阶段在 `rt_select_wait` 里。
+        // 每个子句的 chan / 右值 / 体都要扫（里面可能有别的拒绝面）。
+        //
+        // ⚠️ **`case v, ok := <-c` 的 comma-ok 在 select 里还没做**（`recv_targets`
+        // 长度 2）：`rt_select_wait` 只返回下标，不返回「是不是关闭拿到的零值」。
+        // 语料里没有这种形态，进 `M11-report.md` 的窄化清单。
+        Stmt::Select { clauses } => clauses.iter().find_map(|c| {
+            c.chan
+                .as_ref()
+                .and_then(|e| unsup_expr(tt, e))
+                .or_else(|| c.send_value.as_ref().and_then(|e| unsup_expr(tt, e)))
+                .or_else(|| {
+                    if c.recv_targets.len() > 1 {
+                        Some((
+                            SsaCode::Chan,
+                            "`case v, ok := <-c`（select 里的 comma-ok）".to_string(),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| unsup_block(tt, &c.body))
+        }),
         Stmt::Range { x, body, kind, .. } => match kind {
             // `range c`（M11b/Task 20）：**放行** —— 下降成
             // `for { v, ok := <-c; if !ok { break }; body }`。
@@ -811,7 +833,7 @@ use std::collections::BTreeSet;
 
 use rgoc_hir::{
     BinOp, Block as HirBlock, BranchKind, BuiltinKind, Callee, Case, CompositeItem, Expr, ExprKind,
-    MakeKind, Place, RangeKind, SlotId, Stmt,
+    MakeKind, Place, RangeKind, SelectClause, SlotId, Stmt,
 };
 
 use crate::ir::{Root, RootId};
@@ -945,9 +967,19 @@ fn scan_stmt(tt: &TypeTable, s: &Stmt, sc: &mut Scanned) {
             scan_expr(tt, chan, sc);
             scan_expr(tt, value, sc);
         }
-        Stmt::Select { .. } => {
-            // 由 `unsupported()` 在建图前拒掉（`SSA-UNSUPPORTED-CHAN`）。
-            unreachable!("select 应由 unsupported() 在建图前拒掉")
+        Stmt::Select { clauses } => {
+            for c in clauses {
+                if let Some(e) = &c.chan {
+                    scan_expr(tt, e, sc);
+                }
+                if let Some(e) = &c.send_value {
+                    scan_expr(tt, e, sc);
+                }
+                for p in &c.recv_targets {
+                    scan_addr_place(tt, p, sc);
+                }
+                scan_block(tt, &c.body, sc);
+            }
         }
         Stmt::Assign { lhs, rhs, .. } => {
             for p in lhs {
@@ -1725,8 +1757,11 @@ fn goto_targets(b: &HirBlock) -> BTreeSet<String> {
         match s {
             // `ch <- v` 的载荷是表达式，装不下语句 ⇒ 没有 goto。
             Stmt::Send { .. } => {}
-            Stmt::Select { .. } => {
-                unreachable!("select 应由 unsupported() 在建图前拒掉")
+            // `select` 的子句体是块 ⇒ 必须往下走（`goto` 可以跨进去）。
+            Stmt::Select { clauses } => {
+                for c in clauses {
+                    walk(&c.body, out);
+                }
             }
             Stmt::Branch {
                 kind: BranchKind::Goto,
@@ -1819,8 +1854,21 @@ impl Def<'_> {
                 self.expr(chan);
                 self.expr(value);
             }
-            Stmt::Select { .. } => {
-                unreachable!("select 应由 unsupported() 在建图前拒掉")
+            Stmt::Select { clauses } => {
+                for c in clauses {
+                    if let Some(e) = &c.chan {
+                        self.expr(e);
+                    }
+                    if let Some(e) = &c.send_value {
+                        self.expr(e);
+                    }
+                    for p in &c.recv_targets {
+                        self.write_place(p);
+                    }
+                    let base = self.must.clone();
+                    self.stmts(&c.body.stmts);
+                    self.must = base;
+                }
             }
             Stmt::Assign { lhs, op, rhs } => {
                 for e in rhs {
@@ -3671,6 +3719,212 @@ impl Fb<'_> {
             dots: false,
             effect: eff,
         });
+    }
+
+    /// `select { ... }`（M11b/Task 22–24，`C11` §4）。
+    ///
+    /// # 形状
+    ///
+    /// ```text
+    ///   ; 阶段①：所有 chan 表达式 + send 右值，**各求值一次**（源码顺序）
+    ///   token = rt_select_begin(n_cases, default_idx)
+    ///   rt_select_add(token, i, kind, chan_i, val_i)   ; 每个非 default 子句
+    ///   idx   = rt_select_wait(token)                  ; 阶段②③在 C 里
+    ///   if idx == 0 -> body[case0]
+    ///   if idx == 1 -> body[case1]
+    ///   ...
+    ///   goto body[default]                             ; 没有 default 时不可达
+    /// ```
+    ///
+    /// # 为什么阶段① 单独一遍
+    ///
+    /// `C11` §4 的阶段①：**所有** case 的通道表达式和 send 右值都要在进入
+    /// 试探之前求值（即使那个 case 不会被选中）。这样 `case a <- f():` 里
+    /// `f()` 的副作用次数与源码顺序就与 Go 一致（`T-SEL-01`）。
+    ///
+    /// # 窄化（进 `M11-report.md`）
+    ///
+    /// `case v, ok := <-c` 的 comma-ok **不支持**（`unsup_stmt` 已拒）：
+    /// `rt_select_wait` 只返回下标，不返回「是不是关闭拿到的零值」。
+    fn stmt_select(&mut self, clauses: &[SelectClause]) {
+        use rgoc_hir::types::SelectKind;
+
+        // ── 阶段①：求值（**源码顺序**）
+        //
+        // `case_pos[i]` = 第 i 个非 default 子句在 `clauses` 里的下标；
+        // `tmp[clause_idx]` = 那个子句的「值」（recv 的输出 / send 的输入）。
+        // ⚠️ 每个 case 的「值」走**存储**而不是 SSA 值：
+        // `rt_select_add` 收的是**指针**，运行期通过它读写。
+        //
+        // * recv：先 `temp_root` 拿一块存储，运行期把收到的值写进去，
+        //   `rt_select_wait` 之后用 `Load` 读出来（那才是一个有定义点的值）。
+        // * send：先把右值 `Store` 进临时存储，再把它的地址交给运行期。
+        //
+        // 初版是「把临时值当 `SelectWait` 的 dst」—— 不行：`rt_select_add`
+        // 在**前面**就用了它，而 `SelectWait` 在后面定义 ⇒ `V2`
+        // 「v9 在 b0[10] 定义，却在它之前被使用」。
+        let mut case_pos: Vec<usize> = Vec::new();
+        let mut roots: Vec<RootId> = Vec::new();
+        let mut addrs: Vec<ValueId> = Vec::new();
+        let mut kinds: Vec<i64> = Vec::new();
+        let mut chans: Vec<ValueId> = Vec::new();
+        let mut elem_tys: Vec<Option<TypeId>> = vec![None; clauses.len()];
+        for (ci, c) in clauses.iter().enumerate() {
+            match c.kind {
+                SelectKind::Default => {}
+                SelectKind::Recv => {
+                    let e = c.chan.as_ref().expect("Recv 子句必有 chan");
+                    let ch = self.expr(e);
+                    let elem = self
+                        .chan_elem_ty(e.typ)
+                        .expect("`case <-c` 的 `c` 一定是 chan 类型");
+                    let root = self.temp_root(elem);
+                    let addr = self.addr_of(root);
+                    case_pos.push(ci);
+                    roots.push(root);
+                    addrs.push(addr);
+                    elem_tys[ci] = Some(elem);
+                    kinds.push(0);
+                    chans.push(ch);
+                }
+                SelectKind::Send => {
+                    let e = c.chan.as_ref().expect("Send 子句必有 chan");
+                    let ch = self.expr(e);
+                    let sv = c.send_value.as_ref().expect("Send 子句必有右值");
+                    let v = self.expr(sv);
+                    let root = self.temp_root(sv.typ);
+                    let addr = self.addr_of(root);
+                    self.store_root(root, addr, v);
+                    case_pos.push(ci);
+                    roots.push(root);
+                    addrs.push(addr);
+                    kinds.push(1);
+                    chans.push(ch);
+                }
+            }
+        }
+        let n_cases = case_pos.len();
+        let default_pos = clauses
+            .iter()
+            .position(|c| matches!(c.kind, SelectKind::Default));
+
+        // ── 建 wait-set + 登记
+        //
+        // `default_idx` 取 `clauses.len()` 而**不是** `default_pos`：后者可能与
+        // 某个 case 的下标撞上（default 不在最后时），分派就会走错子句。
+        let int_ty = self.int_ty();
+        let u64_ty = int_ty;
+        let token = self.new_value(u64_ty);
+        let n_v = self.const_int(n_cases as i128, int_ty);
+        let di_v = self.const_int(
+            if default_pos.is_some() {
+                clauses.len() as i128
+            } else {
+                -1
+            },
+            int_ty,
+        );
+        self.chan_call(RuntimeFn::SelectBegin, vec![n_v, di_v], vec![token]);
+        for i in 0..n_cases {
+            let ci = case_pos[i];
+            let idx_v = self.const_int(i as i128, int_ty);
+            let kind_v = self.const_int(i128::from(kinds[i]), int_ty);
+            let _ = ci;
+            self.chan_call(
+                RuntimeFn::SelectAdd,
+                vec![token, idx_v, kind_v, chans[i], addrs[i]],
+                Vec::new(),
+            );
+        }
+        let idx = self.new_value(u64_ty);
+        self.chan_call(RuntimeFn::SelectWait, vec![token], vec![idx]);
+
+        // ── 把 recv 的临时存储读成**有定义点**的值
+        //
+        // 无条件读（不管哪个 case 被选中）：槽里要么是被选中的值、要么是
+        // 零初始化，读出来都不会错。按需读要在每个子句体里各发一条
+        // `Load`，而这里只有 N 条。
+        let mut vals: Vec<Option<ValueId>> = vec![None; clauses.len()];
+        for (i, &cp) in case_pos.iter().enumerate() {
+            if let Some(et) = elem_tys[cp] {
+                vals[cp] = Some(self.load_root(roots[i], et));
+            }
+        }
+
+        // ── 分派：一串 `If (idx == i)`
+        let bodies: Vec<BlockId> = clauses.iter().map(|_| self.new_block()).collect();
+        let bt = self.bool_ty();
+        for (i, &cp) in case_pos.iter().enumerate() {
+            let next = self.new_block();
+            let ci_v = self.const_int(i as i128, int_ty);
+            let cond = self.new_value(bt);
+            self.emit(Instr::Bin {
+                dst: cond,
+                op: rgoc_hir::BinOp::Eq,
+                lhs: idx,
+                rhs: ci_v,
+                typ: bt,
+            });
+            self.set_term(Term::If {
+                cond,
+                then_: (bodies[cp], Vec::new()),
+                else_: (next, Vec::new()),
+            });
+            self.cur = next;
+            self.terminated = false;
+        }
+        match default_pos {
+            Some(dp) => {
+                self.set_term(Term::Goto {
+                    to: bodies[dp],
+                    args: Vec::new(),
+                });
+            }
+            // 没有 default ⇒ `rt_select_wait` 一定返回某个 case 下标，
+            // 走不到这里。用 `Unreachable` 而不是 `Goto`：`V*` 会检查
+            // 每个块的终结符，而这条边确实不存在。
+            None => self.set_term(Term::Unreachable),
+        }
+
+        // ── 各子句体
+        //
+        // ⚠️ **必须压一个 `Switch` 区域**：Go 里 `break` 在 `select` 子句体里
+        // 是「跳出这个 select」。不压的话 `do_break` 找不到目标（实测
+        // `select8.go`：`not yet implemented: M7/Task 25: break 没有可跳的目标`）。
+        let ridx = self.regions.len();
+        self.regions.push(Region::Switch(SwitchCtx {
+            label: None,
+            breaks: Vec::new(),
+        }));
+        let base = (self.val.clone(), self.mem.clone());
+        let mut outs = Vec::new();
+        for (ci, c) in clauses.iter().enumerate() {
+            self.cur = bodies[ci];
+            self.terminated = false;
+            self.val = base.0.clone();
+            self.mem = base.1.clone();
+            // recv 目标：值已经在阶段②③ 里被写进 `tmp`
+            if let (true, Some(t), Some(p)) = (
+                matches!(c.kind, SelectKind::Recv),
+                vals[ci],
+                c.recv_targets.first(),
+            ) {
+                self.write_place(p, t);
+            }
+            self.stmts(&c.body.stmts);
+            if !self.terminated {
+                outs.push(BranchOut {
+                    block: self.cur,
+                    val: self.val.clone(),
+                    mem: self.mem.clone(),
+                });
+            }
+        }
+        let Region::Switch(ctx) = self.regions.remove(ridx) else {
+            unreachable!("刚压进去的是 Switch")
+        };
+        outs.extend(ctx.breaks);
+        self.join_branches(outs);
     }
 
     fn expr(&mut self, e: &Expr) -> ValueId {
@@ -6267,13 +6521,18 @@ impl Fb<'_> {
                 let v = self.expr(value);
                 self.chan_call(RuntimeFn::ChanSend, vec![c, v], Vec::new());
             }
+            // `select`（M11b/Task 22）：三阶段全在 `rt_select_wait` 里，
+            // 这里只负责「建 wait-set → 登记 → 等下标 → 分派」。
+            Stmt::Select { clauses } => self.stmt_select(clauses),
             // `defer`（`M9/Phase 5b`）：实参**现在**求值、装进盒子，
             // 调用体放进合成的包装函数（见 `synth_defer_wrapper`）。
             Stmt::Defer { call } => self.stmt_defer_like(call, false),
-            other => todo!(
-                "M6/Task 24–30：语句 `{}` 的构建还没实现",
-                stmt_kind_name(other)
-            ),
+            // ⚠️ **没有兜底分支** —— 与 `expr` 那边同一条理由。
+            //
+            // 原来是 `other => todo!("语句 ... 的构建还没实现")`。M11b/Task 22 补上
+            // `Select` 之后 `Stmt` 的每个变体都有实现了，兜底变成不可达。
+            // 删掉它：以后加 `Stmt` 变体会**编译失败**指到这里，而不是运行期
+            // `todo!()` 炸在用户面前。
         }
     }
 
@@ -6621,28 +6880,6 @@ fn expr_kind_name(k: &ExprKind) -> &'static str {
     }
 }
 
-fn stmt_kind_name(s: &Stmt) -> &'static str {
-    match s {
-        Stmt::Go { .. } => "go",
-        Stmt::Send { .. } => "send",
-        Stmt::Select { .. } => "select",
-        Stmt::Assign { .. } => "assign",
-        Stmt::ShortDecl { .. } => "shortdecl",
-        Stmt::Expr(_) => "expr",
-        Stmt::If { .. } => "if",
-        Stmt::For { .. } => "for",
-        Stmt::Range { .. } => "range",
-        Stmt::Switch { .. } => "switch",
-        Stmt::TypeSwitch { .. } => "typeswitch",
-        Stmt::Return(_) => "return",
-        Stmt::Branch { .. } => "branch",
-        Stmt::Labeled { .. } => "labeled",
-        Stmt::Block(_) => "block",
-        Stmt::Defer { .. } => "defer",
-        Stmt::Empty => "empty",
-    }
-}
-
 // ── 循环影响扫描（Task 23）───────────────────────────────────────────
 
 /// 循环里「可能被改」的东西。
@@ -6704,8 +6941,18 @@ fn eff_stmt(tt: &TypeTable, sr: &BTreeMap<SlotId, RootId>, s: &Stmt, e: &mut Loo
             eff_expr(tt, sr, value, e);
             e.calls = true;
         }
-        Stmt::Select { .. } => {
-            unreachable!("select 应由 unsupported() 在建图前拒掉")
+        // `select` 会阻塞换 G ⇒ 与 `ch <- v` 同一条保守规则（`calls = true`）。
+        Stmt::Select { clauses } => {
+            for c in clauses {
+                if let Some(x) = &c.chan {
+                    eff_expr(tt, sr, x, e);
+                }
+                if let Some(x) = &c.send_value {
+                    eff_expr(tt, sr, x, e);
+                }
+                eff_block(tt, sr, &c.body, e);
+            }
+            e.calls = true;
         }
         Stmt::Assign { lhs, rhs, .. } => {
             for x in rhs {

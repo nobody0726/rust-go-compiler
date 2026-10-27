@@ -987,6 +987,11 @@ impl Exec<'_> {
                     // panic 到宿主。`--via=ssa` 的语料里没有并发程序（M6 起就
                     // 如此），所以这条实际不会触发 —— 但它保证「加进来也不会
                     // 崩在解释器内部」。
+                    R::SelectBegin | R::SelectAdd | R::SelectWait => {
+                        return Err(Halt::Runtime(
+                            "SSA 求值器不支持 select（并发只在 HIR 面）".to_string(),
+                        ));
+                    }
                     R::ChanSend | R::ChanRecv => {
                         return Err(Halt::Runtime(
                             "SSA 求值器不支持 chan 收发（并发只在 HIR 面）".to_string(),

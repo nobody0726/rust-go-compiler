@@ -2152,6 +2152,57 @@ fn runtime_call(cx: &Ctx<'_>, f: RuntimeFn, args: &[ValueId], dsts: &[ValueId], 
             // 不是直接退出，所以**必须**在这里查状态，否则关闭后发送会静默继续。
             check_panic(cx, asm);
         }
+        // ── `select` 的三动作（M11b/Task 22）──────────────────────────
+        //
+        // 实参全部是普通值（`n` / `default_idx` / `idx` / `kind` 都是常量
+        // 值），所以这里只是搬寄存器 —— 三个阶段全在 `rt_select_wait` 里。
+        RuntimeFn::SelectBegin => {
+            let (Some(n), Some(di), Some(d)) = (args.first(), args.get(1), dsts.first()) else {
+                return;
+            };
+            let (sn, sdi, sd) = (cx.slot(*n), cx.slot(*di), cx.slot(*d));
+            ld_x(asm, "x0", sn.off);
+            ld_x(asm, "x1", sdi.off);
+            asm.ins("bl rt_select_begin");
+            st_x(asm, "x0", sd.off);
+        }
+        RuntimeFn::SelectAdd => {
+            let (Some(t), Some(i), Some(k), Some(c), Some(v)) = (
+                args.first(),
+                args.get(1),
+                args.get(2),
+                args.get(3),
+                args.get(4),
+            ) else {
+                return;
+            };
+            let (st, si, sk, sc, sv) = (
+                cx.slot(*t),
+                cx.slot(*i),
+                cx.slot(*k),
+                cx.slot(*c),
+                cx.slot(*v),
+            );
+            ld_x(asm, "x0", st.off);
+            ld_x(asm, "x1", si.off);
+            ld_x(asm, "x2", sk.off);
+            ld_x(asm, "x3", sc.off);
+            // 第 5 个实参是**指针值本身**（不是槽的地址）：`build.rs` 那边用
+            // `temp_root` 造了一块存储、把它的地址当普通值传进来。
+            ld_x(asm, "x4", sv.off);
+            asm.ins("bl rt_select_add");
+        }
+        RuntimeFn::SelectWait => {
+            let (Some(t), Some(d)) = (args.first(), dsts.first()) else {
+                return;
+            };
+            let (st, sd) = (cx.slot(*t), cx.slot(*d));
+            ld_x(asm, "x0", st.off);
+            asm.ins("bl rt_select_wait");
+            st_x(asm, "x0", sd.off);
+            // `select` 里被选中的 send case 可能撞上「已关闭」⇒ panic。
+            check_panic(cx, asm);
+        }
         // `<-c`（M11b/Task 19）：`rt_recv(c, &dst) -> ok`。
         //
         // `dst` 先清零：窄元素的槽是 8 字节，而 runtime 只写 `elemsize` 字节

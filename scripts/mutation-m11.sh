@@ -196,10 +196,10 @@ $PROBE_RS "M-M11-04 检查条件写反" "crates/rgoc-arm64/src/isel.rs" \
 # `rt_close` 里也有一模一样的 4 格 `if (c->closed != 0) {` —— 只写那一行会
 # 误伤 `rt_close`（变异「关闭不查重复」而不是「发送不查关闭」）。
 $PROBE "M-M11-07 send 的 closed 检查挪后" "$RT" \
-  '        if (c->closed != 0) {
-            rt_panic_send_closed();' \
-  '        if (c->closed != 0 && c->qcount == c->dataqsiz) {
-            rt_panic_send_closed();' \
+  '    if (c->closed != 0) {
+        rt_panic_send_closed();' \
+  '    if (c->closed != 0 && c->qcount == c->dataqsiz) {
+        rt_panic_send_closed();' \
   -p rgoc-driver --test go_chan t_chan_06
 
 # ── M-M11-08：`close` 只唤醒 `recvq` 不唤醒 `sendq` ────────────────────
@@ -219,19 +219,41 @@ $PROBE "M-M11-08 close 不唤醒 sendq" "$RT" \
 # test 没有超时兜底（`run-native-chan.sh` 才有）—— 用输出断言就能抓到的
 # 形态，不要用「靠超时」的形态。
 $PROBE "M-M11-16 关闭且空时 ok 恒为真" "$RT" \
-  '        if (c->closed != 0) {
-            if (es > 0) {
-                rt_memset(out, 0, es);
-            }
-            return 0;
-        }' \
-  '        if (c->closed != 0) {
-            if (es > 0) {
-                rt_memset(out, 0, es);
-            }
-            return 1;
-        }' \
+  '    if (c->closed != 0) {
+        if (es > 0) {
+            rt_memset(out, 0, es);
+        }
+        return 2;
+    }' \
+  '    if (c->closed != 0) {
+        if (es > 0) {
+            rt_memset(out, 0, es);
+        }
+        return 1;
+    }' \
   -p rgoc-driver --test go_chan t_chan_05
+
+# ── M-M11-09：`select` 阶段②**逆序**试探（违反源码顺序）────────────────
+# `C11` §4 / `D-M8-3`：多就绪时取**源码顺序第一个**。逆序 ⇒ 取最后一个。
+# `t_sel_03` 的两个通道都预置了值，所以它必然红（输出 2 而不是 1）。
+$PROBE "M-M11-09 select 阶段②逆序试探" "$RT" \
+  '        for (u64 i = 0; i < w->n; i++) {
+            SelCase *k = &w->cases[i];
+            if (k->c == 0) {
+                continue; /* nil 通道永远不就绪 */
+            }' \
+  '        for (u64 i = w->n - 1; i < w->n; i--) {
+            SelCase *k = &w->cases[i];
+            if (k->c == 0) {
+                continue; /* nil 通道永远不就绪 */
+            }' \
+  -p rgoc-driver --test go_select t_sel_03
+
+# ⚠️ `M-M11-10`（`select` 不撤销其余登记）**没有落地**：变异之后
+# `t_sel_04` 的形态是「主 G 被重复入队」⇒ **挂死**而不是干净失败，而
+# `cargo test` 没有超时兜底（`run-native-chan.sh` 才有）。按「能用输出断言
+# 抓的形态，不要用靠超时的形态」这条口径，宁可不加。
+# 撤销本身由 `t_sel_04` 正面覆盖（它查 `a` 上的第二次发送是否真的交付）。
 
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"

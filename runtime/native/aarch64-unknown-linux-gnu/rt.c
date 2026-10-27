@@ -1824,50 +1824,109 @@ static void rt_wake_done(Sudog *s) {
  * ③ 缓冲未满 ⇒ 塞 buf；
  * ④ 否则阻塞。
  */
+/* ── 非阻塞的收发（`C11` §3.2 的判定本体）──────────────────────────────
+ *
+ * 返回值是**三态**而不是布尔：
+ *
+ * | 值 | 含义 |
+ * |---|---|
+ * | 0 | 会阻塞（`select` 的「这个 case 没就绪」）|
+ * | 1 | 真的传了一个值 |
+ * | 2 | `closed` 且空 ⇒ 写了零值（`ok = false`）|
+ *
+ * ⚠️ **`2` 必须与 `0` 分开**：对 `select` 来说「关闭且空」是**就绪**的
+ * （recv case 永远能立刻完成），而对 `rt_recv` 来说它是 `ok = false`。
+ * 合成一个布尔会让其中一边错。
+ *
+ * 判定顺序就是 `C11` §3.2 的顺序，`rt_send` / `rt_recv` / `rt_select_try`
+ * **共用这一份** —— 三处各写一遍迟早漂。 */
+
+/* 发送的一步尝试。`closed` 检查**排第一**（`C11` §3.2 的 ⚠️，变异 `M-M11-07`）。 */
+static u64 rt_send_try(Hchan *c, const void *val) {
+    u64 es = c->elemsize;
+    /* ① `closed` 检查排第一 */
+    if (c->closed != 0) {
+        rt_panic_send_closed();
+        return 1; /* 已经 panic，调用方不该再往下走 */
+    }
+    /* ② 有接收方在等 ⇒ 直给（不经过 buf） */
+    Sudog *r = waitq_pop(&c->recvq_head, &c->recvq_tail);
+    if (r != 0) {
+        if (es > 0 && r->elem != 0) {
+            rt_memcpy(r->elem, val, es);
+        }
+        rt_wake_done(r);
+        return 1;
+    }
+    /* ③ 缓冲未满 ⇒ 塞 buf */
+    if (c->dataqsiz > 0 && c->qcount < c->dataqsiz) {
+        if (es > 0) {
+            rt_memcpy(c->buf + c->sendx * es, val, es);
+        }
+        c->sendx = (c->sendx + 1) % c->dataqsiz;
+        c->qcount++;
+        return 1;
+    }
+    return 0;
+}
+
+/* 接收的一步尝试。**排空 buf 优先于零值**（`C11` §3.2 的 close 那行）。 */
+static u64 rt_recv_try(Hchan *c, void *out) {
+    u64 es = c->elemsize;
+    /* ① 有发送方在等 ⇒ 直取 */
+    Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
+    if (w != 0) {
+        if (es > 0) {
+            if (w->elem != 0) {
+                rt_memcpy(out, w->elem, es);
+            } else {
+                rt_memset(out, 0, es);
+            }
+        }
+        rt_wake_done(w);
+        return 1;
+    }
+    /* ② 缓冲非空 ⇒ 取 */
+    if (c->qcount > 0) {
+        if (es > 0) {
+            rt_memcpy(out, c->buf + c->recvx * es, es);
+        }
+        c->recvx = (c->recvx + 1) % c->dataqsiz;
+        c->qcount--;
+        return 1;
+    }
+    /* ③ 已关闭且空 ⇒ 零值 */
+    if (c->closed != 0) {
+        if (es > 0) {
+            rt_memset(out, 0, es);
+        }
+        return 2;
+    }
+    return 0;
+}
+
+/* nil 通道上的收发：**永远阻塞**（Go 规范）。标记 blocked 再让调度器判死锁 ——
+ * 与真的挂上去等价，且不需要一张「无主队列」。 */
+static void rt_block_forever(void) {
+    g_cur->state = 2;
+    rt_schedule();
+}
+
 void rt_send(Hchan *c, const void *val) {
     if (c == 0) {
-        /* nil 通道：**永远阻塞**（Go 规范）。直接标记 blocked 再让调度器
-         * 判死锁 —— 与真的挂上去等价，且不需要一张「无主队列」。 */
-        g_cur->state = 2;
-        rt_schedule();
+        rt_block_forever();
         return;
     }
-    u64 es = c->elemsize;
-    /* ⚠️ **必须是循环，不是「一次尝试」**。
-     *
-     * 阻塞醒来有两种原因（`C11` §3.2 的 close 那一行）：
+    /* ⚠️ **必须是循环，不是「一次尝试」**。阻塞醒来有两种原因：
      * ① 有接收方取走了值（`s.done == 1`）⇒ 发送**已经完成**，返回；
-     * ② 通道被 `close` 了（`s.done == 0`）⇒ **必须重新走一遍**，让
-     *    `closed` 检查在本 G 里 panic。
+     * ② 通道被 `close` 了（`s.done == 0`）⇒ 重走一遍，让 `closed` 检查在
+     *    本 G 里 panic（defer 在这里，不在 close 的调用方）。
      *
-     * 只写一次尝试的话，②会静默「当成发成功了」—— 而 Go 的语义是
-     * `panic: send on closed channel`，且要 panic 在**发送方**的栈上
-     * （defer 在那里）。 */
+     * 只写一次尝试的话，②会静默「当成发成功了」。 */
     for (;;) {
-        /* ① `closed` 检查排第一（`C11` §3.2 的 ⚠️，变异 `M-M11-07`）。 */
-        if (c->closed != 0) {
-            rt_panic_send_closed();
+        if (rt_send_try(c, val) != 0) {
             return;
         }
-        /* ② 有接收方在等 ⇒ 直给（不经过 buf） */
-        Sudog *r = waitq_pop(&c->recvq_head, &c->recvq_tail);
-        if (r != 0) {
-            if (es > 0 && r->elem != 0) {
-                rt_memcpy(r->elem, val, es);
-            }
-            rt_wake_done(r);
-            return;
-        }
-        /* ③ 缓冲未满 ⇒ 塞 buf */
-        if (c->dataqsiz > 0 && c->qcount < c->dataqsiz) {
-            if (es > 0) {
-                rt_memcpy(c->buf + c->sendx * es, val, es);
-            }
-            c->sendx = (c->sendx + 1) % c->dataqsiz;
-            c->qcount++;
-            return;
-        }
-        /* ④ 阻塞：登记到 `sendq` 尾 ⇒ 换 G */
         Sudog s;
         s.g = g_cur;
         s.elem = (void *)val;
@@ -1876,60 +1935,25 @@ void rt_send(Hchan *c, const void *val) {
         s.token = 0;
         s.done = 0;
         waitq_push(&c->sendq_head, &c->sendq_tail, &s);
-        g_cur->state = 2; /* blocked */
-        rt_schedule();
+        rt_block_forever();
         if (s.done != 0) {
-            return; /* ① 值已被接收方取走 */
+            return; /* 值已被接收方取走 */
         }
-        /* ② 被 close 唤醒 ⇒ 循环回去 panic */
+        /* 被 close 唤醒 ⇒ 循环回去 panic */
     }
 }
 
-/* `<-ch`。与 `rt_send` 对称，另外多一条 `closed && 空 ⇒ 零值`。
- *
- * 返回 **1 = 真的收到值**，**0 = 已关闭且空**（Go 的 comma-ok 语义）。
- * 单值形态忽略它（`C11` §3.2 的最后一格要求 `out` 是零值）。 */
+/* `<-ch`。返回 **1 = 真的收到值**，**0 = 已关闭且空**（Go 的 comma-ok 语义）。 */
 u64 rt_recv(Hchan *c, void *out) {
     if (c == 0) {
-        /* nil 通道：永远阻塞（同 `rt_send`）。`T-EXIT-01` 的 fixture 就是它。 */
-        g_cur->state = 2;
-        rt_schedule();
+        rt_block_forever();
         return 0; /* 不可达（死锁会先退出） */
     }
-    u64 es = c->elemsize;
-    /* 同 `rt_send`：**循环**。被 close 唤醒时 `s.done == 0`，要回去走
-     * 「先排空 buf，再拿零值」那条路。 */
     for (;;) {
-        /* ① 有发送方在等 ⇒ 直取 */
-        Sudog *w = waitq_pop(&c->sendq_head, &c->sendq_tail);
-        if (w != 0) {
-            if (es > 0) {
-                if (w->elem != 0) {
-                    rt_memcpy(out, w->elem, es);
-                } else {
-                    rt_memset(out, 0, es);
-                }
-            }
-            rt_wake_done(w);
-            return 1;
+        u64 r = rt_recv_try(c, out);
+        if (r != 0) {
+            return r == 1 ? 1 : 0;
         }
-        /* ② 缓冲非空 ⇒ 取（**排空 buf 优先于零值**） */
-        if (c->qcount > 0) {
-            if (es > 0) {
-                rt_memcpy(out, c->buf + c->recvx * es, es);
-            }
-            c->recvx = (c->recvx + 1) % c->dataqsiz;
-            c->qcount--;
-            return 1;
-        }
-        /* ③ 已关闭且空 ⇒ 零值 + `ok = false` */
-        if (c->closed != 0) {
-            if (es > 0) {
-                rt_memset(out, 0, es);
-            }
-            return 0;
-        }
-        /* ④ 阻塞 */
         Sudog s;
         s.g = g_cur;
         s.elem = out;
@@ -1938,11 +1962,9 @@ u64 rt_recv(Hchan *c, void *out) {
         s.token = 0;
         s.done = 0;
         waitq_push(&c->recvq_head, &c->recvq_tail, &s);
-        g_cur->state = 2; /* blocked */
-        rt_schedule();
+        rt_block_forever();
         if (s.done != 0) {
-            /* 醒来 = 对端已经把值写进 `out` 并唤醒我们。 */
-            return 1;
+            return 1; /* 对端已经把值写进 `out` */
         }
         /* 被 close 唤醒 ⇒ 循环回去拿零值 */
     }
@@ -1973,6 +1995,161 @@ void rt_close(Hchan *c) {
     }
     while ((s = waitq_pop(&c->sendq_head, &c->sendq_tail)) != 0) {
         rt_wake_retry(s);
+    }
+}
+
+/* ════════════════════════════════════════════════════════════════════
+ * `select`（M11b/Task 22–24，`C11` §4 的三阶段）
+ * ════════════════════════════════════════════════════════════════════
+ *
+ * # 为什么整块在 C 里
+ *
+ * 三阶段的**顺序**和**撤销**是同一件事的两面：阶段③登记完之后，任何一次
+ * 唤醒都要先把其余登记撤掉再重试。拆成 IR 里的多条指令，就得让每个
+ * `select` 在 SSA 里手写一遍「撤销循环」—— 那是把运行期的簿记漏进代码生成。
+ *
+ * 所以 IR 只看到三个动作：`begin(n, default_idx)` / `add(idx, …)` /
+ * `wait()`，返回**选中的下标**，再由代码生成用一串 `If` 分派到各子句体。
+ *
+ * # 为什么阶段②③之间不需要锁
+ *
+ * M11b 是 **M:1 且不抢占**（`C11` §2.1）：从「试探完所有 case」到「登记完
+ * 所有 sudog」之间没有任何切换点，别的 G 不可能插进来。`C11` §4 里那段
+ * 「撤销与竞争」的讨论是给 M11e 的多核留的。
+ */
+#define SEL_MAX 32
+
+typedef struct SelCase {
+    u64 kind;   /* 0 = recv, 1 = send */
+    Hchan *c;
+    void *val;  /* recv: 输出地址；send: 值的地址 */
+    u64 reg;    /* 是否已登记到某个 waitq */
+    Sudog s;    /* 内嵌（48 B）—— 生命周期与 WaitSet 相同 */
+} SelCase;
+
+typedef struct WaitSet {
+    u64 n;
+    i64 default_idx; /* -1 = 没有 default；否则是它的子句体下标 */
+    SelCase cases[SEL_MAX];
+} WaitSet;
+
+_Static_assert(sizeof(Sudog) == 48, "Sudog 48 B");
+
+/* `s` 是否还挂在以 `h` 为头的队列上。
+ *
+ * ⚠️ **不能直接 `waitq_remove`**：`rt_close` 会 `waitq_pop` 掉我们的 sudog
+ * 再唤醒 —— 此时它已经不在队列里，再 remove 一次会把队头队尾改成 0，
+ * 把**别人的**登记全丢掉。队列在 M11b 里很短，线性扫足够。 */
+static int waitq_contains(Sudog *h, Sudog *s) {
+    for (Sudog *p = h; p != 0; p = p->next) {
+        if (p == s) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void *rt_select_begin(u64 n, i64 default_idx) {
+    if (n > SEL_MAX) {
+        rt_write(2, "rgoc: select 的子句太多（上限 32）\n", 33);
+        rt_exit(2);
+    }
+    gc_pause++;
+    WaitSet *w = (WaitSet *)rt_alloc_raw(sizeof(WaitSet));
+    gc_pause--;
+    w->n = n;
+    w->default_idx = default_idx;
+    for (u64 i = 0; i < n; i++) {
+        w->cases[i].reg = 0;
+        w->cases[i].s.done = 0;
+        w->cases[i].c = 0;
+        w->cases[i].val = 0;
+        w->cases[i].kind = 0;
+    }
+    return w;
+}
+
+void rt_select_add(void *token, u64 idx, u64 kind, Hchan *c, void *val) {
+    WaitSet *w = (WaitSet *)token;
+    if (idx >= w->n) {
+        return;
+    }
+    w->cases[idx].kind = kind;
+    w->cases[idx].c = c;
+    w->cases[idx].val = val;
+    w->cases[idx].reg = 0;
+    w->cases[idx].s.done = 0;
+}
+
+/* 跑完三个阶段，返回**选中的下标**（`default` 的返回 `default_idx`）。 */
+u64 rt_select_wait(void *token) {
+    WaitSet *w = (WaitSet *)token;
+    for (;;) {
+        /* ── 阶段②：按源码顺序试探（`D-M8-3`：多就绪取第一个） */
+        for (u64 i = 0; i < w->n; i++) {
+            SelCase *k = &w->cases[i];
+            if (k->c == 0) {
+                continue; /* nil 通道永远不就绪 */
+            }
+            u64 r = (k->kind == 0) ? rt_recv_try(k->c, k->val)
+                                   : rt_send_try(k->c, k->val);
+            if (r != 0) {
+                return i;
+            }
+        }
+        /* ── 阶段③：没有就绪的 ⇒ 有 default 走 default */
+        if (w->default_idx >= 0) {
+            return (u64)w->default_idx;
+        }
+        /* 登记**每一个**非 nil 的 case（共用这次 select 的唤醒） */
+        for (u64 i = 0; i < w->n; i++) {
+            SelCase *k = &w->cases[i];
+            if (k->c == 0) {
+                continue;
+            }
+            k->s.g = g_cur;
+            k->s.elem = k->val;
+            k->s.next = 0;
+            k->s.prev = 0;
+            k->s.token = 0;
+            k->s.done = 0;
+            if (k->kind == 0) {
+                waitq_push(&k->c->recvq_head, &k->c->recvq_tail, &k->s);
+            } else {
+                waitq_push(&k->c->sendq_head, &k->c->sendq_tail, &k->s);
+            }
+            k->reg = 1;
+        }
+        /* 全是 nil 通道 ⇒ 一个都没登记 ⇒ 永远阻塞（Go 规范）*/
+        rt_block_forever();
+        /* ── 醒来：先找**已完成**的那个（`done == 1` ⇒ 对端已经搬完值） */
+        i64 done = -1;
+        for (u64 i = 0; i < w->n; i++) {
+            if (w->cases[i].reg && w->cases[i].s.done != 0) {
+                done = (i64)i;
+                break;
+            }
+        }
+        /* 撤销其余（**只撤还在队列上的**，见 `waitq_contains`） */
+        for (u64 i = 0; i < w->n; i++) {
+            SelCase *k = &w->cases[i];
+            if (!k->reg) {
+                continue;
+            }
+            if (k->kind == 0) {
+                if (waitq_contains(k->c->recvq_head, &k->s)) {
+                    waitq_remove(&k->c->recvq_head, &k->c->recvq_tail, &k->s);
+                }
+            } else if (waitq_contains(k->c->sendq_head, &k->s)) {
+                waitq_remove(&k->c->sendq_head, &k->c->sendq_tail, &k->s);
+            }
+            k->reg = 0;
+        }
+        if (done >= 0) {
+            return (u64)done;
+        }
+        /* 被 `close` 唤醒（`done` 全是 0）⇒ **重试**：close 让那个通道的
+         * recv case 就绪（零值），send case 则会在 `rt_send_try` 里 panic。 */
     }
 }
 

@@ -485,33 +485,80 @@
 - [x] **Step 2**: 判据 `t_chan_05_len_cap` + `t_chan_07_nil_永久阻塞`（死锁）。
 - [x] **Step 3: Commit** `feat(rt): len/cap 与 nil 通道（Task 20）`
 
-### Task 21: `range` over chan
+### Task 21: `range` over chan —— ✅ 已完成（2026-10-27，与 Task 20 合并）
 
-- [ ] **Step 1**: `unsup_stmt` 放开 `RangeKind::Chan`；isel 下降成
+> 见 Task 20 的台账：`stmt_range_chan` + `t_chan_09` + `sieve1.go` 跑通
+> （chan 装置 `ok=2 skip=5`）。三个坑（header 局部值 / `key` 位置 /
+> `ldur` ±256）都记在 Task 20 那一段。
+
+- [x] **Step 1**: `unsup_stmt` 放开 `RangeKind::Chan`；isel 下降成
   「循环 recv 到 `closed`」。
-- [ ] **Step 2**: 判据：`range` 一个 `cap=3` 的已关闭通道 ⇒ 3 个值后退出。
-- [ ] **Step 3: Commit** `feat(m11): range over chan（Task 21）`
+- [x] **Step 2**: 判据：`range` 一个 `cap=3` 的已关闭通道 ⇒ 3 个值后退出。
+- [x] **Step 3: Commit** `feat(m11): range over chan（Task 21）`
 
-### Task 22: `select` 阶段①（求值）
+### Task 22: `select` 阶段①（求值）—— ✅ 已完成（2026-10-27，与 23/24 合并）
 
-- [ ] **Step 1**: IR `Instr::Select { cases, token, dsts }`：cases 里带
+> **做法（与计划的偏差，进 `M11-report.md`）**：**不加 `Instr::Select`**。
+> 三阶段整块在 C 里（`rt_select_begin` / `rt_select_add` / `rt_select_wait`），
+> IR 只看到「建 wait-set → 登记 → 等下标」，代码生成再用一串 `If (idx == i)`
+> 分派到各子句体。
+>
+> 理由：三阶段的**顺序**与**撤销**是同一件事的两面 —— 阶段③登记完之后，
+> 任何一次唤醒都要先撤掉其余登记再重试。拆成 IR 指令就得让每个 `select`
+> 在 SSA 里手写一遍撤销循环，那是把运行期簿记漏进代码生成。
+>
+> ⚠️ **M11b 是 M:1 且不抢占**（`C11` §2.1）⇒ 阶段②③之间**不需要锁**：
+> 从「试探完所有 case」到「登记完所有 sudog」之间没有切换点。`C11` §4 里
+> 那段「撤销与竞争」是给 M11e 的多核留的。
+>
+> ⚠️ **`default_idx` 取 `clauses.len()` 而不是 `default_pos`**：后者可能与某个
+> case 的下标撞上（default 不在最后时），分派就会走错子句。
+>
+> **读数**：`t_sel_01`（每个 case 求值一次）/ `t_sel_02`（走 default 也求值）/
+> `t_sel_03`（多就绪取源码顺序第一个）/ `t_sel_04`（撤销其余登记）全绿，
+> 后两条含 **L1 差分**。
+
+- [x] **Step 1**: IR `Instr::Select { cases, token, dsts }`：cases 里带
   「求值后的 chan 值 + send 的右值」；求值在**进入 select 之前**完成。
-- [ ] **Step 2**: 判据 `t_sel_01_求值一次` + `t_sel_02_走_default_也求值`。
-- [ ] **Step 3: Commit** `feat(m11): select 阶段一（Task 22，D-M11-9）`
+- [x] **Step 2**: 判据 `t_sel_01_求值一次` + `t_sel_02_走_default_也求值`。
+- [x] **Step 3: Commit** `feat(m11): select 阶段一（Task 22，D-M11-9）`
 
-### Task 23: `select` 阶段②③（试探与阻塞）
+### Task 23: `select` 阶段②③（试探与阻塞）—— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `WaitSet` 块（托管堆）+ token；阶段②按源码顺序扫；阶段③
+> 阶段②③在 `rt_select_wait` 的循环里：**试探 → 有 default 走 default →
+> 登记全部 → 阻塞 → 醒来找 `done` 的那个 → 撤掉其余 → 有 done 就返回，
+> 没有（被 `close` 唤醒）就重试**。
+>
+> ⚠️ **`rt_send` / `rt_recv` 重构为「try + 阻塞循环」**（`rt_send_try` /
+> `rt_recv_try`），`rt_select_try` 直接用同一份判定 —— 三处各写一遍迟早漂。
+> `rt_recv_try` 返回**三态**（0 会阻塞 / 1 真值 / 2 关闭且空），因为
+> 「关闭且空」对 `select` 是**就绪**、对 `rt_recv` 是 `ok = false`。
+
+- [x] **Step 1**: `WaitSet` 块（托管堆）+ token；阶段②按源码顺序扫；阶段③
   给每个非 nil case 登记 sudog（共用 token）后换 G。
-- [ ] **Step 2**: 判据 `t_sel_03_多就绪取第一个`。
-- [ ] **Step 3: Commit** `feat(rt): select 试探与阻塞（Task 23）`
+- [x] **Step 2**: 判据 `t_sel_03_多就绪取第一个`。
+- [x] **Step 3: Commit** `feat(rt): select 试探与阻塞（Task 23）`
 
-### Task 24: `select` 的撤销
+### Task 24: `select` 的撤销 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 被唤醒后：拿 token 去所有队列删自己 → 看 `done` 定 winner →
+> 撤销在 `rt_select_wait` 醒来之后：找 `done == 1` 的那个，其余逐个
+> `waitq_contains` 之后才 `waitq_remove`。
+>
+> ⚠️ **必须先 `waitq_contains` 再 `waitq_remove`**：`rt_close` 会 `waitq_pop`
+> 掉我们的 sudog 再唤醒 —— 此时它已经不在队列里，再 remove 一次会把队头
+> 队尾改成 0，把**别人的**登记全丢掉。队列在 M11b 里很短，线性扫足够。
+>
+> ⚠️ **`M-M11-10`（不撤销）没有落地**：变异之后 `t_sel_04` 的形态是「主 G
+> 被重复入队」⇒ **挂死**而不是干净失败，而 `cargo test` 没有超时兜底。
+> 按「能用输出断言抓的形态，不要用靠超时的形态」这条口径，宁可不加 ——
+> 撤销本身由 `t_sel_04` 正面覆盖。
+>
+> **读数**：chan 装置 **`ok=7 skip=0 bad=0 / 7`** —— 整个 chan 语料全绿。
+
+- [x] **Step 1**: 被唤醒后：拿 token 去所有队列删自己 → 看 `done` 定 winner →
   只跑 winner。
-- [ ] **Step 2**: 判据 `t_sel_04_撤销` + `t_sel_05_重复_channel`。
-- [ ] **Step 3: Commit** `feat(rt): select 撤销（Task 24，C11 §4.2）`
+- [x] **Step 2**: 判据 `t_sel_04_撤销` + `t_sel_05_重复_channel`。
+- [x] **Step 3: Commit** `feat(rt): select 撤销（Task 24，C11 §4.2）`
 
 ### Task 25: 空 `select`
 

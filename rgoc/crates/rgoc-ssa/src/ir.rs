@@ -577,6 +577,18 @@ pub enum RuntimeFn {
     /// 返回 `ok` 而不是两个变体：**同一个符号**同时服务 `v := <-c` 与
     /// `v, ok := <-c` —— 前者忽略返回值，后者取它。
     ChanRecv,
+    /// `rt_select_begin(n, default_idx) -> WaitSet*`（M11b/Task 22）。
+    ///
+    /// `select` 的三阶段整块在 C 里（见 `rt.c` 的注释）：IR 只看到
+    /// 「建 wait-set / 登记一个 case / 等结果」三个动作。拆成 IR 指令的话，
+    /// 每个 `select` 都要在 SSA 里手写一遍「撤销其余登记」的循环 ——
+    /// 那是把运行期簿记漏进代码生成。
+    SelectBegin,
+    /// `rt_select_add(token, idx, kind, chan, val)`：`kind` 0 = recv / 1 = send，
+    /// `val` 是**地址**（recv 的输出 / send 的输入）。
+    SelectAdd,
+    /// `rt_select_wait(token) -> idx`：跑完三阶段，返回选中的下标。
+    SelectWait,
     /// `rt_recover(out)` —— 写 16 字节接口到 `out`（`M9/Phase 5`）。
     ///
     /// # 为什么是 runtime 而不是内建
@@ -588,7 +600,7 @@ pub enum RuntimeFn {
 
 impl RuntimeFn {
     /// 全部（顺序进 `dump` 与守卫测试）。
-    pub const ALL: [RuntimeFn; 8] = [
+    pub const ALL: [RuntimeFn; 11] = [
         RuntimeFn::MapMake,
         RuntimeFn::MapGet,
         RuntimeFn::MapSet,
@@ -596,6 +608,9 @@ impl RuntimeFn {
         RuntimeFn::MapIter,
         RuntimeFn::ChanSend,
         RuntimeFn::ChanRecv,
+        RuntimeFn::SelectBegin,
+        RuntimeFn::SelectAdd,
+        RuntimeFn::SelectWait,
         RuntimeFn::Recover,
     ];
 
@@ -610,6 +625,9 @@ impl RuntimeFn {
             RuntimeFn::MapIter => "rt_map_iter",
             RuntimeFn::ChanSend => "rt_send",
             RuntimeFn::ChanRecv => "rt_recv",
+            RuntimeFn::SelectBegin => "rt_select_begin",
+            RuntimeFn::SelectAdd => "rt_select_add",
+            RuntimeFn::SelectWait => "rt_select_wait",
             RuntimeFn::Recover => "rt_recover",
         }
     }
@@ -625,6 +643,9 @@ impl RuntimeFn {
             RuntimeFn::MapIter => "map_iter",
             RuntimeFn::ChanSend => "chan_send",
             RuntimeFn::ChanRecv => "chan_recv",
+            RuntimeFn::SelectBegin => "select_begin",
+            RuntimeFn::SelectAdd => "select_add",
+            RuntimeFn::SelectWait => "select_wait",
             RuntimeFn::Recover => "recover",
         }
     }

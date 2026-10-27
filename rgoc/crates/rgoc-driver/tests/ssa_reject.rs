@@ -233,12 +233,13 @@ fn t_ssa_33_chan_现在由_ssa_层拒() {
     // 没有入口」—— 它当时是一条守卫：上游一旦放行就会红。
     // M8/Task 14 正是那次放行（`HIR-UNSUPPORTED-CHAN` 已下线），所以这里改成
     // 判「入口打开了、SSA 侧的码真的接住了」：SSA 不实现并发（`M8-design.md` §1.3）。
-    // ⚠️ fixture 换过两次：`make(chan); _ = c` 与 `close(c)` 在 M11b/Task 16/19
-    // 之后都**能编译了**。现在换成 `select` —— 三阶段试探是 M11b 后半
-    // （Task 22），仍然是干净拒绝。
+    // ⚠️ fixture 换过三次：`make(chan); _ = c`（Task 16 放行）、`close(c)`
+    // （Task 19 放行）、`select`（Task 22 放行）。现在换成 **`select` 里的
+    // comma-ok** —— `rt_select_wait` 只返回下标，不返回「是不是关闭拿到的
+    // 零值」⇒ 仍是干净拒绝（进 `M11-report.md` 的窄化清单）。
     let p = fixture(
         "chan",
-        "package main\n\nfunc main() {\n\tc := make(chan int)\n\tselect {\n\tcase <-c:\n\t}\n}\n",
+        "package main\n\nfunc main() {\n\tc := make(chan int)\n\tselect {\n\tcase v, ok := <-c:\n\t\t_, _ = v, ok\n\t}\n}\n",
     );
     let out = run(&p);
     assert_eq!(out.exit, 1, "chan 在 SSA 面必须被拒：{out:?}");
