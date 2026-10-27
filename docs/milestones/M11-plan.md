@@ -278,19 +278,29 @@
   切一轮后输出 `1 2`（顺序由 FIFO 决定）。
 - [x] **Step 3: Commit** `feat(rt): 调度骨架（Task 11）`
 
-### Task 12: `Instr::Go` 与参数打包
+### Task 12: `Instr::Go` 与参数打包 —— ✅ 已完成（2026-10-27）
+
+> **读数**：`go_sched` 5/5（`t_go_02` 用 `rt_go` 启动新 G）+ `t_go_03`（Go 源码
+> 形态的 FIFO）+ `t_go_06`（实参在 `go` 时刻拷贝）。
+>
+> ⚠️ 与计划的三处不同：
+> ① IR 落地成 `Go { callee, args, effect }`（**没有** `nargs` / `argbytes`）——
+>    实参字节数由 isel 从类型表算，动作数记在 `effect` 里（与其它 `Instr` 同形）；
+> ② `rt_go` 的启动帧不是「`{fn, argbytes, args…}`」而是固定布局
+>    （`sa+0..160` 保存区 / `sa+160..224` 实参区 / `sa+224` fn），
+>    字节数记在 `gdesc.argbytes` 里给 GC 用（M11c 补，见 `C12` §4.1.1）；
+> ③ `go` 的实参**只支持 ≤ 8 个非浮点标量**（`CG-UNSUPPORTED-GO-ARGS`）——
+>    聚合实参按 `C5` §6.1 是指针，而 `go` 之后调用方的帧可能被复用。
 
 **Files:**
 - Modify: `rgoc-ssa/src/ir.rs`（`Instr::Go`）、`build.rs`、`live.rs`（safepoint）、
   `isel.rs`、`rt.c`（`rt_go` / `rt_go_trampoline`）
 
-- [ ] **Step 1**: IR：`Go { func, args, nargs, argbytes }`；`dsts()` 空；
-  `uses()` = args + func；**是 safepoint**（`live.rs` 的穷尽匹配会强制回答）。
-- [ ] **Step 2**: isel：实参在当前 G 的栈上按普通调用布局算好，`bl rt_go`。
-- [ ] **Step 3**: `rt_go`：新栈 + 启动帧 `{fn, argbytes, args…}` +
-  入队**队尾**（不切走）。
-- [ ] **Step 4**: 判据 `t_go_03_就绪队列_fifo` + `t_go_04_参数深拷贝`。
-- [ ] **Step 5: Commit** `feat(m11): go 语句与参数打包（Task 12，D-M11-6）`
+- [x] **Step 1**: IR：`Go { callee, args, effect }`；`dsts()` 空；**是 safepoint**。
+- [x] **Step 2**: isel：实参在调用方的栈上按普通调用布局算好，`bl rt_go`。
+- [x] **Step 3**: `rt_go`：新栈 + 启动帧 + 入队**队尾**（不切走）。
+- [x] **Step 4**: 判据 `t_go_03`（FIFO）+ `t_go_06`（实参深拷贝）。
+- [x] **Step 5: Commit** `feat(m11): go 语句与参数打包（Task 12，D-M11-6）`
 
 ### Task 13: `unsup_stmt` 放开 `go`
 
