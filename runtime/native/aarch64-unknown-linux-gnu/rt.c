@@ -456,6 +456,16 @@ static u64 parse_u64(const char *s) {
  * ⚠️ **全局而不是寄存器** —— 用寄存器会让 `t_gc_10` 红。 */
 u64 *g_stack_lo;
 
+/* 帧记录链的**链头**（`C12` §4.2）。由 `isel` 的序言/尾声维护
+ * （`g_frames = fp` / `= prev`），运行期只**读**它。
+ *
+ * ⚠️ M11c 起它的语义是「**当前 G** 的链头」（`D-M11-10`）：`rt_schedule` 在
+ * 切换时把旧值存进 `gdesc.frames`、把对方的值装回来。所以序言/尾声那两条
+ * 指令**不需要知道有几个 G** —— 这正是选这种改法（而不是「序言里改成
+ * `g_cur->frames`」）的理由：生成代码一个字节不变，M10 的 14 条栈根判据
+ * 全部原样有效。 */
+void *g_frames;
+
 typedef struct GDesc {
     u64 *sp;             /* +0  挂起时的栈顶（切换点） */
     u64 *stack_lo;       /* +8  栈低地址 */
@@ -870,10 +880,27 @@ void rt_schedule(void) {
         rt_fatal_deadlock();
     }
     GDesc *prev = g_cur;
+    /* ── 帧记录链跟着 G 走（`D-M11-10`，M11c/Task 32）──────────────────
+     *
+     * `g_frames` 是**当前 G 的链头**，不是全局唯一的链。切走前把它存进
+     * 自己的 `gdesc`，切进来前换成对方的 —— 于是 `isel` 的序言/尾声
+     * （`g_frames = fp` / `= prev`）**一个字节都不用改**：它们看到的永远是
+     * 「我这个 G 的链」，语义与 M10 完全一致。
+     *
+     * ⚠️ **必须在 `rt_switch` 之前写 `prev->frames`**：切换之后当前栈就换成
+     * 对方的了，`g_frames` 也已经不是 `prev` 的值。
+     *
+     * ⚠️ 两个赋值缺一不可：
+     *   * 少了 `prev->frames = g_frames` ⇒ 挂起的 G 醒来后链头丢了（它的栈上
+     *     对象全部无根）；
+     *   * 少了 `g_frames = next->frames` ⇒ 新 G 一上来就沿着**别人的**帧链扫，
+     *     扫到的是另一块栈 ⇒ 随机崩。 */
+    prev->frames = g_frames;
     rt_gset_current(next);
+    g_frames = next->frames;
     next->state = 1; /* running */
     rt_switch(&prev->sp, next->sp);
-    /* 这里返回时，说明别的 G 切回了我 —— `g_cur` 已经由对方设好。 */
+    /* 这里返回时，说明别的 G 切回了我 —— `g_cur` 与 `g_frames` 都已由对方设好。 */
 }
 
 /* 当前 G 结束。**永不返回**。
@@ -2554,9 +2581,8 @@ static void drain(void) {
 
 /* ── 栈根：帧记录链（`C12` §4.2，M10/Task 22–23）── */
 
-/* 帧记录链的链头。由 `isel` 的序言/尾声维护（`g_frames = fp` / `= prev`），
- * 这里只**读**。`.bss` 天然为零 ⇒ 空链。 */
-void *g_frames;
+/* 链头 `g_frames` 的定义在文件前部（`GDesc` 那一节）—— `rt_schedule` 要用它，
+ * 而调度器在它前面。这里只留「怎么用」的说明。 */
 
 /* `RtFuncInfo` 的 C 镜像（`C5` §11.4，M9 已发在 `.rodata`）。
  *
