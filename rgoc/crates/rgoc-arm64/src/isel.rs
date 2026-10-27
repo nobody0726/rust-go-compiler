@@ -720,6 +720,9 @@ fn instr(cx: &Ctx<'_>, ins: &Instr, asm: &mut Asm) -> Result<(), CgCode> {
         // `new(T)` 也是 `Make`，但它的 `typ` 是**指针**（`build.rs` 的约定）——
         // 那不是切片，走 arena 分配（`D-M7-7`）。只有 `make([]T,…)` 才是 `[]T`。
         // `make(map[K]V)`（M9/Task 19）：单字指针，指向 runtime 的 `MapObj`。
+        Instr::Make { dst, typ, cap, .. } if chan_elem(cx.tt, *typ).is_some() => {
+            makechan(cx, *dst, *typ, *cap, asm);
+        }
         Instr::Make { dst, typ, .. } if map_kv(cx.tt, *typ).is_some() => {
             map_make(cx, *dst, *typ, asm);
         }
@@ -1953,6 +1956,41 @@ fn is_pointer_ty(tt: &TypeTable, t: TypeId) -> bool {
 }
 
 /// `map[K]V` 的 `(K, V)`（剥命名/别名）；不是 map ⇒ `None`。
+/// `chan T` 的元素类型（穿过 `Named` / `Alias`）。
+fn chan_elem(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    use rgoc_types::typ::Type;
+    let mut cur = t;
+    for _ in 0..64 {
+        match tt.type_of(cur) {
+            Type::Chan { elem, .. } => return Some(*elem),
+            Type::Named(id) => cur = tt.named_underlying(*id),
+            Type::Alias(id) => cur = tt.alias_rhs(*id),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// `make(chan T[, n])` ⇒ `rt_makechan(&dst, n, desc)`（M11b/Task 16）。
+///
+/// 与 `makeslice` 同一形状：**目标槽地址进 `x0`**（输出参数），不是返回值。
+/// `elemsize` **不由这里传** —— `rt_makechan` 从 desc 的 `size`（`+0`）读，
+/// 因为「类型大小」是 `rgoc-meta` 算的，传两份口径迟早不一致。
+fn makechan(cx: &Ctx<'_>, dst: ValueId, typ: TypeId, cap: Option<ValueId>, asm: &mut Asm) {
+    let d = cx.slot(dst);
+    let elem = chan_elem(cx.tt, typ).expect("`makechan` 只在 chan 类型上调用");
+    let desc = crate::module::desc_symbol(rgoc_meta::desc::type_hash(cx.tt, elem));
+    addr(asm, d.off);
+    asm.ins("mov x0, x9");
+    match cap {
+        Some(v) => ld_x(asm, "x1", cx.slot(v).off),
+        // `make(chan T)` ⇒ 无缓冲，`dataqsiz = 0`
+        None => load_imm(asm, "x1", 0),
+    }
+    load_addr(asm, "x2", &desc);
+    asm.ins("bl rt_makechan");
+}
+
 fn map_kv(tt: &TypeTable, t: TypeId) -> Option<(TypeId, TypeId)> {
     use rgoc_types::typ::Type;
     let mut cur = t;

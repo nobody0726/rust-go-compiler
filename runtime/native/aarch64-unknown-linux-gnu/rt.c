@@ -1602,7 +1602,14 @@ _Static_assert(__builtin_offsetof(Hchan, lock) == 88, "lock 在 +88");
 void *rt_alloc_raw(u64 bytes);
 void *rt_alloc_array(const TypeDesc *elem, u64 cap);
 
-Hchan *rt_makechan(u64 elemsize, u64 dataqsiz, const void *elemtype) {
+void rt_makechan(Hchan **out, u64 dataqsiz, const void *elemtype) {
+    /* `elemsize` 从 desc 的 `size` 读（`TypeDesc.size` 在 **+0**，`rgoc-meta`
+     * 的 `desc.rs`）。**不由 isel 传**：`TypeTable` 在 arm64 侧没有「类型大小」
+     * 的 API（大小是 `rgoc-meta` 算的），传两份口径迟早不一致。
+     *
+     * ⚠️ `TypeDesc.size` 是 **data 部分**（不含 8 字节对象头）—— 正是通道缓冲
+     * 需要的元素宽度。 */
+    u64 elemsize = elemtype != 0 ? (u64)(*(const u32 *)elemtype) : 0;
     gc_pause++;
     Hchan *c = (Hchan *)rt_alloc_raw(sizeof(Hchan));
     c->qcount = 0;
@@ -1625,7 +1632,9 @@ Hchan *rt_makechan(u64 elemsize, u64 dataqsiz, const void *elemtype) {
         c->buf = 0;
     }
     gc_pause--;
-    return c;
+    /* 输出参数而不是返回值：与 `rt_makeslice` 同一形状（`x0` 是目标槽地址）。
+     * 槽在栈上 ⇒ GC 顺着帧记录扫得到它。 */
+    *out = c;
 }
 
 

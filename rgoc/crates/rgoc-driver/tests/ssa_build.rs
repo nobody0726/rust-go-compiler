@@ -2410,8 +2410,13 @@ fn t_ssa_36_初始化式里的不支持面要带码拒绝() {
     // 仍然被拒的 chan —— 判据的形状没变，仍然是「初始化式里的拒绝要带码」。
     let (program, mut tt) = program_of(
         "init-chan",
-        // `main` **不碰** chan：这样唯一该被拒的就是初始化式
-        "package main\n\nvar c = make(chan int)\n\nfunc main() {\n\tprintln(1)\n}\n",
+        // `main` **不碰** chan：这样唯一该被拒的就是初始化式。
+        //
+        // ⚠️ M11b/Task 16 起 `make(chan T)` **放行**了（它只分配 hchan，没有
+        // 等待）⇒ 原来那个 fixture（`var c = make(chan int)`）不再被拒。
+        // 换成「chan 类型的值赋给 chan 类型的全局」—— `d` 的初始化式是
+        // `c`，而 `c` 的类型是 `chan int` ⇒ `face_kind` 仍拒。
+        "package main\n\nvar c = make(chan int)\n\nvar d chan int = c\n\nfunc main() {\n\tprintln(1)\n}\n",
     );
     let out = build(&program, &mut tt);
     assert_eq!(out.rejected.len(), 1, "一条拒绝：{:?}", out.rejected);

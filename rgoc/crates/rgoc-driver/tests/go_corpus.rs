@@ -78,7 +78,11 @@ fn build_once(tag: &str, rel: &str) -> (i32, String) {
         files: vec![repo_root().join(rel)],
         output: Some(dir.join("prog")),
         emit: Emit::Elf,
-        keep_asm: false,
+        // ⚠️ **必须保留 **： 时链接器读的是临时路径，
+        // 而 （第一个真编译成功的并发文件）在这个模式下报
+        //  —— 那是装置层面的路径问题。
+        // 判据要检查的是**构建结果**，多留一个  无害。
+        keep_asm: true,
         opt: rgoc_ssa::opt::Config::all(),
         lang: None,
     };
@@ -143,14 +147,6 @@ fn t_gcorp_03_并发语料不_panic() {
         other.is_empty(),
         "`N'` 里这些是内部失败（exit 2/其他），不是拒绝也不是成功：\n  {}",
         other.join("\n  ")
-    );
-
-    // ── ③ 已经能走到 SSA 面的那个，必须给出可读的诊断 ─────────────────
-    let (exit, err) = build_once("n", "go_source_code/test/chan/zerosize.go");
-    assert_eq!(exit, 1, "`zerosize.go` 应干净拒绝");
-    assert!(
-        err.contains("SSA-UNSUPPORTED-CHAN"),
-        "`zerosize.go` 的诊断里应出现 `SSA-UNSUPPORTED-CHAN`，实际：\n{err}"
     );
 }
 
@@ -221,8 +217,13 @@ fn t_gcorp_04_go_不再是拒绝原因() {
     let mut still_go: Vec<String> = Vec::new();
     for rel in &ok {
         let (exit, err) = build_once("n", rel);
-        // 现在仍然全拒（`make(chan)` / `select` / `send` 都是 M11b 的事）。
-        assert_eq!(exit, 1, "`{rel}` 现在应仍被拒（channel 还没做）");
+        // ⚠️ **不要求「全被拒」**：`make(chan)` 在 M11b/Task 16 放行后，
+        // `zerosize.go` 已经能编译（exit=0）。这条判据只钉「拒绝原因里没有
+        // `go 语句`」—— 某个文件是 0 还是 1 是支持面的事，不是这条的事。
+        assert!(
+            exit == 0 || exit == 1,
+            "`{rel}` 应是编译成功或干净拒绝，实际 {exit}"
+        );
         if err.contains("go 语句") {
             still_go.push(format!("{rel} ⇒ {}", err.trim()));
         }
@@ -232,4 +233,17 @@ fn t_gcorp_04_go_不再是拒绝原因() {
         "这些仍因 `go 语句` 被拒（Task 13 的目标是把它从拒绝面拿掉）：\n  {}",
         still_go.join("\n  ")
     );
+
+    // ── ③ 原来这里断言「`zerosize.go` 干净拒绝且带码」——**删掉了** ──────
+    //
+    // M11b/Task 16 的 `make(chan)` 放行后，这个文件**能编译了**
+    // （`make(chan [0]byte)` / `make(chan struct{}` 都是合法分配），
+    // 「必须 exit=1」的前提没了。
+    //
+    // 为什么不再换个断言：`build_once` 用 `Emit::Elf`，而这个文件的 `.s` 在
+    // 那个模式下没落到 `prog.s`（同目录直接 `build` 是 rc=0）—— 那是**装置**
+    // 的路径问题。与其为它改装置，不如让 `run-native-chan.sh` 覆盖：它数的是
+    // **行为**（构建一次、跑三次、比字节），比退出码强。
+    //
+    // 这条判据的主旨（`N'` 不 panic）由 ① ② 两段保证，没丢。
 }

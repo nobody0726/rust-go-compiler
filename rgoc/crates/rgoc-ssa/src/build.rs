@@ -543,6 +543,22 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
     // map 曾经也在这里（M6/Task 31），M9/Phase 2 实现后撤了（`D-M9-5`）——
     // `SsaCode::Map` 这个变体本身留着（`diag.rs` 的 `ALL` 是稳定出口），
     // 但**没有入口**：反向判据在 `rgoc-driver/tests/ssa_reject.rs::t_ssa_33_map`。
+    // `make(chan T[, n])` 在 M11b 支持（Task 16）：它只分配一个 `hchan`，
+    // **没有等待**，所以不属于「并发语义」的拒绝面。
+    //
+    // ⚠️ 其余 chan 用法（`<-ch` / `ch <- v` / 当实参 / `len(c)`）仍拒 ——
+    // 它们要 `Sudog` 与阻塞（Task 18）。
+    if matches!(&e.kind, ExprKind::Make { .. }) {
+        let mut cur = e.typ;
+        for _ in 0..64 {
+            match tt.type_of(cur) {
+                rgoc_types::typ::Type::Chan { .. } => return None,
+                rgoc_types::typ::Type::Named(id) => cur = tt.named_underlying(*id),
+                rgoc_types::typ::Type::Alias(id) => cur = tt.alias_rhs(*id),
+                _ => break,
+            }
+        }
+    }
     if let Some(code) = face_kind(tt, e.typ) {
         return Some((
             code,
