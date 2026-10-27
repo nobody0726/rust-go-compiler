@@ -204,3 +204,32 @@ fn t_gdev_03_拒面行数冻结() {
     let rej = read_list("chan-rejected.txt");
     assert_eq!(rej.len(), 12, "拒面行数变了：{rej:?}");
 }
+
+/// `T-GCORP-04`（Task 13 收尾）：**`go` 不再是拒绝原因**。
+///
+/// # 为什么这条要单独存在
+///
+/// `t_gcorp_03` 只要求「不 panic」—— 它允许 `N'` 全被拒（Phase 0 就是这样）。
+/// 而 Task 13 的目标是「`go` 语句进得来」：如果只靠 `t_gcorp_03`，**把 `go`
+/// 又加回拒绝面也照样绿**。
+///
+/// 所以这条钉的是**拒绝原因的内容**：7 个 `N'` 仍全被拒（它们要 `hchan`），
+/// 但没有一个是因为 `go 语句`。
+#[test]
+fn t_gcorp_04_go_不再是拒绝原因() {
+    let ok = chan_ok();
+    let mut still_go: Vec<String> = Vec::new();
+    for rel in &ok {
+        let (exit, err) = build_once("n", rel);
+        // 现在仍然全拒（`make(chan)` / `select` / `send` 都是 M11b 的事）。
+        assert_eq!(exit, 1, "`{rel}` 现在应仍被拒（channel 还没做）");
+        if err.contains("go 语句") {
+            still_go.push(format!("{rel} ⇒ {}", err.trim()));
+        }
+    }
+    assert!(
+        still_go.is_empty(),
+        "这些仍因 `go 语句` 被拒（Task 13 的目标是把它从拒绝面拿掉）：\n  {}",
+        still_go.join("\n  ")
+    );
+}

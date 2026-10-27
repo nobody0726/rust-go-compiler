@@ -103,3 +103,50 @@ fn t_go_02_rt_go_能启动新_g() {
     );
     assert_eq!(out.exit, 0, "stderr={:?}", out.stderr);
 }
+
+/// `T-GO-01`（`GO-2` 的第一条）：**M:1 —— 只有一个 OS 线程**。
+///
+/// # 为什么扫 `rt.c` 而不是扫产物
+///
+/// 产物是 freestanding ELF，没有 libc，`pthread_create` 根本不可能出现 ——
+/// 扫产物是一条**永远绿**的断言。真正会破坏 M:1 的地方是 runtime 自己：
+/// 只要有人在 `rt.c` 里加一次 `SYS_clone`（或 `clone3`），就会变成 M:N，
+/// 而那时**没有任何判据会红**（程序照样跑对，只是不再确定）。
+///
+/// 这条扫的是**源码**：`rt.c` 里的系统调用白名单只有 `mmap` / `write` / `exit`。
+#[test]
+fn t_go_04_m1_只有一个线程() {
+    let rt = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../runtime/native/aarch64-unknown-linux-gnu/rt.c"),
+    )
+    .expect("读不到 rt.c");
+    for bad in ["SYS_clone", "SYS_clone3", "pthread_create", "SYS_fork"] {
+        assert!(
+            !rt.contains(bad),
+            "`rt.c` 里出现了 `{bad}` —— M11a 是 **M:1**（`C11` §2.1），\
+             多一个线程就会让「同 seed 逐字节可回放」失效"
+        );
+    }
+}
+
+/// `T-GO-05`（`GO-2` 的第三条）：**同一程序跑两次，输出逐字节相同**。
+///
+/// # 为什么确定性是 M:1 的判据而不是「运气好」
+///
+/// M:1 + 不抢占 + 就绪队列 FIFO ⇒ 执行顺序**只由源码决定**。所以「跑两次
+/// 一样」不是巧合，而是这三条规则的推论。反过来，任何一条被破坏（真的并发了、
+/// 或者队列变成 LIFO），这条都会红 —— 而且它比 `t_go_01` 更狠：`t_go_01`
+/// 只跑一次，靠期望字符串；这条不写期望，纯靠**自比**。
+#[test]
+fn t_go_05_同一程序两次输出一致() {
+    let a = support::native_harness::build_and_run_env("go05a", MIN, &[("RGOC_G11_GOTEST", "1")])
+        .expect("第一次应跑起来");
+    let b = support::native_harness::build_and_run_env("go05b", MIN, &[("RGOC_G11_GOTEST", "1")])
+        .expect("第二次应跑起来");
+    assert_eq!(
+        a.stdout, b.stdout,
+        "同一程序两次输出不同 ⇒ 执行顺序不再只由源码决定（M:1 / 不抢占 / FIFO 有一条破了）"
+    );
+    assert_eq!(a.exit, b.exit, "退出码也要一致");
+}

@@ -294,17 +294,17 @@
 
 ### Task 13: `unsup_stmt` 放开 `go`
 
-- [ ] **Step 1**: 去掉 `Stmt::Go` 的拒绝；保留 `Send`/`Select`/`Range-Chan`。
-- [ ] **Step 2**: 判据：`M'` 里没有「只因 `go` 被拒」的文件（逐个看拒绝原因）。
-- [ ] **Step 3: Commit** `feat(ssa): 放开 go 语句（Task 13）`
+- [x] **Step 1**: 去掉 `Stmt::Go` 的拒绝；保留 `Send`/`Select`/`Range-Chan`。
+- [x] **Step 2**: 判据：`M'` 里没有「只因 `go` 被拒」的文件（逐个看拒绝原因）。
+- [x] **Step 3: Commit** `feat(ssa): 放开 go 语句（Task 13）`
 
 ### Task 14: `T-GO-01` / `T-GO-02` / `T-GO-05`
 
-- [ ] **Step 1**: `t_go_01_m_1`（静态扫描：`.s` 与 `rt.c` 无 `clone`/`pthread`）。
-- [ ] **Step 2**: `t_go_02_不抢占`（`for {}` 在 G 里 ⇒ 装置超时 124，
+- [x] **Step 1**: `t_go_01_m_1`（静态扫描：`.s` 与 `rt.c` 无 `clone`/`pthread`）。
+- [x] **Step 2**: `t_go_02_不抢占`（`for {}` 在 G 里 ⇒ 装置超时 124，
   **124 是期望值**）。
-- [ ] **Step 3**: `t_go_05_确定性`（5 个 G 的 fixture 跑两次逐字节相同）。
-- [ ] **Step 4: Commit** `test(m11): 调度三规则的另外三条（Task 14）`
+- [x] **Step 3**: `t_go_05_确定性`（5 个 G 的 fixture 跑两次逐字节相同）。
+- [x] **Step 4: Commit** `test(m11): 调度三规则的另外三条（Task 14）`
 
 ### Task 15: Phase 1 收口
 
