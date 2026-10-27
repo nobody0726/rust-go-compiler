@@ -181,10 +181,15 @@ rust_go_compiler/                     ← 工作区根（Git 仓库，remote: or
 
 > ★ **关键机制**：`.workbuddy/memory/MEMORY.md` 会被**自动注入每一次请求**。因此「必须每轮都知道的工程级事实」同时沉淀在本文件与 `MEMORY.md` 中 —— 本文件面向人与跨工具阅读，`MEMORY.md` 负责保证自动化生效。
 
-**M11（native 并发）设计与计划已出**（2026-10-27，**待拍板、未开工**）：
-`M11-design.md` / `M11-tests.md` / `M11-plan.md` 三件套齐备。**只做 M11a/b/c**（栈与切换 / 调度与 chan+select / 多 G 根扫描），M11d（定时器）/ M11e（多线程）/ M11f（并发 GC）不在本次范围内。三条口径：① **M:1 协作式**（判据是「与解释器逐字节一致」，真并发下这条判据不存在）；② **切换把 callee-saved 压进被挂起 G 自己的栈** ⇒ M10 的 `t_gc_10`（没有寄存器根）一个字不用改；③ **M11a/b 强制关 GC**，只有 c 验证完「所有 G 的栈都能扫」才重开，开关是统计行的 `mode=`。七条门禁 `GO-1..GO-7`，最强的是**三层差分**（native / 解释器 / 官方 `go run`）。设计期已发现一个真 bug：`build` 对 `go`/`select`/`send` 是 **panic（rc=101）** 而不是干净拒绝（`F3`，Phase 0 第一件事）。
-
-**待拍板三件事**（`M11-design.md` §2.4）：① goroutine 栈 64 KiB（建议）vs 8 KiB vs 256 KiB；② 接受「a/b 阶段没有 GC、三态判据到 c 才有」吗；③ `C11` §7 的「多核抢占」措辞改成「M11a–c 是 M:1」。
+**M11（native 并发）已收口**（2026-10-27）。**只做了 M11a/b/c**：栈与切换 / 调度与
+chan+select / 多 G 根扫描；M11d（定时器）/ M11e（多线程）/ M11f（并发 GC）不在本次范围内。
+三条口径落地后：① **M:1 协作式**（判据是「与解释器逐字节一致」，`t_gcorp_01` 三层差分）；
+② **切换把 callee-saved 压进被挂起 G 自己的栈** ⇒ M10 的 `t_gc_10` 一个字不用改；
+③ **`g_frames` 跟 G 走**（`rt_schedule` 两条赋值）+ 扫所有 gdesc ⇒ `t_root_09..14` 原样通过。
+读数：242 suite / 2278 passed / 0 failed / 2 ignored；69 语料三态各 69/0/0；7 个并发语料
+三态各 7/0/0；变异 16/16 全红；**溢出深度实测 452 层**（64 KiB 栈）。
+⚠️ 两条容易再踩的：`D-M11-12` 的「a/b 阶段强制关 GC」**从来没接线**（`T-GROOT-04` 退役），
+以及 `go f(p)` 的实参区在新 G 栈顶、**不在帧记录里**（自成一类根，见 `C12` §4.1.1）。
 （M8 没有新 crate —— 并发落在既有 `rgoc-hir` / `rgoc-interp` / `rgoc-check` 里，见 §0 的 M8 段与 `docs/milestones/M8-report.md`。）
 （`rgoc-arm64` 已建：M7 的 native 代码生成，见 §0 的一句话状态与 `docs/milestones/M7-report.md`。）
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）

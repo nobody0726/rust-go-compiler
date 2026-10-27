@@ -478,19 +478,25 @@ M9c1/c2 分别验收，合起来对应 M9c；M10 只依赖已验收的 M9a/b/c1/
 
 ### M11：native 栈、调度、channel/select 与定时器
 
-> **状态：🟡 设计完成、待拍板**（2026-10-27）—— 三件套齐备：
-> [`M11-design.md`](./milestones/M11-design.md)（`D-M11-1..12` / `F1..F12` /
-> 门禁 `GO-1..GO-7`）、[`M11-tests.md`](./milestones/M11-tests.md)（各族判据 +
-> 三层差分 + 15 条变异）、[`M11-plan.md`](./milestones/M11-plan.md)（Task 1–46）。
-> **只做 M11a/b/c**：M11d（定时器）/ M11e（多线程）/ M11f（并发 GC）不在本次范围内
-> —— 前两个需要 stdlib 面（归 M12）与「性质判据」（另一个量级），第三个被
-> 「STW + 单线程」直接排除。
-> 三条口径先写在这里：① **M:1 协作式**（判据是「与解释器逐字节一致」，真并发下
-> 这条判据不存在）；② **切换把 callee-saved 压进被挂起 G 自己的栈** ⇒ M10 的
-> 「没有寄存器根」守卫 `t_gc_10` 一个字不用改；③ **M11a/b 强制关 GC**，
-> 只有 c 验证完「所有 G 的栈都能扫」才重开 —— 开关是统计行的 `mode=`。
-> 设计期已发现一个真 bug：`build` 对 `go`/`select`/`send` 是 **panic（rc=101）**
-> 而不是干净拒绝（`F3`，Phase 0 第一件事）。
+> **状态：✅ 已收口**（2026-10-27，**只做 M11a/b/c**）——
+> [`M11-design.md`](./milestones/M11-design.md) / [`M11-tests.md`](./milestones/M11-tests.md) /
+> [`M11-plan.md`](./milestones/M11-plan.md) / [`M11-manifest.json`](./milestones/M11-manifest.json) /
+> [`M11-report.md`](./milestones/M11-report.md)。
+> M11d（定时器）/ M11e（多线程）/ M11f（并发 GC）不在本次范围内 —— 前两个需要
+> stdlib 面（归 M12）与「性质判据」（另一个量级），第三个被「STW + 单线程」直接排除。
+>
+> **读数**：242 suite / 2278 passed / 0 failed / 2 ignored；69 个单线程语料三态各
+> 69/0/0；7 个并发语料三态各 7/0/0（`M'` 12/12 每态）；三层差分（native / 解释器 /
+> 官方）7/7；变异 **16/16 全红**；**溢出深度实测 452 层**（64 KiB 栈）。
+>
+> 三条口径落地后的实际形态：① **M:1 协作式**（判据是「与解释器逐字节一致」）；
+> ② **切换把 callee-saved 压进被挂起 G 自己的栈** ⇒ M10 的「没有寄存器根」守卫
+> `t_gc_10` 一个字没改；③ **`g_frames` 跟 G 走** + 扫所有 gdesc ⇒ M10 的 14 条
+> 栈根判据原样通过。
+>
+> ⚠️ 两条与计划不同的实测结论：`D-M11-12` 的「a/b 阶段强制关 GC」**从来没接线**
+> （对照靠装置侧 `RGOC_GC=0`，`T-GROOT-04` 退役）；`go f(p)` 的实参区在新 G 栈顶、
+> **不在帧记录里**，自成一类根（`C12` §4.1.1）。
 
 - **M11a**：首发平台有栈上下文切换、寄存器/SP/PC/栈对齐 fixture；先受限固定大小 goroutine 栈，溢出明确报错，不承诺复制增长。
 - **M11b**：M:1 协作调度、go 参数求值/复制、channel/select 等待与取消、main 结束；将 M8 的语义用例转入 native 门禁。

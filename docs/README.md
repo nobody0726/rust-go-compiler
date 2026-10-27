@@ -77,9 +77,11 @@
 | M10 | [`milestones/M10-plan.md`](./milestones/M10-plan.md) | **怎么干 M10** —— **Task 1–45**（Phase 0 契约 → 1 托管堆 → 2 根协议 → 3 自动/长跑 → 4 收口） | ✅ **已收口**（2026-10-27；九条门禁 9/9、语料三态各 69/0/0、变异 20/20）|
 | M10 | [`milestones/M10-manifest.json`](./milestones/M10-manifest.json) | **M10 的账** —— 门禁 `GC-1..GC-9` 的逐条证据、8 条未支持面、`measured`（长跑读数）、5 条 `closed_gaps` + 1 条 `deferred_gaps` | ✅ **已填实**（由 `manifest_m10.rs` 对账，含「长跑读数必须能复现」）|
 | M10 | [`milestones/M10-report.md`](./milestones/M10-report.md) | **M10 的复盘** —— 读数 / 真错清单（按「为什么先前没抓到」分类）/ 判据的牙怎么长出来的 / 接手指南 | ✅ 2026-10-27 |
-| M11 | [`milestones/M11-design.md`](./milestones/M11-design.md) | **怎么建 M11** —— 决策 `D-M11-1..12`（M:1 协作式 / 固定 64 KiB 栈 / **切换把 callee-saved 压进自己栈** / 序言栈检查 / `hchan` 逐字段 / `Sudog` 进托管堆 / `g_frames` 跟 G 走 / a-b 阶段强制关 GC）、事实基线 `F1..F12`、七条门禁 `GO-1..GO-7`、白名单 8 条 | 🟡 **草案**（2026-10-27，§2.4 三件事待拍板）|
-| M11 | [`milestones/M11-tests.md`](./milestones/M11-tests.md) | **怎么验 M11** —— `T-STK`/`T-GO`/`T-CHAN`/`T-SEL`/`T-EXIT`/`T-GROOT`/`T-GCORP` 各族判据、**三层差分**（native / 解释器 / 官方）、15 条变异、六条不变式 | 🟡 **草案**（随设计一起冻结）|
-| M11 | [`milestones/M11-plan.md`](./milestones/M11-plan.md) | **怎么干 M11** —— **Task 1–46**（Phase 0 契约与装置 → 1 栈与切换 → 2 chan/select → 3 多 G 根 → 4 收口） | 🟡 **待拍板后开工** |
+| M11 | [`milestones/M11-design.md`](./milestones/M11-design.md) | **怎么建 M11** —— 决策 `D-M11-1..12`（M:1 协作式 / 固定 64 KiB 栈 / **切换把 callee-saved 压进自己栈** / 序言栈检查 / `hchan` 逐字段 / `Sudog` 进托管堆 / `g_frames` 跟 G 走）、事实基线 `F1..F12`、七条门禁 `GO-1..GO-7`、白名单 8 条 | ✅ **已定稿**（2026-10-27 收口；溢出深度实测 452 层，`D-M11-12` 的「强制关 GC」实为未接线，`T-GROOT-04` 退役）|
+| M11 | [`milestones/M11-tests.md`](./milestones/M11-tests.md) | **怎么验 M11** —— `T-STK`/`T-GO`/`T-CHAN`/`T-SEL`/`T-EXIT`/`T-GROOT`/`T-GCORP` 各族判据、**三层差分**（native / 解释器 / 官方）、**16 条变异**、六条不变式 | ✅ **已定稿**（2026-10-27；`T-GROOT-04` 退役、新增 `T-STK-07` 与 `T-CHAN-08`）|
+| M11 | [`milestones/M11-plan.md`](./milestones/M11-plan.md) | **怎么干 M11** —— **Task 0–46**（Phase 0 契约与装置 → 1 栈与切换 → 2 chan/select → 3 多 G 根 → 4 收口） | ✅ **已收口**（2026-10-27；242 suite / 2278 passed / 0 failed / 2 ignored；变异 16/16 全红）|
+| M11 | [`milestones/M11-manifest.json`](./milestones/M11-manifest.json) | **M11 交付清单** —— 七条门禁逐条证据 / 10 条白名单 / 语料计数（69 与 19−12=7 都算出来）/ `measured`（溢出深度 452、10 万 G、5000 次 select）/ 缺口 | ✅ **已填实**（2026-10-27；由 `manifest_m11.rs` 对账 + 三态复现）|
+| M11 | [`milestones/M11-report.md`](./milestones/M11-report.md) | **M11 复盘** —— 读数 / 交付 / 决策的实测复核 / **真错清单按「为什么先前没抓到」分类** / 判据的牙 / 接手指南（三条铁律）/ 遗留 | ✅ 2026-10-27 |
 
 **三件套的分工**：`design` 定**做什么与边界** → `tests` 定**怎么算通过** → `plan` 定**按什么顺序、以什么粒度动手**。三者齐备才开工（03 §6.2）。
 
