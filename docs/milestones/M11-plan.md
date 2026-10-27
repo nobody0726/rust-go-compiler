@@ -673,62 +673,125 @@
 
 # Phase 3 · M11c：多 G 根扫描（Task 32–39）
 
-### Task 32: `g_frames` 变成「当前 G 的链头」
+### Task 32: `g_frames` 变成「当前 G 的链头」—— ✅ 已完成（2026-10-27）
 
-**Files:**
-- Modify: `rt.c`（`rt_switch` 里搬 `frames`）、`isel.rs`（**不改**）
+> **读数**：`gc_stack` 5/5 + `gc_reclaim` 6/6 全绿（`t_root_09..14` **原样通过**，
+> `isel.rs` 一个字节没改）。
+>
+> 改法落地成两行（在 `rt_schedule`，不是 `rt_switch` 里 —— 那边是顶层汇编，
+> 加两次访存要动 `x0/x1` 的生命周期）：`prev->frames = g_frames;` 切走前存、
+> `g_frames = next->frames;` 切进来装。`g_frames` 的定义也从 2557 行挪到
+> `GDesc` 那一节（`rt_schedule` 在它前面）。
 
-- [ ] **Step 1**: `rt_switch` 前后：`g_cur->frames = g_frames` /
-  `g_frames = next->frames`。**序言/尾声一个字节不改**（`D-M11-10` 的第一种改法）。
-- [ ] **Step 2**: 判据：M10 的 `t_root_09..14` 全部仍绿（这是**不许改判据**的那批）。
-- [ ] **Step 3: Commit** `feat(rt): g_frames 跟 G 走（Task 32，D-M11-10）`
+- [x] **Step 1**: `g_cur->frames = g_frames` / `g_frames = next->frames`；
+  **序言/尾声一个字节不改**（`D-M11-10` 的第一种改法）。
+- [x] **Step 2**: 判据：M10 的 `t_root_09..14` 全部仍绿。
+- [x] **Step 3: Commit** `feat(rt): g_frames 跟 G 走（Task 32，D-M11-10）`
 
-### Task 33: 扫所有 G 的链
+### Task 33: 扫所有 G 的链 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `mark_roots` 增加「遍历所有 gdesc（ready/blocked/exited）→
-  `mark_frames(g->frames)`」+ `mark_ptr(g->wait)`。
-- [ ] **Step 2**: 判据 `t_groot_01_挂起_G_的栈是根` + `t_groot_02_就绪_G` +
-  `t_groot_03_waitset_保活` + **`t_groot_06_多G超集扫描不坏`**
-  （Task 0 结论的回归面：N 个 G 轮流阻塞/唤醒、stress 态跑 ⇒ 与 `off` 态逐字节相同、
-  `bad_ptr == 0`；每条 `bad_stale` 都能归因到「超集位图」）。
-- [ ] **Step 3: Commit** `feat(rt): 多 G 扫根（Task 33，D-M11-11）`
+> **读数**：`go_root` 01/02/03/06 全绿；`t_groot_01` 从 `#[ignore]` 转正。
+>
+> ⚠️ **开工第一件事就是把它跑红**：`t_groot_01` 在实现前是 FAILED（native 输出
+> 空、解释器 `42`）—— 这是「判据先红」的证据，不是事后补的。
+>
+> ⚠️ **实测抓到一个真 bug**（不在计划里）：`go f(p)` 的实参拷进新 G 的**栈顶**，
+> 而那块区域**不在任何帧记录里**（trampoline 还没建帧）⇒ 闭包块（`fv` 在 arg0）
+> 与按值传的指针都没有根。症状不是「读到垃圾」，而是 trampoline 调 `[fv+8]` 时
+> 撞 **nil 检查 panic**（块被回收并清零），`RGOC_GC=0` 下一切正常。
+> 定位过程（都是实打实的弯路）：先怀疑 `x29` 被踩 → 再怀疑 slot 复用 →
+> 最后用「panic 时的 `allocs` 读数 = 20005（正好是全部已完成的分配）」把范围
+> 锁到 send 之后，才想到「实参区根本不是根」。修法：`gdesc.argbytes`（用掉原来
+> 的 `pad`）+ GC 按字保守标 + trampoline 读完实参就清零。
+>
+> 另外两处顺带修好：`Hchan` 从 `K_RAW` 换成带 desc 的 `K_OBJECT`（有缓冲通道的
+> `buf` 之前没有根）；`select` 阻塞时把 `WaitSet` 挂 `gdesc.wait`。
 
-### Task 34: 翻 `mode` 开关
+- [x] **Step 1**: `mark_all_g_stacks` 遍历所有 gdesc（三种状态都扫）+ `WaitSet` 标注。
+- [x] **Step 2**: 判据 `t_groot_01/02/03/06`。
+- [x] **Step 3: Commit** `feat(rt): 多 G 扫根 + 栈回收（Task 33/34/36，D-M11-11/12）`
 
-- [ ] **Step 1**: 去掉 `rt_gc_force_off()` 的调用（保留函数，供 `RGOC_GC_FORCE_OFF=1`
-  调试用）；`T-GROOT-04` 改成 `T-GROOT-05`（`mode=stress` 且 `collections>0`）。
-- [ ] **Step 2**: 判据：并发语料 + `RGOC_GC_STRESS=8` ⇒ 输出不变 + 收过。
-- [ ] **Step 3: Commit** `feat(rt): M11c 重新启用 GC（Task 34，D-M11-12）`
+### Task 34: 翻 `mode` 开关 —— ✅ 已完成（2026-10-27，与 33/36 同一提交）
 
-### Task 35: 并发语料的三态
+> ⚠️ **`rt_gc_force_off` 从来没接线**：a/b 阶段的对照靠装置侧的 `RGOC_GC=0`，
+> 代码里没有那个函数 ⇒ 「去掉调用」这一步不存在。**`T-GROOT-04` 退役**，
+> 由 `T-GROOT-05` 取代（更强：`mode=stress` + `collections>0` + 输出与 off 态
+> **逐字节相同**）。
+>
+> ⚠️ 这也解释了一件事：a/b 阶段并发语料其实**一直在开着 GC 跑**（只是没有判据
+> 逼出多 G 根的问题）—— `T-GROOT-01` 一转正就红，正是这个原因。
 
-- [ ] **Step 1**: `run-native-chan.sh --gc=off|on|stress`：7 个 `N'` 三态各
-  7/0/0，且三态 stdout 逐字节相同。
-- [ ] **Step 2**: 判据 `t_gcorp_05_并发语料三态`。
-- [ ] **Step 3: Commit** `test(m11): 并发语料三态（Task 35）`
+- [x] **Step 1**: `T-GROOT-04` → `T-GROOT-05`（`force_off` 不实现，理由见上）。
+- [x] **Step 2**: 判据：`t_groot_05_翻开关后收过垃圾且输出不变`。
+- [x] **Step 3: Commit**（并入 Task 33）
 
-### Task 36: 长跑与压力
+### Task 35: 并发语料的三态 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: 10 万个 G（依次创建+退出，不是同时）⇒ `live` 有界、栈被回收
-  （`munmap`）。
-- [ ] **Step 2**: 判据 `t_groot_06_goroutine_栈不泄漏`（`chunks`/`live` 有界）。
-- [ ] **Step 3: Commit** `test(m11): goroutine 栈不泄漏（Task 36）`
+> **读数**：`run-native-chan.sh --gc=off|on|stress` 三态各 **7/0/0**（`M'` 12/12）。
+> `t_gcorp_05` 逐字节比 stdout + stderr + 退出码。
+>
+> ⚠️ **射程要说清楚**：7 个 `N'` 里只有 `sieve1` 在 stress 下有真实回收
+> （105 次 / 76 块），其余 6 个分配太少 ⇒ 对它们是弱判据。强判据是
+> `t_groot_05/06`（断言 `collections>0`）。
 
-### Task 37: 变异 `M-M11-13..15`
+- [x] **Step 1**: 三态各 7/0/0，stdout 逐字节相同。
+- [x] **Step 2**: 判据 `t_gcorp_05_并发语料三态`。
+- [x] **Step 3: Commit** `test(m11): 并发语料三态 + WaitSet 不泄漏 + Phase 3 变异（Task 35/37）`
 
-- [ ] **Step 1**: 只扫当前 G / `force_off` 空实现 / `Sudog` 回 arena —— 三条全红。
-- [ ] **Step 2: Commit** `test(m11): Phase 3 变异（Task 37）`
+### Task 36: 长跑与压力 —— ✅ 已完成（2026-10-27，与 33/34 同一提交）
 
-### Task 38: `C12` 增补（多 G 根）
+> **读数**：10 万个 G（依次创建+退出）⇒ `heap=17 MB`（1 chunk）/ `rss=2848 KB` /
+> `live=176 B` / `collections=300`。栈真的 `munmap` 了（不还的话 RSS 是几百 MB）。
+>
+> 三个坑：
+> ① **不能在自己栈上 `munmap` 自己** ⇒ 由**下一个**调 `rt_schedule` 的 G 收尸；
+> ② 僵尸必须**链表**（连着两个「建了就退」会互相覆盖，前一个的 64 KiB 永远漏）；
+> ③ `rt_gstack_alloc` 原来 mmap `G_STACK_BYTES + 16` 再对齐 —— `munmap` 会把
+> 长度**向上取整到页**，于是多还掉一页别人的映射。`G_STACK_BYTES` 本来就是 16
+> 的倍数、`mmap` 返回页对齐 ⇒ 那 16 字节纯属多余，删掉。
 
-- [ ] **Step 1**: `C12` §4.1 的根表加第 9 类「其它 G 的栈」；§4.2 说明
-  `g_frames` 的语义变成「当前 G 的链头」。
-- [ ] **Step 2: Commit** `docs(m11): C12 §4 增补多 G 根（Task 38）`
+- [x] **Step 1**: 10 万个 G ⇒ 栈被 `munmap`、`gdesc` 槽复用（`g_free`）。
+- [x] **Step 2**: 判据 `t_groot_07_goroutine_栈不泄漏`。
+- [x] **Step 3: Commit**（并入 Task 33）
 
-### Task 39: Phase 3 收口
+### Task 37: 变异 `M-M11-13..17` —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `GO-6` 五条全绿；`mode` 翻转完成；变异 15/15 全红。
-- [ ] **Step 2: Commit** `chore(m11): Phase 3 收口（M11c）`
+> **读数**：`--strict` ⇒ **RED 15 / GREEN 0 / PENDING 0 / MISS 0**。
+>
+> * `M-M11-13` 只扫当前 G ⇒ `t_groot_01` 红；
+> * `M-M11-14` **换成**「`go` 实参区不登记为根」⇒ `t_groot_02` 红
+>   （初稿的「`force_off` 空实现」没有可变异的东西，退役）；
+> * `M-M11-15` `WaitSet` 回 arena ⇒ `t_chan_08` 红；
+> * `M-M11-17`（新增）退出的 G 不还栈 ⇒ `t_groot_07` 红。
+
+- [x] **Step 1**: 四条全红（见上）。
+- [x] **Step 2: Commit**（并入 Task 35 的提交）
+
+### Task 38: `C12` 增补（多 G 根）—— ✅ 已完成（2026-10-27）
+
+> **读数**：§4.1 扩到**十类根**（原计划只加第 9 类；第 10 类「`go` 的实参区」是
+> 实测长出来的，必须进契约）+ §4.1.1 一节；§4.2 写清 `g_frames` 的新语义。
+>
+> 顺带修了一处**契约漂移**：`C12` §5.1 一直写着 `RGOC_GC_STRESS=<n>` 是「每 n
+> 次」，而代码存的是布尔（`parse_u64(...) != 0`）⇒ `STRESS=64` 与 `STRESS=1`
+> 等价。实测证据：`STRESS=1000` + 30 万分配跑出 `collections=300000`。
+> 改成真间隔后 `groot07` 的 GC 次数 300000 → 300，两套语料三态仍全绿。
+
+- [x] **Step 1**: `C12` §4.1 扩表 + §4.2 改语义（+ §5.1 修漂移）。
+- [x] **Step 2: Commit** `docs(m11): C12 §4 增补多 G 根 + 修正 stress 的间隔语义（Task 38）`
+
+### Task 39: Phase 3 收口 —— ✅ 已完成（2026-10-27）
+
+> **`GO-6` 六条全绿**（计划写「五条」，实际 01/02/03/05/06/07 六条；`04` 退役）。
+> **`mode` 翻转完成**：`t_groot_05` 断言 `mode=stress` + `collections>0`。
+> **变异 15/15 全红**。
+> **`t_chan_08` 第一版是假绿**（`collections=0` 而 heap 涨到 170 MB）——
+> `rt_select_begin` 的分配在 `gc_pause` 里，而 `gc_pause != 0` 时**连 stress
+> 钩子都跳过** ⇒ 只做 select 的程序一次 GC 都不跑。改成「末尾再 churn 一轮」
+> 才真的扫到。
+
+- [x] **Step 1**: `GO-6` 六条全绿；`mode` 翻转完成；变异 15/15 全红。
+- [x] **Step 2: Commit** `chore(m11): Phase 3 收口（M11c）`
 
 ---
 
