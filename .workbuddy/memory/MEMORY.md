@@ -21,7 +21,7 @@
   账在 `docs/milestones/M10-manifest.json`（`manifest_m10.rs` 对账，含
   「长跑读数必须能复现」），复盘在 `M10-report.md`
 - **M11（native 并发）已收口**（2026-10-27，只做 a/b/c）：七条门禁 `GO-1..GO-7` 全绿。
-  读数 **242 suite / 2278 passed / 0 failed / 2 ignored**；69 单个语料三态各 69/0/0；
+  读数 **243 suite / 2281 passed / 0 failed / 2 ignored**；69 单个语料三态各 69/0/0；
   7 个并发语料三态各 7/0/0（`M'` 12/12）；三层差分 7/7；变异 **16/16 全红**；
   **溢出深度实测 N=452**（64 KiB 栈）。账在 `M11-manifest.json`（`manifest_m11.rs`
   对账 + 三态复现），复盘在 `M11-report.md`。M11d/e/f 明确不做。

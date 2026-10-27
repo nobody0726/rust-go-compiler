@@ -809,7 +809,8 @@
 
 ### Task 40: 全量回归 —— ✅ 已完成（2026-10-27）
 
-> **读数**：fmt / check / clippy 全绿；test **2276 passed / 0 failed / 3 ignored**；
+> **读数**（当时的快照；最终值见 Task 46：**243 suite / 2281 passed**）：fmt / check /
+> clippy 全绿；test **2276 passed / 0 failed / 3 ignored**；
 > `run-native.sh` 三态各 69/0/0；`run-native-chan.sh` 三态各 7/0/0（`M'` 12/12）；
 > `run-chan.sh chan-input.txt`（解释器）**ok=7 skip=12 bad=0 / 19**。
 >
@@ -922,6 +923,13 @@
 >   `C12` §4 的描述从「八类根」改「十类根」；白名单从 8 条改 10 条。
 > * **当日日志** `.workbuddy/memory/2026-10-27.md`：追加 M11c + Phase 4 的
 >   四个真 bug、两次「判据没牙」、交付物清单。
+> * **终态读数**：**243 suite / 2281 passed / 0 failed / 2 ignored**（比 Task 40
+>   那次多了 `t_stk_02`、`manifest_m11` 三条；`ignored` 从 3 降到 2 —— `t_go_03`
+>   转正）。
+> * ⚠️ 收尾时发现两处**过期读数**：`M11-manifest.json` 的 `measured.workspace`
+>   与 README/AGENTS/roadmap 里的「242 suite / 2278」是在 `manifest_m11.rs`
+>   **加入之前**测的。数字自报就是会漂 —— 所以 `manifest_m11.rs` 里那条
+>   「三态必须能复现」才必须存在（它复算的是**能算的那部分**）。
 >
 > ⚠️ 记忆里**不写**「溢出深度 452」这种具体数字以外的过程细节 —— 数字会变，
 > 机制不会；数字留在 `M11-manifest.json`（由 `manifest_m11.rs` 对账）。

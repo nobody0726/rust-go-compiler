@@ -375,7 +375,7 @@ fn t_stk_02_sp_对齐() {
         let imm: u64 = rest
             .parse()
             .unwrap_or_else(|_| panic!("`sub sp` 的立即数不是纯数字（大帧走寄存器？）：{t}"));
-        if imm % 16 != 0 {
+        if !imm.is_multiple_of(16) {
             bad.push(format!("帧大小 {imm} 不是 16 的倍数：{t}"));
         }
     }

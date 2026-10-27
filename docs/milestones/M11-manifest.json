@@ -4,7 +4,7 @@
   "generated_at": "2026-10-27T00:00:00Z",
   "filled_at": "2026-10-27T00:00:00Z",
   "fill_task": "M11-plan.md Task 41（按实测数字填；由 rgoc-driver/tests/manifest_m11.rs 对账）",
-  "status": "已收口 —— 七条门禁 GO-1..GO-7 全部 pass；242 suite / 2278 passed / 0 failed / 2 ignored；69 个单线程语料三态各 69/0/0；7 个并发语料三态各 7/0/0（M' 12/12 每态）；变异 16/16 全红；溢出深度实测 N=452",
+  "status": "已收口 —— 七条门禁 GO-1..GO-7 全部 pass；243 suite / 2281 passed / 0 failed / 2 ignored；69 个单线程语料三态各 69/0/0；7 个并发语料三态各 7/0/0（M' 12/12 每态）；变异 16/16 全红；溢出深度实测 N=452",
   "scope": "把 M8/M9 只有解释器的并发语义搬到 native：每个 goroutine 一块固定 64 KiB 栈（mmap）、`rt_switch`（顶层汇编，160 字节 callee-saved 保存区）、M:1 协作式调度（就绪队列 FIFO、不抢占）、`go` 语句、`hchan` 四操作（96 字节布局冻结）+ 阻塞/唤醒 + 三条 panic、`select` 三阶段、死锁与退出码、GC 在**多 G** 下的根扫描（帧记录链跟 G 走 + 扫所有 gdesc + `go` 实参区）、goroutine 的栈与 gdesc 回收。**不含**：多线程/GMP（U-M11-01）、抢占（02）、定时器（03）、栈增长（04）、步数预算（05）、`-race`（06）、select 随机（07）、并发 GC（08）。",
   "docs": {
     "design": "docs/milestones/M11-design.md（D-M11-1..12 / GO-1..GO-7 / §2 方案比较 / §3 栈与切换 / §4 判据与装置）",
@@ -56,7 +56,7 @@
     }
   },
   "measured": {
-    "workspace": "242 suite / 2278 passed / 0 failed / 2 ignored",
+    "workspace": "243 suite / 2281 passed / 0 failed / 2 ignored",
     "corpus_native_three_states": "off 69/0/0 · on 69/0/0 · stress 69/0/0",
     "corpus_chan_three_states": "off 7/0/0 · on 7/0/0 · stress 7/0/0（每态 M' 12/12）",
     "corpus_interp_chan": "ok=7 skip=12 bad=0 / 19",

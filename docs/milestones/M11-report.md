@@ -10,7 +10,7 @@
 
 | 项 | 读数 | 复跑命令 |
 |---|---|---|
-| 四条门禁 | fmt / check / clippy 全绿；**242 suite / 2278 passed / 0 failed / 2 ignored** | `cargo test --workspace --no-fail-fast` |
+| 四条门禁 | fmt / check / clippy 全绿；**243 suite / 2281 passed / 0 failed / 2 ignored** | `cargo test --workspace --no-fail-fast` |
 | 69 个单线程语料 × 三态 | **各 69/0/0** | `bash tools/run-oracle/run-native.sh --gc=off\|on\|stress` |
 | 7 个并发语料 × 三态 | **各 7/0/0** + `M'` 12/12 每态 | `bash tools/run-oracle/run-native-chan.sh --gc=…` |
 | 解释器侧（M8 的装置，不改） | ok=7 skip=12 bad=0 / 19 | `bash tools/run-oracle/run-chan.sh tools/run-oracle/chan-input.txt` |
