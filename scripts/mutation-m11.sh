@@ -255,6 +255,51 @@ $PROBE "M-M11-09 select 阶段②逆序试探" "$RT" \
 # 抓的形态，不要用靠超时的形态」这条口径，宁可不加。
 # 撤销本身由 `t_sel_04` 正面覆盖（它查 `a` 上的第二次发送是否真的交付）。
 
+# ── M-M11-06：就绪队列改成**队头插入**（LIFO）─────────────────────────
+# `C11` §2.1：就绪队列 FIFO。队头插入 ⇒ 后创建的 G 先跑。
+# `t_go_01` 的调度自测建 A、B 两个 G（A 先入队），FIFO ⇒ `A\nB\n`；
+# LIFO ⇒ `B\nA\n`。
+$PROBE "M-M11-06 就绪队列队头插入" "$RT" \
+  '    if (g_ready_tail == 0) {
+        g_ready_head = g;
+        g_ready_tail = g;
+    } else {
+        g_ready_tail->qnext = g;
+        g_ready_tail = g;
+    }' \
+  '    g->qnext = g_ready_head;
+    g_ready_head = g;
+    if (g_ready_tail == 0) {
+        g_ready_tail = g;
+    }' \
+  -p rgoc-driver --test go_sched t_go_01
+
+# ── M-M11-11：死锁判定**无条件**触发（漏「有就绪 G」这一条）────────────
+# `rt_schedule` 只在队列空时才报死锁。改成无条件 ⇒ 第一次换 G 就退出 2。
+# `t_go_01`（调度骨架）立刻红。
+$PROBE "M-M11-11 死锁判定无条件触发" "$RT" \
+  '    GDesc *next = rt_dequeue();
+    if (next == 0) {
+        rt_fatal_deadlock();
+    }' \
+  '    GDesc *next = rt_dequeue();
+    rt_fatal_deadlock();' \
+  -p rgoc-driver --test go_sched t_go_01
+
+# ── M-M11-12：`go` 之后**立刻切走**（等价于「main 返回后还在跑别的 G」）──
+# `C11` §2.1 的「不抢占」：`rt_go` 只入队，不切走当前 G。
+# 加了 `rt_schedule()` ⇒ `go f()` 立刻跑 f。`t_exit_02` 的 fixture 是
+# 「`go func(){println("X")}()` + main 直接返回」，正常输出空；变异后打印 X。
+$PROBE "M-M11-12 go 之后立刻切走" "$RT" \
+  '    /* 入队**队尾**，不切走当前 G（`C11` §2.1 的「不抢占」）。 */
+    rt_enqueue(g);
+}' \
+  '    /* 变异 M-M11-12：入队后立刻切走 */
+    rt_enqueue(g);
+    rt_schedule();
+}' \
+  -p rgoc-driver --test go_exit t_exit_02
+
 echo "=== mutation-m11: RED $red / GREEN $green / PENDING $pending / MISS $miss（$MODE）"
 [ -n "$report" ] && echo "$report"
 

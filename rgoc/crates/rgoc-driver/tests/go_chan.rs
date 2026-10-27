@@ -329,3 +329,52 @@ fn t_chan_09_range_over_chan() {
     );
     assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
 }
+
+/// `T-CHAN-10`：**四操作串一遍**（`GO-3` 的逐格差分，Task 30）。
+///
+/// # 为什么还要一条「串起来」的
+///
+/// `t_chan_02`..`t_chan_09` 各查一格，但它们都是**单一形态**。真实程序里
+/// 四操作会交替出现，而交替最容易暴露「下标/计数被上一操作搞脏」这类错
+/// （官方 `select6.go` 的注释就在讲这个：`select` 会把失败 case 的队列搞坏）。
+///
+/// 这条把 send / recv / comma-ok / close / len / cap / range **串成一个
+/// 序列**，然后与 HIR 解释器逐字节差分（`assert_l1`）—— 解释器是 M8 就在用的
+/// 那份实现，两边同时错的概率远低于各自对。
+const ALL_FOUR: &str = r#"
+package main
+
+func main() {
+	c := make(chan int, 4)
+	println(len(c), cap(c))
+	c <- 1
+	c <- 2
+	c <- 3
+	println(len(c), cap(c))
+	v, ok := <-c
+	println(v, ok, len(c))
+	c <- 4
+	c <- 5
+	close(c)
+	println(len(c), cap(c))
+	sum := 0
+	for x := range c {
+		sum += x
+	}
+	println(sum)
+	v, ok = <-c
+	println(v, ok)
+}
+"#;
+
+#[test]
+fn t_chan_10_四操作串一遍() {
+    let t = go_probe::probe("chan10", ALL_FOUR, &[("RGOC_GC", "0")]).expect("应能编译并跑起来");
+    t.assert_l1("chan10");
+    assert_eq!(
+        t.native.stdout, "0 4\n3 4\n1 true 2\n4 4\n14\n0 false\n",
+        "四操作交替后读数必须仍然自洽：实际 {:?}",
+        t.native.stdout
+    );
+    assert_eq!(t.native.exit, 0, "stderr={:?}", t.native.stderr);
+}

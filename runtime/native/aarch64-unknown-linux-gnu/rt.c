@@ -486,14 +486,25 @@ static GDesc *g_cur;
 static u32 g_next_id;
 static u32 g_count;
 
-/* 分配一个**空的** gdesc（栈由调用方填）。
+/* goroutine 数超限（`M11-design.md` §4.4，`C9` §5 的退出码 2）。
  *
- * 上限检查在 Task 29（`runtime error: too many goroutines (limit 1024)`）；
- * M11a 只有 `main` 一个 G，走不到那里。 */
+ * ⚠️ 文本里的 `1024` 是 `G_MAX` 的字面值。**不拼宏**是刻意的（与
+ * `rt_panic_stack_overflow` 同一条理由）：判据断言的是确切字节数，而
+ * 「文本与配置一致」这件事必须能被判据发现 —— 拼宏会让两边永远一起变。 */
+static void rt_fatal_too_many_g(void) {
+    const char *m = "runtime error: too many goroutines (limit 1024)\n";
+    u64 n = 0;
+    while (m[n] != 0) {
+        n++;
+    }
+    rt_write(2, m, n);
+    rt_exit(2);
+}
+
+/* 分配一个**空的** gdesc（栈由调用方填）。 */
 static GDesc *rt_gdesc_new(void) {
     if (g_count >= G_MAX) {
-        /* Task 29 会换成 `C9` §5 的文本 + 退出 2。 */
-        rt_fatal_oom(heap_limit);
+        rt_fatal_too_many_g();
     }
     GDesc *g = &g_descs[g_count];
     g_count++;

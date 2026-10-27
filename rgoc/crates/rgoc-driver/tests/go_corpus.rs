@@ -30,6 +30,8 @@
 //! 把整个测试进程打死，只能看到一个文件名 —— 而这条判据的价值恰恰是
 //! 「**6 个**全都不 panic」。所以逐个 `catch_unwind`，把 panic 折成 `rc=101`。
 
+mod support;
+
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 
@@ -246,4 +248,68 @@ fn t_gcorp_04_go_不再是拒绝原因() {
     // **行为**（构建一次、跑三次、比字节），比退出码强。
     //
     // 这条判据的主旨（`N'` 不 panic）由 ① ② 两段保证，没丢。
+}
+
+/// `T-GCORP-01`：**7 个 `N'` 三层一致**（`M11-tests.md` 的主判据）。
+///
+/// # 三层
+///
+/// | 层 | 从哪来 |
+/// |---|---|
+/// | native | `rgoc build` 出来的 aarch64 ELF |
+/// | 解释器 | `--via=hir`（M8 那份实现，与 native **完全独立**）|
+/// | 官方 | 这 7 个文件的 `// run` 语义是「**只在失败时打印**」⇒ 期望 = 空输出 + 退出 0 |
+///
+/// # 为什么这是主判据而不是「跑通就行」
+///
+/// 「跑通」有两种可能：**语义对**，或者**两边都错得一样**。三层里 native 与
+/// 解释器是两套独立实现（一份 arm64 汇编生成、一份树遍历求值），它们同时
+/// 错成同一个输出的概率远低于各自对 —— 而官方那层（空输出 + 0）钉住了
+/// 「这两个文件本来就不该打印任何东西」。
+///
+/// ⚠️ 官方层**不跑 `go run`**：语料目录是只读的，而且 `go run` 在容器里要
+/// `-buildvcs=false`（见记忆）。这 7 个文件的判据形态是「静默成功」，
+/// 所以「空输出 + 退出 0」就是官方语义的**完整**表达 —— 不存在需要比对的
+/// 期望字符串。
+#[test]
+fn t_gcorp_01_七个_n_三层一致() {
+    let ok = chan_ok();
+    assert_eq!(ok.len(), 7, "`N'` 应为 7");
+    let mut bad: Vec<String> = Vec::new();
+    for rel in &ok {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../..")
+                .join(rel),
+        )
+        .unwrap_or_else(|e| panic!("读不到 `{rel}`：{e}"));
+        let slug = rel.rsplit('/').next().unwrap_or(rel).replace(".go", "");
+
+        // native
+        let nat = support::native_harness::build_and_run_env(&format!("g1n{slug}"), &src, &[])
+            .unwrap_or_else(|e| panic!("`{rel}` native 侧失败：\n{e}"));
+        // 解释器
+        let interp = support::native_harness::hir_output(&format!("g1h{slug}"), &src)
+            .unwrap_or_else(|e| panic!("`{rel}` 解释器侧失败：\n{e}"));
+
+        // ① native vs 解释器（stdout 逐字节）
+        if nat.stdout != interp {
+            bad.push(format!(
+                "{rel}: native stdout {:?} ≠ 解释器 {:?}",
+                nat.stdout, interp
+            ));
+        }
+        // ② native vs 官方（空输出 + 退出 0）
+        if !nat.stdout.is_empty() || nat.exit != 0 {
+            bad.push(format!(
+                "{rel}: 官方语义是静默成功，实际 exit={} stdout={:?}",
+                nat.exit, nat.stdout
+            ));
+        }
+        // ③ 解释器 vs 官方
+        if !interp.is_empty() {
+            bad.push(format!("{rel}: 解释器不该有输出，实际 {interp:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "三层不一致：\n{}", bad.join("\n"));
 }

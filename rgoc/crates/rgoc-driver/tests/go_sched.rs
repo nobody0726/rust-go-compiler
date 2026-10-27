@@ -150,3 +150,45 @@ fn t_go_05_同一程序两次输出一致() {
     );
     assert_eq!(a.exit, b.exit, "退出码也要一致");
 }
+
+/// `T-GO-06`：**`go f(x)` 的实参在 `go` 时刻拷贝**（`C11` §3.6 / Go 规范）。
+///
+/// # 为什么这条必须改完 `x` 再读
+///
+/// `go f(x)` 之后 `x = 2`。Go 规定实参在 `go` 语句执行时求值并**拷贝**，
+/// 所以 goroutine 里看到的是 `1`。
+///
+/// 实现上：`go` 走 `stmt_defer_like`，把调用打包成闭包，捕获的是 `x` 的
+/// **值**（`MakeClosure` 的 `captures` 是 ValueId，不是槽地址）—— 所以天然
+/// 是拷贝。这条判据钉住它：如果有人把捕获改成「取槽地址」（比如为了省一次
+/// 拷贝），`x = 2` 会被 goroutine 看见，输出变 2。
+///
+/// ⚠️ 这条**不是**数据竞争用例：M:1 不抢占 ⇒ goroutine 在 `main` 跑完
+/// `x = 2` 之后才被调度，两次运行结果一致。
+const ARG_COPY: &str = r#"
+package main
+
+var done = make(chan int)
+
+func f(v int) {
+	done <- v
+}
+
+func main() {
+	x := 1
+	go f(x)
+	x = 2
+	println(<-done)
+}
+"#;
+
+#[test]
+fn t_go_06_实参在_go_时刻拷贝() {
+    let t = go_probe::probe("go06", ARG_COPY, &[("RGOC_GC", "0")]).expect("应能编译并跑起来");
+    t.assert_l1("go06");
+    assert_eq!(
+        t.native.stdout, "1\n",
+        "`go f(x)` 的实参必须在 `go` 时刻拷贝（之后改 `x` 不影响）：实际 {:?}",
+        t.native.stdout
+    );
+}

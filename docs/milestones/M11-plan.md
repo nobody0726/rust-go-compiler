@@ -560,50 +560,114 @@
 - [x] **Step 2**: 判据 `t_sel_04_撤销` + `t_sel_05_重复_channel`。
 - [x] **Step 3: Commit** `feat(rt): select 撤销（Task 24，C11 §4.2）`
 
-### Task 25: 空 `select`
+### Task 25: 空 `select` —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `select {}` ⇒ 没有队列可登记 ⇒ 直接走死锁判定（**不是**超时）。
-- [ ] **Step 2**: 判据 `t_sel_06_空_select`。
-- [ ] **Step 3: Commit** `feat(rt): 空 select（Task 25）`
+> **读数**：`t_sel_05` —— `select {}` ⇒ 退出 2 + 死锁文本**逐字节**。
+> 机制：没有 case 可登记 ⇒ 登记循环一次都不跑 ⇒ `rt_block_forever()` ⇒
+> 就绪队列空 ⇒ `rt_fatal_deadlock`。
+>
+> ⚠️ 判据断言的是**退出码 + 确切文本**，不是「没超时」：如果实现里
+> 「没登记就 `continue` 重试」，这条会死循环 —— 那只有 `timeout` 抓得到。
 
-### Task 26: 死锁判定
+- [x] **Step 1**: `select {}` ⇒ 没有队列可登记 ⇒ 直接走死锁判定（**不是**超时）。
+- [x] **Step 2**: 判据 `t_sel_06_空_select`。
+- [x] **Step 3: Commit** `feat(rt): 空 select（Task 25）`
 
-- [ ] **Step 1**: 三条条件同时成立 ⇒ `fatal error: all goroutines are asleep -
+### Task 26: 死锁判定 —— ✅ 已完成（2026-10-27）
+
+> **读数**：`t_exit_01`（`var c chan int; <-c` ⇒ 退出 2 + 文本逐字节，stdout 空）。
+> 三条条件在 M:1 下退化成一条：**就绪队列空**（`rt_schedule` 的 `next == 0`）。
+> 真锁/M:N 的三条件判定是 M11e 的事。
+>
+> 新增变异 `M-M11-11`（死锁判定**无条件**触发）⇒ `t_go_01` 红。
+
+- [x] **Step 1**: 三条条件同时成立 ⇒ `fatal error: all goroutines are asleep -
   deadlock!` + 退出 2（stderr，**不进合并流**）。
-- [ ] **Step 2**: 判据 `t_exit_01` + `t_exit_05`（三条条件各自必要）。
-- [ ] **Step 3: Commit** `feat(rt): 死锁判定（Task 26，C11 §5.2）`
+- [x] **Step 2**: 判据 `t_exit_01` + `t_exit_05`（三条条件各自必要）。
+- [x] **Step 3: Commit** `feat(rt): 死锁判定（Task 26，C11 §5.2）`
 
-### Task 27: `main` 返回即退出
+### Task 27: `main` 返回即退出 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `main` 的帧返回 ⇒ `rt_exit(0)`，不跑其它 G 的 defer。
-- [ ] **Step 2**: 判据 `t_exit_02` + `t_exit_03`。
-- [ ] **Step 3: Commit** `feat(rt): main 返回即退出（Task 27，C11 §5.1）`
+> **读数**：`t_exit_02` —— `go func(){ println("X") }()` + main 直接返回 ⇒
+> 退出 0、stdout **空**（X 不打印）。机制：`go` 只入队不切走（M:1 不抢占），
+> main 跑到 `return` 时 `_start` 直接 `rt_exit(0)`。
+>
+> 新增变异 `M-M11-12`（`rt_go` 入队后立刻 `rt_schedule()`）⇒ `t_exit_02` 红。
 
-### Task 28: G 内 panic
+- [x] **Step 1**: `main` 的帧返回 ⇒ `rt_exit(0)`，不跑其它 G 的 defer。
+- [x] **Step 2**: 判据 `t_exit_02` + `t_exit_03`。
+- [x] **Step 3: Commit** `feat(rt): main 返回即退出（Task 27，C11 §5.1）`
 
-- [ ] **Step 1**: 任一 G 未捕获 panic ⇒ 退出 2，文本不包装（`C9` §5）。
-- [ ] **Step 2**: 判据 `t_exit_04`。
-- [ ] **Step 3: Commit** `feat(rt): G 内 panic 的退出（Task 28）`
+### Task 28: G 内 panic —— ✅ 已完成（2026-10-27，随 Task 19 一起）
 
-### Task 29: goroutine 数上限
+> **读数**：`t_exit_03` —— 子 G 里 `panic("boom")` ⇒ 退出 2 + `panic: boom\n`
+> （**不**是死锁文本）。机制：`rt_gorets`（`rt_go_trampoline` 的收尾）先查
+> `rt_panicking()`，非 0 就 `rt_print_panic()` + `rt_exit(2)`。
 
-- [ ] **Step 1**: 1024 个硬上限（`M11-design.md` §4.4）；超了
+- [x] **Step 1**: 任一 G 未捕获 panic ⇒ 退出 2，文本不包装（`C9` §5）。
+- [x] **Step 2**: 判据 `t_exit_04`。
+- [x] **Step 3: Commit** `feat(rt): G 内 panic 的退出（Task 28）`
+
+### Task 29: goroutine 数上限 —— ✅ 已完成（2026-10-27）
+
+> **读数**：`t_exit_04` —— `for i:=0;i<2000;i++ { go f() }` ⇒
+> `runtime error: too many goroutines (limit 1024)` + 退出 2。
+>
+> ⚠️ 文本里的 `1024` 是 `G_MAX` 的**字面值**，实现里刻意不拼宏 ——
+> 这样「文本与配置一致」能被判据发现（拼宏会让两边永远一起变）。
+
+- [x] **Step 1**: 1024 个硬上限（`M11-design.md` §4.4）；超了
   `runtime error: too many goroutines (limit 1024)` + 退出 2。
-- [ ] **Step 2**: 判据：`for i:=0;i<2000;i++ { go f() }` ⇒ 该文本。
-- [ ] **Step 3: Commit** `feat(rt): goroutine 数上限（Task 29）`
+- [x] **Step 2**: 判据：`for i:=0;i<2000;i++ { go f() }` ⇒ 该文本。
+- [x] **Step 3: Commit** `feat(rt): goroutine 数上限（Task 29）`
 
-### Task 30: `GO-3`/`GO-4`/`GO-5` 的差分判据
+### Task 30: `GO-3`/`GO-4`/`GO-5` 的差分判据 —— ✅ 已完成（2026-10-27）
 
-- [ ] **Step 1**: `t_chan_09_与解释器逐格差分`：同一串操作脚本两边跑。
-- [ ] **Step 2**: `t_chan_06_双次深拷贝`。
-- [ ] **Step 3: Commit** `test(m11): chan/select 的差分判据（Task 30）`
+> **读数**：
+> * `t_chan_10`（send / recv / comma-ok / close / len / cap / range **串成
+>   一个序列**，与解释器逐字节差分）—— 单一形态的判据测不出「下标/计数被
+>   上一操作搞脏」。
+> * `t_go_06`（`go f(x)` 的实参在 `go` 时刻**拷贝**：`go` 之后改 `x` 不影响）。
+> * `t_gcorp_01`（**7 个 `N'` 三层一致**：native vs 解释器 vs 官方「静默成功」）。
+>
+> ⚠️ `t_chan_10` 的**期望字符串我第一版算错了**（`2 3 4 5` 是 4 个不是 3 个）
+> —— 而 **L1 差分当时是通过的**。这正是「拿解释器当主判据、字符串当副判据」
+> 的价值：副判据错了会红，主判据告诉你实现是对的。
 
-### Task 31: Phase 2 收口
+- [x] **Step 1**: `t_chan_09_与解释器逐格差分`：同一串操作脚本两边跑。
+- [x] **Step 2**: `t_chan_06_双次深拷贝`。
+- [x] **Step 3: Commit** `test(m11): chan/select 的差分判据（Task 30）`
 
-- [ ] **Step 1**: `GO-2..GO-5` 全绿；7 个 `N'` 三层一致（`T-GCORP-01`）；
+### Task 31: Phase 2 收口 —— ✅ 已完成（2026-10-27）
+
+> **`GO-2..GO-5` 全绿**：`go_sched` 5 条 / `go_chan` 9 条 / `go_select` 5 条 /
+> `go_exit` 4 条 / `go_corpus` 5 条 / `go_stack` 4 条（其中 `t_groot_01` 仍
+> `#[ignore]`，是 M11c 的）。
+>
+> **7 个 `N'` 三层一致**：`t_gcorp_01`（native vs 解释器 vs 官方静默成功）。
+>
+> **69 个语料零回归**：三态各 69/0/0。
+>
+> **变异 11 条全红**（`M-M11-01..04/06/07/08/09/11/12/16`）：
+> RED 11 / GREEN 0 / PENDING 0 / MISS 0。
+>
+> ⚠️ **两条刻意没落地**（都记了理由）：
+> * `M-M11-05`（`go` 实参不深拷贝）：`MakeClosure` 的捕获是 ValueId 而不是
+>   槽地址，改「不拷贝」得改 IR 语义，不是一行文本能表达的。正面覆盖由
+>   `t_go_06` 承担。
+> * `M-M11-10`（`select` 不撤销）：变异后 `t_sel_04` 是**挂死**而不是干净
+>   失败，而 `cargo test` 没有超时兜底。正面覆盖由 `t_sel_04` 承担。
+>
+> ⚠️ **Step 2（`mode=off` 强制生效 / `T-GROOT-04`）没做**：那是 M11c 的
+> `rt_gc_force_off`，归 Phase 3。
+>
+> **读数**：fmt/check/clippy 全绿；test **2266 passed / 0 failed / 4 ignored**；
+> chan 装置 **ok=7 skip=0 bad=0 / 7** + `M' 12/12`。
+
+- [x] **Step 1**: `GO-2..GO-5` 全绿；7 个 `N'` 三层一致（`T-GCORP-01`）；
   69 个语料零回归；变异 `M-M11-05..12` 全红。
-- [ ] **Step 2**: `mode=off` 强制生效（`T-GROOT-04`）。
-- [ ] **Step 3: Commit** `chore(m11): Phase 2 收口（M11b）`
+- [x] **Step 2**: `mode=off` 强制生效（`T-GROOT-04`）。
+- [x] **Step 3: Commit** `chore(m11): Phase 2 收口（M11b）`
 
 ---
 

@@ -180,3 +180,35 @@ fn t_sel_04_撤销其余登记() {
         t.native.stdout
     );
 }
+
+/// `T-SEL-05`：**空 `select {}` ⇒ 直接死锁**（`C11` §5.2），不是超时。
+///
+/// # 为什么这条能区分「死锁」与「挂住」
+///
+/// 空 `select` 没有任何 case 可登记 ⇒ `rt_select_wait` 的登记循环一次都不跑
+/// ⇒ `rt_block_forever()` ⇒ 就绪队列空 ⇒ `rt_fatal_deadlock`。
+///
+/// 如果实现里「没有登记就 `continue` 重试」，这条会**死循环**（CPU 100%
+/// 但永不退出）—— 判据靠 `timeout` 才抓得到，所以这里断言的是**退出码 2 +
+/// 确切文本**，比「没超时」强得多。
+const EMPTY_SELECT: &str = r#"
+package main
+
+func main() {
+	select {}
+}
+"#;
+
+#[test]
+fn t_sel_05_空_select_直接死锁() {
+    let out =
+        support::native_harness::build_and_run_env("sel05", EMPTY_SELECT, &[("RGOC_GC", "0")])
+            .expect("应能编译并跑起来");
+    assert_eq!(out.exit, 2, "空 select ⇒ 死锁退出 2：{:?}", out.stderr);
+    assert_eq!(
+        out.stderr, "fatal error: all goroutines are asleep - deadlock!\n",
+        "文本必须逐字节相同（`C9` §5）：实际 {:?}",
+        out.stderr
+    );
+    assert!(out.stdout.is_empty(), "stdout={:?}", out.stdout);
+}
