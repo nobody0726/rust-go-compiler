@@ -288,14 +288,14 @@
    "what": "ken_simpswitch 在 stress 下 rc=139",
    "closed_at": "M10/Task 26",
    "resolution": "根因是起始位图不变式（R-10-20）：空闲区的起始位没置 ⇒ 字符串累加循环里「指向空闲区的指针」被当成块首、拿旧 desc 扫垃圾 ⇒ 段错误。t_heap_08 是它的最小化"
-  }
- ],
- "deferred_gaps": [
+  },
   {
    "id": "G-M10-06",
    "what": "真 live-in 位图会让 defernil / print / nilptr2 / method5 坏掉，机制未查清",
-   "why_deferred": "保留 live-out 超集是**安全**的（多标 = 泄漏一轮），而查清它要重做「safepoint 的 def 是否必须在集合里」的整条推理，收益是省一点内存。M10 的门禁不依赖它",
-   "next": "M11（并发 GC）之前必须查清：并发标记对「多标」的容忍度更低（会拖慢终止判定）"
+   "closed_at": "M11/Task 0",
+   "resolution": "根因**不在位图**：rt_defer_push 用 rt_arena_alloc 分配 DeferRec，而 rt_arena_alloc 走 gc_alloc，后者的 stress 钩子在分配**之前**跑 GC —— 此刻新记录还没挂上 g_defer_top（mark_defer 看不到闭包），而 Defer 不是 safepoint ⇒ sp_idx 停在 MakeClosure 位点 ⇒ 闭包块的唯一根是那张位图。超集恰好含 MakeClosure 的 dst，所以 M10 没露（是巧合，不是保证）。真 live-in 下闭包被回收 ⇒ 堆地址被下一个闭包复用 ⇒ rt_deferrun 调到别人的闭包 ⇒ panic 且 recover 救不回来。修法：rt_defer_push 加 gc_pause（C12 §6.1 / R-10-24）；修完真 live-in 也能跑绿，但位图仍保留超集（策略选择，不是补丁）。证据：scripts/g-m10-06-probe.md（四语料 × 四组合 + trace）",
+   "assumptions_refuted": "① 不是「被调方内部二次 GC」（GC 在登记动作自己的分配里，位置在调用方）；② 不是 sp_idx 配对偏差（.stackmap 差集只有闭包 dst 一处）；③ 不是栈槽复用（dst 槽在 MakeClosure 前是零页）"
   }
- ]
+ ],
+ "deferred_gaps": []
 }

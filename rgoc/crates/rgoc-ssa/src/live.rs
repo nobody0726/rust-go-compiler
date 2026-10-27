@@ -332,11 +332,21 @@ pub fn analyze(f: &SsaFunc, cfg: &Cfg, tt: &TypeTable) -> Liveness {
             // `after[ii]` 是 live-**out**，而 GC 是在指令**执行之前**跑的，所以
             // 本指令的 def 槽此刻还是旧值 —— 标它等于多标一个可能已死的块。
             //
-            // 试过把 def 去掉（真 live-in 语义），**实测会让
-            // `defernil` / `print` / `nilptr2` / `method5` 全部坏掉**
-            // （`MakeClosure` 的 dst 尤其明显：去掉它 `defer` 就崩）。机制没查清，
-            // 所以这里**保留超集**：多标 = 泄漏一轮，漏标 = 活对象被回收。
-            // 两者代价不对等，保守优先（`C12` §4.3）。
+            // # 为什么保留超集（`G-M10-06` 已查清，2026-10-27）
+            //
+            // 去掉 def（真 live-in）曾让 `defernil` / `print` / `nilptr2` /
+            // `method5` 全部坏掉。**根因不在位图**，在 `rt_defer_push`：它用
+            // `rt_arena_alloc` 分配 `DeferRec`，而那条路径走 `gc_alloc`，后者的
+            // stress 钩子在**分配之前**跑 GC —— 此刻新记录还没挂上 `g_defer_top`，
+            // `mark_defer` 看不到这个闭包；而 `Defer` 不是 safepoint，`sp_idx`
+            // 还停在本位点。于是 `MakeClosure` 的 dst 就是闭包块的**唯一**根。
+            // 超集恰好含它，所以 M10 一直没露 —— 那是巧合，不是保证。
+            //
+            // 修法：`rt_defer_push` 加 `gc_pause`（`R-10-24`，与 `R-10-23`
+            // 同源）。修完之后真 live-in 也能跑绿（`scripts/g-m10-06-probe.md`
+            // 有四个语料 × 四种组合的读数）。**但位图仍保留超集** —— 这是策略
+            // 选择，不是给那个缺口打的补丁：多标 = 泄漏一轮，漏标 = 活对象被
+            // 回收，两者代价不对等，保守优先（`C12` §4.4）。
             //
             // 代价是「扫到已死指针」会变成常态，所以探针分成两个：
             // `bad_ptr`（解析不到块首 / 块头非法 —— 真错）与

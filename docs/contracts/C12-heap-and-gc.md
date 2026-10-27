@@ -317,11 +317,34 @@ for i in 0..sp_words:
 还活着的值），而 GC 在指令**执行之前**跑 ⇒ 「本指令自己的 def」也在集合里，
 那一刻它的槽里还是**上一条命的值**。
 
-试过改成真 live-in（把 def 从集合里去掉），**实测让
-`defernil` / `print` / `nilptr2` / `method5` 全部坏掉**（`MakeClosure` 的 dst
-尤其明显：去掉它 `defer` 就崩）。机制没查清 ⇒ 保留超集。
-
 **代价不对等**：多标 = 泄漏一轮；漏标 = 活对象被回收。所以保守优先。
+
+#### 4.4.1 「真 live-in 会坏」已查清（`G-M10-06`，2026-10-27）
+
+曾经试过把 def 从集合里去掉，实测让 `defernil` / `print` / `nilptr2` /
+`method5` 全部坏掉，当时记为「机制没查清」并保留超集。**现在查清了，而且
+根因不在位图。**
+
+```text
+MakeClosure  ──► 闭包块分配，写入 dst 槽
+Defer        ──► bl rt_defer_push(fp, fv)
+                    └─ rt_arena_alloc  ──► gc_alloc(K_ARENA)
+                                              └─ stress 钩子在**分配之前**跑 GC
+                                                 ① 新 DeferRec 还没挂上 g_defer_top
+                                                 ② Defer 不是 safepoint
+                                                    ⇒ sp_idx 停在 MakeClosure 位点
+                                                 ⇒ 闭包块的唯一根 = 那张位图
+```
+
+超集恰好含 `MakeClosure` 的 dst，所以 M10 一直没露 —— 那是**巧合**，不是保证。
+去掉 def ⇒ 闭包被回收 ⇒ 堆地址被下一个闭包复用 ⇒ `rt_deferrun` 调到**别人的**
+闭包 ⇒ panic，且 `recover()` 救不回来（`defernil` 就是这么坏的）。
+
+**修法**：`rt_defer_push` 加 `gc_pause`（`R-10-24`，见 §6.1）。修完之后真
+live-in 也能跑绿 —— 四个语料 × 四种组合的读数在 `scripts/g-m10-06-probe.md`。
+
+⚠️ **修完仍然保留超集**：这是策略选择，不是给那个缺口打的补丁。理由还是
+「代价不对等」，不是「位图必须这样」。
 
 **副作用**：扫到「指向已回收块的指针」成为常态。所以 `bad_ptr` **只计真错**
 （上面第 2、3 道防线），「指向空闲块」不计 —— 否则探针恒非 0，没人再信它。
@@ -452,7 +475,7 @@ threshold` ⇒ 收一次再重试」）。那条**永远不会触发**：chunk �
 |---|---|---|---|
 | 1 | `write_all` 的输出缓冲 | `char[nb]` | 纯字节；且 `write_all` 在 GC 期间**也会被调用**（统计行、panic 文本），它不能触发分配 |
 | 2 | `rt_itab` | `{iface, concrete, fn[]}` | 三个字段全是 **rodata / 代码地址**；不含堆指针 |
-| 3 | `rt_defer_push` 的 `DeferRec` | `{next, fp, fv}` | 运行时簿记。`next` 是 arena 地址、`fp` 是栈地址（`mark_ptr` 都忽略）；`fv` **是根**，但由 §4.1 的第 3 类**单独扫**，不靠扫这条链 |
+| 3 | `rt_defer_push` 的 `DeferRec` | `{next, fp, fv}` | 运行时簿记。`next` 是 arena 地址、`fp` 是栈地址（`mark_ptr` 都忽略）；`fv` **是根**，但由 §4.1 的第 3 类**单独扫**，不靠扫这条链。⚠️ **分配期间必须 `gc_pause`**（`R-10-24`，见 §6.1）|
 | 4 | `panic_set` 的文本 | `char[n+1]` | 纯字节 |
 | 5 | `rt_recover` 的 box | `{ptr, len}` 的 string | 含一个堆指针，但它指向的文本**也在 arena**（永不回收）⇒ 不需要标记 |
 | 6 | chunk 元数据 / worklist | 位图、页摘要、标记栈 | GC 自己用；参与回收就没有底了 |
@@ -483,12 +506,35 @@ threshold` ⇒ 收一次再重试」）。那条**永远不会触发**：chunk �
 ⚠️ 表按**源码片段**认，不按行号：行号会随任何无关改动漂移，那样守卫每周都要
 修一次，最后没人维护；而片段本身被改动时，那正是应该重审保留面的时刻。
 
+### 6.1 `rt_defer_push` 必须 `gc_pause`（`R-10-24`）
+
+```c
+gc_pause++;
+DeferRec *r = rt_arena_alloc(sizeof(DeferRec), 8);
+r->next = g_defer_top; r->fp = fp; r->fv = fv; g_defer_top = r;
+gc_pause--;
+```
+
+**为什么**：`rt_arena_alloc` 走 `gc_alloc`，而 `gc_alloc` 的 stress 钩子在
+**分配之前**跑 GC。那一刻新记录还没挂上 `g_defer_top` ⇒ `mark_defer` 看不到
+这个闭包；而 `Defer` 不是 safepoint ⇒ `sp_idx` 还停在 `MakeClosure` 的位点。
+于是闭包块的唯一根就是那张位图。
+
+与 `rt_alloc_escaped`（`R-10-23`）**同一个理由**：一次分配 + 立即发布，中间没有
+别的分配点 ⇒ 这段时间里不产生垃圾 ⇒ 不收也安全。`gc_pin` 是「中间还要再分配
+一次」时才需要，这里不需要。
+
+**证据**：`scripts/g-m10-06-probe.md`（`G-M10-06` 的调查记录）。去掉这个
+`gc_pause` 且位图取真 live-in ⇒ `defernil`/`print`/`nilptr2`/`method5` 全坏，
+且坏法是「闭包块被回收 ⇒ 地址被下一个闭包复用 ⇒ defer 调到别人的闭包」。
+
 ---
 
 ## 7. 变更记录
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-27 | **`G-M10-06` 查清**：§4.4 加 §4.4.1（真 live-in 会坏的根因是 `rt_defer_push` 的「分配未发布」窗口，不是位图）；新增 **§6.1 `R-10-24`**（`rt_defer_push` 必须 `gc_pause`）；§6 表第 3 行补约束 | `scripts/g-m10-06-probe.md`：四个语料 × 四种组合的读数 + trace（`push-fv` 地址复用 / `gc-begin:3` 无 `mark-fv`）；修法后真 live-in 也全绿 |
 | 2026-10-27 | **Phase 2 定稿**：§4.1 八类根（加 pin 槽）；§4.2 记录区改成「`[-32,-8)`、值槽从 `-40` 起、`frame_size = 32 + sub`」；§4.3 修正 `sp_off` 是**字**下标（原来写成位偏移）并补 `mark_ptr` 三道防线；新增 §4.4（保守超集）/ §4.5（逃逸槽）；§5.4 `bad_ptr` 口径收窄；§6 表补到 6 条 + 按源码片段认 | 实测：① `sp_off` 按位偏移读会扫到帧外的字；② 真 live-in 位图让 `defernil`/`print`/`nilptr2`/`method5` 全坏；③ 逃逸槽在 arena ⇒ 闭包捕获 `&槽` 时槽里的指针没有根；④ 起始位图漏维护 ⇒ 假块首 ⇒ 段错误（`ken/simpswitch.go`）|
 | 2026-10-27 | **§2.1 块头编码加 `blk >> 4`**（`R-10-9`）；§1.3 分配顺序改成 **free list 优先**（`R-10-12`）；§2.2 加 `arena` kind（`R-10-6`）；§5.1 `RGOC_GC_STRESS` 改成**间隔**（`R-10-10`）；§6 补「arena 也带块头」| Phase 1 实测：① 块大小不能靠 desc 算（非法 desc 时 sweep 会走到块中间）；② bump 优先让 free list 形同虚设（判据假绿三次）；③ 不给 arena 块头会让 sweep 把 itab 当空闲；④ `stress=1` 在 1e5 次分配的语料上是 O(n²) 跑不完 |
 | 2026-10-26 | **草案创建**（M10/Task 1）：§1 堆形状 / §2 块头与 kind / §3 起始位图 / §4 根集合与帧记录 / §5 触发与统计 / §6 arena 保留面 | `M10-design.md` `D-M10-1..15` / `F1..F14`；用户拍板三件事（16 字节块头 / 逐位点 `sp_idx` / map 进托管堆）|

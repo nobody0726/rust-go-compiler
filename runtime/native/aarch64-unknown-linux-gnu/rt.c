@@ -2287,11 +2287,29 @@ static void mark_defer(void) {
 }
 
 void rt_defer_push(void *fp, void *fv) {
+    /* ⚠️ `gc_pause` 不是可选的（`G-M10-06` / `R-10-24`）。
+     *
+     * `rt_arena_alloc` 走 `gc_alloc`，而 `gc_alloc` 的 stress 钩子在**分配前**
+     * 跑一次 GC。此刻新记录**还没挂上** `g_defer_top`，所以：
+     *
+     *   * `mark_defer` 看不到这个闭包；
+     *   * `Defer` 不是 safepoint ⇒ `sp_idx` 还停在 `MakeClosure` 那个位点。
+     *
+     * 于是闭包块的**唯一**根就是 `MakeClosure` 的位图。M10 的位图是 live-out
+     * 超集，恰好含 dst，所以一直没露 —— 但那是**巧合**，不是保证：
+     * 改成真 live-in 后 `defernil` / `print` / `nilptr2` / `method5` 全部坏掉，
+     * 病灶就在这里（闭包被回收 ⇒ 地址被下一个闭包复用 ⇒ `rt_deferrun`
+     * 调到**别人的**闭包 ⇒ panic 且 `recover()` 救不回来）。
+     *
+     * `gc_pause` 的语义正好是「一次分配 + 立即发布」，与 `rt_alloc_escaped`
+     * 同一个理由（`R-10-23`）。分配与发布之间没有别的分配点 ⇒ 不收也安全。 */
+    gc_pause++;
     DeferRec *r = rt_arena_alloc(sizeof(DeferRec), 8);
     r->next = g_defer_top;
     r->fp = fp;
     r->fv = fv;
     g_defer_top = r;
+    gc_pause--;
 }
 
 /* 把文本拷进堆再记状态。`p` 可能是帧上的临时缓冲，展开期间就没了。 */

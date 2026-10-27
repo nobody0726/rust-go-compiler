@@ -132,3 +132,56 @@ fn t_gc_11_arena_调用点必须登记() {
         }
     }
 }
+
+/// `R-10-24`：`rt_defer_push` 的分配必须在 `gc_pause` 里。
+///
+/// # 这条守卫防的是什么（`G-M10-06`）
+///
+/// `rt_arena_alloc` 走 `gc_alloc`，而 `gc_alloc` 的 stress 钩子在**分配之前**
+/// 跑 GC。那一刻新 `DeferRec` 还没挂上 `g_defer_top` ⇒ `mark_defer` 看不到这个
+/// 闭包；而 `Defer` 不是 safepoint ⇒ `sp_idx` 还停在 `MakeClosure` 的位点。
+/// 于是闭包块的唯一根就是那张位图 —— M10 的 live-out 超集恰好含它，所以一直
+/// 没露；换成真 live-in 就让 `defernil`/`print`/`nilptr2`/`method5` 全坏。
+///
+/// # 为什么断言顺序而不是只断言「出现」
+///
+/// 只查「函数体里有 `gc_pause++`」的话，把它写在 `g_defer_top = r;` **之后**
+/// 也照样绿 —— 而那时窗口已经过了，守卫等于没写。
+#[test]
+fn t_gc_12_defer_push_的分配必须_gc_pause() {
+    let path = repo_root().join("runtime/native/aarch64-unknown-linux-gnu/rt.c");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("读 {} 失败：{e}", path.display()));
+
+    let start = text
+        .find("void rt_defer_push(void *fp, void *fv) {")
+        .unwrap_or_else(|| panic!("rt.c 里找不到 `rt_defer_push` 的定义"));
+    let body_end = text[start..]
+        .find("\n}\n")
+        .map(|i| start + i)
+        .unwrap_or_else(|| panic!("找不到 `rt_defer_push` 的结束大括号"));
+    let body = &text[start..body_end];
+
+    let pos = |needle: &str| -> usize {
+        body.find(needle)
+            .unwrap_or_else(|| panic!("`rt_defer_push` 里找不到 `{needle}`（`R-10-24`）"))
+    };
+
+    let pause_on = pos("gc_pause++;");
+    let alloc = pos("rt_arena_alloc(sizeof(DeferRec), 8)");
+    let publish = pos("g_defer_top = r;");
+    let pause_off = pos("gc_pause--;");
+
+    assert!(
+        pause_on < alloc,
+        "`gc_pause++` 必须在分配**之前**（否则 GC 会在分配时跑）"
+    );
+    assert!(
+        alloc < publish,
+        "分配必须发生在发布之前（这是 `DeferRec` 的构造顺序）"
+    );
+    assert!(
+        publish < pause_off,
+        "`gc_pause--` 必须在 `g_defer_top = r;` **之后** —— 提前放开等于窗口还在"
+    );
+}
