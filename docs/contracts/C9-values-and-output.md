@@ -172,6 +172,8 @@ println('A') / println(byte(65)) -> 65\n / 65\n
 | **死锁**（所有 goroutine 睡着且 `main` 未结束） | `2` + stderr `fatal error: all goroutines are asleep - deadlock!` | `T-CON-35`（逐字节）/ `T-CON-22/22b`（nil 通道的 recv 与 send） |
 | **任何 goroutine 内未捕获 panic**（不限 `main`） | `2` + `panic: <值>` 一行，**不包装** | `T-CON-37/38/39` |
 | 资源超限（帧 / 求值栈 / 步数 / goroutine 数） | `2` | `T-EX-52`；`T-CON-07`（goroutine 内 `for {}` ⇒ 预算烧完退出 2） |
+| **goroutine 栈溢出**（M11 新增）| `2` + stderr `runtime error: goroutine stack exceeded <N> bytes`（`<N>` 是**十进制字节数**，如 `65536`）| `T-STK-03` |
+| **goroutine 数超限**（M11 新增）| `2` + stderr `runtime error: too many goroutines (limit 1024)` | `M11-design.md` §4.4 |
 | 参数错 / io 错 / 内部错（`run_run` 返回 `Err`） | `2` | `main_entry` |
 
 **1 与 2 的分界**：`1` = **没跑**（静态面就判死），`2` = **跑了但没跑完**。
@@ -276,6 +278,7 @@ runtime error: out of memory (heap limit <N> bytes)
 
 | 修订 | 日期 | 内容 | 触发 |
 |---|---|---|---|
+| `C9-5` | 2026-10-27 | §5 补两条 M11 文本：goroutine 栈溢出（`runtime error: goroutine stack exceeded <N> bytes`）与 goroutine 数超限（`runtime error: too many goroutines (limit 1024)`），都是退出码 2 | `M11-plan.md` Task 3；`M11-design.md` §4.4 / §6。**先写进契约再实现** —— `R-51-1` 的教训是「文本只在代码里」等于没有契约 |
 | `C9-1` | 2026-10-26 | 新增 §6.1：native 独有的 `runtime error: out of memory (heap limit N bytes)`（`R-9-39`）| `M9-plan.md` Task 67；`rt.c` 的 `rt_fatal_oom` 早就按「与 `C9` §6 一致」注释着，但那一节里**没有**这一条 —— 注释指向一个不存在的契约项（`R-51-1` 的同一类错）|
 | 2026-10-23 | 首次产出（收口期补写，从实现逐条核对） | Task 9 原漏产出 |
 | `C9-2` | 2026-10-23 | §4.3 明确「地址一律占位」；§4.4 补 `float32` 与指数两位的判据 | `print.rs` 实现与 `T-EX-24` 对齐 |
