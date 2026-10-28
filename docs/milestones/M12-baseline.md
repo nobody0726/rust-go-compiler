@@ -644,3 +644,76 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 `t_gen_05` 把它们当成「能 lower 成功的文件」计入了 84。这不是本 Task 引入的问题，
 但**必须记账**：Task 22 修好之后这两个文件会从 84 里掉出去，`MIN_CHECKED` 要跟着
 改成 82。
+
+## 14. Task 20：`T-GEN-02` compile 族 39/40（2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t20/baseline.tsv`。
+
+### 14.1 五条修复（每条有语料对账）
+
+| # | 语料 | 症状 | 根因 | 修法 |
+|---|---|---|---|---|
+| 1 | `issue53762` / `issue49516` | `Value[int](1)` / `(*Q[int]).Push` 报 `HIR-UNSUPPORTED-GENERIC` | check 面只认「**函数**实例化」（`generic_funcs` 有账），**类型**实例化 `T[P]` 落进索引分派 ⇒ invalid | `explicit_instantiation` 旁新增 `type_instantiation`：`x` 是 `TypeExpr` 且指向带类型参数的 named 原型 ⇒ `rgoc_types::instantiate` 造实例，返回 `TypeExpr` operand |
+| 2 | `issue47878` | `m[k]()` / `(<-ch)()` / `x.(T)()` 的调用报 `HIR-MISSING-TYPE`（mode=invalid） | check 的 `call` 只接 `Value | Variable`，map index / comma-ok 操作数落 `_ => invalid()` —— 但它们的 `typ` 就是签名类型 | match 扩 `MapIndex | CommaOk` |
+| 3 | `issue47878` | `槽 s0 没有根（函数 main）` / `既不提升也没有根` | 指针接收者方法调用的 recv 是 `Addr(Place::Slot(s))`，SSA 的取址扫描（`scan_expr`）与**确定赋值分析**（`Def::expr`）都不扫 `Callee::Method.recv` | 两处都补扫；`Iface.recv` 保守同扫。⚠️ 单测 `var src Src1[int]; src.Next()` 能过只是因为 `_ = src` 把槽推进了 `unsafe_slots` —— **假绿**，`Def` 的缺口一直都在 |
+| 4 | `smoketest.go` | `var _ = f2[int, string, struct{}]` 报「没有落到任何实例」 | lowering 的 `Index` 臂**先求下标**：多实参的 index 是 `Expr::List`，不是表达式，恒 invalid ⇒ 断链 | 先按位置查 `inst_target`（实例账），`a[i]` 没账自然落回索引路径 |
+| 5 | `typelist.go` | `func _[T any](m T)` 报 `not enough type arguments`；`~int` 约束上 `*p` / `ch <- 0` / `<-ch` 三条误报 | ① `generic_funcs` 按名字记账，`func _[T …]` 与 `func _ interface{…}` 撞裸名；② 类型参数上的操作符判定只看 `underlying(T)`（= 约束接口） | ① `Package::blank_func_tparams` 按**声明位置**记账；② 新增 `rgoc_types::core_type`（项表非空且 underlying 全同 ⇒ 那个 underlying），`deref` / `recv` / `send` 改走 `under_or_core` |
+
+> 第 5 条的 `core_type` 有个与 `t_gen_05` 同源的坑：**必须先看原类型**是不是
+> `TypeParam` 再走 `underlying` —— 后者把类型参数解到约束接口上，那一档
+> 永远匹配不到（第一次就这么写的，三条诊断纹丝不动）。
+
+### 14.2 读数
+
+| 项 | t18c | t20 |
+|---|---|---|
+| build 成功合计 | 154 | **168** |
+| `run` 族 build_ok | 46/71 | **55/71** |
+| `run` 族跑绿 | 44 | **50** |
+| `compile` 族 build_ok | 35/40 | **39/40** |
+| 全量测试 | 2312 | **2314** passed / 0 failed |
+
+逐文件 14 个转 `ok`：compile 族 4 个（`issue47878` / `issue49516` /
+`issue53762` / `smoketest`），run 族 10 个（`eface` / `issue47925b/c/d` /
+`issue48598` / `issue48602` / `issue48645b` / `issue50109b` / `issue53477` /
+`issue48604`）—— 后一批是类型实例化与复杂被调者的**连带收益**（泛型类型的
+方法值调用、类型断言调用都不是 typelist 专属形态）。
+
+### 14.3 白名单：U-M12-01（部分实例化）
+
+`typelist.go` 剩两条诊断（92 / 112 行的 `f := f2[byte]` /
+`f := f4[int]`）：**部分实例化** —— 给部分类型实参，剩余的从调用实参推断。
+官方里「部分实例化的函数值」是一等公民（类型 = 仍带类型参数的签名）；
+我们的类型系统没有这个维度，支持它需要贯穿三层：
+
+* check：`Operand` 得能表示「部分泛型函数值」（新 mode 或 typ 携带 tparams）；
+* HIR：`f := f2[byte]` 的槽里存什么？（实例要等调用点的推断才定）
+* SSA：帧布局拿到含 `TypeParam` 的签名怎么办？
+
+这是一条独立的里程碑级工作，不是 Task 20 的局部补丁。判据
+`t_gen_02_compile_39of40` 把白名单**冻住**（`WHITELIST = ["typelist"]` +
+断言条数 == 1），防止悄悄变大。
+
+### 14.4 变异验证：4 / 4 全红
+
+装置 `.superpowers/m20-mutate.py`（apply A..D / restore），每次变异前
+`cargo clean -p`，判据都是 `t_gen_02_compile_39of40`（compile 全族遍历，
+四条修复的语料都在里面）。
+
+| # | 变异 | 变红 |
+|---|---|---|
+| A | `type_instantiation` 整条短路（`if false &&`） | `issue53762` / `issue49516` |
+| B | `call` 的 mode 收窄回 `Value | Variable` | `issue47878` |
+| C | `Def::expr` 不再读方法接收者 | `issue47878`（建图 panic） |
+| D | lowering 的 `Index` 先求下标（实例账断链） | `smoketest` |
+
+### 14.5 ⚠️ 事故记录：变异恢复冲掉未提交改动（同一条坑第三次）
+
+变异 B 的锚点没匹配（0 次）⇒ 脚本 `exit 2`，但**恢复已经跑过** ——
+`.superpowers/m20-mutate.py` 的 `restore` 用 `git checkout --`，把
+**未提交的 Task 20 全部改动**（expr.rs / build.rs / lower.rs）冲掉了。
+`§11.3` 记过这条纪律（「要么先提交、要么用原文副本」），这次是执行层没
+落实：变异装置的 FILES 列表里是**尚未提交**的文件。处置：按会话记录
+逐段重写（三处都有完整 diff 上下文），**从本轮起纪律改为「写完即 add」**
+—— staging 区就是恢复操作的保护区。装置本身也该在 apply 前检查
+`git status --short <file>` 非空时拒绝运行。
