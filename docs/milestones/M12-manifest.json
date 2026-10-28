@@ -1,0 +1,234 @@
+{
+  "stage": "M12",
+  "line": "a（泛型：检查面 / 单态化 / native）",
+  "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行",
+  "generated_at": "2026-10-27T00:00:00Z",
+  "filled_at": "2026-10-27T00:00:00Z",
+  "fill_task": "M12-plan.md Task 26（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
+  "status": "a 线已收口 —— 六条门禁 G12-1..G12-6 全部 pass；246 suite / 2324 passed / 0 failed / 2 ignored；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76，bad=0（skip 9 全白名单冻住）；泛型 × 并发 4 语料三态逐字节；变异 3/3 全红。b 线（反射）/ c 线（opt）pending，门禁 G12-7..G12-13 另行填",
+  "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）。",
+  "docs": {
+    "design": "docs/milestones/M12-design.md（D-M12-1..10 / G12-1..13 / §5 未支持面）",
+    "tests": "docs/milestones/M12-tests.md（T-GEN-01..19 各族 + 装置判据）",
+    "plan": "docs/milestones/M12-plan.md（Task 0–…；进度台账 .superpowers/sdd/M12-plan/progress.md，不入库）",
+    "baseline": "docs/milestones/M12-baseline.md（F1..F14 实测 / §14.3 U-M12-01 / §15..§17 各 Task 收口）",
+    "contracts": [
+      "docs/contracts/C8-check-diagnostics.md（TYP-* 泛型诊断码复用，不新增码）",
+      "docs/contracts/C9-values-and-output.md（§4.1 合并流：M12 Ruling 24-1 的 L2 口径依据）",
+      "docs/contracts/C12-heap-and-gc.md（§5.1 三态口径不变）"
+    ]
+  },
+  "crates": [
+    {
+      "name": "rgoc-types",
+      "role": "类型集四态投影（`IfaceTSet`）/ `core_type`（单档：项表非空且 underlying 全同）/ `type_mentions_tparam`（发码口抽象判定，M12/Task 21）/ `subset_of`·`intersect`·`includes` / `is_comparable`"
+    },
+    {
+      "name": "rgoc-load",
+      "role": "`mono.rs`（实例命名 `Sum·int` / `Mono::request` memo / 深度封顶字段）/ `typeexpr.rs` 的 Index 臂实参数校验（Task 22，`TYP-WRONG-TYPE-ARG-COUNT`）"
+    },
+    {
+      "name": "rgoc-check",
+      "role": "类型参数声明与约束检查（expr.rs 的逐 term 谓词 `common_slice_elem` 等）/ `under_or_core` / `instance.rs`（实例化不动点 + `request_typed_methods` + 诊断回滚）/ 变参窄面（Task 23）/ 局部类型声明本体占位（Ruling 24-2）"
+    },
+    {
+      "name": "rgoc-hir",
+      "role": "`lower.rs`：实例体的 HIR 生成（类型参数替换）；接口混合比较装箱（Task 21，`Op::Eql|Neq` 两侧 coerce）"
+    },
+    {
+      "name": "rgoc-interp",
+      "role": "`go_eq_tt`（接口动态类型 identical 归一，Task 21）/ `compare` 带 TypeTable"
+    },
+    {
+      "name": "rgoc-ssa",
+      "role": "实例函数的 SSA 与 `.s` 发码（实例与原型同一条管线，无泛型专用指令）"
+    },
+    {
+      "name": "rgoc-driver",
+      "role": "判据：`m12_checkface.rs`（T-GEN-01..19）/ `m12_corpus.rs`（T-M12-01/01b/02）/ 装置 `tools/run-oracle/run-native-typeparam.sh`（四族三层 + 合并流 L2）"
+    }
+  ],
+  "corpus_lists": {
+    "root": "go_source_code/test/typeparam（只读；266 个 .go）",
+    "classifier": "tools/run-oracle/m12-classify.sh（七份清单**算出来**，`.superpowers/m12-lists`；判据 m12_corpus.rs::t_m12_01 七份自洽 + t_m12_01b 合成语料必拒）",
+    "gate_face": {
+      "run": { "count": 71, "gate": "G12-2" },
+      "compile": { "count": 40, "gate": "G12-1" },
+      "errorcheck": { "count": 5, "gate": "G12-3" },
+      "total": 116,
+      "note": "门禁面 = 116（M12-plan.md Global Constraints；判据 t_gen_08a_门禁清单非空且文件存在）"
+    },
+    "rejected": { "count": 76, "gate": "G12-3", "note": "码集合 ⊇ TYP-UNSUPPORTED-IMPORT-FORM（装置断言「码集合包含」不是首码，baseline §5 校正 5）" },
+    "dir": { "count": 67, "note": "不做（U-M12-07）" },
+    "errorcheck_m": { "count": 2, "note": "不做（U-M12-08）" }
+  },
+  "measured": {
+    "workspace": "246 suite / 2324 passed / 0 failed / 2 ignored",
+    "gate_face_counts": "116 = run 71 + compile 40 + errorcheck 5；拒绝面 76（rejected）",
+    "typeparam_family": "run 63/71（skip 8 全白名单：5 × U-M12-09 + 3 × §15.3）· compile 39/40（skip 1 = typelist，U-M12-01）· errorcheck 5/5 · rejected 76/76 —— 合计 bad=0（Task 24 收口态，装置 run-native-typeparam.sh 实测）",
+    "run_native_interp": "t_gen_01_run_68of71：71 条门禁语料 build + interp + native，白名单 3 条功能级缺口冻住（§15.3），其余 68 条全绿",
+    "min_checked": "108（t_gen_05：run 69 + compile 39 + errorcheck 0；errorcheck 5 条该报诊断 ⇒ lower 拒绝 —— Task 22 后的账，只许涨）",
+    "gen_conc_three_states": "4 语料（append.go / issue47901.go / fixtures gen_conc.go / gen_queue.go）× off/on/stress 各 4/0/0，逐字节相同；gen_* 的 stress=RGOC_GC_STRESS=1 且断言 collections>0（t_gen_11）",
+    "m11_regression": "run-native-chan.sh --gc=off|on|stress 各 7/0/0 + M' 12/12×3；69 单线程语料不回归（Task 24）",
+    "instance_determinism": "同一程序两次独立 build 的 .s 逐字节相同（t_gen_04）；mangled 实例名 `Sum·int` / `Sum·string` / `Sum_int` 在 dump-hir 并存（Ruling 25-1：.s 里 arm64 后端重编号 fnN，实例名只在 dump-hir 可见）",
+    "no_typeparam_residue": "`--dump=hir` 与 `.s` 里 `type parameter` 出现 0 次（t_gen_05_无残留 + 阴性对照 invalid/TypeParam 必须被抓）",
+    "mutations": "3/3 全红（.superpowers/m25-mutate.py：M-M12-01 不动点一轮 → T-GEN-01；M-M12-02 mangled 丢实参 → T-GEN-04；M-M12-03 core_type 不查类型集 → T-GEN-19。RED 3 / GREEN 0 / PENDING 0 / MISS 0 —— M-M12-03 对计划原靶 T-GEN-01 为 GREEN，改靶见 Ruling 25-2）",
+    "compare_fix": "接口混合比较两处语义 bug（Task 21）：lower 缺装箱 + go_eq 裸 TypeId 相等被 add_basic 不去重骗过 —— equal.go `g(3,3)` 假阴性；变异 4/4 全红（m21-mutate.py E..H）",
+    "errorcheck_codes": "issue51232/51233 落 TYP-WRONG-TYPE-ARG-COUNT（Task 22 修声明面校验）；5/5 首码与官方 ERROR 行一致"
+  },
+  "gate": [
+    {
+      "id": "G12-1",
+      "name": "泛型静态面（compile 40）",
+      "status": "pass",
+      "evidence": "m12_checkface.rs::t_gen_02_compile_39of40（compile 全族 build 退出 0 + 产物 ELF；WHITELIST=[typelist] 冻住且断言条数==1，U-M12-01）",
+      "gap": "—"
+    },
+    {
+      "id": "G12-2",
+      "name": "泛型运行面（run 71 三层一致）",
+      "status": "pass",
+      "evidence": "m12_checkface.rs::t_gen_01_run_68of71（71 条语料 build + interp + native，白名单 3 冻住）；装置 run-native-typeparam.sh 的 L1（native vs 解释器逐流）+ L2（vs 官方**合并流**，Ruling 24-1）；t_gen_15c（native 实例体可执行）、t_gen_18_链接 / t_gen_18b（泛型方法实例语义）",
+      "gap": "5 条 native 输出级老缺口（U-M12-09，白名单冻住；ec8fd74 实测同错非回归）+ 3 条功能级（§15.3）"
+    },
+    {
+      "id": "G12-3",
+      "name": "拒绝面（76 干净拒绝 + errorcheck 5 首码对齐）",
+      "status": "pass",
+      "evidence": "装置 run-native-typeparam.sh --only rejected（76/76 rc=1 且码集合 ⊇ TYP-UNSUPPORTED-IMPORT-FORM）与 --only errorcheck（5/5 首码 ∈ 登记集合，Task 22）；m12_checkface.rs::t_gen_05_无残留（errorcheck 5 条该报诊断 ⇒ lower 拒绝，checked 账 108）；t_gen_14d_实例化环有码（TYP-INVALID-INSTANCE-CYCLE）",
+      "gap": "—"
+    },
+    {
+      "id": "G12-4",
+      "name": "单态化完备性（无残留 + 实例名确定）",
+      "status": "pass",
+      "evidence": "m12_checkface.rs::t_gen_05_无残留（门禁面 lower 成功的 108 个文件 HIR 无 TypeParam/invalid 残留 + 阴性对照）/ t_gen_04_实例名确定性（两次 build .s 逐字节 + dump-hir 三名并存 + native 输出）/ t_gen_15_原型不发码 / t_gen_16_实例化具名类型是不同条目",
+      "gap": "—"
+    },
+    {
+      "id": "G12-5",
+      "name": "泛型 × 并发/GC 三态",
+      "status": "pass",
+      "evidence": "m12_checkface.rs::t_gen_11_泛型并发三态（4 语料 × off/on/stress 逐字节；gen_* stress=1 且 collections>0）",
+      "gap": "语料里 `chan`/`map` 泛型用例偏少（gen_conc 只分配 6 次 ⇒ stress=8 一次 GC 都不触发，判据恒真——计划警告成真，实测后改 stress=1）"
+    },
+    {
+      "id": "G12-6",
+      "name": "不回归（69 单线程 + 7 并发三态 + 全量 cargo）",
+      "status": "pass",
+      "evidence": "Task 24：run-native.sh 69 单线程三态不回归；run-native-chan.sh 7/7×3 + M' 12/12×3；全量 246 suite / 2324 passed / 0 failed / 2 ignored（后台实测，manifest_m12.rs::t_manifest_12_全量读数与清单一致 钉形状）",
+      "gap": "—"
+    }
+  ],
+  "unsupported": [
+    {
+      "id": "U-M12-01",
+      "what": "部分实例化（`f := f2[byte]` 剩余实参推断）",
+      "code": "TYP-WRONG-TYPE-ARG-COUNT",
+      "exit": 1,
+      "test_id": "t_gen_02_compile_39of40",
+      "evidence": "typelist.go 的 92/112 行报诊断拒绝（白名单冻住）；支持它要「部分泛型函数值」贯穿 check/HIR/SSA 三层（baseline §14.3）"
+    },
+    {
+      "id": "U-M12-02",
+      "what": "reflect.MakeFunc",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "b 线（Phase 4）范围；需要反向 trampoline，语料里没有（M12-design.md §5）"
+    },
+    {
+      "id": "U-M12-03",
+      "what": "可变参数 Call（CallSlice / ...any 实参）",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "b 线范围（M12-design.md §5）"
+    },
+    {
+      "id": "U-M12-04",
+      "what": "PGO / DWARF / coverage",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "roadmap 已划延期（M12-design.md §5）"
+    },
+    {
+      "id": "U-M12-05",
+      "what": "泛型原体的独立检查（不可达实例的类型错误不报）",
+      "code": null,
+      "exit": null,
+      "test_id": null,
+      "evidence": "D-M12-3 的副作用：只检查可达实例；语料里未出现「不可达但应报错」的用例（M12-design.md §5）"
+    },
+    {
+      "id": "U-M12-06",
+      "what": "并发 GC / 写屏障",
+      "code": null,
+      "exit": null,
+      "test_id": "t_gen_11_泛型并发三态",
+      "evidence": "沿用 U-M11-08：STW + 单线程，GC 只在分配点同步跑（C12 的 U-M10-04 不变）"
+    },
+    {
+      "id": "U-M12-07",
+      "what": ".dir 目录测试（相对包 import）",
+      "code": "TYP-UNSUPPORTED-IMPORT-FORM",
+      "exit": 1,
+      "test_id": "t_m12_01_七份清单自洽",
+      "evidence": "typeparam-dir.txt 67 条是 `// rundir`/`// compiledir` 桩，不进门禁面（baseline §4.2）"
+    },
+    {
+      "id": "U-M12-08",
+      "what": "errorcheck -m（内联诊断）",
+      "code": "TYP-UNSUPPORTED-IMPORT-FORM",
+      "exit": 1,
+      "test_id": "t_m12_01_七份清单自洽",
+      "evidence": "typeparam-errorcheck-m.txt 2 条，期望错是内联报告，不做（baseline §4.2）"
+    },
+    {
+      "id": "U-M12-09",
+      "what": "native 接口断言 / itab 的输出级老缺口（typeswitch3/4/5、issue51522b、eface、dictionaryCapture-noinline、dottype、issue44688）",
+      "code": null,
+      "exit": 0,
+      "test_id": "t_gen_01_run_68of71",
+      "evidence": "合并流口径（Ruling 24-1）暴露：8 条语料 native 输出错误（如 `other 2814739…`）；ec8fd74（Task 21 前）实测同错 ⇒ 非回归；白名单冻在装置 run_whitelist()（§15.3 / §17.2），独立任务跟进"
+    },
+    {
+      "id": "U-M12-10",
+      "what": "局部泛型类型的实例化（`type U[_ any] int; type V U[int]` 于函数体内）",
+      "code": null,
+      "exit": 0,
+      "test_id": null,
+      "evidence": "局部类型声明不挂 type_params ⇒ `U[int]` 判 None ⇒ 本体填 invalid 占位（Ruling 24-2，防 panic 不求真）；官方合法。登记独立跟进（baseline §17.3）"
+    }
+  ],
+  "open_gaps": [
+    {
+      "id": "G-M12-01",
+      "what": "core_type 的 unalias 不解 Named —— 具名约束拿不到核心类型",
+      "detail": "`type C interface{ ~*int }` 作为约束时，`core_type` 在 `Type::Interface` 判定处就返回 None（unalias 只解 Alias 不解 Named）⇒ 具名约束上的 `*p` / `ch <-` / `x[i]` 一律按「没有核心类型」拒绝。语料全是内联约束所以 71 条没踩到；Task 25 的 T-GEN-19 探针必须内联约束就是这个原因。修法：core_type 先 `underlying(constraint)` 再判 Interface —— 但要先证明 named 单档约束语料全绿不被翻红。"
+    },
+    {
+      "id": "G-M12-02",
+      "what": "泛型 × 并发的 GC 覆盖靠自造 fixture",
+      "detail": "71 条 run 语料里泛型 + chan/map 的组合太少且分配少（gen_conc 只分配 6 次，stress=8 不触发 GC）⇒ t_gen_11 的 4 语料里 2 条是自造 fixture（gen_conc / gen_queue）。官方语料没有更重的组合；强判据（collections>0）已经钉住。"
+    },
+    {
+      "id": "G-M12-03",
+      "what": "rejected / errorcheck 两族的判据只在装置脚本里，没有 Rust 侧等价物",
+      "detail": "76 条拒绝与 5 条 errorcheck 的逐文件断言在 run-native-typeparam.sh；Rust 侧只有 t_m12_02（装置打真靶）与 t_gen_05（errorcheck 全报诊断的账）。装置本身有 t_m12_02 的双向钉住（合成反例必红 + absdiff 必绿）兜底。"
+    }
+  ],
+  "closed_gaps": [
+    {
+      "id": "F1",
+      "what": "baseline 实测校正：指令五族（run 142 / compile 44 / errorcheck 8 / rundir 49 / compiledir 18 / 无指令 5），门禁面 71+40+5=116",
+      "resolution": "m12_corpus.rs::t_m12_01 七份清单自洽 + t_m12_01b 装置有牙；七份之和 266 与盘上实数对上"
+    },
+    {
+      "id": "F2",
+      "what": "G12-3 的判据形态（首码 22/76 → 码集合包含）",
+      "resolution": "装置 rejected 族按「码集合 ⊇ TYP-UNSUPPORTED-IMPORT-FORM」断言（baseline §5 校正 5），76/76"
+    }
+  ]
+}
