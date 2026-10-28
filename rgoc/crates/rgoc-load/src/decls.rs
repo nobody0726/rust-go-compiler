@@ -189,6 +189,10 @@ pub(crate) struct Checker<'a> {
     /// 已经报过 `undefined` 的**书写位置**（Task 25）——`Pos` 唯一标识一次书写，
     /// 见 [`crate::scope`] 的 `report_undefined`。
     pub(crate) undefined_reported: BTreeSet<Pos>,
+    /// 已经报过**类型实参数错**的书写位置（`M12/Task 22`）—— 同
+    /// `undefined_reported` 的理由：类型表达式是克隆的（`x, y int` 拆成
+    /// 两份 `Field`），同一个 `Fn[RCT]` 会被解析两遍，官方只报一次。
+    pub(crate) type_arg_count_reported: BTreeSet<Pos>,
     /// **直接**依赖：`import` 路径 → 已装载的包（M4/Task 35）。
     ///
     /// 只读借自 `Package::imports` —— 会话在阶段 A 与阶段 B **之间**把它填好
@@ -245,6 +249,7 @@ impl Checker<'_> {
             roots: Vec::new(),
             untyped_cache: BTreeMap::new(),
             undefined_reported: BTreeSet::new(),
+            type_arg_count_reported: BTreeSet::new(),
             imports,
             bindings,
             cur_file: None,
@@ -305,6 +310,7 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
         roots: Vec::new(),
         untyped_cache: BTreeMap::new(),
         undefined_reported: BTreeSet::new(),
+        type_arg_count_reported: BTreeSet::new(),
         imports: &pkg.imports,
         bindings,
         cur_file: None,

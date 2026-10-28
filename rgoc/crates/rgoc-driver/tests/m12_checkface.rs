@@ -1819,15 +1819,21 @@ fn t_gen_05_无残留() {
     );
 }
 
-/// 今天实测能 lower 成功的门禁文件数：`run` 47 + `compile` 35 + `errorcheck` 2
-/// = **84**。
+/// 今天实测能 lower 成功的门禁文件数：**108**（Task 22 后实测）。
 ///
-/// 三族的差分别是：`run` 71 − 24 个跳过、`compile` 40 − 5、`errorcheck` 5 − 3
-/// （`tparam1` / `issue48711` / `issue50317` 本来就该报诊断）。
+/// 账：`run` 族 71 条里 2 条 lower 失败（`dictionaryCapture-noinline` /
+/// `issue44688`——报诊断 ⇒ lower 拒绝），`compile` 族 39/40（`typelist`
+/// 报诊断），`errorcheck` 5 条**全部**报诊断 ⇒ 全部 lower 拒绝：
+/// 69 + 39 + 0 = **108**。
+///
+/// `errorcheck` 的账变过一次（Task 22）：`issue51232/51233` 原来不报
+/// 诊断（假绿）⇒ lower 成功、计入 checked；落了 `TYP-WRONG-TYPE-ARG-COUNT`
+/// 之后转为报诊断 ⇒ skip。`checked` 因此从 110 变 108 —— **这不是退化**，
+/// 是「该报错的文件现在真的报错了」。
 ///
 /// 只许**涨**：某个文件从 ok 变成 reject 时，`t_gen_05` 会红着提醒
 /// 「这条判据少查了一个，别当它还是全覆盖」。
-const MIN_CHECKED: usize = 84;
+const MIN_CHECKED: usize = 108;
 
 /// 阴性对照：往真 HIR 里塞 `invalid` / `TypeParam`，判据必须报出来。
 fn undefended_control(tt: &mut rgoc_types::TypeTable, prog: &rgoc_hir::Program) {

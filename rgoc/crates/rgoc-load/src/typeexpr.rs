@@ -153,6 +153,38 @@ impl Checker<'_> {
                 if args.iter().any(|&a| *self.tt.type_of(a) == Type::Invalid) {
                     return base;
                 }
+                // 实参数 ≠ 形参数（官方 `WrongTypeArgCount` 的两段式：多了
+                // too many、少了 not enough；`issue51232/51233` 的
+                // `Fn[RCT]`——`Fn` 要 2 个实参只给 1 个——就是「少了」）。
+                //
+                // 为什么装载面报：这批语料的 `Fn[RCT]` 全在**声明位置**
+                // （类型本体 / 接口方法签名 / struct 字段 / func 签名），
+                // 都归本层解析；检查器的 `type_expr` 看不到声明面。检查面
+                // 的同型校验（表达式位置）另有一份，两处口径一致。
+                //
+                // 报完仍**退回原型**（错误恢复，与 `unwrap_or(base)` 同口径
+                // —— 建出来的 `Fn·invalid` 实例会污染「按已存在实例反推
+                // 方法实例」的那一遍）。按**书写位置**去重：类型表达式是
+                // 克隆的（`x, y int` 拆两份 `Field`），同一处会解析两遍。
+                let ntp = self.tt.named_def(nid).type_params.len();
+                if args.len() != ntp && self.type_arg_count_reported.insert(ix.index.pos()) {
+                    let how = if args.len() > ntp {
+                        "too many"
+                    } else {
+                        "not enough"
+                    };
+                    self.bag.push(Diag {
+                        pos: ix.index.pos(),
+                        code: DiagCode::TypWrongTypeArgCount,
+                        message: format!(
+                            "{how} type arguments for type {}: have {}, want {}",
+                            self.tt.named_def(nid).name,
+                            args.len(),
+                            ntp
+                        ),
+                    });
+                    return base;
+                }
                 rgoc_types::instantiate(self.tt, nid, &args).unwrap_or(base)
             }
 
