@@ -86,6 +86,19 @@ pub struct InstRequest {
     pub args: Vec<TypeId>,
     /// 实例名（[`mangled`] 的产物）。
     pub name: String,
+    /// **实例化链的深度**：从包级函数体（深度 0）里直接请求的是 1，
+    /// 从深度 1 的实例体里请求的是 2，依此类推。
+    ///
+    /// 为什么需要它（而不是只数总条数）：`test/typeparam/issue48711.go` 的
+    /// ```go
+    /// func f[T interface{ ~[]P }, P any](t T) { f[[]T, T]([]T{t}) }
+    /// func main() { f[[]int](nil) }
+    /// ```
+    /// 每一层实参都不同（`[]int` → `[][]int` → …）⇒ **memo 永远不命中**。
+    /// 只按条数封顶时，一万条实例每条都要再检查一遍体，容器直接被 OOM 杀掉
+    /// （实测 exit 137）。按**深度**封顶才是官方的口径（实例化**嵌套**太深 =
+    /// 环），代价与宽度无关。
+    pub depth: usize,
 }
 
 /// 待实例化队列 + 已请求过的 memo。
@@ -97,6 +110,9 @@ pub struct Mono {
     queue: VecDeque<InstRequest>,
     /// 已请求过的 `(origin, args)`；`args` 已规范化。
     seen: Vec<(FuncKey, Vec<TypeId>)>,
+    /// 当前正在检查的实例深度（0 = 包级函数体）。由调用方在每轮
+    /// [`Self::take`] 之后用 [`Self::set_depth`] 摆好。
+    cur_depth: usize,
 }
 
 impl Mono {
@@ -156,8 +172,20 @@ impl Mono {
             origin,
             args: norm,
             name,
+            depth: self.cur_depth + 1,
         });
         true
+    }
+
+    /// 摆好「当前正在检查的实例深度」（见 [`InstRequest::depth`]）。
+    pub fn set_depth(&mut self, d: usize) {
+        self.cur_depth = d;
+    }
+
+    /// 当前深度（诊断与测试用）。
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.cur_depth
     }
 
     /// 取下一个待实例化请求（FIFO）。

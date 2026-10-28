@@ -1101,3 +1101,159 @@ func f() {
         "TYP-UNDECLARED-NAME",
     );
 }
+
+// ── Task 14：实例化闭包（不动点）────────────────────────────────────────
+
+/// 装载 + 检查一段源码，拿回检查结果（库级 —— 判据要看 `instances`，
+/// 那是命令行**看不到**的面）。
+fn check_src(src: &str) -> rgoc_check::CheckedPackage {
+    let mut tt = rgoc_types::TypeTable::new();
+    let files: [(&str, &[u8]); 1] = [("a.go", src.as_bytes())];
+    let (pkg, bag) = rgoc_load::load_sources(&mut tt, &files, None);
+    rgoc_check::check_package(&pkg, &mut tt, bag, &rgoc_check::CheckOptions::default())
+}
+
+/// `T-GEN-14`：`A[int]` 的体里调 `B[string]`、`B[string]` 的体里又调 `A[int]`
+/// ⇒ **恰好 2 个**实例，且不无限循环。
+///
+/// # 判据为什么是「恰好 2」而不是「≥ 2」
+///
+/// 实例化的不动点有两个典型错法，方向相反：
+///
+/// * **不收敛** —— 每轮把 `A[int]` 当新请求重新入队（memo 没按 `identical` 比、
+///   或键里漏了 origin）⇒ 队列永不空；
+/// * **漏请求** —— 只从 `main` 出发看一层（不重走实例体的表达式面）⇒ 只有 1 个。
+///
+/// `≥ 2` 两种都抓不住（第一种也能到 2）。所以数**精确值**。
+#[test]
+fn t_gen_14_不动点() {
+    let c = check_src(
+        r#"
+package main
+
+func A[T any](v T) int {
+	return B[string]("x") + 0
+}
+
+func B[U any](v U) int {
+	return A[int](1)
+}
+
+func main() {
+	_ = A[int](0)
+}
+"#,
+    );
+    let names: Vec<&str> = c.instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names.len(), 2, "实例数不是 2：{names:?}");
+    assert!(names.contains(&"A\u{00b7}int"), "没有 A·int：{names:?}");
+    assert!(
+        names.contains(&"B\u{00b7}string"),
+        "没有 B·string（实例体里的调用没被跟进）：{names:?}"
+    );
+    assert!(
+        !names.contains(&"A\u{00b7}string"),
+        "把 A 的实参记成了 string：{names:?}"
+    );
+}
+
+/// `T-GEN-14b`：自引用的实例化链必须**收敛**（同一 `(origin, args)` 只产一份）。
+///
+/// `Loop[T]` 在 `Loop` 的体里：每次走实例体都会再请求一次同一个
+/// `(Loop, [T])`。memo 一旦失效，队列就永不空 —— 判据用**精确条数**把它逼出来
+/// （生产代码另有上限兜底，见 `MAX_INSTANCES`，所以失效时是「数不对」而不是挂住）。
+#[test]
+fn t_gen_14b_递归实例() {
+    let c = check_src(
+        r#"
+package main
+
+func Loop[T any](v T, n int) int {
+	if n == 0 {
+		return 0
+	}
+	return Loop[T](v, n-1)
+}
+
+func main() {
+	_ = Loop[int](1, 3)
+}
+"#,
+    );
+    let names: Vec<&str> = c.instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names.len(), 2, "自引用链没收敛：{names:?}");
+    assert!(names.contains(&"Loop\u{00b7}int"), "{names:?}");
+    // 名字两两不同（撞名会让两份实例互相覆盖）
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), names.len(), "实例撞名：{names:?}");
+}
+
+/// `T-GEN-14c`：实例体必须**按实参**复查，不是拿类型参数本身再走一遍。
+///
+/// # 这条判据的牙在哪
+///
+/// 前两条都只数「实例有几个」—— 它们**证不出**替换生效：`A` 的体在包级检查
+/// 那一遍（用 `T` 本身）就已经把 `B[string]` 请求出来了。所以这里要一个
+/// **只在替换后才会出现**的请求：
+///
+/// ```go
+/// func F[T any](v T) int { return G[T](v, 0) }   // 通用那一遍请求 G·tp
+/// ```
+///
+/// 实例体（`T := int`）会再走一次同一个 `G[T]`，这时 `T` 是 `int` ⇒ 请求
+/// `G·int`。**去掉 `Env` 里的替换**，`G·int` 就永远不出现。
+#[test]
+fn t_gen_14c_实例体按实参复查() {
+    let c = check_src(
+        r#"
+package main
+
+func F[T any](v T) int {
+	return G[T](v, 0)
+}
+
+func G[T any](v T, n int) int {
+	return n
+}
+
+func main() {
+	_ = F[int](1)
+}
+"#,
+    );
+    let names: Vec<&str> = c.instances.iter().map(|i| i.name.as_str()).collect();
+    assert!(names.contains(&"F\u{00b7}int"), "{names:?}");
+    assert!(
+        names.contains(&"G\u{00b7}int"),
+        "实例体没有按实参复查（只拿到了通用那一遍的 G·tp…）：{names:?}"
+    );
+    let mut sorted = names.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    assert_eq!(sorted.len(), names.len(), "实例撞名：{names:?}");
+}
+
+/// `T-GEN-14d`：实例化**环**必须报码，不能静默截断。
+///
+/// 语料 `issue48711.go` 是真正的环 —— 每层实参都不同（`[]int` → `[][]int`…），
+/// memo 永远不命中：
+///
+/// ```go
+/// func f[T interface{ ~[]P }, P any](t T) { f[[]T, T]([]T{t}) }
+/// func main() { f[[]int](nil) }
+/// ```
+///
+/// 两条错法各有一条判据：**不收口**（深度不封顶）会一直跑到 OOM
+/// （实测 exit 137 把整个装置带崩）；**收口但不报**就是静默截断 —— 产物缺
+/// 函数，症状要到链接期才出现。这里判后者。
+#[test]
+fn t_gen_14d_实例化环有码() {
+    let f = corpus().join("issue48711.go");
+    let (_, codes) = check_verdict(&f);
+    assert!(
+        codes.iter().any(|c| c == "TYP-INVALID-INSTANCE-CYCLE"),
+        "实例化环没有报码（静默截断？）：{codes:?}"
+    );
+}

@@ -22,6 +22,7 @@
 //! | [`render`] | `--diag-dump` 的 `C8` 渲染（过滤 / 排序 / 字节格式） |
 //! | [`diag`] | 原始诊断位（soft）+ 26 类类别投影（全量穷尽） |
 //! | [`version`] | 版本门控判定（Task 19） |
+//! | [`instance`] | 实例化闭包（不动点，`M12/Task 14`） |
 //!
 //! # 与骨架期的区别（Task 2 → Task 20）
 //!
@@ -38,6 +39,7 @@ pub mod env;
 pub mod expr;
 pub mod imports;
 pub mod initorder;
+pub mod instance;
 pub mod lookup;
 pub mod main_check;
 pub mod operand;

@@ -75,6 +75,23 @@ pub(crate) fn check_package_bodies(s: &mut Session<'_>) {
     }
 }
 
+/// 检查一个**实例**的函数体（模块级入口，`M12/Task 14` 的 `instance` 走它）。
+///
+/// `subst` 是「类型参数名 → 实参」。
+pub(crate) fn check_instance_body(
+    s: &mut Session<'_>,
+    file: FileId,
+    f: &FuncDecl,
+    subst: &[(String, TypeId)],
+) {
+    let mut cx = StmtChecker {
+        s,
+        env: Env::new(),
+        results: Vec::new(),
+    };
+    cx.check_instance_body(file, f, subst);
+}
+
 /// 语句检查器。
 struct StmtChecker<'s, 'p> {
     s: &'s mut Session<'p>,
@@ -240,6 +257,45 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         self.env.push();
         self.declare_tparams(f);
         self.declare_recv_tparams(f);
+        self.declare_func_locals(f, &params, &results);
+        self.check_body(file, body);
+    }
+
+    /// 检查一个**实例**的函数体（`M12/Task 14`）：类型参数换成实参。
+    ///
+    /// # 与 [`Self::func_decl`] 的两处差别
+    ///
+    /// 1. **类型参数声明成实参**（`subst`），而不是声明成类型参数本身 ——
+    ///    于是体里每一处 `type_expr(T)` 都自然拿到 `int`，不需要另造一条
+    ///    `SubstMap` 替换路径（`D-M5-2`：替换必须走同一套求值器）。
+    /// 2. **签名经 AST 再求一遍**（[`Self::ast_sig`]）而不是读
+    ///    `Package` 里那份 —— `SignatureDef` 里存的是**未替换**的 `T`，
+    ///    拿它登记形参槽位会让 `v T` 的槽类型停在 `typeparam` 上，下游
+    ///    `layout` / `verify` 全要炸。`ast_sig` 走 `eval`，`eval` 看 `Env`
+    ///    ⇒ 自动替换。
+    ///
+    /// ⚠️ 两个函数的**体块与参数同层**这个规则不变（见 [`Self::check_body`]）。
+    pub(crate) fn check_instance_body(
+        &mut self,
+        file: FileId,
+        f: &FuncDecl,
+        subst: &[(String, TypeId)],
+    ) {
+        let Some(body) = &f.body else {
+            return;
+        };
+        self.env.push();
+        for (name, t) in subst {
+            self.env.declare(name, Operand::type_expr(*t));
+        }
+        let (params, results) = self.ast_sig(file, f).unwrap_or_default();
+        self.results = results.clone();
+        self.declare_func_locals(f, &params, &results);
+        self.check_body(file, body);
+    }
+
+    /// 参数 + 命名结果的槽位登记（两个入口共用）。
+    fn declare_func_locals(&mut self, f: &FuncDecl, params: &TupleVars, results: &TupleVars) {
         if let Expr::FuncType(ft) = &f.type_ {
             for (i, p) in ft.params.iter().enumerate() {
                 if let Some(n) = &p.name {
@@ -254,10 +310,14 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 }
             }
         }
+    }
 
-        // 体块：与参数**同一层**（Go 规范「同一块或函数体的参数表」——
-        // 参数与体首层共享「已声明」判据，`func f(x int) { x := 1 }` 必须报
-        // `no new variables`）。块内的 `{}` 才另开一层。
+    /// 走一个函数体并收尾（两个入口共用）。
+    ///
+    /// 体块与参数**同一层**（Go 规范「同一块或函数体的参数表」——
+    /// 参数与体首层共享「已声明」判据，`func f(x int) { x := 1 }` 必须报
+    /// `no new variables`）。块内的 `{}` 才另开一层。
+    fn check_body(&mut self, file: FileId, body: &BlockStmt) {
         self.stmts(file, &body.stmts);
         self.env.pop();
 

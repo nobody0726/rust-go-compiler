@@ -27,11 +27,11 @@
 //! [`Session::report`] 上报。Cheap-trick 抑制与「次级消息留流」两条纪律
 //! 见 [`Session`] 的文档。入口是 [`check_package`]。
 
-use rgoc_ast::AstFile;
+use rgoc_ast::{AstFile, Decl};
 use rgoc_lex::{Diag, DiagBag, DiagCode, Pos};
 use rgoc_load::Package;
-use rgoc_types::TypeTable;
 use rgoc_types::version::{Versions, pkg_versions};
+use rgoc_types::{TypeId, TypeTable};
 
 use crate::diag::RawDiag;
 
@@ -186,6 +186,15 @@ pub struct CheckedPackage {
     /// 诊断流；装载诊断在前、检查诊断在后（官方 go/types 是**同一个**
     /// checker 错误流，装载即检查的一部分）。
     pub diags: Vec<RawDiag>,
+    /// **实例化清单**（`M12/Task 14`）：每个泛型函数按一组实参要造一份。
+    ///
+    /// ⚠️ 这里放的是**请求**（`origin` + 实参 + 名字），不是造好的代码 ——
+    /// 依赖方向决定的：`rgoc-hir` 依赖 `rgoc-check`，把 `Func` 塞进这里会成环。
+    /// 消费方是 `rgoc_hir::lower`（它按这份清单再 lower 一遍体）。
+    ///
+    /// 顺序 = **受理序**（不动点的 BFS 序），不是声明序：判据要能说
+    /// 「`A·int` 先于它体里请求的 `B·string`」。
+    pub instances: Vec<rgoc_load::mono::InstRequest>,
 }
 
 impl CheckedPackage {
@@ -255,6 +264,16 @@ pub struct Session<'a> {
         std::collections::BTreeMap<(rgoc_lex::FileId, u32, u32), rgoc_types::TypeId>,
     diags: Vec<RawDiag>,
     reported_any: bool,
+    /// 单态化的**待实例化队列 + memo**（`M12/Task 14`）。
+    pub(crate) mono: rgoc_load::mono::Mono,
+    /// 函数名 → `FuncKey`（声明序登记；方法也占一个键）。
+    ///
+    /// 同名只认**第一个**（重名声明是另案，`T-CK-*` 已报；这里不能因为重名
+    /// 把两个 `FuncKey` 混起来）。
+    func_keys: std::collections::BTreeMap<String, rgoc_load::mono::FuncKey>,
+    /// 已受理的实例（受理序）。`take_inst` 取走的请求在这里留底 ——
+    /// 它最终成为 [`CheckedPackage::instances`]。
+    insts: Vec<rgoc_load::mono::InstRequest>,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -272,6 +291,20 @@ impl<'a> Session<'a> {
     /// 开一个会话（空流）。
     #[must_use]
     pub fn new(pkg: &'a Package, tt: &'a mut TypeTable, opts: &'a CheckOptions) -> Self {
+        // 泛型函数的 `FuncKey` 按**声明序**登记（`FuncKey` = `Decl::Func` 的
+        // 全局下标，方法也占位 —— 与 `check_package_bodies` 的走访序一致）。
+        // 顺序必须和 `instance::func_of` 逐字相同，否则「第 n 个 FuncDecl」
+        // 两边会指到不同的函数。
+        let mut mono = rgoc_load::mono::Mono::new();
+        let mut func_keys = std::collections::BTreeMap::new();
+        for ast in &pkg.asts {
+            for d in &ast.decls {
+                if let Decl::Func(f) = d {
+                    let k = mono.declare(f.name.value.clone());
+                    func_keys.entry(f.name.value.clone()).or_insert(k);
+                }
+            }
+        }
         Self {
             pkg,
             tt,
@@ -280,7 +313,43 @@ impl<'a> Session<'a> {
             local_types: std::collections::BTreeMap::new(),
             diags: Vec::new(),
             reported_any: false,
+            mono,
+            func_keys,
+            insts: Vec::new(),
         }
+    }
+
+    /// 请求实例化 `name[targs…]`（`M12/Task 14`）。
+    ///
+    /// 返回 `true` = **新**请求（已入队）。名字不是包级泛型函数、或实参组
+    /// 已经请求过 ⇒ `false`（不报错：调用点自己已经在别的面判过「这能不能
+    /// 实例化」）。
+    pub(crate) fn request_inst(&mut self, name: &str, targs: &[TypeId]) -> bool {
+        let Some(&k) = self.func_keys.get(name) else {
+            return false;
+        };
+        self.mono.request(self.tt, k, targs)
+    }
+
+    /// 取下一个待实例化请求（FIFO）。
+    pub(crate) fn take_inst(&mut self) -> Option<rgoc_load::mono::InstRequest> {
+        self.mono.take()
+    }
+
+    /// 受理一个实例（留底成 [`CheckedPackage::instances`]）。
+    pub(crate) fn accept_inst(&mut self, req: rgoc_load::mono::InstRequest) {
+        self.insts.push(req);
+    }
+
+    /// 摆好实例化链的深度（`instance::check_instances` 每轮调一次）。
+    pub(crate) fn set_inst_depth(&mut self, d: usize) {
+        self.mono.set_depth(d);
+    }
+
+    /// 已受理的实例（续跑 lowering 用；`M12/Task 14`）。
+    #[must_use]
+    pub fn instances(&self) -> &[rgoc_load::mono::InstRequest] {
+        &self.insts
     }
 
     /// 查一个**局部具名类型**在检查期定下的 `TypeId`（M5/Task 15）。
@@ -402,7 +471,10 @@ impl<'a> Session<'a> {
     /// 收会话取检查结果。
     #[must_use]
     pub fn into_checked(self) -> CheckedPackage {
-        CheckedPackage { diags: self.diags }
+        CheckedPackage {
+            diags: self.diags,
+            instances: self.insts,
+        }
     }
 }
 
@@ -466,6 +538,10 @@ pub fn check_package_with<'p, T>(
     }
     crate::expr::check_package_decls(&mut session);
     crate::stmt::check_package_bodies(&mut session);
+    // Task 14：实例化闭包（不动点）。必须在包级检查**之后** —— 请求是在走
+    // 表达式时产生的，而实例体的复查又会产新请求（`A[int]` 的体里调
+    // `G[string]`），所以这是一个「抽干队列」的循环，不是一遍扫描。
+    crate::instance::check_instances(&mut session);
     // Task 33：初始化环。官方由 `initOrder()` 在类型检查末尾统一报
     // （`InvalidInitCycle`），这里同样放在最后 —— 顺序面的图与表达式面无关，
     // 但它读的是**整包**的 AST，早跑晚跑结果一样。

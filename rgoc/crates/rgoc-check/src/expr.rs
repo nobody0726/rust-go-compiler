@@ -715,6 +715,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         ) else {
             return InstSig::unchanged(sig, params, results);
         };
+        // 推断出来的实参同样要登记实例（`M12/Task 14`）—— 否则
+        // `F(1)`（不写 `[int]`）永远不会产实例，而它是最常见的写法。
+        if let Expr::Name(n) = fun {
+            self.s.request_inst(&n.value, &targs);
+        }
         let map: SubstMap = tparams.iter().copied().zip(targs).collect();
         let inst = substitute(self.s.tt, sig_ty, &map);
         let Some(sid) = self.signature_id(inst) else {
@@ -1020,6 +1025,10 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             );
             return Some(Operand::invalid());
         }
+
+        // ②.5 登记实例请求（`M12/Task 14`）：真正的代码生成由不动点那边做，
+        // 这里只负责「有人要 `F·int`」这件事被记下来。
+        self.s.request_inst(&n.value, &targs);
 
         // ③ 替换签名。`e.x` 的操作数必须是签名（泛型函数在装载面**没有**特例）。
         let callee = self.expr(file, &e.x);
