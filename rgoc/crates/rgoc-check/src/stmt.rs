@@ -723,8 +723,24 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                         let under = self
                             .type_expr(file, &t.type_)
                             .or_else(|| self.type_of_expr(file, &t.type_));
-                        if let Some(u) = under {
-                            self.s.tt.set_named_underlying(n, u);
+                        match under {
+                            Some(u) => self.s.tt.set_named_underlying(n, u),
+                            None => {
+                                // 本体解不出来 ⇒ 填 **invalid** 占位（`M12 Ruling
+                                // 24-2`）。`None` 的已知形态是「局部**泛型**类型
+                                // 的实例化」：`type U[_ any] int; type V U[int]`
+                                // —— check 面的局部声明不挂 `type_params`
+                                // （`add_named` 只造名字），`U[int]` 被 Index 臂
+                                // 当「非泛型 named + 实参」判 `None`（**U-M12-10**，
+                                // `nested.go` 的面，官方合法；M12 门禁无覆盖语料，
+                                // 登记后续）。不填的话这条 named **永远没有
+                                // 本体**，第一个读它的表达式（`V(0)` 转换 →
+                                // `underlying`）直接 panic（`table.rs:303`，
+                                // nested.go 实测）—— half-built 表不该被读到，
+                                // 但更不该 panic。
+                                let inv = self.s.tt.invalid();
+                                self.s.tt.set_named_underlying(n, inv);
+                            }
                         }
                     }
                 }

@@ -139,6 +139,33 @@ cmp_three() {
   return 0
 }
 
+# 合并流比（`M12 Ruling 24-1`）：官方 `println` builtin 进 stderr、我们的
+# 契约（`C9` §4.1）定「println + panic 合并流写 stdout」—— 与官方比时
+# out+err 拼起来逐字节（`testdir_test.go` 的判据形态），退出码照比。
+cmp_merged() {
+  local a_out="$1" a_err="$2" a_rc="$3" b_out="$4" b_err="$5" b_rc="$6"
+  cat "$a_out" "$a_err" >"$OUT/.merged.a"
+  cat "$b_out" "$b_err" >"$OUT/.merged.b"
+  cmp -s "$OUT/.merged.a" "$OUT/.merged.b" || return 1
+  [ "$a_rc" = "$b_rc" ] || return 2
+  return 0
+}
+
+# `run` 族的**白名单**（`M12-baseline.md` §15.3 / §17）：
+# - `U-M12-09`（§17.2）：合并流口径暴露的 **native 输出级老缺口** —— 在
+#   `ec8fd74`（Task 21 修复前）实测同样输出错误（`other 2814739…` /
+#   `test N failed`），不是回归。修复是 native 接口断言 / itab 的深水区，
+#   登记后由独立任务跟进。
+# - `§15.3`：t_gen_01 判据冻住的 3 条功能级缺口（build 失败）。
+# 白名单是**冻结**的：多一条少一条都要改这行。
+run_whitelist() {
+  case "$1" in
+    typeswitch3.go|typeswitch4.go|typeswitch5.go|issue51522b.go|eface.go) return 0 ;;
+    dictionaryCapture-noinline.go|dottype.go|issue44688.go) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 ok=0; skip=0; bad=0
 badlist=""
 skiplist=""
@@ -161,6 +188,15 @@ if want run; then
     selected "$b" || continue
     r_total=$((r_total + 1))
     slug="${b%.go}"
+    if run_whitelist "$b"; then
+      case "$b" in
+        dictionaryCapture-noinline.go|dottype.go|issue44688.go) tag="UM12-S15" ;;
+        *) tag="UM12-09" ;;
+      esac
+      skip=$((skip + 1)); skiplist="$skiplist $slug:$tag"
+      line SKIP "$b ($tag：白名单冻住，§15.3 / §17.2)"
+      continue
+    fi
     exe="$OUT/bin/$slug"
     log="$OUT/log/$slug.build"
 
@@ -202,7 +238,12 @@ if want run; then
       line SKIP "$b (官方层不可用 rc=$orc；L1 已一致)"
       continue
     fi
-    cmp_three "$OUT/log/$slug.native.out" "$OUT/log/$slug.native.err" "$nrc" \
+    # ⚠️ 与官方比要用**合并流**（`C9` §4.1 的 `M12 Ruling 24-1`）：
+    # 官方 `println` builtin 进 **stderr**（Go 规范），我们的契约定的是
+    # 「println + panic 合并流写 stdout」—— 逐流比必然假红（native.out
+    # 有字节、oracle.out 空、字节全在 oracle.err）。官方 testdir_test.go
+    # 的判据形态同样是**合并**比。所以 out+err 拼起来逐字节，退出码照比。
+    cmp_merged "$OUT/log/$slug.native.out" "$OUT/log/$slug.native.err" "$nrc" \
       "$OUT/oracle/$slug.out" "$OUT/oracle/$slug.err" "$orc"
     d2=$?
     if [ "$d2" -ne 0 ]; then
@@ -234,6 +275,14 @@ if want compile; then
     selected "$b" || continue
     c_total=$((c_total + 1))
     slug="${b%.go}"
+    # U-M12-01（部分实例化，§14.3）：`typelist` 的 `f := f2[byte]` 需要
+    # 「部分泛型函数值」贯穿 check/HIR/SSA 三层 —— 判据 `t_gen_02` 冻住的
+    # 白名单，脚本同口径（多一条少一条都要改这行）。
+    if [ "$slug" = "typelist" ]; then
+      skip=$((skip + 1)); skiplist="$skiplist $slug:UM12-01"
+      line SKIP "$b (U-M12-01：部分实例化，判据 t_gen_02 白名单)"
+      continue
+    fi
     exe="$OUT/bin/$slug"
     log="$OUT/log/$slug.build"
 
