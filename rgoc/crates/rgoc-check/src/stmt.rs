@@ -699,8 +699,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                         let n = self.s.tt.add_named(&t.name.value);
                         let ph = self.s.tt.named_type(n);
                         self.s.local_types.insert(key, ph);
-                        self.env
-                            .declare_type(&t.name.value, Operand::type_expr(ph));
+                        self.env.declare_type(&t.name.value, Operand::type_expr(ph));
                         let under = self
                             .type_expr(file, &t.type_)
                             .or_else(|| self.type_of_expr(file, &t.type_));

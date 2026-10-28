@@ -3121,6 +3121,14 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         let shape = {
             let tt = &*self.s.tt;
             let mut cur = unalias(tt, typ);
+            // 类型参数 ⇒ **核心类型**（`issue50833` 的
+            // `func c[P *S]() []P { return []P{{f: 1}} }`）：字面量的形状按
+            // 「P 的每个类型都长这样」展开（官方 go1.21+ 的推断语义）。
+            if matches!(tt.type_of(cur), Type::TypeParam(_))
+                && let Some(c) = rgoc_types::core_type(tt, cur)
+            {
+                cur = unalias(tt, c);
+            }
             if let Type::Pointer(e) = tt.type_of(cur) {
                 cur = unalias(tt, *e);
             }

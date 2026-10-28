@@ -516,23 +516,15 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         // 显式实参必须全是类型（有不是类型的 ⇒ 交给原路径报 `not a type`）。
         let mut explicit = Vec::with_capacity(tparams.len());
         for a in &arg_exprs {
-            match self.type_expr(file, a) {
-                Some(t) => explicit.push(Some(t)),
-                None => return None,
-            }
+            explicit.push(Some(self.type_expr(file, a)?));
         }
         while explicit.len() < tparams.len() {
             explicit.push(None);
         }
 
         // 原型签名（`F` 的形参里还是类型参数）。
-        let fop = self.expr(file, &ix.x);
-        let Some(sig) = fop.typ else {
-            return None;
-        };
-        let Some(sid) = self.signature_id(sig) else {
-            return None;
-        };
+        let sig = self.expr(file, &ix.x).typ?;
+        let sid = self.signature_id(sig)?;
         let sig_def = self.tt().signature_def(sid).clone();
         let params = self.tuple_vars(sig_def.params);
         // 实参（类型只用来推断；真正的求值在 call_value 里再做一遍）。
@@ -2179,7 +2171,19 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             let tt = self.tt();
             matches!(tt.type_of(underlying(tt, target)), Type::Interface(_))
         };
-        if !target_is_iface {
+        // 目标**曾是类型参数**（主检查遍里 `B` 还是形参）⇒ 官方跳过静态
+        // 可行判定（类型集运行期才知道）。复查期 `B` 已绑具体类型，靠位置
+        // 集合认出它（`Session::assert_tparam_sites` 的文档记了全程）。
+        let target_was_tp = {
+            let tt = self.tt();
+            if matches!(tt.type_of(unalias(tt, target)), Type::TypeParam(_)) {
+                self.s.assert_tparam_sites.insert(e.x.start_pos());
+                true
+            } else {
+                self.s.assert_tparam_sites.contains(&e.x.start_pos())
+            }
+        };
+        if !target_is_iface && !target_was_tp {
             let ok = {
                 let tt = self.tt();
                 implements(tt, target, xt, false).unwrap_or(true)

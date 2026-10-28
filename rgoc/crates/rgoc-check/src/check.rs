@@ -294,6 +294,14 @@ pub struct Session<'a> {
     inst_sites: std::collections::BTreeMap<(rgoc_lex::Pos, String), String>,
     /// 当前实例上下文（`""` = 包级函数体）。
     inst_ctx: String,
+    /// **类型断言目标曾是类型参数**的位置集（`issue51700` 的 `b1.(B)`）。
+    ///
+    /// 主检查遍（原型体）里 `B` 还是类型参数 ⇒ 官方对这类目标**跳过**静态
+    /// 可行判定（类型集运行期才知道）。实例体复查时 `B` 已绑到具体类型
+    /// （`f(S{})` ⇒ B=S），重算 `implements(S, interface{m2()})` 会判
+    /// 「不可能」—— 诊断被回滚但 operand 已 invalid，lowering 撞
+    /// `HIR-MISSING-TYPE`。复查命中这个集合 ⇒ 跳过判定。
+    pub(crate) assert_tparam_sites: std::collections::BTreeSet<rgoc_lex::Pos>,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -347,6 +355,7 @@ impl<'a> Session<'a> {
             opts,
             consts: std::collections::BTreeMap::new(),
             local_types: std::collections::BTreeMap::new(),
+            assert_tparam_sites: std::collections::BTreeSet::new(),
             diags: Vec::new(),
             reported_any: false,
             mono,
