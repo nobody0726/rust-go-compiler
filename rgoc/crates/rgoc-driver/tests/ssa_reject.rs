@@ -349,14 +349,26 @@ fn t_ssa_33_range_over_func_现在能跑了() {
 
 #[test]
 fn t_ssa_33_泛型在检查器就被拒() {
-    // 泛型（`G-M5-03`）：检查器不放行 ⇒ SSA 的 `-GENERIC` 无输入。
+    // 泛型（`G-M5-03`）：**M12/Task 15 起不成立了** —— 单态化在 HIR 之前完成，
+    // SSA 看到的只有具体函数（`F·int`），所以它既不拒、也不需要
+    // `SSA-UNSUPPORTED-GENERIC`。
+    //
+    // 这条判据的前身是「检查器不放行 ⇒ SSA 的 `-GENERIC` 无输入」。上游放行
+    // 之后它如期变红，按 `ssa_reject` 的老规矩（`range_over_func` 那条也一样）
+    // **翻成正向判据**：SSA 不该再看到任何类型参数，这条路径应当直接跑出 `1`。
+    //
+    // 名字保留（`..._就被拒`）是为了让 `git log -S` 还能找到这条判据的历史；
+    // 它的语义现在是「泛型不在 SSA 面」—— 拒的是**类型参数**，不是泛型程序。
     let src = "package main\n\nfunc F[T any](x T) T {\n\treturn x\n}\n\nfunc main() {\n\tprintln(F(1))\n}\n";
     let p = fixture("generic", src);
     let out = run(&p);
-    assert_eq!(out.exit, 1, "泛型必须被拒：{out:?}");
+    assert_eq!(out.exit, 0, "泛型现在能建图（实例已经下沉）：{out:?}");
+    // ⚠️ 这个 helper 跑的是 `ssa --verify`（**不执行**），所以 stdout 只可能
+    // 是 dump 或空。这里断言空：没吐半截 dump，也没退化成「拒绝」。
+    assert!(out.stdout.is_empty(), "不该有 dump：{out:?}");
     assert!(
         !out.stderr.contains("SSA-UNSUPPORTED-GENERIC"),
-        "这条码**不该**出现（检查器更早拒）：{:?}",
+        "这条码**不该**出现（SSA 看不到类型参数）：{:?}",
         out.stderr
     );
 }

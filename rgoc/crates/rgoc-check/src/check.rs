@@ -274,6 +274,12 @@ pub struct Session<'a> {
     /// 已受理的实例（受理序）。`take_inst` 取走的请求在这里留底 ——
     /// 它最终成为 [`CheckedPackage::instances`]。
     insts: Vec<rgoc_load::mono::InstRequest>,
+    /// **调用点 → 实例名**（`M12/Task 15`；见 [`Session::note_inst_site`]）。
+    ///
+    /// 键 = `(调用点的位置, 实例上下文)`；值 = `mono::mangled` 产出的实例名。
+    inst_sites: std::collections::BTreeMap<(rgoc_lex::Pos, String), String>,
+    /// 当前实例上下文（`""` = 包级函数体）。
+    inst_ctx: String,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -316,6 +322,8 @@ impl<'a> Session<'a> {
             mono,
             func_keys,
             insts: Vec::new(),
+            inst_sites: std::collections::BTreeMap::new(),
+            inst_ctx: String::new(),
         }
     }
 
@@ -350,6 +358,41 @@ impl<'a> Session<'a> {
     #[must_use]
     pub fn instances(&self) -> &[rgoc_load::mono::InstRequest] {
         &self.insts
+    }
+
+    /// 记一条「这个调用点落到哪个实例」（`M12/Task 15`）。
+    ///
+    /// # 为什么 lowering 需要这张表
+    ///
+    /// `F[int](x)` 与 `F(x)` 的**目标函数**只有检查面算得出来：显式那一档要
+    /// `type_expr` 逐项判、推断那一档要跑 `infer_for_call`（还会把无类型常量
+    /// 提升成默认型）。lowering 自己再推一遍就是**两份实现**，而 `D-M5-2` 的
+    /// 原话是「lowering 不自己推类型」—— 两份推断只要有一处口径不同
+    /// （`Id(7)` 推成 `untyped int` 还是 `int`），实例名就差一个字符，
+    /// 而症状是「调用了一个不存在的函数」，编译期一声不响。
+    ///
+    /// 键里带**实例上下文**：同一份 AST 会走两遍（包级一遍、每个实例一遍），
+    /// 同一个 `F[T]` 调用点在这两遍里落到**不同**的实例（`F·tp0` / `F·int`）。
+    pub fn note_inst_site(&mut self, pos: rgoc_lex::Pos, name: &str) {
+        self.inst_sites
+            .insert((pos, self.inst_ctx.clone()), name.to_owned());
+    }
+
+    /// 查一个调用点落在哪个实例（按**当前**实例上下文）。
+    #[must_use]
+    pub fn inst_site(&self, pos: rgoc_lex::Pos) -> Option<&str> {
+        self.inst_sites
+            .get(&(pos, self.inst_ctx.clone()))
+            .map(String::as_str)
+    }
+
+    /// 摆好「当前实例上下文」（`""` = 包级体）。
+    ///
+    /// `instance::check_instances` 在复查每个实例体之前调它，lowering 在下沉
+    /// 每个实例体之前调它 —— 两边必须**同值**，否则 [`Self::inst_site`] 查不到。
+    pub fn set_inst_ctx(&mut self, ctx: &str) {
+        self.inst_ctx.clear();
+        self.inst_ctx.push_str(ctx);
     }
 
     /// 查一个**局部具名类型**在检查期定下的 `TypeId`（M5/Task 15）。

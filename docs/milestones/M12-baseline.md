@@ -228,3 +228,84 @@ Phase 1（Task 5–11）的**承诺**是「把 check 面的**系统性**缺口�
 剩下的 12 个都是**单点**：每个只值 1–2 个文件，且大半要等 Phase 2
 （单态化 / 实例选择器）才能判。把它们挡在 Phase 1 门口只会让 Phase 2
 的实例都造不出来。
+
+---
+
+## 8. Phase 2 第一块砖后的账（Task 15，2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t15/baseline.tsv`（装置同 §0，只换
+`--out` 目录）。
+
+### 8.1 读数
+
+| family | total | check 过 | build 过（t14 → t15） | run 过（t14 → t15） |
+|---|---|---|---|---|
+| `run` | 71 | 62 | 3 → **28** | 3 → **28** |
+| `compile` | 40 | 37 | 6 → **19** | — |
+| `errorcheck` | 5 | 2 | 0 → 2 | — |
+| `rejected` | 76 | 0（全部干净拒绝 ✓） | — | — |
+
+装置（`run-native-typeparam.sh`）：**`ok 87 → 117`、`bad 105 → 75`**
+（分母 192 = 116 门禁 + 76 拒绝）。分族：`run 3 → 20`、`compile 6 → 19`、
+`errorcheck 2/5` 不变、`rejected 76/76` 不变。
+
+⚠️ **装置 `run 20` 与基线表 `run 28` 不矛盾，差的 8 个是三层口径**：
+
+| 形态 | 个数 | 文件 | 成因 |
+|---|---|---|---|
+| native 对、解释器崩/判错 | 5 | `devirtualize1` `devirtualize2` `equal` `issue51522a` `issue51522b` | 类型断言到接口后调方法（nil 解引用）、类型参数与接口判等 / `switch` |
+| **native 错**、解释器对 | 1 | `typeswitch5` | `f[float64](myfloat(9))` 我们打 `fooer 0`，官方打 `fooer 9` |
+| 流向口径（`D-M5-7`） | 2 | `shape1` `typeswitch7` | 我方 `println` 写 stdout、官方写 stderr；**内容逐字节相同** |
+
+`typeswitch5` 是本轮**新发现的 native 真错**（不是「能力未及」），单独登记为
+`F16`，归 Task 16 之后的 native 语义轮。
+
+### 8.2 `build` 失败形态的迁移（`check` 已过之后）
+
+| kind | t14 | t15 | Δ |
+|---|---|---|---|
+| `missing_type` | 69 | **41** | −28 |
+| `layout` | 7 | **4** | −3 |
+| `other` | 15 | **7** | −8 |
+| `verify` | 3 | **0** | −3 |
+| `panic` | 0 | **1** | +1 |
+| **合计** | **94** | **53** | **−41** |
+
+`panic` 那 1 个是 `dottype.go`：SSA 侧的 `todo!()`（`build.rs:4106`），与泛型无关，
+只是 `run` 走到它才暴露。
+
+### 8.3 剩下 41 个 `missing_type` 按「首条报文的表达式种类」
+
+| 种类 | 文件数 | 典型 |
+|---|---|---|
+| `Call` | 13 | 多值调用 / 内建 / 方法值 |
+| `CompositeLit` | 8 | 实例化具名类型作字面量类型（`Box[int]{v: 7}`）|
+| `Unary` | 7 | `-x` / `^x` 落在类型参数上 |
+| `TypeAssert` | 4 | `x.(T)` |
+| `Selector` | 2 | `x.f`（core type 是 struct）|
+| `Binary` | 2 | `a - b` / `a < b` |
+| `List` | 1 | `smoketest.go` 的返回表 |
+| `FuncLit` | 1 | |
+| 别种报文 | 3 | type switch 的 case、复合字面量类型非 struct/array/slice/map、`.Bat` 选择器 |
+
+`layout` 那 4 个（`issue45547` `issue51832` `issue51840` `issue55101`）是**一个根因**：
+`typeexpr.rs` 把 `X[A]` 退化成 `X`（`T-TY-29`），于是签名里出现
+「带类型参数的具名类型」（`Set[T]` `Cache[T]` `List[T]` `G[T]`）⇒ 没有运行期布局。
+它们和 `CompositeLit` 那 8 个是同一件事的两面。
+
+### 8.4 「20 个 run 绿」里一条语义证据都没有 —— 这是真的，不是缺陷
+
+装置报 `有输出 0 + 空输出 20`。查过：`absdiff.go` 的 `main` 体被上游整段注释掉
+（`issue45639`），`issue50417b.go` 是 `func main() {}`；全 71 个 run 语料里**只有
+12 个**文本上出现 `print`/`println`。这批语料本来就是「能编译且不崩」型 ——
+靠 `panic` 报错，不靠打印。
+
+⇒ `G12-2` 的语义证据目前**只能由我们自己的用例给**（`t_gen_15c`：三次 `println`，
+断言 stdout `7\n3\n9\n`）。别把「20 个绿」当成「20 个对」。
+
+⚠️ 由此暴露一条**口径阻塞**（`F17`）：我方 `print`/`println` 按 `D-M5-7` 写
+**stdout**，官方写 **stderr** ⇒ **任何会打印的 run 语料都过不了装置的 L2**
+（`shape1`/`typeswitch7` 实测）。M12 收口前必须在两条里裁一条：
+① 改我方流向对齐 Go（`C9` 随之改，全量测试里数以千计的 stdout 断言要跟着翻）；
+② 装置改按**合并流**比（`M5` 的做法），牺牲「流向分裂」的可见性。
+

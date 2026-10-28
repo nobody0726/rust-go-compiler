@@ -990,62 +990,48 @@ fn t_ex_32_generics_monomorphization() {
 
 /// `T-EX-33`：泛型**超出支持面**的形态必须被拒（退出码 1、stdout 空、带稳定码）。
 ///
-/// 三种超面形态各一条，覆盖三条不同的失败路径：
+/// # 这条判据的历史（三次翻面，每次都是能力前进）
 ///
-/// | 形态 | 实测拒绝码 | 卡在哪 |
-/// |---|---|---|
-/// | 显式实例化 `F[int](1)` | **`HIR-UNSUPPORTED-GENERIC`** | check 过了，lower 面拒（`M12/Task 6` 之后）|
-/// | 泛型类型字面量 `Box[int]{…}` | **`HIR-MISSING-TYPE`** | check 过了，lower 拿不到 `Box[int]` 的字段（`M12/Task 11` 之后）|
-/// | 带类型集约束的泛型函数 `Sum([]int{…})` | **`HIR-MISSING-TYPE`** | check 过了，lower 的 `range xs`（`[]T`）判不出遍历形态（`M12/Task 7` 之后）|
+/// 1. 第一版：三种泛型形态在**检查面**就被拒，码是通用的 `CHK-*`；
+/// 2. `M12/Task 6/7/11`：拒绝面漂到 HIR（`HIR-UNSUPPORTED-GENERIC` /
+///    `HIR-MISSING-TYPE`）—— 判据的措辞当时就写着「`M12` 收口时这三条会
+///    全部变成能跑，届时**移交**给 `T-GEN-*`，别当成必须一直红的守卫」；
+/// 3. `M12/Task 15`（今天）：**实例体发码**之后，显式实例化与类型集约束两条
+///    腿真的能跑了（输出 `1` / `6`）。只剩「泛型**类型**的复合字面量」
+///    `Box[int]{v:7}` 仍拒 —— 那要等 `type_expr` 认实例化的具名类型
+///    （`M12/Task 16`）。
 ///
-/// ⚠️ **判据的措辞要收紧**：`M5-tests.md` 要求的是「**稳定拒绝码**」，第一版
-/// 三条拿到的都是**通用的**检查诊断码（`CHK-*`），不是专属的
-/// `HIR-UNSUPPORTED-GENERIC`。后者在 HIR 层**存在**且能用（`RejectKind::code()`），
-/// 但只在「check 过了、lower 才拒」时才会走到。
-///
-/// **`M12/Task 6` 兑现了第一条腿**：检查器现在认识显式实例化（`F[int]` 不再被
-/// 读成「对函数取下标」）⇒ `F[int](1)` 一路走到 lower，拿到**专属码**。
-///
-/// **`M12/Task 7` 兑现了第三条腿**：`Sum([]int{1,2,3})` 现在能推出 `T = int`
-/// ⇒ 实参面精确通过 ⇒ 检查面不再报 `CHK-INVALID-ASSIGN`，而是走到 lower，
-/// 卡在 `range xs`（`xs` 的静态类型还是 `[]T`，单态化之前 lower 认不出来）。
-/// 码因此从检查面漂到 HIR 面 —— 这是**能力前进**，不是回归。
-///
-/// **`M12/Task 11` 兑现了第二条腿**：`Box[int]{v: 7}` 原先报
-/// `CHK-INVALID-SELECTOR` —— 那条**不是**检查期报的，是 lowering 期
-/// `Session::expr_in` 复查时「拿不到类型」被错误地翻译成检查面码。
-/// Task 11 把 lowering 期的上报回滚之后就只剩真正的 HIR 面码
-/// （`拿不到表达式 CompositeLit 的静态类型` / `选择器 .v 在 lowering 期找不到
-/// 字段或方法`）。**三条腿现在全是 HIR 专属码。**
-///
-/// ⚠️ `M12` 收口时这三条**会全部变成能跑**（那是 a 线的目的）。届时这条判据的
-/// 前提就消失了，要改成「`M12` 的 `T-GEN-*` 接管」而不是继续要求拒绝 ——
-/// 别把它当成「必须一直红」的守卫。
-///
-/// 所以 `T-EX-33` 的 verdict 仍是 **partial**（`G-M5-04`）：
-///
-/// * **兑现**：拒绝是**确定**的（同一输入每次同一个码）、**响亮**的（退出码 1、
-///   stdout 空）、**不会静默算错**；三条腿的码全部落在 HIR 面。
-/// * **未兑现**：`G-M5-04` 的原文是「用通用 `CHK-*` 码而不是**专属的
-///   `HIR-UNSUPPORTED-GENERIC`**」—— 后两条是 `HIR-MISSING-TYPE`，不是
-///   `HIR-UNSUPPORTED-GENERIC`。verdict 的最终裁决与 gap 的关闭留给
-///   `M12/Task 43`（那时这三条腿会变成能跑，判据要移交）。
-///
-/// 把三条码**写死**在这里：它们一旦变了，这条测试会红，提醒改 manifest 的
-/// verdict 与 `G-M5-04`，而不是悄悄漂移。
+/// 所以现在这条判据混合了两种形态：**能跑的两条翻成正向**（还顺手证明
+/// `G-M5-04` 的关闭是语义对、而不是「不报错了」），**仍不能跑的那条保留
+/// 拒绝断言**。等 Task 16 落地，第二条也翻正向，这条判据就可以整条退场。
 #[test]
 fn t_ex_33_out_of_surface_generics_are_rejected() {
-    // 显式实例化：官方 `go run` 打印 1，本仓拒。
-    rejected(
-        "t_ex_33_explicit",
-        "package main\n\
-         func F[T any](v T) T { return v }\n\
-         func main() {\n\
-         \tprintln(F[int](1))\n\
-         }\n",
-        "HIR-UNSUPPORTED-GENERIC",
+    // ⚠️ **这条判据在 `M12/Task 15` 已经移交了一半**（原文就写着「`M12` 收口时
+    // 这三条会全部变成能跑 …… 改成由 `T-GEN-*` 接管，别把它当成必须一直红的
+    // 守卫」）。今天的实测：
+    //
+    // * 第一条腿（显式实例化 `F[int](1)`）—— **能跑**，输出 `1`。
+    //   实例体下沉之后 `F·int` 是普通具体函数，不需要任何泛型支持。
+    // * 第三条腿（类型集约束 `Sum([]int{…})`）—— **能跑**，输出 `6`。
+    // * 第二条腿（**泛型类型**的字面量 `Box[int]{v:7}`）—— 仍拒。
+    //   缺的是「实例化后的具名类型作复合字面量的类型」：检查面在
+    //   `type_expr` 上对 `Type::Named` 的实例化还没接（`M12/Task 16` 的
+    //   `T-GEN-16` 面）。它的拒绝形态仍是 `HIR-MISSING-TYPE`。
+    //
+    // 三条都留着：前两条翻成正向（顺带钉住 `G-M5-04` 的关闭是**真的**语义对，
+    // 不是「不报错了」），第三条保留拒绝，等 Task 16 落地后再翻。
+    assert_eq!(
+        out(
+            "t_ex_33_explicit",
+            "package main\n\
+             func F[T any](v T) T { return v }\n\
+             func main() {\n\
+             \tprintln(F[int](1))\n\
+             }\n"
+        ),
+        "1\n",
+        "显式实例化现在能跑了（`M12/Task 15`）"
     );
-    // 泛型类型字面量：官方打印 7，本仓拒。
     rejected(
         "t_ex_33_gentype",
         "package main\n\
@@ -1056,22 +1042,24 @@ fn t_ex_33_out_of_surface_generics_are_rejected() {
          }\n",
         "HIR-MISSING-TYPE",
     );
-    // 类型集约束 + 切片实参：官方打印 6 / 4，本仓拒。
-    rejected(
-        "t_ex_33_typeset",
-        "package main\n\
-         type Num interface{ ~int | ~float64 }\n\
-         func Sum[T Num](xs []T) T {\n\
-         \tvar s T\n\
-         \tfor _, v := range xs {\n\
-         \t\ts += v\n\
-         \t}\n\
-         \treturn s\n\
-         }\n\
-         func main() {\n\
-         \tprintln(Sum([]int{1, 2, 3}))\n\
-         }\n",
-        "HIR-MISSING-TYPE",
+    assert_eq!(
+        out(
+            "t_ex_33_typeset",
+            "package main\n\
+             type Num interface{ ~int | ~float64 }\n\
+             func Sum[T Num](xs []T) T {\n\
+             \tvar s T\n\
+             \tfor _, v := range xs {\n\
+             \t\ts += v\n\
+             \t}\n\
+             \treturn s\n\
+             }\n\
+             func main() {\n\
+             \tprintln(Sum([]int{1, 2, 3}))\n\
+             }\n"
+        ),
+        "6\n",
+        "类型集约束 + 切片实参现在能跑了（`M12/Task 15`）"
     );
 }
 

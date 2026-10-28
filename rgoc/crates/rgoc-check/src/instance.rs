@@ -79,6 +79,10 @@ pub(crate) fn check_instances(s: &mut Session<'_>) {
         }
         // ② 摆深度：这一轮的体里发出的请求都是 `depth + 1`。
         s.set_inst_depth(req.depth);
+        // 同时摆**实例上下文**：体里的调用点落到的实例名与包级那一遍不同
+        // （`F[T]` 在这遍里是 `F·int`，包级那遍是 `F·tpN`），lowering 靠它
+        // 区分同一份 AST 的两遍（`Session::note_inst_site`）。
+        s.set_inst_ctx(&req.name);
         if let Some((file, f)) = func_of(s.pkg, req.origin) {
             let subst = tparam_subst(s, f, &req.args);
             // 实例体复查：诊断回滚（见模块文档）。
@@ -91,6 +95,7 @@ pub(crate) fn check_instances(s: &mut Session<'_>) {
     }
     // 回到包级深度：后面的诊断/续跑 lowering 不该继承某一层的深度。
     s.set_inst_depth(0);
+    s.set_inst_ctx("");
 }
 
 /// 报「实例化没收敛」。

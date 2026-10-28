@@ -176,21 +176,29 @@ fn run_oracle(args: &[&str]) -> (i32, String) {
 /// （红的必须红、绿的必须绿）才排除了「恒 OK」与「恒 BAD」两种坏法 ——
 /// 这正是 `M11` 的 `T-M12-02` 想防的那类「探针打错靶」。
 ///
-/// 选这两个文件是因为它们**今天**就是这个状态（`M12-baseline.md` §2）：
-/// `absdiff.go` 是 check 面失败（core type 运算），`issue47708.go` 是今天
-/// 3 个能跑通的之一。装置实现变了之后若两者状态互换，这条判据会红 ——
-/// 那时要改的是**这里登记的文件**，不是判据本身。
+/// 选这两个文件是因为它们**今天**就是这个状态：
+///
+/// * **红**：`dottype.go` —— `x := i.(T)` 之后的多值调用撞上 SSA 的
+///   `todo!()`（`build.rs:4106`，`build101`）。它是**真的**坏，且与单态化
+///   正交（`M12` 的 Task 17/18 才轮到），拿它当「已知红」不会被下一次
+///   实例化改动顺手修掉。
+/// * **绿**：`absdiff.go` —— `M12/Task 15` 之前它是 check 面失败（core type
+///   上的 `-`）；实例体发码之后**它翻绿了**。这条判据的旧版拿它当「已知红」，
+///   于是 Task 15 一落地判据就红 —— 装置没坏，是登记的状态过期了。
+///   按判据自己的原话：「要改的是这里登记的文件，不是判据本身」。
+///
+/// 装置实现变了之后若两者状态互换，这条判据会红。
 #[test]
 fn t_m12_02_装置打的是真靶() {
-    let (rc_bad, out_bad) = run_oracle(&["--list", "--only", "run", "--filter", "absdiff.go"]);
-    assert_eq!(rc_bad, 1, "absdiff.go 今天应当红：\n{out_bad}");
+    let (rc_bad, out_bad) = run_oracle(&["--list", "--only", "run", "--filter", "dottype.go"]);
+    assert_eq!(rc_bad, 1, "dottype.go 今天应当红：\n{out_bad}");
     assert!(
-        out_bad.contains("BAD") && out_bad.contains("absdiff.go"),
+        out_bad.contains("BAD") && out_bad.contains("dottype.go"),
         "红的理由必须指名道姓：\n{out_bad}"
     );
 
-    let (rc_ok, out_ok) = run_oracle(&["--list", "--only", "run", "--filter", "issue47708.go"]);
-    assert_eq!(rc_ok, 0, "issue47708.go 今天应当绿：\n{out_ok}");
+    let (rc_ok, out_ok) = run_oracle(&["--list", "--only", "run", "--filter", "absdiff.go"]);
+    assert_eq!(rc_ok, 0, "absdiff.go 今天应当绿：\n{out_ok}");
     assert!(out_ok.contains("OK"), "应当有一行 OK：\n{out_ok}");
     assert!(
         out_ok.contains("run 1/1"),

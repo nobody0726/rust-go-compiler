@@ -18,8 +18,20 @@
 //! * 顶层块以外的 `goto` ⇒ `HIR-UNSUPPORTED-GOTO`；
 //! * 泛型实例化 ⇒ `HIR-UNSUPPORTED-GENERIC`（只做非泛型子集）；
 //! * 跨包引用 ⇒ `HIR-MISSING-TYPE`（M5 语料全是单包）。
+//!
+//! # 泛型：原型不发码，实例发码（`M12/Task 15`）
+//!
+//! 泛型函数/方法的**原型**（形参类型还是 `T` 的那一份）**不进** `Program`：
+//! `T` 没有运行期布局，下沉它只会得到 `帧布局失败：v0 的类型 t32 没有运行期
+//! 布局`（`devirtualize1.go` 实测）。真正发码的是**实例**
+//! （`CheckedPackage.instances`），它们的体用「类型参数名 → 实参」替换后再走
+//! 一遍 [`Lowerer::lower_func`]。
+//!
+//! 调用点落到哪个实例**由检查面定**（`Session::inst_site`）：显式那一档要
+//! `type_expr` 逐项判、推断那一档要跑 `infer_for_call`，两处都在 `rgoc-check`
+//! 里 —— lowering 重推一遍就是两份实现（`D-M5-2`）。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rgoc_ast::{
     AssignOp, BlockStmt, CallExpr, CaseClause, CommClause, CompositeLit, Decl, DeclStmt,
@@ -32,6 +44,7 @@ use rgoc_check::operand::{Mode, Operand};
 use rgoc_const::{BasicId, Const, default_type_of};
 use rgoc_lex::{FileId, Pos};
 use rgoc_load::Package;
+use rgoc_load::mono::InstRequest;
 use rgoc_types::{Type, TypeId, TypeTable, unalias, underlying};
 
 use crate::diag::{HirReject, RejectKind};
@@ -166,6 +179,22 @@ struct Lowerer<'a, 'p> {
     /// `missing type in composite literal`（`align.go` / `escape3.go` /
     /// `ken/convert.go` / `nilptr2.go` 实测）。类型只能来自外层元素类型。
     hint: Option<TypeId>,
+    /// 泛型**原点**：`FuncKey`（检查面的登记序 = `Decl::Func` 的全局下标）→
+    /// `(ast 下标, decl 下标)`。
+    ///
+    /// 这些原型**不发码**（见模块文档）；表只用来在第二遍按实例请求找回
+    /// 对应的 AST。
+    origins: BTreeMap<usize, (usize, usize)>,
+    /// 实例名 → 函数（`CheckedPackage.instances` 的兑现）。
+    ///
+    /// 名字由 `rgoc_load::mono::mangled` 产出（`·` 分隔实参、`.` 分隔复合类型
+    /// 内部段）—— Go 标识符不允许这两个字符，所以用户符号不可能冒充。
+    insts_by_name: BTreeMap<String, FuncId>,
+    /// 待下沉的实例请求（受理序）。
+    insts: Vec<InstRequest>,
+    /// 泛型函数名（名字面）：下沉到 `F` 时若它没有实例，要**响亮失败**而不是
+    /// 当成「不存在的名字」。
+    generic_names: BTreeSet<String>,
 }
 
 impl<'a, 'p> Lowerer<'a, 'p> {
@@ -195,6 +224,10 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             rejects: Vec::new(),
             pending_label: None,
             hint: None,
+            origins: BTreeMap::new(),
+            insts_by_name: BTreeMap::new(),
+            insts: Vec::new(),
+            generic_names: BTreeSet::new(),
         }
     }
 
@@ -420,10 +453,24 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         // 声明在**后面**，而 lowering 找方法靠 `self.methods`。边收边 lower
         // 会让前向声明的方法在 lowering 期「不存在」（`nilptr2.go` 实测：
         // 四个 `.F` 全部报「选择器找不到字段或方法」）。
+        let mut key = 0usize;
         for (ai, ast) in pkg.asts.iter().enumerate() {
             for (di, decl) in ast.decls.iter().enumerate() {
                 match decl {
                     Decl::Func(f) => {
+                        // `FuncKey` 的编号与检查面 `Session::new` **逐字相同**
+                        // （`pkg.asts` 序 → `decls` 序 → 只数 `Decl::Func`）。
+                        // 两处不同步的症状是「实例用的是别的函数」，而且一条
+                        // 诊断都不会有。
+                        let this = key;
+                        key += 1;
+                        if is_generic_decl(f) {
+                            // 泛型原型**不发码**（`M12/Task 15`）：形参/局部还是
+                            // `T`，没有运行期布局。真正发码的是实例。
+                            self.origins.insert(this, (ai, di));
+                            self.generic_names.insert(f.name.value.clone());
+                            continue;
+                        }
                         let fid = FuncId(u32::try_from(self.prog.funcs.len()).unwrap_or(u32::MAX));
                         self.prog
                             .funcs
@@ -461,7 +508,23 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
         self.prog.main = self.funcs_by_name.get("main").copied();
 
-        // ② **初始化式**：函数表与全局表都已就绪，前向引用随便用。
+        // ② **实例**：名字与实参组都由检查面定（`CheckedPackage.instances`），
+        //    这里只造壳；体在第二遍按替换下沉（`M12/Task 15`）。
+        //
+        //    顺序 = 受理序（检查面的 BFS）。确定性由 `Mono` 的 memo 保证：
+        //    同一 `(origin, identical 的实参组)` 只会入队一次。
+        //
+        //    必须排在初始化式**之前**：`var x = Id(7)` 的右侧要在
+        //    `insts_by_name` 里查得到 `Id·int`。
+        let reqs: Vec<InstRequest> = self.s.instances().to_vec();
+        for req in &reqs {
+            let fid = FuncId(u32::try_from(self.prog.funcs.len()).unwrap_or(u32::MAX));
+            self.prog.funcs.push(Func::placeholder(req.name.clone()));
+            self.insts_by_name.insert(req.name.clone(), fid);
+        }
+        self.insts = reqs;
+
+        // ③ **初始化式**：函数表与全局表都已就绪，前向引用随便用。
         for (ai, ast) in pkg.asts.iter().enumerate() {
             let file = pkg.files[ai];
             for decl in &ast.decls {
@@ -520,6 +583,36 @@ impl<'a, 'p> Lowerer<'a, 'p> {
     // ───────────────────────── 第二遍：函数体 ─────────────────────────
 
     fn lower_all(&mut self) {
+        // ① **实例体**先下沉（`M12/Task 15`）。
+        //
+        //    顺序反过来的代价是精度：非泛型体里调实例时，`coerce_list` 要按
+        //    `prog.funcs[fid].param_types` 收敛实参，而那份表只有下沉完才有。
+        //    数组/结构体实参漏收敛不会当场报错（解释器不看静态类型），但 SSA
+        //    的 `V3` 会在「常量 `Int(7)` 的类型是 `T`」上炸（`M12-baseline.md`
+        //    §3.2 的 `verify` 2 个就是这个形状）。
+        let insts = std::mem::take(&mut self.insts);
+        for req in insts {
+            let Some(&(ai, di)) = self.origins.get(&req.origin) else {
+                continue;
+            };
+            let file = self.pkg.files[ai];
+            let Decl::Func(f) = &self.pkg.asts[ai].decls[di] else {
+                continue;
+            };
+            let f = f.clone();
+            let Some(&fid) = self.insts_by_name.get(&req.name) else {
+                continue;
+            };
+            self.file = file;
+            // 「类型参数名 → 实参」由检查面给（`instance::subst_of`）—— 名字与
+            // id 的配对口径只有那一份（`Package::generic_funcs` +
+            // `FuncDecl::tparams` + 请求实参，三处按声明序 zip）。
+            let subst = rgoc_check::instance::subst_of(self.s, &req);
+            self.s.set_inst_ctx(&req.name);
+            self.lower_func(fid, &f, &subst);
+            self.s.set_inst_ctx("");
+        }
+        // ② 包级 / 方法体。
         let pending = std::mem::take(&mut self.pending);
         for (fid, ai, di) in pending {
             let file = self.pkg.files[ai];
@@ -528,7 +621,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             };
             let f = f.clone();
             self.file = file;
-            self.lower_func(fid, &f);
+            self.lower_func(fid, &f, &[]);
         }
         self.prog.init_order = self.order_inits();
     }
@@ -556,25 +649,42 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         out
     }
 
-    fn lower_func(&mut self, fid: FuncId, f: &FuncDecl) {
+    /// 下沉一个函数体。
+    ///
+    /// `subst` 是「类型参数名 → 实参」（`M12/Task 15`）：空表 = 普通函数；
+    /// 非空 = **实例体**，里面每个类型表达式（`T` / `[]T` / `Box[T]`）都要按它
+    /// 替换。声明进**函数层**的 `types`，于是 `check_env` 会把它交给检查器
+    /// —— 替换走的是检查面那一套求值器，不是 lowering 自己拼的映射
+    /// （`D-M5-2`：类型只从会话取）。
+    fn lower_func(&mut self, fid: FuncId, f: &FuncDecl, subst: &[(String, TypeId)]) {
         let mut ctx = FnCtx::new(fid);
+        // 类型参数先在**函数层**落地（与检查面 `check_instance_body` 的
+        // `env.declare(name, Operand::type_expr(t))` 同一层、同一含义）。
+        for (name, t) in subst {
+            if let Some(layer) = ctx.types.first_mut() {
+                layer.insert(name.clone(), *t);
+            }
+        }
         let mut params = Vec::new();
         let mut param_types = Vec::new();
         let mut results = Vec::new();
         let mut result_types = Vec::new();
         let mut named_results = false;
 
+        // 先把上下文压栈：签名里的类型表达式要走 `check_env`（替换生效），
+        // 而 `check_env` 只看 `self.stack`。
+        self.stack.push(ctx);
+
         // 接收者先占一个槽（方法）。
         if let Some(recv) = &f.recv {
             let typ = self
-                .s
-                .type_expr_of(self.file, &recv.type_)
+                .type_in_body(&recv.type_)
                 .unwrap_or_else(|| self.s.tt.invalid());
-            let slot = ctx.alloc_t(typ);
+            let slot = self.alloc_slot(typ);
             param_types.push(typ);
             params.push(slot);
             if let Some(n) = &recv.name {
-                ctx.declare(&n.value, Local { slot, typ });
+                self.cur_mut().declare(&n.value, Local { slot, typ });
             }
         }
 
@@ -583,24 +693,23 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             for p in &ft.params {
                 let (typ, dots) = self.param_type(&p.type_);
                 variadic |= dots;
-                let slot = ctx.alloc_t(typ);
+                let slot = self.alloc_slot(typ);
                 params.push(slot);
                 param_types.push(typ);
                 if let Some(n) = &p.name {
-                    ctx.declare(&n.value, Local { slot, typ });
+                    self.cur_mut().declare(&n.value, Local { slot, typ });
                 }
             }
             for r in &ft.results {
                 let typ = self
-                    .s
-                    .type_expr_of(self.file, &r.type_)
+                    .type_in_body(&r.type_)
                     .unwrap_or_else(|| self.s.tt.invalid());
-                let slot = ctx.alloc_t(typ);
+                let slot = self.alloc_slot(typ);
                 results.push(slot);
                 result_types.push(typ);
                 if let Some(n) = &r.name {
                     named_results = true;
-                    ctx.declare(&n.value, Local { slot, typ });
+                    self.cur_mut().declare(&n.value, Local { slot, typ });
                 }
             }
         } else {
@@ -612,7 +721,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             );
         }
 
-        self.stack.push(ctx);
         // 进了新函数体，外层复合字面量的元素类型提示就不再适用。
         let saved_hint = self.hint.take();
         let body = match &f.body {
@@ -638,19 +746,21 @@ impl<'a, 'p> Lowerer<'a, 'p> {
     }
 
     /// 形参类型：`...T` ⇒ `[]T` + 变参位。
+    ///
+    /// 走 [`Self::type_in_body`]（带局部作用域 + 实例替换）而不是
+    /// `Session::type_expr_of`：实例体里 `func F[T any](x T)` 的形参类型必须
+    /// 落到实参上，否则槽类型停在 `T` 上，下游 `layout` 当场炸
+    /// （`M12-baseline.md` §3.2 的 `帧布局失败：v0 的类型 t32`）。
     fn param_type(&mut self, e: &AExpr) -> (TypeId, bool) {
         if let AExpr::DotsType(d) = e {
             let elem = self
-                .s
-                .type_expr_of(self.file, &d.elem)
+                .type_in_body(&d.elem)
                 .unwrap_or_else(|| self.s.tt.invalid());
             let slice = self.s.tt.add_slice(elem);
             return (slice, true);
         }
         (
-            self.s
-                .type_expr_of(self.file, e)
-                .unwrap_or_else(|| self.s.tt.invalid()),
+            self.type_in_body(e).unwrap_or_else(|| self.s.tt.invalid()),
             false,
         )
     }
@@ -2272,6 +2382,12 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 let iop_env = self.check_env();
                 let iop = self.s.expr_in(self.file, &ix.index, &iop_env);
                 if iop.mode == Mode::TypeExpr {
+                    // `F[int]` 在值语境里就是**那个实例化后的函数**
+                    // （`M12/Task 15`）：检查面已经把它落到某个实例上，
+                    // 这里翻成函数值。
+                    if let Some(fid) = self.inst_target(e) {
+                        return Expr::new(ExprKind::FuncLit(fid), typ);
+                    }
                     self.reject(
                         ix.pos,
                         RejectKind::Generic,
@@ -2385,6 +2501,19 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
         if let Some(fid) = self.funcs_by_name.get(&n.value) {
             return Expr::new(ExprKind::FuncLit(*fid), typ);
+        }
+        // 泛型函数名作值（未实例化）—— 大概率是推断调用（`F(…)`）的 callee
+        // 被单独 lower 到，检查面已经给了实例（`M12/Task 15`）。
+        if self.generic_names.contains(&n.value) {
+            if let Some(fid) = self.inst_at(n.pos) {
+                return Expr::new(ExprKind::FuncLit(fid), typ);
+            }
+            self.reject(
+                n.pos,
+                RejectKind::Generic,
+                format!("泛型函数 {} 没有落到任何实例（U-M5-10）", n.value),
+            );
+            return Expr::new(ExprKind::Nil, typ);
         }
         // `true` / `false` 是 universe 常量，走上面的常量分支就够；到这里说明
         // 名字既不是局部也不是包级对象 —— 拒绝（不猜）。
@@ -2714,6 +2843,14 @@ impl<'a, 'p> Lowerer<'a, 'p> {
     }
 
     fn lower_callee(&mut self, c: &CallExpr, fop: &Operand) -> Callee {
+        // 泛型调用点：**目标实例由检查面定**（`Session::inst_site`），这里只翻译。
+        //
+        // 显式（`F[int](…)`）与推断（`F(…)`）在这里合流：检查面已经把两档
+        // 都归到同一个 `(origin, 实参组)` 上，并记在**这个 callee 节点**的
+        // 位置上（`M12/Task 15`）。
+        if let Some(fid) = self.inst_target(&c.fun) {
+            return Callee::Func(fid);
+        }
         if let AExpr::Selector(se) = &*c.fun {
             // 方法表达式**调用**：`T.M(recv, args…)`。`se.x` 是类型 ⇒ 接收者
             // 是**实参**（第 0 个），不是 `recv`。这里必须直接给出 `Func`，
@@ -2779,6 +2916,32 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
         let _ = fop;
         Callee::Value(Box::new(self.lower_expr(&c.fun)))
+    }
+
+    /// 这个表达式是不是一个「已落到某个实例」的泛型引用（`M12/Task 15`）。
+    ///
+    /// 两种形状：
+    ///
+    /// * `F[int]` —— `Expr::Index`（显式实例化；值语境与调用语境共用）；
+    /// * `F` —— `Expr::Name`（推断调用 `F(…)`；检查面在 `instantiate_callee`
+    ///   里把推断结果记在名字的位置上）。
+    ///
+    /// 查表用**当前实例上下文**（`Session::set_inst_ctx`）：同一份 AST 在包级
+    /// 那一遍与实例那一遍里，同一个 `F[T]` 落到不同的实例。查不到 ⇒ `None`
+    /// （不是泛型调用，或检查面没给出结论 —— 后者交给调用方按原路拒绝）。
+    fn inst_target(&self, e: &AExpr) -> Option<FuncId> {
+        let pos = match e {
+            AExpr::Name(n) => n.pos,
+            AExpr::Index(ix) => ix.pos,
+            _ => return None,
+        };
+        self.inst_at(pos)
+    }
+
+    /// [`Self::inst_target`] 的位置版（`lower_name` 手里只有 `Name`）。
+    fn inst_at(&self, pos: Pos) -> Option<FuncId> {
+        let name = self.s.inst_site(pos)?;
+        self.insts_by_name.get(name).copied()
     }
 
     /// 被调方是不是变参函数（`...T`）。
@@ -3306,6 +3469,37 @@ fn is_addr_expr(e: &AExpr) -> bool {
         AExpr::Name(_) | AExpr::Selector(_) | AExpr::Index(_) => true,
         AExpr::Unary(o) => o.op == Op::Mul,
         AExpr::Paren(p) => is_addr_expr(&p.x),
+        _ => false,
+    }
+}
+
+/// 这个 `func` 声明是不是**泛型**（原型不发码，`M12/Task 15`）。
+///
+/// 两条判据，缺一不可：
+///
+/// * **自己的类型参数**（`func F[T any](…)`）—— `FuncDecl::tparams` 非空；
+/// * **接收者声明的类型参数**（`func (b *Box[T]) M()`）—— 接收者写成
+///   `Box[…T…]` 的形状。装载面用同一个形状判据（`decls.rs::recv_type_args`），
+///   所以两边对「哪些方法带 T」不会分叉。
+///
+/// ⚠️ 这里**不**看「体里有没有用到 T」：`func F[T any]() int` 的体可以一次都
+/// 不碰 `T`，但它仍然不能被**调用**（`F` 不是值，`F[int]` 才是），下沉它只会
+/// 产出一个谁也调不到的函数 —— 而它的实例会另行下沉。
+fn is_generic_decl(f: &FuncDecl) -> bool {
+    if !f.tparams.is_empty() {
+        return true;
+    }
+    f.recv
+        .as_ref()
+        .is_some_and(|r| recv_has_type_args(&r.type_))
+}
+
+/// 接收者类型里有没有形参表（`Box[T]` / `*Box[T]` / `(Box[T])`）。
+fn recv_has_type_args(e: &AExpr) -> bool {
+    match e {
+        AExpr::Paren(p) => recv_has_type_args(&p.x),
+        AExpr::Unary(u) if u.op == Op::Mul && u.y.is_none() => recv_has_type_args(&u.x),
+        AExpr::Index(_) => true,
         _ => false,
     }
 }

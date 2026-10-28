@@ -719,6 +719,10 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         // `F(1)`（不写 `[int]`）永远不会产实例，而它是最常见的写法。
         if let Expr::Name(n) = fun {
             self.s.request_inst(&n.value, &targs);
+            // 并记下「这个调用点落到哪个实例」（`M12/Task 15`）：lowering 按
+            // 位置来查，**不**自己再推断一遍（详见 `Session::note_inst_site`）。
+            let name = rgoc_load::mono::mangled(self.s.tt, &n.value, &targs);
+            self.s.note_inst_site(n.pos, &name);
         }
         let map: SubstMap = tparams.iter().copied().zip(targs).collect();
         let inst = substitute(self.s.tt, sig_ty, &map);
@@ -1029,6 +1033,11 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         // ②.5 登记实例请求（`M12/Task 14`）：真正的代码生成由不动点那边做，
         // 这里只负责「有人要 `F·int`」这件事被记下来。
         self.s.request_inst(&n.value, &targs);
+        // 并把「这个 `F[int]` 落到哪个实例」记在**本节点**的位置上
+        // （`M12/Task 15`）：lowering 的 `AExpr::Index` 那一支按位置查，
+        // 值语境（`g := F[int]`）与调用语境（`F[int](x)`）共用这一条。
+        let inst_name = rgoc_load::mono::mangled(self.s.tt, &n.value, &targs);
+        self.s.note_inst_site(e.pos, &inst_name);
 
         // ③ 替换签名。`e.x` 的操作数必须是签名（泛型函数在装载面**没有**特例）。
         let callee = self.expr(file, &e.x);

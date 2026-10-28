@@ -12,6 +12,8 @@
 //! 文件全误排除）。所以这里不抄一份文件名清单，而是让 `m12-classify.sh` 现算
 //! 一份到临时目录再读 —— 语料一变，这里跟着变。
 
+mod support;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1256,4 +1258,117 @@ fn t_gen_14d_实例化环有码() {
         codes.iter().any(|c| c == "TYP-INVALID-INSTANCE-CYCLE"),
         "实例化环没有报码（静默截断？）：{codes:?}"
     );
+}
+
+// ── Task 15：泛型原型不发码 / 实例体发码 ─────────────────────────────
+
+/// 跑 `run --dump-hir`，返回 dump 文本（不跑程序 —— 那个旗标的语义就是「只出 dump」）。
+fn hir_dump(name: &str, src: &str) -> String {
+    let p = probe(name, src);
+    let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+        .args(["run", "--dump-hir"])
+        .arg(&p)
+        .output()
+        .expect("起不了 run --dump-hir");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "`{name}` 的 lowering 应当成功，实际退出 {:?}\nstderr:\n{}\ndump:\n{text}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    text
+}
+
+/// dump 里的函数名（`# func <i> <名字>` 那一列）。
+fn dumped_funcs(dump: &str) -> Vec<String> {
+    dump.lines()
+        .filter_map(|l| l.strip_prefix("# func "))
+        .filter_map(|rest| rest.split_once(' ').map(|(_, n)| n.to_string()))
+        .collect()
+}
+
+/// `T-GEN-15`：**泛型原型不发码**，发码的是实例。
+///
+/// # 为什么这条是 M12a 的第一块砖
+///
+/// 原型的形参类型还是 `T`，没有运行期布局 —— 下沉它只会得到
+/// `帧布局失败：v0 的类型 t32 没有运行期布局`（`devirtualize1.go` 实测），
+/// 而它**本来就不该被调用**（`F` 不是值，`F[int]` 才是）。真正要发码的是
+/// 实例，名字形如 `Id·int`（`M12/Task 13` 的 `mangled`）。
+///
+/// 判据用**精确函数表**而不是「能跑」：能跑只证明有一条路通了，
+/// 精确函数表才钉住「原型不在里面、实例在里面、没用的泛型一条也不发」。
+#[test]
+fn t_gen_15_原型不发码() {
+    let dump = hir_dump(
+        "gen15a",
+        r#"
+package main
+
+func Id[T any](x T) T { return x }
+
+// 从没被调用过的泛型：一条也不该发。
+func Unused[T any](v T) T { return v }
+
+func main() { println(Id(7)) }
+"#,
+    );
+    let names = dumped_funcs(&dump);
+    assert_eq!(
+        names,
+        vec!["main".to_string(), "Id\u{00b7}int".to_string()],
+        "函数表应当是「main + Id·int」两条（原型与未使用的泛型都不发码）：{names:?}\n{dump}"
+    );
+}
+
+/// `T-GEN-15b`：显式 `Id[int](9)` 与推断 `Id(7)` 落到**同一个**实例。
+///
+/// 两档推断/替换在检查面的两条路（`explicit_instantiation` /
+/// `instantiate_callee`），但实例的键都是 `(origin, 实参组)` —— 一旦无类型常量
+/// 在两条路上被提升成不同的类型（`untyped int` vs `int`），实例名就会差一个
+/// 后缀，于是同一份逻辑被造两遍，且 `Id(int)` 那一份的形参类型不对。
+#[test]
+fn t_gen_15b_显式与推断同一个实例() {
+    let c = check_src(
+        r#"
+package main
+
+func Id[T any](x T) T { return x }
+
+func main() {
+	println(Id(7))
+	println(Id[int](9))
+}
+"#,
+    );
+    let names: Vec<&str> = c.instances.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(names, vec!["Id\u{00b7}int"], "实例表不对：{names:?}");
+}
+
+/// `T-GEN-15c`：实例体在 native 上**跑得出正确结果**（不是「没崩」）。
+///
+/// 覆盖三档：推断调用、双形参 + 联合约束、显式实例化。
+#[test]
+fn t_gen_15c_native_实例体可执行() {
+    let out = support::native_harness::build_and_run(
+        "gen15c",
+        r#"
+package main
+
+func Id[T any](x T) T { return x }
+
+func Add[T int | float64](a, b T) T { return a + b }
+
+func main() {
+	println(Id(7))
+	println(Add(1, 2))
+	println(Id[int](9))
+}
+"#,
+    )
+    .expect("native 编译/运行失败");
+    assert_eq!(out.stdout, "7\n3\n9\n");
+    assert_eq!(out.exit, 0);
 }
