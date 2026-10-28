@@ -995,7 +995,7 @@ fn t_ex_32_generics_monomorphization() {
 /// | 形态 | 实测拒绝码 | 卡在哪 |
 /// |---|---|---|
 /// | 显式实例化 `F[int](1)` | **`HIR-UNSUPPORTED-GENERIC`** | check 过了，lower 面拒（`M12/Task 6` 之后）|
-/// | 泛型类型字面量 `Box[int]{…}` | `CHK-INVALID-SELECTOR` | 实例化后的类型是 invalid，取不到字段 |
+/// | 泛型类型字面量 `Box[int]{…}` | **`HIR-MISSING-TYPE`** | check 过了，lower 拿不到 `Box[int]` 的字段（`M12/Task 11` 之后）|
 /// | 带类型集约束的泛型函数 `Sum([]int{…})` | **`HIR-MISSING-TYPE`** | check 过了，lower 的 `range xs`（`[]T`）判不出遍历形态（`M12/Task 7` 之后）|
 ///
 /// ⚠️ **判据的措辞要收紧**：`M5-tests.md` 要求的是「**稳定拒绝码**」，第一版
@@ -1010,7 +1010,13 @@ fn t_ex_32_generics_monomorphization() {
 /// ⇒ 实参面精确通过 ⇒ 检查面不再报 `CHK-INVALID-ASSIGN`，而是走到 lower，
 /// 卡在 `range xs`（`xs` 的静态类型还是 `[]T`，单态化之前 lower 认不出来）。
 /// 码因此从检查面漂到 HIR 面 —— 这是**能力前进**，不是回归。
-/// 剩下第二条仍卡在检查面（选择器，`M12` 的 Task 15）。
+///
+/// **`M12/Task 11` 兑现了第二条腿**：`Box[int]{v: 7}` 原先报
+/// `CHK-INVALID-SELECTOR` —— 那条**不是**检查期报的，是 lowering 期
+/// `Session::expr_in` 复查时「拿不到类型」被错误地翻译成检查面码。
+/// Task 11 把 lowering 期的上报回滚之后就只剩真正的 HIR 面码
+/// （`拿不到表达式 CompositeLit 的静态类型` / `选择器 .v 在 lowering 期找不到
+/// 字段或方法`）。**三条腿现在全是 HIR 专属码。**
 ///
 /// ⚠️ `M12` 收口时这三条**会全部变成能跑**（那是 a 线的目的）。届时这条判据的
 /// 前提就消失了，要改成「`M12` 的 `T-GEN-*` 接管」而不是继续要求拒绝 ——
@@ -1019,8 +1025,11 @@ fn t_ex_32_generics_monomorphization() {
 /// 所以 `T-EX-33` 的 verdict 仍是 **partial**（`G-M5-04`）：
 ///
 /// * **兑现**：拒绝是**确定**的（同一输入每次同一个码）、**响亮**的（退出码 1、
-///   stdout 空）、**不会静默算错**；且第一条腿已经是专属码。
-/// * **未兑现**：另两条的码不是专属的（它们会在 `M12a` 里变成能跑）。
+///   stdout 空）、**不会静默算错**；三条腿的码全部落在 HIR 面。
+/// * **未兑现**：`G-M5-04` 的原文是「用通用 `CHK-*` 码而不是**专属的
+///   `HIR-UNSUPPORTED-GENERIC`**」—— 后两条是 `HIR-MISSING-TYPE`，不是
+///   `HIR-UNSUPPORTED-GENERIC`。verdict 的最终裁决与 gap 的关闭留给
+///   `M12/Task 43`（那时这三条腿会变成能跑，判据要移交）。
 ///
 /// 把三条码**写死**在这里：它们一旦变了，这条测试会红，提醒改 manifest 的
 /// verdict 与 `G-M5-04`，而不是悄悄漂移。
@@ -1045,7 +1054,7 @@ fn t_ex_33_out_of_surface_generics_are_rejected() {
          \tb := Box[int]{v: 7}\n\
          \tprintln(b.v)\n\
          }\n",
-        "CHK-INVALID-SELECTOR",
+        "HIR-MISSING-TYPE",
     );
     // 类型集约束 + 切片实参：官方打印 6 / 4，本仓拒。
     rejected(

@@ -113,7 +113,7 @@
         "T-EX-32",
         "T-EX-33"
       ],
-      "evidence": "T-EX-25..31 全绿（含 1.22 loopvar 的 012、typed nil、断言双值、type switch 四支）；T-EX-32 只到 any + 推断（G-M5-03）；T-EX-33 拒绝确定；显式实例化那条已拿到专属码（M12/Task 6），类型集那条 check 已过、卡在 lower 的 range（HIR-MISSING-TYPE，M12/Task 7），只剩泛型类型字面量仍是通用 CHK 码（G-M5-04）"
+      "evidence": "T-EX-25..31 全绿（含 1.22 loopvar 的 012、typed nil、断言双值、type switch 四支）；T-EX-32 只到 any + 推断（G-M5-03）；T-EX-33 拒绝确定，三条腿的码全在 HIR 面 —— 显式实例化 HIR-UNSUPPORTED-GENERIC（M12/Task 6）、类型集 HIR-MISSING-TYPE（M12/Task 7）、类型字面量 HIR-MISSING-TYPE（M12/Task 11 把 lowering 期的重复上报回滚之后）"
     },
     "EX-5": {
       "name": "defer/panic/recover",
@@ -443,7 +443,7 @@
       "id": "T-EX-33",
       "gate": "EX-4",
       "verdict": "partial",
-      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_33：三条超面形态退出码 1、stdout 空；显式实例化那条已是专属码 HIR-UNSUPPORTED-GENERIC（M12/Task 6 兑现）；类型集那条 check 面已通过、卡在 lower 的 range xs（HIR-MISSING-TYPE，M12/Task 7 兑现）；只剩泛型类型字面量仍是通用 CHK-INVALID-SELECTOR（G-M5-04）",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_33：三条超面形态退出码 1、stdout 空；三条腿的码全在 HIR 面 —— 显式实例化 HIR-UNSUPPORTED-GENERIC（M12/Task 6 兑现）、类型集 HIR-MISSING-TYPE（M12/Task 7 兑现）、类型字面量 HIR-MISSING-TYPE（M12/Task 11 兑现：原先那条 CHK-INVALID-SELECTOR 是 lowering 期 Session::expr_in 复查的误报，回滚之后只剩真 HIR 码）。G-M5-04 的关闭与本条 verdict 的最终裁决留给 M12/Task 43",
       "leg": "甲",
       "name": "泛型超出面拒绝"
     },
@@ -959,13 +959,13 @@
       {
         "id": "G-M5-03",
         "item": "泛型只到「any 约束 + 类型推断」（T-EX-32）",
-        "note": "实测：Id(1)/Id(\"s\") 正确；F[int](1) 现在报 HIR-UNSUPPORTED-GENERIC（M12/Task 6 让检查器认识显式实例化，该腿已兑现）、Box[int]{v:7} 报 CHK-INVALID-SELECTOR、Sum([]int{...}) 报 CHK-INVALID-ASSIGN。单态化的执行面在 interp 里已就位，剩下两条仍卡在检查面 —— 与 G-M5-04 同根",
+        "note": "实测：Id(1)/Id(\"s\") 正确；F[int](1) 报 HIR-UNSUPPORTED-GENERIC（M12/Task 6 让检查器认识显式实例化，该腿已兑现）、Box[int]{v:7} 报 HIR-MISSING-TYPE（M12/Task 11 把 lowering 期重复上报回滚后）、Sum([]int{...}) 报 HIR-MISSING-TYPE（M12/Task 7）。单态化的执行面在 interp 里已就位，剩下的是 lower 还不支持泛型 —— 与 G-M5-04 同根",
         "gate": "EX-4 / T-EX-32"
       },
       {
         "id": "G-M5-04",
         "item": "泛型超面用通用 CHK-* 码拒绝，而非专属 HIR-UNSUPPORTED-GENERIC（T-EX-33）",
-        "note": "拒绝本身确定、响亮、不静默算错（三条 fixture 退出码 1 + stdout 空），判据想防的事都防住了；但码不是专属的。M12 的 Task 6/7 已让前两条走到专属/后端码，第三条要等 Task 15 的实例选择器 —— 见 G-M5-03",
+        "note": "拒绝本身确定、响亮、不静默算错（三条 fixture 退出码 1 + stdout 空），判据想防的事都防住了；三条腿的码到 M12/Task 11 已全部落在 HIR 面（前两条是 HIR-UNSUPPORTED-GENERIC / HIR-MISSING-TYPE，第三条原先的 CHK-INVALID-SELECTOR 是 lowering 期复查的误报，回滚后变 HIR-MISSING-TYPE）。**但 ≠ 专属的 HIR-UNSUPPORTED-GENERIC**，故本条不自行关闭；M12 收口时这三条 fixture 会变成能跑，判据要移交 T-GEN-*，届时在 M12/Task 43 一并裁决",
         "gate": "EX-4 / T-EX-33"
       },
       {

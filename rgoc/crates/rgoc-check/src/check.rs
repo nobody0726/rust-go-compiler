@@ -426,13 +426,23 @@ pub fn check_package(
 /// # 为什么需要它（M5/Task 23）
 ///
 /// lowering 必须**复用同一个检查会话**（`D-M5-2`：类型一律来自
-/// `Operand.typ`，不许自己推），而 lowering 自身也可能报诊断
-/// （`HIR-*` 之外的「拿不到类型」会走会话的上报层）。若先 `into_checked()`
-/// 再 lowering，那些诊断就丢了 —— 于是 `rgoc run` 会在「静态检查明明有错」
-/// 的情况下照样跑起来。
+/// `Operand.typ`，不许自己推）。若先 `into_checked()` 再 lowering，lowering
+/// 就再也拿不到「检查期定下的 `TypeId`」（局部具名类型的记忆化、常量折叠值）
+/// —— 于是它只能重建一份，同一性当场分叉。
 ///
-/// 所以顺序是：检查 → **调用方 lowering** → 收流。返回的
-/// [`CheckedPackage`] 因此**包含 lowering 期产生的诊断**。
+/// 所以顺序是：检查 → **调用方 lowering** → 收流。
+///
+/// # lowering 期的上报**不生效**（`M12/Task 11` 订正）
+///
+/// 原先这里写的是「返回的 [`CheckedPackage`] 因此**包含 lowering 期产生的
+/// 诊断**」，用意是「lowering 报的真诊断别丢」。实测下来那条用意是错的：
+/// lowering 期的诊断**全部**是 [`Session::expr_in`] 复查的副作用
+/// ——「拿不到类型」的真实原因是 lowering 还不支持（`HIR-UNSUPPORTED-GENERIC`），
+/// 而错误消息却是 `CHK-*`（`cannot close non-channel value of type invalid type`）。
+///
+/// 结果是 `check` 与 `build` 对同一份源码给出不同结论（`T-GEN-08a`，21 个文件）。
+/// 现在 `f` 期间的上报全部回滚；lowering 的不支持面走返回值 `T`（`HirReject`），
+/// 不丢。
 ///
 /// # 生命周期
 ///
@@ -466,6 +476,24 @@ pub fn check_package_with<'p, T>(
             message: c.message,
         });
     }
+    let mark = session.diag_len();
+    let any = session.reported_any();
     let out = f(&mut session);
+    // ⚠️ **`f`（lowering）期的上报一律回滚**（`M12/Task 11`；`F14` 的根因）。
+    //
+    // 会话在 `f` 期间被 lowering 拿去复查表达式（`Session::expr_in`，
+    // `D-M5-2` 的「类型一律来自 `Operand`」）。那是**复查**，不是第二次检查：
+    // 它走的还是 `rgoc-check` 那套求值器，于是任何「复查时拿不到类型」都会
+    // 变成一条 `CHK-*` 诊断塞进流里 —— 而「拿不到类型」的真实原因是
+    // **lowering 还不支持**（`HIR-UNSUPPORTED-GENERIC`），不是源码有错。
+    //
+    // 代价实测（`issue48609.go`）：`check` 报 0 条，`build` 报 1 条
+    // `cannot close non-channel value of type invalid type`。同一份源码、
+    // 同一份 `Files`、同一个 `lang`、同一份 `CheckOptions` —— 差别只有 `f`。
+    // 21 个门禁文件栽在这上面，`T-GEN-08a` 因此长期红着。
+    //
+    // 回滚**不丢信息**：lowering 自身的不支持面走 [`crate::HirReject`] 的
+    // 返回值（`HirReject` 不经会话），调用方照样看得到。
+    session.rollback_diags(mark, any);
     (session.into_checked(), out)
 }
