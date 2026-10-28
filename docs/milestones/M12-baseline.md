@@ -309,3 +309,54 @@ Phase 1（Task 5–11）的**承诺**是「把 check 面的**系统性**缺口�
 ① 改我方流向对齐 Go（`C9` 随之改，全量测试里数以千计的 stdout 断言要跟着翻）；
 ② 装置改按**合并流**比（`M5` 的做法），牺牲「流向分裂」的可见性。
 
+
+---
+
+## 9. Task 16 的实验读数（**已回滚，不采纳**，2026-10-28）
+
+留档原因：它精确指出了「`T-TY-29` 一旦推翻，哪些账立刻能收」，所以下次动手
+可以直接拿它当靶子 —— 但这一版**不能采纳**（引入了一个真回归，见 §9.3）。
+
+基线文件：`.superpowers/m12-baseline-t16/baseline.tsv`（装置同 §0）。
+
+### 9.1 做了什么
+
+`rgoc-load::typeexpr::resolve_type` 与 `rgoc-check::expr::type_expr` 各加一条
+`Expr::Index` 臂，调 `rgoc_types::instantiate` —— 即 `X[A]` **不再退化成** `X`
+（推翻 `T-TY-29`）。
+
+### 9.2 读数
+
+| 项 | t15 | 实验版 t16 |
+|---|---|---|
+| build 失败合计 | 53 | **37** |
+| `missing_type` | 41 | **29** |
+| `layout` | 4 | 5 |
+| `other` | 7 | 10 |
+
+**10 个文件 build 翻绿**：`issue51765` `issue54135` `issue46591` `issue47877`
+`issue48344` `issue48617` `issue48838` `issue49049` `interfacearg`（run 族），
+外加 `builtins.go` 的 check 也翻绿。**3 个文件推进到链接期**：
+`issue48049` `issue52026` `issue48198`（缺 `__desc_0265b777`，以及
+`fn4294967295` —— `FuncId::MAX` 没落实例的哨兵值，新形状，归 Task 18）。
+
+新写的两条判据在这版上**一次就绿**（`T-GEN-16` 身份、`T-GEN-16b`
+`Box[int]{v:7}` 跑出 `7\nhi\n1 z\n`），说明「臂本身」没写错。
+
+### 9.3 为什么不能采纳
+
+`func Get[T any](b Box[T]) T` 的**任何**调用都变成 `CHK-INVALID-ASSIGN`：
+
+```
+DBG load  Box args=[TypeId(36)] -> TypeId(37)   # 形参 `Box[T]`
+DBG check Box args=[TypeId(6)]  -> TypeId(45)   # 字面量 `Box[int]`
+DBG infer tparams=[TypeParamId(1)] par=[37] args=[45] -> Err(TypCannotInferTypeArgs)
+```
+
+形参实例里的 `T` 是 `TypeId(36)`、调用点的是 `TypeId(6)` —— **同一个声明的类型
+参数被声明了两次**。推断 `nify(T36, T6)` 时 `T36` 不在句柄表里 ⇒ 走
+`unify.rs:578` 的 `common_under` 分支（拿约束 `any` 的本体去对 `int`）⇒ 假 ⇒
+`TypCannotInferTypeArgs` ⇒ 形参留 `Box[T]` ⇒ 报不可赋值。
+
+⇒ **顺序应当是「先统一类型参数身份，再开实例化」**。先开实例化 = 每个泛型调用的
+可赋值性全崩（实测），`t_gen_07` 腿③ 直接红。
