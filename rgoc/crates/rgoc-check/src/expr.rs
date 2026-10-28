@@ -3185,29 +3185,66 @@ pub(crate) fn is_untyped(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_untyped)
 }
 
+/// 官方 `allBasic`（`go/types/predicates.go:62`，`M12/Task 8`）。
+///
+/// ```go
+/// func allBasic(t Type, info BasicInfo) bool {
+///     if tpar, _ := Unalias(t).(*TypeParam); tpar != nil {
+///         return tpar.is(func(t *term) bool { return t != nil && isBasic(t.typ, info) })
+///     }
+///     return isBasic(t, info)
+/// }
+/// ```
+///
+/// # 为什么是「逐个 term」而不是「取 core type」
+///
+/// `M12-plan.md` Task 8 的原话是「按类型集取 core type」，**那是错的**：
+/// 官方 `coreType` 要求所有 term 的 core type **相同**，于是 `~int | ~float64`
+/// 的 core type 是 `nil` —— 真按 core type 判就会把 `a + b` 拒掉，而它合法。
+/// 官方语义是「类型集里的**每一个** term 都满足 `isBasic(info)`」。
+///
+/// `IfaceTSet::Comparable` / `All` / `Empty` 一律给假：对应官方
+/// `_TypeSet.is(f)` 的 `!hasTerms() ⇒ false`（`Comparable` 的项面是 𝓤，
+/// 不算 hasTerms；`All` 更是连「所有类型都 numeric」都不成立）。
+fn all_basic(tt: &TypeTable, t: TypeId, f: impl Fn(BasicId) -> bool) -> bool {
+    if let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) {
+        let c = tt.type_param_def(*tp).constraint;
+        let Type::Interface(iid) = tt.type_of(underlying(tt, c)) else {
+            return false;
+        };
+        let rgoc_types::typeset::IfaceTSet::Terms(terms) = &tt.interface_def(*iid).tset else {
+            return false;
+        };
+        return terms
+            .iter()
+            .all(|(_, ty)| basic_kind(tt, *ty).is_some_and(&f));
+    }
+    basic_kind(tt, t).is_some_and(f)
+}
+
 /// 官方 `allNumeric`（含无类型数值）。
 pub(crate) fn all_numeric(tt: &TypeTable, t: TypeId) -> bool {
-    basic_kind(tt, t).is_some_and(BasicId::is_numeric)
+    all_basic(tt, t, BasicId::is_numeric)
 }
 
 /// 官方 `allBoolean`（含无类型 bool）。
 pub(crate) fn all_boolean(tt: &TypeTable, t: TypeId) -> bool {
-    basic_kind(tt, t).is_some_and(BasicId::is_bool)
+    all_basic(tt, t, BasicId::is_bool)
 }
 
 /// 官方 `allString`（含无类型 string）。
 fn all_string(tt: &TypeTable, t: TypeId) -> bool {
-    basic_kind(tt, t).is_some_and(BasicId::is_string)
+    all_basic(tt, t, BasicId::is_string)
 }
 
 /// 官方 `allInteger`（含无类型整数/rune）。
 pub(crate) fn all_integer(tt: &TypeTable, t: TypeId) -> bool {
-    basic_kind(tt, t).is_some_and(BasicId::is_integer)
+    all_basic(tt, t, BasicId::is_integer)
 }
 
 /// 官方 `allOrdered = allBasic(t, IsOrdered)`（`= 整数 ∪ 浮点 ∪ 字符串`）。
 pub(crate) fn all_ordered(tt: &TypeTable, t: TypeId) -> bool {
-    basic_kind(tt, t).is_some_and(|b| b.is_integer() || b.is_float() || b.is_string())
+    all_basic(tt, t, |b| b.is_integer() || b.is_float() || b.is_string())
 }
 
 /// 官方 `isPointer`。

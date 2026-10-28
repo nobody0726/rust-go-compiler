@@ -566,3 +566,87 @@ func use() {
         "CHK-INVALID-ASSIGN",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Task 8 的局部判据：类型参数上的二元运算（core type 面）
+// ════════════════════════════════════════════════════════════════════
+//
+// ⚠️ 名字里的 `gen_08` **不是** `M12-tests.md` 的 `T-GEN-08a/b`（那条讲「同一份
+// 源码 `check` 与 `build` 同口径」，由 `t_gen_08a_*` 承担）。这里是 `M12-plan.md`
+// Task 8 自己起的名字，撞号了 —— 记在台账里，收口时若改名只影响这一条。
+
+/// 类型参数上的 `+` / `<`：按**类型集的每个 term** 判，不是按 core type。
+///
+/// # 为什么先看官方源码再写
+///
+/// `M12-plan.md` Task 8 写的是「按类型集取 core type」，但官方
+/// `go/types/predicates.go:62` 的 `allBasic` 干的是别的事：
+///
+/// ```go
+/// func allBasic(t Type, info BasicInfo) bool {
+///     if tpar, _ := Unalias(t).(*TypeParam); tpar != nil {
+///         return tpar.is(func(t *term) bool { return t != nil && isBasic(t.typ, info) })
+///     }
+///     return isBasic(t, info)
+/// }
+/// ```
+///
+/// 而 `_TypeSet.is(f)` 是「**所有** term 都满足 f」且 `!hasTerms() ⇒ false`。
+/// 所以 `~int | ~float64` **有** `+`（两个 term 都是 numeric）——
+/// 真按 core type 判反而会拒（两个 term 的 core type 不同 ⇒ 官方的
+/// `coreType` 返回 nil），那是错的。
+#[test]
+fn t_gen_08_core_type() {
+    // ① 混合数值集上的 `+`：两个 term 都是 numeric ⇒ 通过。
+    assert_check_ok(
+        "gen08a",
+        r#"
+package p
+
+func Add[T ~int | ~float64](a, b T) T { return a + b }
+
+func use() { _ = Add(1, 2) }
+"#,
+    );
+    // ② 单个 term 上的 `<`。
+    assert_check_ok(
+        "gen08b",
+        r#"
+package p
+
+func Less[T ~int](a, b T) bool { return a < b }
+
+func use() { _ = Less(1, 2) }
+"#,
+    );
+    // ③ `int | string` 上的 `<`：两个 term 都 ordered ⇒ 通过（官方的
+    //    `allOrdered` = 整数 ∪ 浮点 ∪ 字符串，字符串是 ordered）。
+    assert_check_ok(
+        "gen08c",
+        r#"
+package p
+
+func Min[T int | string](a, b T) T {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func use() { _ = Min(1, 2) }
+"#,
+    );
+    // ④ 类型集里有一个 term 不支持 `+` ⇒ 拒。这是「别把判定整个放宽」的牙：
+    //    `~bool` 不是 numeric，`allBasic(IsNumeric)` 必须给假。
+    assert_check_code(
+        "gen08n",
+        r#"
+package p
+
+func Add[T ~int | ~bool](a, b T) T { return a + b }
+
+func use() { _ = Add(1, 2) }
+"#,
+        "CHK-INVALID-OPERATION",
+    );
+}
