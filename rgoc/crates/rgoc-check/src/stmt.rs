@@ -291,6 +291,23 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         self.env.push();
         self.declare_tparams(f);
         self.declare_recv_tparams(f);
+        // **接收者**（`M12/Task 21`）：主遍也要声明 —— 方法体里的 `x.a` 在
+        // 包级有**同名全局**时掉到那个全局上，报「interface has no field or
+        // method a」（dictionaryCapture-noinline 实测；与 `check_instance_body`
+        // 的同一段成对，那边 Task 18 已补）。
+        //
+        // ⚠️ 必须排在 `declare_func_locals`（参数/结果名）**之前**：官方
+        // `funcDecl` 先解**类型表达式**再声明变量名 —— `issue51765` 的
+        // `func (this *empty[T]) Next() (empty T, _ error)`：结果名 `empty`
+        // 遮蔽了类型 `empty`，接收者类型 `*empty[T]` 若在结果名声明**之后**
+        // 求值，`empty` 会命中结果变量（类型参数）⇒ `cannot index value of
+        // type type parameter` 假诊断。
+        if let Some(recv) = &f.recv
+            && let Some(n) = &recv.name
+            && let Some(t) = self.decl_type(file, &recv.type_)
+        {
+            self.env.declare(&n.value, Operand::variable(Some(t)));
+        }
         let (params, results) = self.func_sig(file, f).unwrap_or_default();
         self.results = results.clone();
         // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
@@ -326,21 +343,24 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             // `declare_type`：类型参数名可以是 `_`（见 `Env::declare_type`）。
             self.env.declare_type(name, Operand::type_expr(*t));
         }
-        let (params, results) = self.ast_sig(file, f).unwrap_or_default();
-        self.results = results.clone();
-        self.declare_func_locals(f, &params, &results);
         // **接收者**（`M12/Task 18`）：`f.type_` 里没有它，它是 `f.recv` 那一栏。
         // 不声明的话方法体里的 `c.l` / `s.Equals(other)` 全变 `invalid` ——
         // 症状是「泛型函数 `EqualMap` 没有落到任何实例」（推断拿不到实参类型）
         // 与「拿不到表达式 Call 的静态类型」，而**包级那一遍**（`T` 还是类型
         // 参数）看不出问题，所以只有实例体这一遍会踩
         // （`issue55101.go` / `issue51840.go` 实测）。
+        //
+        // ⚠️ 与主遍 `func_decl` 同一条顺序纪律：**先于** `declare_func_locals`
+        // （`issue51765`：结果名遮蔽类型名时，接收者类型表达式必须先求值）。
         if let Some(recv) = &f.recv
             && let Some(n) = &recv.name
             && let Some(t) = self.decl_type(file, &recv.type_)
         {
             self.env.declare(&n.value, Operand::variable(Some(t)));
         }
+        let (params, results) = self.ast_sig(file, f).unwrap_or_default();
+        self.results = results.clone();
+        self.declare_func_locals(f, &params, &results);
         self.check_body(file, body);
     }
 

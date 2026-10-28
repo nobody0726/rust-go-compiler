@@ -598,7 +598,8 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
     // * `close(c)` —— `BuiltinKind::Close`（Task 20）
     // * `len(c)` / `cap(c)` —— 下面 `Builtin` 分支显式查（要读 `Hchan` 的字段）
     // * `select` / `range c` —— `unsup_stmt` 的 `Select` / `RangeKind::Chan`
-    // * 转换到 chan 类型、`new(chan T)` —— 仍走 `face_kind`
+    // * 转换到 chan 类型放行了（`M12/Task 21`：单字布局纯 re-tag）；`new(chan T)`
+    //   —— 仍走 `face_kind`（`New` 臂）
     match &e.kind {
         ExprKind::Const(_) | ExprKind::Slot(_) | ExprKind::Global(_) | ExprKind::Nil => None,
         // `<-ch`（M11b/Task 19）：**放行** —— `rt_recv` 已实现。
@@ -625,9 +626,12 @@ fn unsup_expr(tt: &TypeTable, e: &Expr) -> Option<(SsaCode, String)> {
         }
         ExprKind::Binary { x, y, .. } => unsup_expr(tt, x).or_else(|| unsup_expr(tt, y)),
         ExprKind::Convert { to, x } => {
-            if let Some(code) = face_kind(tt, *to) {
-                return Some((code, "转换到 map/chan 类型".to_string()));
-            }
+            // 转换到 **chan 类型**放行了（`M12/Task 21`，`issue47901` 的
+            // `Chan[int](make(chan Chan[int]))`）：chan 的布局是单字（与指针
+            // 同类，`layout` 的 91 行），命名 chan ↔ 底层 chan 的转换是
+            // **纯 re-tag**，`Instr::Convert` 的 isel 对 `Int` 类就是搬一个字。
+            // `new(chan T)` 仍拒（下面 `New` 臂独立查 `face_kind`）。
+            let _ = to;
             unsup_expr(tt, x)
         }
         ExprKind::Call { callee, args, .. } => match callee {
