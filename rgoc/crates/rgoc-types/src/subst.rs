@@ -97,28 +97,45 @@ fn subst_rec(
     let out = match *tt.type_of(x) {
         // 原子：基本型 / 无效 / 别名（别名本体不走访 —— 与停步口径一致）。
         Type::Basic(_) | Type::Invalid | Type::Alias(_) => x,
-        // 具名：起点停步；**实例**在重实例化口径下按新实参重建（Task 16）。
+        // 具名：起点停步；**实例**逐实参替换，改动则重建（`M4/Task 16`）。
+        //
+        // 官方 `subst.go:318-344` 对**已实例化**的 `*Named` 也走这条路：
+        // `orig := t.Origin()` 非空 ⇒ 替换 `TypeArgs` 每一位，改了就
+        // `check.instance(...)` 重建一个实例。**不只是**「重实例化口径」才做 ——
+        // 停步口径（`reinst == None`）同样要重建，否则 `T → int` 这类替换
+        // 进不到 `Box[T]` 的实参里（`M12/Task 16` 实测：`func Get[T any](b
+        // Box[T]) T` 的任何调用都推不出 `T`）。
         Type::Named(id) => {
             let (origin, targs) = {
                 let d = tt.named_def(id);
                 (d.origin, d.targs.clone())
             };
-            match (reinst, origin) {
-                (Some(depth), Some(origin)) => {
-                    let mut changed = false;
-                    let mut new_args = Vec::with_capacity(targs.len());
-                    for a in targs {
-                        let a2 = subst_rec(tt, a, map, visited, reinst)?;
-                        changed |= a2 != a;
-                        new_args.push(a2);
-                    }
-                    if changed {
+            let Some(origin) = origin else {
+                // 未实例化的起点：原子（官方 `n == 0 ⇒ return t`）。
+                visited.insert(x, x);
+                return Ok(x);
+            };
+            let mut changed = false;
+            let mut new_args = Vec::with_capacity(targs.len());
+            for a in targs {
+                let a2 = subst_rec(tt, a, map, visited, reinst)?;
+                changed |= a2 != a;
+                new_args.push(a2);
+            }
+            if !changed {
+                x
+            } else {
+                match reinst {
+                    Some(depth) => {
                         crate::instantiate::instantiate_at(tt, origin, &new_args, depth + 1)?
-                    } else {
-                        x
+                    }
+                    // 停步口径**不报错**（这条路的调用方没有错误通道）：推断期
+                    // 的实参可能还带未绑定的类型参数，约束校验失败不该在这里
+                    // 变成硬错 —— 退回原条目，与「替换的不动点」同效。
+                    None => {
+                        crate::instantiate::instantiate_at(tt, origin, &new_args, 1).unwrap_or(x)
                     }
                 }
-                _ => x,
             }
         }
         // 类型参数：命中 ⇒ 实参；未命中 ⇒ 原样。

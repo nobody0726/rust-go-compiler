@@ -360,3 +360,75 @@ DBG infer tparams=[TypeParamId(1)] par=[37] args=[45] -> Err(TypCannotInferTypeA
 
 ⇒ **顺序应当是「先统一类型参数身份，再开实例化」**。先开实例化 = 每个泛型调用的
 可赋值性全崩（实测），`t_gen_07` 腿③ 直接红。
+
+---
+
+## 10. Task 16 采纳版读数（2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t16b/baseline.tsv`（装置同 §0）。
+**§9 那一版已作废**（回滚），这一节是最终采纳的实现。
+
+### 10.1 做了什么
+
+两件事，缺一不可：
+
+1. **`X[A]` 不再是 `X`**（推翻 `T-TY-29`）：`rgoc-load::typeexpr::resolve_type` 与
+   `rgoc-check::expr::type_expr` 各加一条 `Expr::Index` 臂，按 `(origin, 实参组)`
+   调 `rgoc_types::instantiate`（memo 复用）。非泛型的 `X[A]` 不在这里报错 ——
+   交给调用点的「数量错」。
+2. **替换要能进实例实参**：`rgoc-types::subst::subst_rec` 的 `Type::Named` 分支
+   原先把实例当**原子**（`reinst == None` 直接返回），于是 `T → int` 换不进
+   `Box[T]` 的实参里。官方 `subst.go:318-344` 明确要求：`t.Origin()` 非空 ⇒
+   逐实参替换、改了就 `check.instance(...)` 重建。停步口径照做，但**不报错**
+   （调用方没有错误通道）—— 重建失败退回原条目。
+
+### 10.2 读数
+
+| 项 | t15 | t16b |
+|---|---|---|
+| build 失败合计 | 52 | **46** |
+| `missing_type` | 41 | **31** |
+| `layout` | 4 | 4 |
+| `other` | 7 | 10 |
+| `panic` | 0 | 1 |
+| `run` 族 build_ok | 28/71 | **37/71** |
+| `compile` 族 build_ok | 19/40 | **22/40** |
+| `run` 族真跑通 | 30/71 | **35/71** |
+
+**12 个文件直接变好**：`builtins`（check 也过）、`issue51355`、`issue51765`、
+`interfacearg`、`issue46591`、`issue47877`、`issue48344`、`issue48617`、`issue48838`、
+`issue49049`、`issue49421`、`issue54135`。
+
+**7 个是「推进」而不是退步**（严重度表把它们记成变坏，逐个看报文后确认）：
+7 个的 `check` 全是 **1 → 0**，即检查面首次通过，暴露的是**下游**缺口：
+
+| 文件 | 现在卡在 |
+|---|---|
+| `issue48049` / `issue52026` / `issue48198` | 链接期缺 `__desc_*` / `__itab_*`（Task 18） |
+| `issue51909` | `HIR-UNSUPPORTED-GENERIC`：`Operation` 没落到任何实例 |
+| `issue48645b` | `HIR-MISSING-TYPE`：`Call` 的静态类型（内建 `print` 族的调用） |
+| `issue50264` / `issue54225` | lowering 期选择器找不到方法（实例方法的接收者类型） |
+
+`other` 从 7 涨到 10、`panic` 出现的 1 个（`dottype.go`）都在这一簇里 —— **不是**
+语义回退。
+
+### 10.3 上一节（§9）的根因判断是错的，这里订正
+
+§9 说「同一个声明的类型参数被声明了两次（`TypeId(36)` vs `TypeId(6)`）」。
+本次在 `declare_tparams` 上打点，实测：
+
+```
+DBG declare_tparams parent=ScopeId(1) n=1 names=[Some("T")]
+DBG   tp=TypeParamId(0) ty=TypeId(33) name=Some("T")   # type Box[T any] 的 T
+DBG declare_tparams parent=ScopeId(1) n=1 names=[Some("T")]
+DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
+```
+
+两次声明对应**两个不同的声明**（`Box` 与 `Get`），没有重复。`TypeId(6)` 是
+`int`，不是另一个 `T` —— §9 的读数里 `Box args=[TypeId(6)]` 那一行是**字面量**
+`Box[int]` 的实参，被误读成了类型参数。
+
+真实断点：`infer_from_call` 先用 `rename_map` 把 `T1` 换成新条目 `T2`，再对形参
+做 `substitute` —— 而 `substitute` 进不到 `Box[T1]` 的实参里 ⇒ 形参仍是
+`Box[T1]` ⇒ `is_parameterized(par, [T2])` 为假 ⇒ ① 段的统一**整位跳过** ⇒
+`T` 无绑定 ⇒ `TypCannotInferTypeArgs`。所以修的是 `subst.rs`，不是 `declare_tparams`。

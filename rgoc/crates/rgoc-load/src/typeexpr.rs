@@ -118,12 +118,29 @@ impl Checker<'_> {
             Expr::InterfaceType(i) => self.resolve_interface(scope, i),
             Expr::FuncType(f) => self.resolve_signature(scope, f, None),
 
-            // 实例化 `X[A, B]`：**退化**为 `X` 自身（`T-TY-29`）。
+            // 实例化 `X[A, B]`（`M12/Task 16`；推翻 `T-TY-29`）。
+            //
             // 类型实参照样解析 —— 它们是真名字引用，前向引用与环都要能被触发。
+            // 解析完再按 `(origin, args)` 走 memo 建实例；失败时**退回原型**
+            // （约束不满足 / 数量错由检查器报，装载面只提供类型形状）。
             Expr::Index(ix) => {
                 let base = self.resolve_type(scope, &ix.x);
-                let _ = self.resolve_type(scope, &ix.index);
-                base
+                let arg_exprs: Vec<&Expr> = match &*ix.index {
+                    Expr::List(l) => l.elems.iter().collect(),
+                    other => vec![other],
+                };
+                let mut args = Vec::with_capacity(arg_exprs.len());
+                for a in arg_exprs {
+                    args.push(self.resolve_type(scope, a));
+                }
+                let bu = unalias(self.tt, base);
+                let Type::Named(nid) = *self.tt.type_of(bu) else {
+                    return base;
+                };
+                if self.tt.named_def(nid).type_params.is_empty() {
+                    return base;
+                }
+                rgoc_types::instantiate(self.tt, nid, &args).unwrap_or(base)
             }
 
             // `unsafe.Pointer`（M4/Task 31）：`unsafe` 是**编译器伪包** ——

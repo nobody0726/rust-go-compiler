@@ -446,25 +446,50 @@ fn 包级_too_new_在装载路径上报出() {
     assert_eq!(codes(&diags), vec![DiagCode::TypPackageRequiresNewerGo]);
 }
 
-/// `T-TY-29`：实例化 `X[A]` 在 M3 退化为 `X` 自身（边界由 `M3-design.md` §5.2 钉住）。
+/// `T-TY-29`：实例化 `X[A]` 不再退化（**M12/Task 16 推翻 M3 的边界**）。
+///
+/// M3 把它冻成「`G[int]` 就是 `G`」（`M3-design.md` §5.2），因为那时泛型整体
+/// 不在面内 —— 退化至少能让「有没有写错」判得下去。M12 起要发码，就必须真的
+/// 造出实例条目：`G[int]` 与 `G[string]` 的布局不同，退化会把两个都当原型。
+///
+/// 编号沿用（`T-TY-29` 是这条边界的名字），断言翻成反向：**`rhs` 不能等于
+/// `G`**，必须是「origin 是 `G`、实参是 `int`」的实例。
 #[test]
-fn t_ty_29_实例化退化为同一_id() {
+fn t_ty_29_实例化不再退化() {
     let (tt, pkg, diags) = load(&[(
         "a.go",
         "package p\n\ntype G[T any] struct{ x T }\n\ntype H = G[int]\n",
     )]);
     assert!(diags.is_empty(), "{DIAGS}：{diags:?}");
-    // `H` 是**别名** ⇒ 对象类型是别名本身，退化体现它的 `rhs` 上
+    let g = ty(&pkg, "G");
+    // `H` 是**别名** ⇒ 对象类型是别名本身，实例化体现它的 `rhs` 上
     let h = ty(&pkg, "H");
     let Type::Alias(hid) = tt.type_of(h) else {
         panic!("H 该是别名，实际 {:?}", tt.type_of(h));
     };
-    assert_eq!(
-        tt.alias_def(*hid).rhs.expect("别名本体不能为空"),
-        ty(&pkg, "G"),
-        "`G[int]` 退化为 `G` 的同一个类型条目（M3 无实例化）"
+    let rhs = tt.alias_def(*hid).rhs.expect("别名本体不能为空");
+    assert_ne!(
+        rhs, g,
+        "`G[int]` 不再是 `G` 自己（M12/Task 16 推翻 M3 的退化）"
     );
-    assert!(matches!(tt.type_of(ty(&pkg, "G")), Type::Named(_)));
+    let Type::Named(gn) = tt.type_of(g) else {
+        panic!("G 该是具名类型，实际 {:?}", tt.type_of(g));
+    };
+    let Type::Named(hn) = tt.type_of(rhs) else {
+        panic!("G[int] 该是具名实例，实际 {:?}", tt.type_of(rhs));
+    };
+    let (gn, hn) = (*gn, *hn);
+    assert_eq!(
+        tt.named_def(hn).origin,
+        Some(gn),
+        "实例的 origin 必须指回 `G`"
+    );
+    assert_eq!(tt.named_def(hn).targs.len(), 1, "实例带一位实参");
+    assert_eq!(
+        *tt.type_of(tt.named_def(hn).targs[0]),
+        Type::Basic(BasicId::Int),
+        "实参就是 `int`"
+    );
 }
 
 /// 两个具名类型互相引用（**合法**的那种：经指针/切片等间接边）不该报错。

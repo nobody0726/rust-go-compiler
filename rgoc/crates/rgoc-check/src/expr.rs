@@ -1354,6 +1354,28 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             }
             // `func(…) …`（M4/Task 37）：变参 `...T` ⇒ 末参类型是 `[]T`。
             Expr::FuncType(ft) => self.func_type_expr(file, ft),
+            // 实例化 `X[A, B]`（`M12/Task 16`）：与装载面**同口径**（`X[A]`
+            // 不再是 `X`）。类型实参照样按类型表达式解析；`X` 不是泛型具名类型
+            // ⇒ `None`（交给调用点报「不是类型 / 数量错」，本层不猜）。
+            Expr::Index(ix) => {
+                let base = self.type_expr(file, &ix.x)?;
+                let arg_exprs: Vec<&Expr> = match &*ix.index {
+                    Expr::List(l) => l.elems.iter().collect(),
+                    other => vec![other],
+                };
+                let mut args = Vec::with_capacity(arg_exprs.len());
+                for a in arg_exprs {
+                    args.push(self.type_expr(file, a)?);
+                }
+                let bu = rgoc_types::unalias(self.s.tt, base);
+                let rgoc_types::Type::Named(nid) = *self.s.tt.type_of(bu) else {
+                    return None;
+                };
+                if self.s.tt.named_def(nid).type_params.is_empty() {
+                    return None;
+                }
+                rgoc_types::instantiate(self.s.tt, nid, &args).ok()
+            }
             // `...T` 单独出现只在参数表里，落到这里说明上下文不对。
             Expr::DotsType(d) => self.type_expr(file, &d.elem),
             // `unsafe.Pointer`（M9 收口补，`G-M9-01` / `R-9-41`）。

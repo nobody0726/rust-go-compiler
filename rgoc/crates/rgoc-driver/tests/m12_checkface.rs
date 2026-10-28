@@ -1372,3 +1372,106 @@ func main() {
     assert_eq!(out.stdout, "7\n3\n9\n");
     assert_eq!(out.exit, 0);
 }
+
+// ── Task 16：实例化具名类型（`X[A]` 不再是 `X`）──────────────────────
+
+/// 装载一段源码，**保留类型表**（判据要比 `TypeId` 身份，那在命令行上看不到）。
+fn loaded_src(src: &str) -> (rgoc_types::TypeTable, rgoc_load::Package) {
+    let mut tt = rgoc_types::TypeTable::new();
+    let files: [(&str, &[u8]); 1] = [("a.go", src.as_bytes())];
+    let (pkg, bag) = rgoc_load::load_sources(&mut tt, &files, None);
+    let diags = bag.into_sorted();
+    assert!(
+        diags.is_empty(),
+        "这段源码不该有诊断（判据要看的是类型身份）：{diags:?}"
+    );
+    (tt, pkg)
+}
+
+/// `T-GEN-16`：`Box[int]` 与 `Box[string]` 是**两个**类型条目，同一组实参复用。
+///
+/// # 为什么这条必须先立
+///
+/// `typeexpr.rs` 原先对 `X[A]` 是**退化**（`T-TY-29`：返回 `X` 自己）。退化在
+/// 只看「有没有错」的判据下毫无症状 —— 两条 `var x Box[int]` / `var y Box[string]`
+/// 都能过检查，因为它们的类型都是同一个 `Box`。要抓到它，只能比**身份**：
+/// `TypeId` 相等就是退化，不等才是真的造了实例。
+///
+/// 三个断言各挡一种错法：
+/// * `int` 实例 ≠ `string` 实例 —— 挡退化（两个都等于原型）与「实参被忽略」；
+/// * 同实参复用 —— 挡「每次实例化都造新条目」（那样 `Box[int]` 两个变量类型
+///   不同，可赋值性会莫名其妙地失败）；
+/// * 实例的 `origin` 指向 `Box`、`targs` 长度 1 —— 挡「造了一个无关的具名类型」。
+#[test]
+fn t_gen_16_实例化具名类型是不同条目() {
+    let (tt, pkg) = loaded_src(
+        r#"
+package p
+
+type Box[T any] struct{ v T }
+
+var a Box[int]
+var b Box[string]
+var c Box[int]
+"#,
+    );
+    let ty = |n: &str| pkg.lookup(n).and_then(|o| o.typ).expect("对象有类型");
+    let (a, b, c) = (ty("a"), ty("b"), ty("c"));
+    let named_of = |t: rgoc_types::TypeId| match tt.type_of(t) {
+        rgoc_types::Type::Named(n) => *n,
+        other => panic!("期望具名实例，实际 {other:?}"),
+    };
+    let (na, nb) = (named_of(a), named_of(b));
+    assert_ne!(
+        a, b,
+        "`Box[int]` 与 `Box[string]` 必须是两个类型条目（相等 = `X[A]` 又退化了）"
+    );
+    assert_eq!(a, c, "同一组实参必须复用同一个实例条目（memo）");
+    let box_origin = tt.named_def(na).origin.expect("实例必须记 origin");
+    assert_eq!(
+        box_origin,
+        tt.named_def(nb).origin.expect("实例必须记 origin"),
+        "两个实例的 origin 必须是同一个 `Box`"
+    );
+    let da = tt.named_def(na);
+    assert_eq!(da.name, "Box", "实例的原名");
+    assert_eq!(da.targs.len(), 1, "实例要带一位类型实参：{:?}", da.targs);
+    assert_eq!(
+        *tt.type_of(da.targs[0]),
+        rgoc_types::Type::Basic(rgoc_const::BasicId::Int),
+        "实参就是 `int` 本身"
+    );
+}
+
+/// `T-GEN-16b`：实例化具名类型既能在**字面量**里用，也能**传给泛型函数**。
+///
+/// 后半句是这一版最容易崩的地方（实测过一次）：`func Get[T any](b Box[T]) T`
+/// 的形参是**实例** `Box[T]`，推断要把 `T` 绑到 `int` 就必须能替换进实例的
+/// 实参里 —— `substitute` 对具名实例原是原子停步的（`subst.rs` 的
+/// `reinst == None` 分支），于是每个 `Get(...)` 调用都报 `CHK-INVALID-ASSIGN`。
+/// 修法照官方 `subst.go:318-344`：已实例化的具名类型逐实参替换、改了就重建。
+#[test]
+fn t_gen_16b_native_实例化类型可用() {
+    let out = support::native_harness::build_and_run(
+        "gen16b",
+        r#"
+package main
+
+type Box[T any] struct{ v T }
+
+func Get[T any](b Box[T]) T { return b.v }
+
+func main() {
+	a := Box[int]{v: 7}
+	b := Box[string]{v: "hi"}
+	println(a.v)
+	println(b.v)
+	println(Get(Box[int]{v: 3}))
+	println(Get(Box[string]{v: "z"}))
+}
+"#,
+    )
+    .expect("native 编译/运行失败");
+    assert_eq!(out.stdout, "7\nhi\n3\nz\n");
+    assert_eq!(out.exit, 0);
+}
