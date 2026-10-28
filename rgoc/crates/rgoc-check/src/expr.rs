@@ -480,17 +480,21 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         }
     }
 
-    /// **泛型调用点的前缀类型实参**：`F[T1](args…)`（显式实参数 < 形参数）。
+    /// **泛型调用点的推断**：`F[T1](args…)`（显式实参数 < 形参数）与
+    /// `F(args…)`（**无显式实参、全靠推断**，go1.21 语义；`append.go` 的
+    /// `_Append([]Recv{recv}, recv)` 实测）。
     ///
     /// # 判定与分工
     ///
-    /// * `c.fun` 必须是 `Index(Name(F), …)` 且 `F` 在 `generic_funcs` 里有账
-    ///   （与 [`Self::explicit_instantiation`] 同源）；
-    /// * 显式实参数 `==` 形参数 ⇒ `None`（原路径：完整实例化已经工作）；
-    /// * `>` ⇒ `None`（原路径报 `TYP-WRONG-TYPE-ARG-COUNT`）；
-    /// * `<` ⇒ 本函数接管：实参照常求值，`infer_for_call` 以
-    ///   `explicit = [Some(t)…, None…]` 解出**全量**实参，登记实例与调用点
-    ///   （lowering 的 `inst_target` 查 `Index` 的位置），再进真调用。
+    /// * `c.fun` 是 `Index(Name(F), …)` 或 `Name(F)`，且 `F` 在
+    ///   `generic_funcs` 里有账（与 [`Self::explicit_instantiation`] 同源）；
+    /// * Index 形态显式实参数 `==` 形参数 ⇒ `None`（原路径：完整实例化已经
+    ///   工作）；`>` ⇒ `None`（原路径报 `TYP-WRONG-TYPE-ARG-COUNT`）；
+    /// * 其余（Index 少于 / Name 无显式）⇒ 本函数接管：实参照常求值，
+    ///   `infer_for_call` 以 `explicit`（前缀 `Some` + 其余 `None`，Name
+    ///   形态全 `None`）解出**全量**实参，登记实例与调用点（lowering 的
+    ///   `inst_target` 对 `Index` 查 `ix.pos`、对 `Name` 查 `n.pos`），再进
+    ///   真调用。
     ///
     /// # 实参会求值两遍
     ///
@@ -498,32 +502,57 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 检查面的求值没有运行期副作用，重复诊断靠 `reported_any` 抑制位兜底
     /// （第一遍报过的错第二遍不再报）。
     fn call_with_prefix_targs(&mut self, file: FileId, c: &CallExpr) -> Option<Operand> {
-        let Expr::Index(ix) = &*c.fun else {
-            return None;
+        // 实参表达与原型名：`F[T…](args)`（Index）或 `F(args)`（Name）。
+        // 调用点位置两态都要记（lowering `inst_target` 两态都查）。
+        let (fname, site_pos, has_index) = match &*c.fun {
+            Expr::Index(ix) => match &*ix.x {
+                Expr::Name(n) => (n, ix.pos, true),
+                _ => return None,
+            },
+            Expr::Name(n) => (n, n.pos, false),
+            _ => return None,
         };
-        let Expr::Name(n) = &*ix.x else {
-            return None;
+        let tparams = self.s.pkg.generic_funcs.get(&fname.value)?.clone();
+        // 显式实参：Index 形态解类型（**少于**才接管）；Name 形态全 None。
+        let explicit: Vec<Option<TypeId>> = if !has_index {
+            vec![None; tparams.len()]
+        } else {
+            let ix = match &*c.fun {
+                Expr::Index(ix) => ix,
+                _ => unreachable!("index_pos 非 None ⇒ c.fun 是 Index"),
+            };
+            let arg_exprs: Vec<&Expr> = match &*ix.index {
+                Expr::List(l) => l.elems.iter().collect(),
+                other => vec![other],
+            };
+            // 只接管「**少于**」：等于走完整实例化（原路径），多于由原路径报错。
+            if arg_exprs.len() >= tparams.len() {
+                return None;
+            }
+            // 显式实参必须全是类型（有不是类型的 ⇒ 交给原路径报 `not a type`）。
+            let mut explicit = Vec::with_capacity(tparams.len());
+            for a in &arg_exprs {
+                explicit.push(Some(self.type_expr(file, a)?));
+            }
+            while explicit.len() < tparams.len() {
+                explicit.push(None);
+            }
+            explicit
         };
-        let tparams = self.s.pkg.generic_funcs.get(&n.value)?.clone();
-        let arg_exprs: Vec<&Expr> = match &*ix.index {
-            Expr::List(l) => l.elems.iter().collect(),
-            other => vec![other],
-        };
-        // 只接管「**少于**」：等于走完整实例化（原路径），多于由原路径报错。
-        if arg_exprs.len() >= tparams.len() {
-            return None;
-        }
-        // 显式实参必须全是类型（有不是类型的 ⇒ 交给原路径报 `not a type`）。
-        let mut explicit = Vec::with_capacity(tparams.len());
-        for a in &arg_exprs {
-            explicit.push(Some(self.type_expr(file, a)?));
-        }
-        while explicit.len() < tparams.len() {
-            explicit.push(None);
-        }
 
-        // 原型签名（`F` 的形参里还是类型参数）。
-        let sig = self.expr(file, &ix.x).typ?;
+        // 原型签名（`F` 的形参里还是类型参数）。**只求 `F` 本身**：
+        // Index 形态不能求 `c.fun` —— 那会落进 `explicit_instantiation`，
+        // 对「显式少于形参」报 `TYP-WRONG-TYPE-ARG-COUNT`（推断成功与否
+        // 还没定，先报数量错是误报）。
+        let sig_expr: &Expr = if has_index {
+            match &*c.fun {
+                Expr::Index(ix) => &ix.x,
+                _ => unreachable!("has_index ⇒ c.fun 是 Index"),
+            }
+        } else {
+            &c.fun
+        };
+        let sig = self.expr(file, sig_expr).typ?;
         let sid = self.signature_id(sig)?;
         let sig_def = self.tt().signature_def(sid).clone();
         let params = self.tuple_vars(sig_def.params);
@@ -534,12 +563,30 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             .iter()
             .map(|a| self.expr(file, a).typ.unwrap_or(inv))
             .collect();
-        // 变参 / 个数不齐的推断面没做（官方先按 `arguments` 打包）——
-        // 与 `Task 7` 的「变参不推断」同一条窄面。
-        if sig_def.variadic || arg_tys.len() != params.len() {
+        // 变参：`f(t1, t2, t3)`（无 `...`）官方先把实参**打包**成 `...T` 的
+        // 元素序列再推断（`arguments` 的展开），推断的形参面因此按「固定段
+        // + 元素 × 剩余实参」重排；`f(xs...)` 形态实参对应整个 slice，原样。
+        // 个数不齐仍然交回原路径报 `arguments` 错。
+        let par_tys: Vec<TypeId> = if sig_def.variadic && !c.has_dots {
+            let n_fixed = params.len().saturating_sub(1);
+            if arg_tys.len() < n_fixed {
+                return None;
+            }
+            let Some(elem) = params
+                .last()
+                .and_then(|p| common_slice_elem(self.s.tt, p.1))
+            else {
+                return None;
+            };
+            let mut ps: Vec<TypeId> = params[..n_fixed].iter().map(|p| p.1).collect();
+            ps.resize(arg_tys.len(), elem);
+            ps
+        } else {
+            params.iter().map(|p| p.1).collect()
+        };
+        if arg_tys.len() != par_tys.len() {
             return None;
         }
-        let par_tys: Vec<TypeId> = params.iter().map(|p| p.1).collect();
         let targs = match rgoc_types::infer::infer_for_call(
             self.s.tt,
             &tparams,
@@ -553,9 +600,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             _ => return None,
         };
         // 推断成功 ⇒ 与完整实例化同一条落地路径：登记实例 + 调用点。
-        self.s.request_inst(&n.value, &targs);
-        let name = rgoc_load::mono::mangled(self.s.tt, &n.value, &targs);
-        self.s.note_inst_site(ix.pos, &name);
+        self.s.request_inst(&fname.value, &targs);
+        let name = rgoc_load::mono::mangled(self.s.tt, &fname.value, &targs);
+        self.s.note_inst_site(site_pos, &name);
         // 用**全量实参替换后的签名**进真调用。
         let map: SubstMap = tparams.iter().copied().zip(targs).collect();
         let sig_ty = self.tt().signature_type(sid);
