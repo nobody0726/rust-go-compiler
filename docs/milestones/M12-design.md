@@ -34,33 +34,35 @@ roadmap 把 M12 写成三条**互相独立**的扩展线，本文档照此分解
 
 | 子阶段 | roadmap 原句 | 本次落地形态 |
 |---|---|---|
-| **M12a 泛型 native** | 「先 native 全量单态化，覆盖泛型闭包、method value、interface/类型 switch 和必要的类型身份」 | 单态化在 **load 层**完成（§3.2）；门禁 = **111 个无 `import` 的文件**（69 `run` + 37 `compile` + 5 `errorcheck`） |
+| **M12a 泛型 native** | 「先 native 全量单态化，覆盖泛型闭包、method value、interface/类型 switch 和必要的类型身份」 | 单态化在 **load 层**完成（§3.2）；门禁 = **116 个无 stdlib import 的文件**（71 `run` + 40 `compile` + 5 `errorcheck`）|
 | **M12b 有限反射** | 「明确包/API 白名单；先 size/alignment、kind、字段偏移/Tag、方法表和类型身份，再定义最小调用接口」 | 白名单 = 读 + `Call` + 写面（§3.5–3.7）；`reflect` 用**源码桩**引入 |
 | **M12c 优化** | 「shape/dictionary 共享、内联（PIPE-12）、精细逃逸分析（PIPE-13）、SwissTable、SSA 高级优化」 | 内联 / 精细逃逸 / SwissTable / **字典替换**（§3.8）；每段独立、独立读数 |
 
 **实测修正（相对 roadmap 的原始假设）**：
 
 1. roadmap 假定「泛型小切片可在 M9 后独立交付」—— 实测**不成立**：今天 141 个 `// run` 里 check 只过 22、build 只过 3、run 只过 3（`F3`）。泛型不是「收尾补丁」，而是一条独立长线。
-2. roadmap 未提 stdlib —— 实测 `// run` 141 个里 **72 个有 `import` 声明**（`fmt` 64 个），`// compile` 41 个里 4 个、`// errorcheck` 6 个里 1 个。本阶段**不碰 stdlib**（`U-M12-01`），语料门禁因此收缩到**无 `import` 的子集**（§4.2）。
-   ⚠️ 口径：「无 `import`」= 文件里没有 `import` 声明（`grep -LE '^import'`）。**不要**用 `grep -lE '^import|"'` 这种谓词 —— 它会把带字符串字面量的文件全误排除（本设计第一版就这么错的，把 69 数成了 37）。
+2. roadmap 未提 stdlib —— 实测带 stdlib import 的有 **76 个**（`// run` 71 / `// compile` 4 / `// errorcheck` 1；`fmt` 占绝大多数）。本阶段**不碰 stdlib**（`U-M12-01`），语料门禁因此收缩到**无 stdlib import 的子集**（§4.2）。
+   ⚠️ 口径（**Task 0 三次翻车换来的**，见 `M12-baseline.md` §1.2）：判据是「**import 集合 ⊆ {unsafe}**」，且要**注释感知** —— ① `issue50417.go`/`issue50417b.go` 的 `import "fmt"` 在块注释里；② `unsafe` 是 M4 支持的伪 import；③ 指令带尾随参数（`// run -gcflags="-l"`）要用 `^// run( |$)` 匹配。用 `grep -lE '^import|"'` 会把带字符串字面量的文件全误排除（第一版把 69 数成了 37）。
 
 ### 1.3 明确不做（M12 边界）
 
-* **stdlib import**（`fmt` / `strings` / `strconv` / `sort` / `math` / `errors` / `sync` / `runtime`）—— **77 个**带 `import` 的文件只做**拒绝面**判据。
+* **stdlib import**（`fmt` / `strings` / `strconv` / `sort` / `math` / `errors` / `sync` / `runtime`）—— **76 个**带 stdlib import 的文件只做**拒绝面**判据。
 * **`reflect.MakeFunc`**（`U-M12-02`）：它是 `Call` 的镜像，需要反向 trampoline，语料里没有。
 * **可变参数 `Call`**（`Value.CallSlice` 与 `...any` 实参，`U-M12-03`）。
 * **并发 GC / 写屏障**（沿用 `U-M11-08`）：M12 仍是 STW + 单线程，`reflect.Value.Set` 因此不需要屏障（§3.7 写清前提）。
 * **PGO / DWARF / coverage**（`U-M12-04`，roadmap 已划延期）。
 * **`unsafe` 白名单外**（沿用 M4 的 `U-M4-06`）。
 * **泛型原体的独立检查**（`U-M12-05`）：只检查**可达实例**，未被调用的泛型函数体里的类型错误不报（`D-M12-3` 的副作用）。
+* **`.dir` 目录测试**（`U-M12-07`）：`// rundir`/`// compiledir` 的 67 个 `.go` 全是 `package ignored` 桩，真测试在同名目录里、用**相对包 import**（`import "./a"`）—— 属「包解析」，roadmap 已划延期。
+* **`errorcheck -m`**（`U-M12-08`）：2 个文件的期望错是 gc 的**内联报告**（`can inline …`），我们没有 `-m`。
 
 ### 1.4 退出条件（门禁十三条）
 
 | ID | 门禁 | 判据族 |
 |---|---|---|
-| `G12-1` | 泛型静态面：37 个无 `import` 的 `// compile` 全过 | `T-GEN-02` |
-| `G12-2` | 泛型运行面：69 个无 `import` 的 `// run` 三层一致 | `T-GEN-01` |
-| `G12-3` | 拒绝面：77 个带 `import` 的干净拒绝 + 码稳定；5 个 `errorcheck` 的**第一条诊断码 ∈ Task 0 登记的集合** | `T-GEN-03` |
+| `G12-1` | 泛型静态面：40 个无 stdlib import 的 `// compile` 全过 | `T-GEN-02` |
+| `G12-2` | 泛型运行面：71 个无 stdlib import 的 `// run` 三层一致 | `T-GEN-01` |
+| `G12-3` | 拒绝面：**76** 个干净拒绝且诊断码集合 ⊇ `TYP-UNSUPPORTED-IMPORT-FORM`；5 个 `errorcheck` 的首码 ∈ 登记集合 | `T-GEN-03` |
 | `G12-4` | 单态化完备性：`.s` 无 `type parameter` 残留 + 实例名确定 | `T-GEN-04/05` |
 | `G12-5` | 泛型 × 并发/GC：语料里的 `chan`/`map` 用例三态 | `T-GEN-06` |
 | `G12-6` | 不回归：69 单线程 + 7 并发三态 + 全量 cargo | `T-GEN-07` |
@@ -70,7 +72,7 @@ roadmap 把 M12 写成三条**互相独立**的扩展线，本文档照此分解
 | `G12-10` | 内联：`opt_equiv` + 三态不变 + 体积读数 | `T-OPT-01` |
 | `G12-11` | 精细逃逸：`allocs` 下降 + 三态不变 | `T-OPT-02` |
 | `G12-12` | SwissTable：语义不变 + probe 读数 | `T-OPT-03` |
-| `G12-13` | 字典替换：111 个门禁语料重跑 + 体积读数（**可切断**） | `T-OPT-04` |
+| `G12-13` | 字典替换：116 个门禁语料重跑 + 体积读数（**可切断**） | `T-OPT-04` |
 
 `G12-1..6` 属 M12a，`7..9` 属 M12b，`10..13` 属 M12c。**三组互不阻塞**：a 收口即可发布，b/c 各自独立。
 
@@ -89,9 +91,9 @@ roadmap 把 M12 写成三条**互相独立**的扩展线，本文档照此分解
 | `D-M12-5` | `reflect` 用**源码桩**；`TypeDesc` 40 字节不动，`pad` 改 `meta_idx` 旁挂 `ReflectMeta` | 白名单由包内容决定（不用第二份清单）；不碰 `C5` §10 冻结布局 |
 | `D-M12-6` | 反射白名单 = **读 + `Call` + 写面**；`MakeFunc` 排除 | 全写面是本次拍板的上限；`MakeFunc` 是另一个量级 |
 | `D-M12-7` | 写面**不需要写屏障**（STW + 单线程），但要写进 `C12` 当**前提** | 将来上并发 GC 时这条会静默失效，必须留字据 |
-| `D-M12-8` | 语料门禁 = **69 `run` + 37 `compile` + 5 `errorcheck` = 111 个无 `import` 的文件**；77 个带 `import` 的转拒绝面；78 个无指令不纳入 | 拒绝理由不对的判据就是假绿 |
+| `D-M12-8` | 语料门禁 = **71 `run` + 40 `compile` + 5 `errorcheck` = 116 个无 stdlib import 的文件**；76 个转拒绝面；67 个 `.dir` 桩与 5 个无指令不纳入 | 拒绝理由不对的判据就是假绿 |
 | `D-M12-9` | 官方层用容器内的 `go run`（go1.27.1） | 三层差分的第三层（`F11`） |
-| `D-M12-10` | **Task 0 = 基线测绘**（111 个逐条归因），没有它不排计划 | 四档怎么切必须是算出来的，不是拍的 |
+| `D-M12-10` | **Task 0 = 基线测绘**（116 个逐条归因），没有它不排计划 | 四档怎么切必须是算出来的，不是拍的 |
 
 ### 2.2 只对**非显然**的五条展开
 
@@ -136,23 +138,28 @@ A 的额外好处：**`A3` 被绕开**。`A3` 的根因是「dump 的根集不�
 
 | # | 事实 | 来源 |
 |---|---|---|
-| `F1` | `test/typeparam` 共 **266** 个文件：`// run` 141 / `// compile` 41 / `// errorcheck` 6 / 无指令 78 | `grep -lE '^// (run|compile|errorcheck)$'` |
-| `F2` | 无 `import` 声明的：`// run` **69** / 141、`// compile` **37** / 41、`// errorcheck` **5** / 6；带 `import` 的合计 **77** | `grep -lE '^// …$' \| xargs grep -LE '^import'` |
-| `F3` | **今天**的读数：141 个 `// run` ⇒ `check` **22** / `build` **3** / `run` **3**（`issue47708`、`issue50417`、`issue50417b`）；**69 个门禁子集** ⇒ `check` **21** / `build` **2** / `run` **2** | 逐文件 `check`→`build`→`run` 实测 |
-| `F4` | check 失败诊断码分布：`CHK-INVALID-INDEX` 231、`CHK-INVALID-ASSIGN` 224、`TYP-UNSUPPORTED-IMPORT-FORM` 112、`CHK-INVALID-OPERATION` 32、`CHK-INVALID-SELECTOR` 10、`CHK-INVALID-RANGE-EXPR` 8、`TYP-UNDECLARED-NAME` 5、`CHK-INVALID-BUILTIN-ARG` 4 | 同上 |
-| `F5` | check 过但 build 失败的 19 个：`帧布局失败：v0 的类型 t32 没有运行期布局` 4、`VerifyError` 2、`CHK-INVALID-SELECTOR` 6（`x.foo undefined (type invalid type…)`）、`HIR-MISSING-TYPE` 2 | 同上 |
+| `F1` | `test/typeparam` 共 **266** 个文件，指令是**五族**：`// run` 142 / `// rundir` 49 / `// compile` 44 / `// compiledir` 18 / `// errorcheck` 8 / 无指令 5（六族互斥，和为 266）| `grep -lE '^// <族>( |$)'` |
+| `F2` | 无 stdlib import 的：`// run` **71** / 142、`// compile` **40** / 44、`// errorcheck` **5** / 8；带 stdlib import 的合计 **76**；`// rundir`+`// compiledir` 的 **67** 个全是 `package ignored` 桩 | `m12-classify.sh`（注释感知的 import 提取）|
+| `F3` | **今天**的读数：门禁 116 个 ⇒ `run` **3** / 71、`compile` **6** / 40、`errorcheck` **1** / 5（语义对）；拒绝面 **76/76** 干净拒绝 | `m12-baseline.sh` |
+| `F4` | check 失败诊断码分布（门禁族 64 个）：`CHK-INVALID-INDEX` 47（其中 **121 处** `cannot index value of type func` = 显式实例化被当索引）、`CHK-INVALID-ASSIGN` 11、`CHK-INVALID-OPERATION` 2、`CHK-INVALID-BUILTIN-ARG` 2、`TYP-INVALID-BLANK` 1、`CHK-INVALID-RANGE-EXPR` 1 | 同上 |
+| `F5` | check 过但 build 失败 38 个：`HIR-MISSING-TYPE` 12、`CHK-INVALID-SELECTOR` 11、`帧布局失败` 6、`VerifyError` 2、其它 7（6 个是 `build` 内置 check 又报错 + 1 个真 clang 链接失败 `issue52124`）| 同上 |
 | `F6` | 六种形态探测：`Id[T any](x T)` + `Id(7)` = check ✅ / 解释器 ✅ / native ❌ verifier；`Id[int](7)` = `CHK-INVALID-INDEX`；`Box[T]{v:3}` + `b.v` = check ✅ 但 `run`/`build` 报 `CHK-INVALID-SELECTOR`；`[T comparable]` = check ✅ / 解释器 ✅ / native ❌；`[T Num]` + `+` = `CHK-INVALID-OPERATION`；`[]T` 形参 = `CHK-INVALID-ASSIGN` | 六份探针源码 |
-| `F7` | 69 个门禁 `// run` 的特性分布：`any` 56、`[T ` 55、`interface` 54、`func(` 18、`~` 8、`comparable` 8、`map[` 6、`[T,` 4、`chan` 2、`[K ` 1、`recover` 1、**`unsafe` 0、`reflect` 0** | `grep -c` 逐特性 |
+| `F7` | 71 个门禁 `// run` 的特性分布：`any` 56+、`[T ` 55+、`interface` 54+、`func(` 18、`~` 8、`comparable` 8、`map[` 6、`chan` 2、`recover` 1、**`unsafe` 4（伪 import）、`reflect` 0** | `grep -c` 逐特性 |
 | `F8` | `import "reflect"` ⇒ `TYP-UNSUPPORTED-IMPORT-FORM`（"no source directory under the import roots"）；`-I` 只存在于 `types` 子命令 | 实测 + `cli.rs:785` |
 | `F9` | `TypeDesc` 40 字节（`C5` §10），`pad: u16` 现在空着 | `rt.c` / `rgoc-meta::desc` |
 | `F10` | M7 已有 `abi_classify`（参数 ABI 分类）；`opt_equiv.rs` 是 pass 的唯一强判据 | M7/M10 交付 |
 | `F11` | 容器内 `go version go1.27.1 linux/arm64` | 实测 |
 | `F12` | 现有全量：**243 suite / 2281 passed / 0 failed / 2 ignored**；69 单线程三态各 69/0/0；7 并发三态各 7/0/0 | M11 收口读数 |
+| `F13` | `// rundir`/`// compiledir` 的 67 个文件是 `package ignored` 桩；同名 `.dir/` 目录 69 个、用相对包 import（`import "./a"` 35 处）| Task 0 实测 |
+| `F14` | **`check` 与 `build` 口径不一致 7 个**：6 个 `check` rc=0 而 `build` 的内置 check 报错（`TYP-INVALID-CONVERSION` 1 / `CHK-INVALID-OPERATION` 5），1 个是真 clang 链接失败 | Task 0 实测 |
+
+> ⚠️ `F1/F2/F3/F7` 是 **Task 0 实测修正后**的值（设计第一版写的 141/41/6/78 与
+> 111 是把「精确匹配 `^// run$`」当成了族划分）。修正记录见 `M12-baseline.md` §5。
 
 ### 2.4 已拍板的五件事（2026-10-28）
 
 1. **三条线全做**（泛型 / 反射 / 优化），但**独立门禁、可各自切断**。
-2. **泛型语料的「全过」= 111 个无 `import` 的文件**（69 `run` + 37 `compile` + 5 `errorcheck`）；77 个带 `import` 的转拒绝面。
+2. **泛型语料的「全过」= 116 个无 stdlib import 的文件**（71 `run` + 40 `compile` + 5 `errorcheck`）；76 个转拒绝面；67 个 `.dir` 桩与 5 个无指令不纳入。
 3. **反射 = 全写面**（读 + `Call` + `Set*`/`Make*`/`New`），`MakeFunc` 排除。
 4. **泛型 ABI = 先单态化、c 线换字典**（字典是重写，排最后、第一个可切断）。
 5. **不碰 stdlib**（`fmt` 等 8 个包不做），`errorcheck` 族去掉。
@@ -234,7 +241,7 @@ A 的额外好处：**`A3` 被绕开**。`A3` 的根因是「dump 的根集不�
 | 内联 | `rgoc-ssa` 新增 inline pass | `opt_equiv` + 69/67 三态不变 + `.s` 行数下降 |
 | 精细逃逸 | `rgoc-ssa` 的逃逸分析（现在保守全堆分配） | `allocs` 下降 + 三态输出不变 |
 | SwissTable | `rt.c` 的 `MapObj` 槽块 | `t_map_*` 全绿 + 大 map probe 读数 |
-| 字典替换 | a 线的代码生成（重写） | 111 个门禁语料重跑 + 代码体积读数 |
+| 字典替换 | a 线的代码生成（重写） | 116 个门禁语料重跑 + 代码体积读数 |
 
 ---
 
@@ -244,7 +251,7 @@ A 的额外好处：**`A3` 被绕开**。`A3` 的根因是「dump 的根集不�
 
 | 层 | 从哪来 | 覆盖 |
 |---|---|---|
-| **L1** native vs **解释器** | `--via=hir` | 全部 111 个门禁语料（**主判据**） |
+| **L1** native vs **解释器** | `--via=hir` | 全部 116 个门禁语料（**主判据**） |
 | **L2** native vs **官方** | `go run`（go1.27.1，`F11`） | 69 个 `// run` |
 | **L3** 解释器 vs 官方 | 同上 | 69 个 `// run` |
 
@@ -254,13 +261,15 @@ L1 仍是主判据：`C11` 已把 rgoc 的语义冻结，官方只用来证明�
 
 | 清单 | 个数 | 用途 |
 |---|---|---|
-| `typeparam-run.txt` | 69 | 无 `import` 的 `// run`（三层一致） |
-| `typeparam-compile.txt` | 37 | 无 `import` 的 `// compile`（编译通过） |
-| `typeparam-errorcheck.txt` | 5 | 无 `import` 的 `// errorcheck`（诊断码对齐） |
-| `typeparam-rejected.txt` | 77 | 带 `import`（干净拒绝 + 码稳定） |
-| `typeparam-skip.txt` | 78 | 其余（无 `run`/`compile`/`errorcheck` 指令，不纳入） |
+| `typeparam-run.txt` | 71 | 无 stdlib import 的 `// run`（三层一致）|
+| `typeparam-compile.txt` | 40 | 无 stdlib import 的 `// compile`（编译通过）|
+| `typeparam-errorcheck.txt` | 5 | 无 stdlib import、无 `-m` 的 `// errorcheck`（诊断码对齐）|
+| `typeparam-errorcheck-m.txt` | 2 | 带 `-m`（`U-M12-08`，不做）|
+| `typeparam-rejected.txt` | 76 | 带 stdlib import（干净拒绝 + 码集合稳定）|
+| `typeparam-dir.txt` | 67 | `.dir` 桩（`U-M12-07`，不做）|
+| `typeparam-none.txt` | 5 | 无指令（不做）|
 
-`T-M12-01` 断言：五份之和 = 266，且每份都由 `grep` 从语料算出（不手抄）。
+`T-M12-01` 断言：**七份**之和 = 266、两两不相交，且每份都由 `tools/run-oracle/m12-classify.sh` 从语料算出（不手抄）。
 
 ### 4.3 判据表（正文在 `M12-tests.md`）
 
@@ -289,7 +298,7 @@ L1 仍是主判据：`C11` 已把 rgoc 的语义冻结，官方只用来证明�
 
 * 每条线 **4–8 人周**、最长 **12 周**，独立计窗（不逐子阶段重复领取）。
 * **超限切断顺序**：SwissTable → 内联/逃逸的预算目标（保留正确性）→ 字典替换（退回单态化）。
-* **不可放宽**：`G12-1/2/3`（111 个门禁语料 + 77 拒绝面）、反射白名单每个符号有判据、四条 cargo 门禁。
+* **不可放宽**：`G12-1/2/3`（116 个门禁语料 + 76 拒绝面）、反射白名单每个符号有判据、四条 cargo 门禁。
 
 ---
 
@@ -297,19 +306,21 @@ L1 仍是主判据：`C11` 已把 rgoc 的语义冻结，官方只用来证明�
 
 | ID | 不做 | 判据/登记 |
 |---|---|---|
-| `U-M12-01` | stdlib import（`fmt`/`strings`/`strconv`/`sort`/`math`/`errors`/`sync`/`runtime`） | **77** 个文件 ⇒ 拒绝面（`T-GEN-03`）；其中 1 个是 `// errorcheck`（拒绝理由不对，只登记不计分） |
+| `U-M12-01` | stdlib import（`fmt`/`strings`/`strconv`/`sort`/`math`/`errors`/`sync`/`runtime`） | **76** 个文件 ⇒ 拒绝面（`T-GEN-03`）|
 | `U-M12-02` | `reflect.MakeFunc` | `T-REF-01` 的白名单里没有它 |
 | `U-M12-03` | 可变参数 `Call`（`CallSlice`、`...any` 实参） | `T-REF-03` 的分档里没有它 |
 | `U-M12-04` | PGO / DWARF / coverage | roadmap 已划延期 |
 | `U-M12-05` | **泛型原体的独立检查**（不可达实例的类型错误不报） | `D-M12-3` 的副作用，如实登记 |
 | `U-M12-06` | 并发 GC / 写屏障 | 沿用 `U-M11-08`；`D-M12-7` 的前提写进 `C12` |
+| `U-M12-07` | `.dir` 目录测试（相对包 import）| 67 个桩 + 69 个目录，不在任何门禁里 |
+| `U-M12-08` | `errorcheck -m`（内联诊断）| 2 个文件，不在门禁里 |
 
 ---
 
 ## 6. 错误处理
 
 * **实例化失败**（约束不满足）：诊断码沿用 M4 的 `CHK-*`，**不新增码**；报点用实例化**现场**的位置（不是泛型声明处），并在消息里带类型实参。
-* **递归实例化无底洞**（`F[F[F[...]]]`）：设实例深度上限（初值 64），超限报 `CHK-INSTANTIATION-DEPTH`（**新增码**，进 `C8` 的字典序表）。
+* **递归实例化无底洞**（`F[F[F[...]]]`）：超限报 **`TYP-INVALID-INSTANCE-CYCLE`** —— 该码 **M4 已建**（`rgoc-lex/src/diag.rs`），深度上限用它自己的 `MAX_INSTANTIATION_DEPTH`。**不新增码**（Task 0 修正）。
 * **`reflect` 误用**：`CanSet` 为假时 panic（文本对齐官方），走既有 `rt_panic_*`。
 * **`Call` 的 ABI 不匹配**：编译期就拒绝（白名单外的形态不给过），不在运行时猜。
 
@@ -344,7 +355,7 @@ L1 仍是主判据：`C11` 已把 rgoc 的语义冻结，官方只用来证明�
 
 ## 9. 任务分解原则（`M12-plan.md` 的输入）
 
-1. **Task 0 先做基线测绘**：111 个门禁语料 + 77 个拒绝面各跑一遍，逐条归因成「检查面 / 单态化 / 反射 / 范围外」四类，产出 `M12-baseline.md`。**没有这张表不排后面的任务顺序。**
+1. **Task 0 先做基线测绘**：116 个门禁语料 + 76 个拒绝面各跑一遍，逐条归因成「检查面 / 单态化 / 反射 / 范围外」四类，产出 `M12-baseline.md`。**没有这张表不排后面的任务顺序。**
 2. 每条线内部按「先判据后实现」：先写会红的判据（今天 `T-GEN-01` 就该红），再实现。
 3. 每个 Task 2–5 分钟粒度、带可粘贴内容与验证命令（沿 M10/M11 的格式）。
 4. 阶段收口即 commit + push；每段收口跑四条门禁 + 两套语料三态 + 变异。

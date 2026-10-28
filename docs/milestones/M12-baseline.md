@@ -1,0 +1,161 @@
+# M12 基线测绘（Task 0）
+
+> 目的：回答「今天到哪了」与「每个失败归因到哪一类」。`M12-plan.md` 的任务顺序
+> 由这张表决定（`D-M12-10`：「没有这张表不排后面的任务顺序」）。
+>
+> 复现：
+> ```bash
+> RGOC_TTY=0 scripts/in-container.sh bash -lc 'cd /work && \
+>   bash tools/run-oracle/m12-classify.sh && \
+>   bash tools/run-oracle/m12-baseline.sh'
+> ```
+> 两个脚本都在 `tools/run-oracle/`，读数全部**算**出来（不手抄）。
+
+---
+
+## 1. 语料划分（七份，和为 266）
+
+| 清单 | 个数 | 门禁 | 说明 |
+|---|---|---|---|
+| `typeparam-run.txt` | **71** | `G12-2` 三层一致 | 无 stdlib import 的 `// run` |
+| `typeparam-compile.txt` | **40** | `G12-1` 编译通过 | 无 stdlib import 的 `// compile` |
+| `typeparam-errorcheck.txt` | **5** | `G12-3` 诊断码对齐 | 无 stdlib import、无 `-m` |
+| `typeparam-errorcheck-m.txt` | 2 | 不做（`U-M12-08`） | 带 `-m`：期望错是**内联报告** |
+| `typeparam-rejected.txt` | **76** | `G12-3` 干净拒绝 | 带 stdlib import（任何族） |
+| `typeparam-dir.txt` | 67 | 不做（`U-M12-07`） | `// rundir`/`// compiledir` 桩 |
+| `typeparam-none.txt` | 5 | 不做 | 没有任何指令 |
+| **合计** | **266** | | `T-M12-01` 断言自洽 |
+
+**门禁面 = 116 个文件**（71 + 40 + 5）。
+
+### 1.1 `// rundir` / `// compiledir` 是什么（`F13`）
+
+那 67 个 `.go` 全是 `package ignored`（1 个 `package p`）的**桩**，真正的测试在
+同名 `.dir/` 目录里（69 个目录、每个 2–4 个文件）。目录里的测试用**相对包
+import**（`import "./a"` 35 处、`import "./b"` 4 处）—— 那是「包解析」，
+roadmap 明确划在 M12 之外。所以：**桩不算测试**，也不能进分母。
+
+### 1.2 「无 stdlib import」怎么判（三条踩过的坑）
+
+判据是「**import 集合 ⊆ {unsafe}**」，用能识别注释的小状态机取路径：
+
+1. **块注释里的 import 不算**：`issue50417.go` / `issue50417b.go` 的
+   `import "fmt"` 在 `/* … */` 里（官方为留档注释掉了），而这两个**今天就能跑通**。
+   用 `grep '^import'` 会把它们判成「需要 stdlib」。
+2. **`unsafe` 是支持的伪 import**（M4 的 `U-M4-06`）：`issue53390.go` 只有
+   `import "unsafe"`，属门禁面。全语料 5 个文件 import `unsafe`，4 个有指令。
+3. **指令要匹配 `^// run( |$)`**：6 个文件带尾随参数（`// run -gcflags="-l"`、
+   `// compile -p=p`、`// errorcheck -0 -m`），精确匹配会漏。
+
+---
+
+## 2. 今天到哪了
+
+| family | total | check 过 | build 过 | run 过 |
+|---|---|---|---|---|
+| run | 71 | 22 | **3** | **3** |
+| compile | 40 | 25 | **6** | — |
+| errorcheck | 5 | 2（= 该报错却没报） | — | — |
+| errorcheck-m | 2 | 1 | 0 | — |
+| rejected | 76 | 0（全部干净拒绝 ✓） | — | — |
+| dir | 67 | 67 | 67 | — |
+| none | 5 | 3 | 3 | — |
+
+**门禁面的今天读数：`run` 3/71、`compile` 6/40、`errorcheck` 1/5（语义对）。**
+
+* 今天 `run` 通过的 3 个：`issue47708.go`、`issue50417.go`、`issue50417b.go`
+  （后两个的 `import "fmt"` 在块注释里，是**无泛型**的普通程序）。
+* 今天 `compile` 通过的 6 个：`issue46461`、`issue47929`、`issue47966`、
+  `issue49611`、`issue49875`、`issue50259`。
+* 拒绝面 **76/76 干净拒绝**（退出码 1），且 76/76 的诊断码集合**含**
+  `TYP-UNSUPPORTED-IMPORT-FORM`。
+
+---
+
+## 3. 逐条归因
+
+### 3.1 check 面：64 个失败
+
+| 首码 | 个数 | 成因 |
+|---|---|---|
+| `CHK-INVALID-INDEX` | **47** | **显式实例化 `F[int](x)` 被当成索引**：门禁族里 121 处 `cannot index value of type func`（47 个文件），另有 6 处 `cannot index value of type type parameter`（真·索引 `x[i]`，`x` 是 `[]T`） |
+| `CHK-INVALID-ASSIGN` | 11 | 实例化后的可赋值：`cannot use value of type func as func value in argument to F`（把 `F[int]` 当函数值传）/ `[]int as []type parameter` |
+| `CHK-INVALID-OPERATION` | 2 | `absdiff.go`、`issue48424.go`：core type 上的 `-`/`<` |
+| `CHK-INVALID-BUILTIN-ARG` | 2 | `append.go`、`builtins.go`：`append`/`len` 在类型参数上 |
+| `TYP-INVALID-BLANK` | 1 | `issue47710.go` |
+| `CHK-INVALID-RANGE-EXPR` | 1 | `issue48453.go` |
+
+**一个根因吃掉 47/64**：`index_expr` 不认「对泛型函数做显式实例化」。这是
+M12a 的第一优先级。
+
+### 3.2 build 面：38 个失败（check 已过）
+
+| 形态 | 个数 | 成因 |
+|---|---|---|
+| `missing_type` | 12 | `HIR-MISSING-TYPE`：`拿不到表达式 X 的静态类型（mode=invalid operand）`——check 静默产出 `invalid` 操作数，HIR 建不起来 |
+| `selector` | 11 | `CHK-INVALID-SELECTOR`：实例的字段/方法选择器在 **load 面**没实现（check 面过了） |
+| `other` | 7 | **6 个是 `build` 内置的 check 又报错**（`TYP-INVALID-CONVERSION` 1、`CHK-INVALID-OPERATION` 5）而 `check` 子命令 rc=0；**1 个是真正的 clang 链接失败**（`issue52124.go`） |
+| `layout` | 6 | `帧布局失败：v0 的类型 t32 没有运行期布局`：SSA 拿到了带类型参数的常量 |
+| `verify` | 2 | `VerifyError: 常量 Int(7) 不可能有类型 TypeId(32)`：同上 |
+
+**`other` 那 6 个是一条独立的真错**：`check` 与 `build` 的口径不一致（`F14`）。
+`check` 报 0 个诊断，`build` 用同一份代码报出诊断 —— 不是「泛型不支持」，是
+**同一条检查在两处的输入不同**。
+
+### 3.3 errorcheck：5 个的逐条对照
+
+| 文件 | 官方期望 | 今天 | 判定 |
+|---|---|---|---|
+| `tparam1.go` | `T redeclared` | `TYP-DUPLICATE-DECL` | ✅ 语义对 |
+| `issue48711.go` | `instantiation cycle` | `CHK-INVALID-INDEX` | ✗ 码不对（该 `TYP-INVALID-INSTANCE-CYCLE`） |
+| `issue50317.go` | `interface method must have no type parameters` | `SYN-UNEXPECTED-TOKEN` | ✗ 码不对（解析面先拒了） |
+| `issue51232.go` | `not enough type arguments for type Fn: have 1, want 2` | **无诊断** | ✗ 漏检（该 `TYP-WRONG-TYPE-ARG-COUNT`） |
+| `issue51233.go` | 同上 | **无诊断** | ✗ 漏检 |
+
+⇒ **今天 1/5**。注意 `TYP-WRONG-TYPE-ARG-COUNT`、`TYP-INVALID-INSTANCE-CYCLE`
+**两个码都已经在 `DiagCode` 里**（M4 建的），不需要新增。
+
+### 3.4 不做面的今天读数
+
+* `dir` 67 个桩全部 check/build 通过（它们是 `package ignored`，无内容）。
+* `none` 5 个：3 个通过、2 个 check 失败（`issue47896`、`issue48604`）—— 不在任何门禁里，只登记。
+* `errorcheck-m` 2 个：`pragma.go`、`issue54497.go`，期望错是 `can inline …`
+  （gc 的内联报告），我们没有 `-m`，不做。
+
+---
+
+## 4. 四类归因汇总
+
+| 类 | 个数 | 具体 |
+|---|---|---|
+| **检查面** | 64 | 显式实例化 47 / 可赋值 11 / core type 2 / 内建 2 / 边角 2 |
+| **单态化（load 面）** | 38 | 选择器 11 / `missing_type` 12 / 布局 6 / verify 2 / 其它 7 |
+| **反射** | 0 | 69 个门禁文件里 `reflect` 出现 **0** 次（`F7`）—— b 线不阻塞 a 线 |
+| **范围外** | 76 + 67 + 2 + 5 | stdlib import 76 / dir 桩 67 / `-m` 2 / 无指令 5 |
+
+---
+
+## 5. 对设计文档的修正（六处）
+
+| # | 设计原文 | 实测 | 性质 |
+|---|---|---|---|
+| 1 | `F1`：`run` 141 / `compile` 41 / `errorcheck` 6 / 无指令 78 | **`run` 142 / `compile` 44 / `errorcheck` 8 / `rundir` 49 / `compiledir` 18 / 无指令 5** | 指令是**五族**，且 6 个带尾随参数被漏数 |
+| 2 | `F2`：门禁 69+37+5 = 111；拒绝 77 | **门禁 71+40+5 = 116；拒绝 76；另有 dir 67** | 块注释 import 2 个 + `unsafe` 伪 import + 尾随参数 |
+| 3 | §4.2：五份清单 | **七份**（增 `dir` / `errorcheck-m`） | `dir` 是桩、`-m` 是内联诊断 |
+| 4 | §6：新增 `CHK-INSTANTIATION-DEPTH` | **不新增**：`TYP-INVALID-INSTANCE-CYCLE` 与 `TYP-WRONG-TYPE-ARG-COUNT` 都已存在 | 少一个码要维护 |
+| 5 | `G12-3`：「拒绝面 + 码稳定」 | 首码只有 **22/76** 是 `TYP-UNSUPPORTED-IMPORT-FORM`；但 **76/76 的码集合含它** | 判据改成「**码集合包含**」而不是「首码」 |
+| 6 | — | 新增 `F13`（dir 桩与相对包 import）、`F14`（check/build 口径不一致 7 个） | 新事实 |
+
+**新增两条白名单**：`U-M12-07`（`.dir` 目录测试：相对包 import）、
+`U-M12-08`（`errorcheck -m`：内联诊断）。
+
+---
+
+## 6. 对计划的影响
+
+1. **顺序**：检查面（64）→ 单态化（38）。检查面不动，单态化连实例都造不出来
+   （`F[int](x)` 在 check 就被判成索引）。
+2. **第一优先**：`index_expr` 认显式实例化 —— 一个改动解锁 47 个文件。
+3. **独立真错**：`F14`（check/build 口径不一致 6 个 + 1 个 clang 链接失败）
+   与泛型无关，但挡着 `compile` 门禁，要单独一条任务。
+4. **b 线不阻塞**：门禁 116 个里 `reflect` 0 次，反射可以等 a 线收口再开。
