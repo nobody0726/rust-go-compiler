@@ -92,6 +92,7 @@ fn accepts(rel: &str) -> bool {
         "{rel}：语料里不存在（语料被 sha256 锁死 ⇒ 是清单写错了）"
     );
     let cmd = CheckCommand {
+        roots: Vec::new(),
         files: vec![path],
         diag_dump: false,
         lang: None,

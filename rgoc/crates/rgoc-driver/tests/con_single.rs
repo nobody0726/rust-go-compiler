@@ -29,6 +29,7 @@ fn run_src(name: &str, src: &str) -> RunOutcome {
     let path = dir.join(format!("{name}.go"));
     std::fs::write(&path, src).expect("写不了 fixture");
     run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![path],
         dump_hir: false,
         max_steps: None,

@@ -58,6 +58,7 @@ fn rt_source() -> PathBuf {
 /// **静态拒绝**走 `Ok(exit: 1)`，「跑了但没成」走 `Ok(exit: 2)` —— 三者必须能区分。
 pub fn build_frontend(
     files: &[PathBuf],
+    roots: &[PathBuf],
     opt: rgoc_ssa::opt::Config,
     lang_opt: Option<&str>,
 ) -> Result<Frontend, FrontendError> {
@@ -77,7 +78,7 @@ pub fn build_frontend(
     };
 
     let mut tt = TypeTable::new();
-    let (pkg, bag) = load_with_imports(&mut tt, files, &[], lang.as_deref());
+    let (pkg, bag) = load_with_imports(&mut tt, files, roots, lang.as_deref());
 
     let opts = CheckOptions { test_hooks: false };
     let (checked, lowered) =
@@ -178,7 +179,7 @@ pub fn run_build(cmd: &BuildCommand) -> Result<BuildOutcome, String> {
         module,
         types: tt,
         mut stderr,
-    } = match build_frontend(&cmd.files, cmd.opt, cmd.lang.as_deref()) {
+    } = match build_frontend(&cmd.files, &cmd.roots, cmd.opt, cmd.lang.as_deref()) {
         Ok(f) => f,
         Err(FrontendError::Rejected(stderr)) => {
             return Ok(BuildOutcome {

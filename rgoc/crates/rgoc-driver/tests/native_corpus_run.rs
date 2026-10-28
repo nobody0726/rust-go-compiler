@@ -99,6 +99,7 @@ fn t_nat_42_43_语料上的_native_与解释器逐字节一致() {
 
         // ① native：编译 + 链接 + 跑
         let cmd = BuildCommand {
+            roots: Vec::new(),
             files: vec![src.clone()],
             output: Some(exe.clone()),
             emit: Emit::Elf,
@@ -145,6 +146,7 @@ fn t_nat_42_43_语料上的_native_与解释器逐字节一致() {
 
         // ② 解释器：同一份源码
         let rcmd = RunCommand {
+            roots: Vec::new(),
             files: vec![src.clone()],
             dump_hir: false,
             max_steps: None,

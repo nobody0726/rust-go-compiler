@@ -77,6 +77,7 @@ fn chan_ok() -> Vec<String> {
 fn build_once(tag: &str, rel: &str) -> (i32, String) {
     let dir = scratch(&format!("{tag}/{}", rel.replace('/', "_")));
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![repo_root().join(rel)],
         output: Some(dir.join("prog")),
         emit: Emit::Elf,

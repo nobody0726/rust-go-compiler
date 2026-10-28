@@ -33,6 +33,7 @@ fn build_to(dir: &Path, src_name: &str, src: &str, emit: Emit, keep_asm: bool) -
     std::fs::write(&go, src).expect("写源失败");
     let exe = dir.join(src_name);
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit,

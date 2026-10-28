@@ -19,6 +19,7 @@ use rgoc_driver::cli::{BuildCommand, CliError, Command, Emit, parse_args};
 
 fn build(files: &[&str]) -> BuildCommand {
     BuildCommand {
+        roots: Vec::new(),
         files: files.iter().map(PathBuf::from).collect(),
         output: None,
         emit: Emit::Elf,
@@ -52,6 +53,7 @@ fn 解析_全部旗标() {
     ])
     .unwrap();
     let want = BuildCommand {
+        roots: Vec::new(),
         files: vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
         output: Some(PathBuf::from("out/prog")),
         emit: Emit::Asm,
@@ -113,6 +115,7 @@ fn t_nat_47_emit_asm_只出汇编() {
     let go = write_src("asm_only", "package main\nfunc main() { println(1) }\n");
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/asm_only.s");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(out.clone()),
         emit: Emit::Asm,
@@ -134,6 +137,7 @@ fn t_nat_47_默认出_elf_且不保留汇编() {
     let go = write_src("elf_default", "package main\nfunc main() { println(7) }\n");
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/elf_default");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(out.clone()),
         emit: Emit::Elf,
@@ -157,6 +161,7 @@ fn t_nat_47_keep_asm_保留中间件() {
     let go = write_src("keep_asm", "package main\nfunc main() {}\n");
     let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/native-cli/keep_asm");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(out.clone()),
         emit: Emit::Elf,

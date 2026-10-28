@@ -162,6 +162,7 @@ fn selected_files_are_self_sufficient() {
     let mut bad: Vec<String> = Vec::new();
     for rel in read_rows("run-selected.txt") {
         let cmd = RunCommand {
+            roots: Vec::new(),
             files: vec![root.join(&rel)],
             dump_hir: false,
             max_steps: None,
@@ -327,6 +328,7 @@ fn every_listed_path_exists() {
 /// `testdir_test.go:1184` 及 `run-collide.sh` 的 `perl -pi` 同款。
 fn run_file(path: &Path) -> (String, u8) {
     let o = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![path.to_path_buf()],
         dump_hir: false,
         max_steps: None,

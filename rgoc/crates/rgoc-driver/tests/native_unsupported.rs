@@ -43,6 +43,7 @@ fn build(name: &str, src: &str) -> (u8, String, PathBuf) {
     let exe = go.with_extension("");
     let _ = std::fs::remove_file(&exe);
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,

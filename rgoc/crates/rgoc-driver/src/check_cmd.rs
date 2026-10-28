@@ -80,9 +80,9 @@ pub fn run_check(cmd: &CheckCommand) -> Result<CheckOutcome, String> {
         None => cmd.lang.clone(),
     };
 
-    // ② 装载（`check` 暂不收 `-I`：首轮对撞逐文件单跑，import 面按需再扩）。
+    // ② 装载（`-I` 给根；M12/Task 28 起与 `types` 同款 —— b 线的地基）。
     let mut tt = TypeTable::new();
-    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
+    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &cmd.roots, lang.as_deref());
 
     // ③ 检查（Task 20 起真身：装载诊断入流 + 会话骨架；Task 21 起含表达式
     //    运算符面；语句/内建/门控点由后续任务逐个挂上）。

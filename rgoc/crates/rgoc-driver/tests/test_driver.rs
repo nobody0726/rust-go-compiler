@@ -1126,6 +1126,7 @@ fn 解析_check_子命令_旗标面() {
     assert_eq!(
         got,
         Command::Check(CheckCommand {
+            roots: Vec::new(),
             files: vec![PathBuf::from("a.go")],
             diag_dump: false,
             lang: None,
@@ -1146,6 +1147,7 @@ fn 解析_check_子命令_旗标面() {
     assert_eq!(
         got,
         Command::Check(CheckCommand {
+            roots: Vec::new(),
             files: vec![PathBuf::from("a.go"), PathBuf::from("b.go")],
             diag_dump: true,
             lang: Some("go1.22".into()),

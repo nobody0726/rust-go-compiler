@@ -82,6 +82,7 @@ fn build_corpus(tag: &str, rel: &str) -> PathBuf {
     let dir = scratch(&slug);
     let exe = dir.join("prog");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![repo_root().join(rel)],
         output: Some(exe.clone()),
         emit: Emit::Elf,

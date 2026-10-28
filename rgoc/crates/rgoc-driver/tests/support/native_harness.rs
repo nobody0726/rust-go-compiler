@@ -76,6 +76,7 @@ pub fn build_and_run_env(name: &str, src: &str, env: &[(&str, &str)]) -> Result<
 
     let prog = dir.join("prog");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go.clone()],
         output: Some(prog.clone()),
         emit: Emit::Elf,
@@ -134,6 +135,7 @@ pub fn hir_output(name: &str, src: &str) -> Result<String, String> {
     let go = dir.join("main.go");
     std::fs::write(&go, src).map_err(|e| format!("写 {} 失败：{e}", go.display()))?;
     let cmd = rgoc_driver::cli::RunCommand {
+        roots: Vec::new(),
         files: vec![go],
         dump_hir: false,
         max_steps: None,

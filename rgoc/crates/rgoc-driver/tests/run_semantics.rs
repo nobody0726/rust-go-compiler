@@ -36,6 +36,7 @@ fn run_src(name: &str, src: &str) -> RunOutcome {
     let path = dir.join(format!("{name}.go"));
     std::fs::write(&path, src).expect("写不了 fixture");
     run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![path],
         dump_hir: false,
         max_steps: None,
@@ -140,6 +141,7 @@ fn t_ex_04_dump_is_deterministic() {
     .expect("写不了 fixture");
     let dump = |name: &str| {
         run_run(&RunCommand {
+            roots: Vec::new(),
             files: vec![path.clone()],
             dump_hir: true,
             max_steps: None,
@@ -1240,6 +1242,7 @@ fn t_ex_49_exit_code_table() {
     );
     // 2：参数/io 错（文件不存在）⇒ `run_run` 返回 Err，由 CLI 翻成 2
     let err = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![PathBuf::from("/nonexistent/rgoc-fixture.go")],
         dump_hir: false,
         max_steps: None,
@@ -1269,6 +1272,7 @@ fn t_ex_51_dump_channel_separation() {
     let good = dir.join("t_ex_51_good.go");
     std::fs::write(&good, "package main\nfunc main() { print(\"ZZZ\") }\n").expect("写不了");
     let o = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![good],
         dump_hir: true,
         max_steps: None,
@@ -1298,6 +1302,7 @@ fn t_ex_51_dump_channel_separation() {
     let bad = dir.join("t_ex_51_bad.go");
     std::fs::write(&bad, "package main\nfunc main() { print(nope) }\n").expect("写不了");
     let o2 = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![bad],
         dump_hir: true,
         max_steps: None,
@@ -1339,6 +1344,7 @@ fn t_ex_52_budget_limits_fail_loudly() {
     let spin = dir.join("t_ex_52_steps.go");
     std::fs::write(&spin, "package main\nfunc main() { for {} }\n").expect("写不了");
     let o2 = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![spin],
         dump_hir: false,
         max_steps: Some(10_000),

@@ -55,6 +55,7 @@ fn check(name: &str, src: &str, want: &str) {
     let exe = dir.join(name);
 
     let b = BuildCommand {
+        roots: Vec::new(),
         files: vec![go.clone()],
         output: Some(exe.clone()),
         emit: Emit::Elf,
@@ -77,6 +78,7 @@ fn check(name: &str, src: &str, want: &str) {
     let native = String::from_utf8_lossy(&run.stdout).into_owned();
 
     let r = RunCommand {
+        roots: Vec::new(),
         files: vec![go],
         dump_hir: false,
         max_steps: None,

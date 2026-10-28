@@ -39,6 +39,7 @@ fn run_native(name: &str, src: &str) -> (String, String, Option<i32>) {
     std::fs::write(&go, src).expect("写 fixture 失败");
     let exe = dir.join(name);
     let b = BuildCommand {
+        roots: Vec::new(),
         files: vec![go.clone()],
         output: Some(exe.clone()),
         emit: Emit::Elf,
@@ -64,6 +65,7 @@ fn run_hir(name: &str, src: &str) -> (String, String, Option<i32>) {
     let go = scratch().join(format!("{name}.go"));
     std::fs::write(&go, src).expect("写 fixture 失败");
     let cmd = RunCommand {
+        roots: Vec::new(),
         files: vec![go],
         dump_hir: false,
         max_steps: None,
@@ -243,6 +245,7 @@ fn nat2_切片变体真的被选择() {
     let go = dir.join("slice_variant.go");
     std::fs::write(&go, src).expect("写 fixture 失败");
     let b = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(dir.join("slice_variant")),
         emit: Emit::Elf,

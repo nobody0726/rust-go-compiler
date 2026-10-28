@@ -230,6 +230,7 @@ fn write_fixture(name: &str, src: &str) -> PathBuf {
 /// 跑 `--dump-hir`，返回 dump 文本（诊断走 stderr，另行断言）。
 fn dump_of(path: &Path) -> String {
     let o = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![path.to_path_buf()],
         dump_hir: true,
         max_steps: None,
@@ -496,6 +497,7 @@ fn t_ex_03_lowering_is_silent_when_check_passes() {
         }
         n += 1;
         let o = run_run(&RunCommand {
+            roots: Vec::new(),
             files: vec![root.join(rel)],
             dump_hir: true,
             max_steps: None,

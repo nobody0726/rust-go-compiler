@@ -27,6 +27,7 @@ fn build_and_run(name: &str, src: &str) -> (String, i32, String) {
     std::fs::write(&go, src).expect("写 fixture 失败");
     let exe = dir.join(name);
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,
@@ -252,6 +253,7 @@ fn t_slice_09b_越界的文本逐字节() {
     .unwrap();
     let exe = dir.join("t_slice_09b");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,

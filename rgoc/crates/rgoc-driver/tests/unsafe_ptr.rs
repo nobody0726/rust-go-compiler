@@ -39,6 +39,7 @@ fn run_native(name: &str, src: &str) -> (String, String, Option<i32>) {
     std::fs::write(&go, src).expect("写 fixture 失败");
     let exe = dir.join(name);
     let b = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,
@@ -63,6 +64,7 @@ fn run_ssa(name: &str, src: &str) -> (String, String, Option<i32>) {
     let go = scratch().join(format!("{name}.ssa.go"));
     std::fs::write(&go, src).expect("写 fixture 失败");
     let cmd = RunCommand {
+        roots: Vec::new(),
         files: vec![go],
         dump_hir: false,
         max_steps: None,

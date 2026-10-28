@@ -43,6 +43,7 @@ fn selected() -> Vec<String> {
 
 fn run_via(src: &Path, via: Via) -> (String, u8, String) {
     let o = run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![src.to_path_buf()],
         dump_hir: false,
         max_steps: None,

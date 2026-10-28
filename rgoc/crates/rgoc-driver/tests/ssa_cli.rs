@@ -113,6 +113,7 @@ fn run_via(name: &str, src: &str, via: Via) -> RunOutcome {
     let path = dir.join(format!("{name}.go"));
     std::fs::write(&path, src).expect("写不了 fixture");
     run_run(&RunCommand {
+        roots: Vec::new(),
         files: vec![path],
         dump_hir: false,
         max_steps: None,
@@ -127,6 +128,7 @@ fn run_via(name: &str, src: &str, via: Via) -> RunOutcome {
 #[test]
 fn t_ssa_39_解析_run_的_via() {
     let base = RunCommand {
+        roots: Vec::new(),
         files: vec![PathBuf::from("a.go")],
         dump_hir: false,
         max_steps: None,
@@ -148,6 +150,7 @@ fn t_ssa_39_解析_run_的_via() {
     assert_eq!(
         parse_args(&["run", "--via", "ssa", "a.go"]).unwrap(),
         Command::Run(RunCommand {
+            roots: Vec::new(),
             via: Via::Ssa,
             ..base.clone()
         }),
@@ -157,6 +160,7 @@ fn t_ssa_39_解析_run_的_via() {
     assert_eq!(
         parse_args(&["run", "--via=ssa", "a.go"]).unwrap(),
         Command::Run(RunCommand {
+            roots: Vec::new(),
             via: Via::Ssa,
             ..base.clone()
         }),

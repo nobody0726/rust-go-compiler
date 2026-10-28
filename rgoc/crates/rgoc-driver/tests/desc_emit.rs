@@ -57,6 +57,7 @@ fn build_asm(name: &str, src: &str) -> String {
     std::fs::write(&go, src).expect("写 fixture 失败");
     let exe = dir.join(name);
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,

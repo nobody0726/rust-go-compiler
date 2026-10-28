@@ -174,6 +174,7 @@ fn nat7_帧图与反汇编的偏移必须一致() {
     std::fs::write(&go, SRC).expect("写源失败");
     let exe = dir.join("fm");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,
@@ -278,6 +279,7 @@ fn nat7_帧大小等式_frame_等于_sub_加_16() {
     std::fs::write(&go, SRC).expect("写源失败");
     let exe = dir.join("fm2");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(exe.clone()),
         emit: Emit::Elf,

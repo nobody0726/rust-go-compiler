@@ -69,9 +69,9 @@ pub fn run_run(cmd: &RunCommand) -> Result<RunOutcome, String> {
         None => cmd.lang.clone(),
     };
 
-    // ② 装载
+    // ② 装载（`-I` 给根；M12/Task 28 起与 `types` 同款）。
     let mut tt = TypeTable::new();
-    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &[], lang.as_deref());
+    let (pkg, bag) = load_with_imports(&mut tt, &cmd.files, &cmd.roots, lang.as_deref());
 
     // ③ 检查 + lowering（**同一个会话**：`D-M5-2`）
     let opts = CheckOptions { test_hooks: false };

@@ -163,6 +163,11 @@ impl Sched {
 pub struct RunCommand {
     /// 组成**同一个包**的文件。
     pub files: Vec<PathBuf>,
+    /// `-I <root>`：import 解析根（可给多次；M12/Task 28 起与 `types` 同款）。
+    ///
+    /// b 线（`stdlib/reflect`）的地基：反射包自己要被 import，没有根就
+    /// 一切 import 报「不支持的 import 形式」。
+    pub roots: Vec<PathBuf>,
     /// `--dump-hir`：只输出 HIR 的确定性 dump（`T-EX-04` 的对撞入口）。
     pub dump_hir: bool,
     /// `--max-steps N`：步数预算覆盖（缺省 1e8；`D-M5-12`）。
@@ -244,6 +249,8 @@ impl Emit {
 pub struct BuildCommand {
     /// 组成**同一个包**的文件。
     pub files: Vec<PathBuf>,
+    /// `-I <root>`：import 解析根（可给多次；M12/Task 28 起与 `types` 同款）。
+    pub roots: Vec<PathBuf>,
     /// `-o PATH`：产物路径（缺省 `<stem>`，与源文件同目录）。
     pub output: Option<PathBuf>,
     /// `--emit elf|asm`：产物形态（默认 `elf`）。
@@ -271,6 +278,12 @@ pub struct CheckCommand {
     /// 首轮对撞面是**逐文件单跑**（`C8` §2 装置前提），多文件包见 `U-M4-11`；
     /// 装载器本身收多文件（单包多文件是 M3 的包模型），这里不额外设限。
     pub files: Vec<PathBuf>,
+    /// `-I <root>`：import 解析根（可给多次；M12/Task 28 起与 `types` 同款）。
+    ///
+    /// 原先刻意不收（`check_cmd.rs` 的注释：「首轮对撞逐文件单跑」）；
+    /// b 线要在 `stdlib/reflect` 上做文章，没有根连 `import "reflect"`
+    /// 都解析不到。
+    pub roots: Vec<PathBuf>,
     /// `--diag-dump`：把诊断渲染成 dump（`C8` 的对撞入口；Task 20 起接 C8 类别行）。
     ///
     /// 不给时只报诊断（stderr）与摘要（stdout）—— 门禁读的是退出码与诊断流，
@@ -435,10 +448,10 @@ impl fmt::Display for CliError {
              rgoc-driver lex <file> [--mode comments|directives]\n  \
              rgoc-driver ast <file>\n  \
              rgoc-driver types [--dump | --cmp] [--lang go1.N] [-I <root>]... <file>...\n  \
-             rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] <file>...\n  \
-             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] [--sched=seed:N] <file>...\n  \
+             rgoc-driver check [--diag-dump] [--lang go1.N] [--test-hooks] [-I <root>]... <file>...\n  \
+             rgoc-driver run [--dump-hir] [--max-steps N] [--lang go1.N] [--via hir|ssa] [--opt=…] [--sched=seed:N] [-I <root>]... <file>...\n  \
              rgoc-driver ssa [--dump] [--verify] [--opt=…] <file>...\n  \
-             rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] [--lang go1.N] <file>...";
+             rgoc-driver build [-o PATH] [--emit elf|asm] [--keep-asm] [--opt=…] [--lang go1.N] [-I <root>]... <file>...";
         match self {
             Self::NoCommand => write!(f, "缺少命令。{USAGE}"),
             Self::UnknownCommand(c) => write!(
@@ -522,6 +535,7 @@ pub fn parse_args(argv: &[&str]) -> Result<Command, CliError> {
 /// 选项与文件参数的先后无关；未知选项一律报错（T37 纪律，与 `types`/`check` 同）。
 fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
     let mut dump_hir = false;
     let mut max_steps: Option<u64> = None;
     let mut lang: Option<String> = None;
@@ -609,6 +623,13 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
                 sched = s;
                 i += 2;
             }
+            "-I" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("-I"));
+                };
+                roots.push(PathBuf::from(*v));
+                i += 2;
+            }
             a if a.starts_with('-') => return Err(CliError::UnknownFlag(a.to_string())),
             a => {
                 files.push(PathBuf::from(a));
@@ -621,6 +642,7 @@ fn parse_run_sub(rest: &[&str]) -> Result<RunCommand, CliError> {
     }
     Ok(RunCommand {
         files,
+        roots,
         dump_hir,
         max_steps,
         lang,
@@ -692,6 +714,7 @@ fn parse_ssa(rest: &[&str]) -> Result<SsaCommand, CliError> {
 /// 只收一种就等于让另一个入口静默失灵）。
 fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
     let mut output: Option<PathBuf> = None;
     let mut emit = Emit::Elf;
     let mut keep_asm = false;
@@ -747,6 +770,13 @@ fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
                 keep_asm = true;
                 i += 1;
             }
+            "-I" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("-I"));
+                };
+                roots.push(PathBuf::from(*v));
+                i += 2;
+            }
             "--lang" => {
                 let Some(v) = rest.get(i + 1) else {
                     return Err(CliError::MissingValue("--lang"));
@@ -766,6 +796,7 @@ fn parse_build(rest: &[&str]) -> Result<BuildCommand, CliError> {
     }
     Ok(BuildCommand {
         files,
+        roots,
         output,
         emit,
         keep_asm,
@@ -841,6 +872,7 @@ fn parse_types(rest: &[&str]) -> Result<TypesCommand, CliError> {
 /// 未知选项一律报错（T37 纪律，与 `types` 同一条）。
 fn parse_check(rest: &[&str]) -> Result<CheckCommand, CliError> {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut roots: Vec<PathBuf> = Vec::new();
     let mut diag_dump = false;
     let mut lang: Option<String> = None;
     let mut test_hooks = false;
@@ -854,6 +886,13 @@ fn parse_check(rest: &[&str]) -> Result<CheckCommand, CliError> {
             "--test-hooks" => {
                 test_hooks = true;
                 i += 1;
+            }
+            "-I" => {
+                let Some(v) = rest.get(i + 1) else {
+                    return Err(CliError::MissingValue("-I"));
+                };
+                roots.push(PathBuf::from(*v));
+                i += 2;
             }
             "--lang" => {
                 let Some(v) = rest.get(i + 1) else {
@@ -875,6 +914,7 @@ fn parse_check(rest: &[&str]) -> Result<CheckCommand, CliError> {
     }
     Ok(CheckCommand {
         files,
+        roots,
         diag_dump,
         lang,
         test_hooks,

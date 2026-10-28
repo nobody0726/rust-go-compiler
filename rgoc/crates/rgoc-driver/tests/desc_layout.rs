@@ -135,7 +135,12 @@ fn 语料里每个类型的_desc_都与_layout_和_ptr_mask_一致() {
 
     for rel in &files {
         let path = repo_root().join(rel);
-        let fe = match build_cmd::build_frontend(std::slice::from_ref(&path), Config::all(), None) {
+        let fe = match build_cmd::build_frontend(
+            std::slice::from_ref(&path),
+            &[],
+            Config::all(),
+            None,
+        ) {
             Ok(f) => f,
             Err(FrontendError::Rejected(_)) => {
                 // SSA 建不出图（M6 的 23 个）—— 不在本判据的分母里。

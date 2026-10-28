@@ -721,6 +721,7 @@ func main() {
     std::fs::write(&go, src).expect("写 fixture 失败");
     let out = dir.join("artifact");
     let cmd = BuildCommand {
+        roots: Vec::new(),
         files: vec![go],
         output: Some(out.clone()),
         emit: Emit::Asm,
