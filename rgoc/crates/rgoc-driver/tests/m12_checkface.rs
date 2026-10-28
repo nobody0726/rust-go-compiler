@@ -1008,3 +1008,96 @@ func use() { _ = Bad(make(chan<- int)) }
         "CHK-INVALID-RANGE-EXPR",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-GEN-12 方法接收者声明的类型参数
+// ════════════════════════════════════════════════════════════════════
+
+/// `func (s Stream[T]) M()` 里的 `T` 由**接收者**声明 —— 方法体里必须能看见它。
+///
+/// # 为什么这条单独一类（`M12/Task 12`）
+///
+/// Task 9 的 `declare_tparams` 只声明了**函数自己**的 `[T any]`，漏了接收者
+/// 那一组。官方是**两组分开**声明的（`collectRecv` 的 `declareTypeParam`，
+/// `signature.go:276`；方法自己的在 `collectTypeParams`）。
+///
+/// 漏了的表现不是「报 undefined」，而是 `type_expr(T)` 静默失败 ⇒ 复合字面量
+/// `Stream[T]{it: it}` 的类型解析不出来 ⇒ `value is not a type`
+/// （`issue48645b.go:35` 两条、`issue54225.go:13`）。
+///
+/// # id 从哪来
+///
+/// 装载面已经按位置把接收者的类型参数记进 `SignatureDef::recv_tparams`
+/// （M4/Task 12，`instantiate` 的逐方法替换也读它）。检查面取同一份，
+/// 名字从 AST 的接收者写法按序读，逐位配对 —— **不在两处各推一遍**。
+///
+/// # 负例为什么必要
+///
+/// 「声明进 Env」很容易顺手做过头（比如把接收者的形参表整棵当声明，
+/// 连 `Stream[[]int]` 也放行）。第 ③ 条判「`T` 不该泄漏到方法之外」——
+/// 它钉的是 `env.push()` / `pop()` 的边界，不是名字本身。
+#[test]
+fn t_gen_12_接收者的类型参数() {
+    // ① 体里用接收者的 `T`：读字段、返回 `T`、构造 `Stream[T]` 字面量、指针接收者写字段。
+    //
+    // ⚠️ **`Pipe[T, T](…)` 那一行是这条判据的牙**（实测踩过）：
+    // 只写 `Stream[T]{…}` 与 `return s.v` 时，`T` 走 `Package::lookup_in_file`
+    // 也能解析（装载期在接收者的块作用域里登记过）⇒ **去掉修复判据照样绿**。
+    // 真正会红的是「**显式实例化的类型实参**」那一路：`Pipe[T, T](s.v)` ——
+    // 它只查 `Env`（`issue48645b.go:35` 的 `Pipe[T, T]` 就是这个形态）。
+    assert_check_ok(
+        "gen12a",
+        r#"
+package p
+
+type Stream[T any] struct{ v T }
+
+func Pipe[A, B any](a A) B { var z B; return z }
+
+func (s Stream[T]) Get() T { return s.v }
+
+func (s Stream[T]) Wrap() Stream[T] { return Stream[T]{v: s.v} }
+
+func (s Stream[T]) Dup() T { return Pipe[T, T](s.v) }
+
+func (s *Stream[T]) Set(x T) { s.v = x }
+
+func (s Stream[T]) Pair() (T, T) { return s.v, s.v }
+"#,
+    );
+    // ② 多形参 + 指针 + 括号写法（`(*Stream[T, U])`）。
+    assert_check_ok(
+        "gen12b",
+        r#"
+package p
+
+type Pair[A, B any] struct {
+	a A
+	b B
+}
+
+func (p Pair[A, B]) First() A { return p.a }
+
+func (p *Pair[A, B]) Swap() Pair[B, A] { return Pair[B, A]{a: p.b, b: p.a} }
+
+func (p (Pair[A, B])) Third() B { return p.b }
+"#,
+    );
+    // ③ 负例：接收者的 `T` 不该泄漏到方法之外。
+    assert_check_code(
+        "gen12n1",
+        r#"
+package p
+
+type Box[T any] struct{ v T }
+
+func (b Box[T]) A() {}
+
+func f() {
+	var x T
+	_ = x
+}
+"#,
+        "TYP-UNDECLARED-NAME",
+    );
+}

@@ -46,7 +46,7 @@ use rgoc_ast::{
 };
 use rgoc_const::{BasicId, Sizes, default_type_of, representable};
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
-use rgoc_types::{ChanDir, Type, TypeId, underlying};
+use rgoc_types::{ChanDir, Type, TypeId, TypeParamId, underlying};
 
 use crate::check::Session;
 use crate::env::Env;
@@ -239,6 +239,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
         self.env.push();
         self.declare_tparams(f);
+        self.declare_recv_tparams(f);
         if let Expr::FuncType(ft) = &f.type_ {
             for (i, p) in ft.params.iter().enumerate() {
                 if let Some(n) = &p.name {
@@ -302,6 +303,45 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 let self_ty = self.s.tt.type_param_def(id).self_ty;
                 self.env.declare(&name.value, Operand::type_expr(self_ty));
             }
+        }
+    }
+
+    /// 把**方法接收者**声明的类型参数声明进函数层（`M12/Task 12`）。
+    ///
+    /// `func (s Stream[T]) DropWhile(…)` 的 `T` 由**接收者**声明
+    /// （官方 `collectRecv` 的 `declareTypeParam`，`signature.go:276`），
+    /// 它与方法自己的 `[P any]` 是**两组**。Task 9 只补了自己那组
+    /// ⇒ 接收者的 `T` 在体里查不到，于是 `Stream[T]{it: it}` 这种复合字面量
+    /// 的类型报 `value is not a type`（`issue48645b.go:35` / `issue54225.go:13`）。
+    ///
+    /// # id 从哪来
+    ///
+    /// 装载面已经把接收者的类型参数写进 `SignatureDef::recv_tparams`
+    /// （M4/Task 12 的 `set_signature_recv_tparams`；按**位置**对齐，
+    /// 供 `rgoc-types::instantiate` 的逐方法替换用）。这里取同一份：
+    /// 名字从 AST 的接收者写法按序读，id 从签名读，逐位配对。
+    ///
+    /// ⚠️ 两边个数不必相等 —— `recv_tparams` 空（不是泛型接收者 / 装载期
+    /// 拆不出）时 `zip` 自然截断，不会造出错的绑定。
+    fn declare_recv_tparams(&mut self, f: &FuncDecl) {
+        let Some(recv) = &f.recv else { return };
+        let names = recv_tparam_names(&recv.type_);
+        if names.is_empty() {
+            return;
+        }
+        let Some(t) = self.method_sig(&recv.type_, &f.name.value) else {
+            return;
+        };
+        let ids: Vec<TypeParamId> = {
+            let tt = &*self.s.tt;
+            match tt.type_of(underlying(tt, t)) {
+                Type::Signature(id) => tt.signature_def(*id).recv_tparams.clone(),
+                _ => Vec::new(),
+            }
+        };
+        for (name, id) in names.iter().zip(ids) {
+            let self_ty = self.s.tt.type_param_def(id).self_ty;
+            self.env.declare(name, Operand::type_expr(self_ty));
         }
     }
 
@@ -1688,6 +1728,40 @@ fn recv_base_name(e: &Expr) -> Option<&str> {
         Expr::Unary(u) if u.op == rgoc_ast::Op::Mul => recv_base_name(&u.x),
         Expr::Index(i) => recv_base_name(&i.x),
         _ => None,
+    }
+}
+
+/// 接收者写出的**类型参数名**（`func (s *Stream[T, U]) M()` ⇒ `["T", "U"]`）。
+///
+/// 形状由 Go 语法保证：`"(" [标识符] ["*"] Base [ "[" 标识符表 "]" ] ")"`。
+/// 剥掉括号与 `*` 之后不是「基名 + 纯标识符表」⇒ **空表**（`Stream[[]int]`
+/// 这种不是接收者声明的类型参数；装载面的 `recv_type_args` 同样返回 `None`，
+/// 于是 `recv_tparams` 也是空的 —— 两侧同判，不会错位）。
+fn recv_tparam_names(e: &Expr) -> Vec<String> {
+    let mut cur = e;
+    loop {
+        cur = match cur {
+            Expr::Paren(p) => &p.x,
+            Expr::Unary(u) if u.op == rgoc_ast::Op::Mul && u.y.is_none() => &u.x,
+            _ => break,
+        };
+    }
+    let Expr::Index(ix) = cur else {
+        return Vec::new();
+    };
+    match &*ix.index {
+        Expr::Name(n) => vec![n.value.clone()],
+        Expr::List(l) => {
+            let mut out = Vec::with_capacity(l.elems.len());
+            for el in &l.elems {
+                let Expr::Name(n) = el else {
+                    return Vec::new();
+                };
+                out.push(n.value.clone());
+            }
+            out
+        }
+        _ => Vec::new(),
     }
 }
 

@@ -173,3 +173,58 @@ M12a 的第一优先级。
 3. **独立真错**：`F14`（check/build 口径不一致 6 个 + 1 个 clang 链接失败）
    与泛型无关，但挡着 `compile` 门禁，要单独一条任务。
 4. **b 线不阻塞**：门禁 116 个里 `reflect` 0 次，反射可以等 a 线收口再开。
+
+---
+
+## 7. Phase 1 收口后的账（Task 12，2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t12/baseline.tsv`（复现命令同 §0）。
+
+### 7.1 读数
+
+| family | total | check 过 | Task 0 | build 过 | run 过 |
+|---|---|---|---|---|---|
+| run | 71 | **62** | 22 | 3 | 3 |
+| compile | 40 | **37** | 25 | 6 | — |
+| errorcheck | 5 | 2（= 漏报）| 2 | — | — |
+| rejected | 76 | 0 = 全部干净拒绝 ✓ | 0 | — | — |
+
+门禁族 116 个里 **check 通过 99**（`62 + 37`，不含 errorcheck 那 2 个「该报没报」）。
+`M12-plan.md` 标题写的「64 → 0」**没有达成**，剩 12 个（下表）；它们不是
+「Phase 1 漏做」，是**各自的独立缺口**，逐一归了去向。
+
+### 7.2 剩余 12 个 check 失败与去向
+
+| 文件 | 族 | 码 | 卡在哪 | 归 |
+|---|---|---|---|---|
+| `append.go` | run | `CHK-INVALID-OPERATION` | 类型参数上的 `!=` 要 `Recv` 的具体类型 —— 得先**推断变参调用的实参**（`_Append([]Recv{recv}, recv)`）| Task 20 |
+| `dictionaryCapture-noinline.go` | run | `CHK-INVALID-ASSIGN` + `CHK-INVALID-SELECTOR` | 类型参数上的字段选择（`x.a`，core type 是 struct）| Task 15 |
+| `issue48030.go` | run | `TYP-WRONG-TYPE-ARG-COUNT` | **部分类型实参**：`Seq2[int]` 只给 1 个，官方按推断补第 2 个 | 未排期（新特性）|
+| `issue48137.go` | run | `TYP-UNDECLARED-NAME` | 函数体内的**局部类型**作类型实参（`type Bar func() Bar; Foo[Bar]()`）—— `T-GEN-08b` 的两份实现 | 未排期（`T-GEN-08b`）|
+| `issue48645b.go` | run | `CHK-INVALID-ASSIGN` | 函数实参可赋值性（`func(T) bool` 里含类型参数替换）| Task 15/16 |
+| `issue50264.go` | run | `CHK-INVALID-ASSIGN` | 同上 | Task 15/16 |
+| `issue54225.go` | run | `CHK-NOT-A-TYPE` | **嵌套实例作类型实参**（`Two[Node[V]]()`）—— Task 12 探针新发现 | 未排期（新缺口）|
+| `typeswitch3.go` | run | `TYP-UNDECLARED-NAME` | `switch x := i.(type) { case T: … }` 的**隐式变量** `x` 没声明 | 未排期（type switch 面）|
+| `typeswitch4.go` | run | `TYP-UNDECLARED-NAME` | 同上 | 同上 |
+| `builtins.go` | compile | `CHK-INVALID-BUILTIN-ARG` | `g3[T M4[rune, V], V any]` 的**第一个 term 的 map key 没替换成 `rune`**（泛型接口实例的 tset 未重算）| Task 9 的 open，`rgoc-types` |
+| `issue51909.go` | compile | `CHK-INVALID-ASSIGN` | 函数可赋值性 | Task 15/16 |
+| `typelist.go` | compile | `CHK-WRONG-RESULT-COUNT` + `TYP-WRONG-TYPE-ARG-COUNT` | 结果类型解析失败 ⇒ 结果表空 ⇒ 误报 return 个数 | 未排期 |
+
+`errorcheck` 族 5 个里 2 个漏报（该报错的没报），归 **Task 22**。
+
+### 7.3 什么叫「Phase 1 完成」
+
+Phase 1（Task 5–11）的**承诺**是「把 check 面的**系统性**缺口清掉」，不是
+「116 个全绿」：
+
+* Task 6 的显式实例化：47 个文件；
+* Task 7 的实例化后可赋值；
+* Task 8 的 core type 运算（`allBasic` 不是 core type）；
+* Task 9 的类型参数进 `Env` + 四个谓词（`underIs` / `commonUnder` / `sliceElem` / `allBasic`）；
+* Task 10 的两个边角（接收者形参表的 `_`、`range` 的 `commonUnder`）；
+* Task 11 的口径统一（lowering 复查期的上报不再入流）；
+* Task 12 的接收者类型参数进 `Env`。
+
+剩下的 12 个都是**单点**：每个只值 1–2 个文件，且大半要等 Phase 2
+（单态化 / 实例选择器）才能判。把它们挡在 Phase 1 门口只会让 Phase 2
+的实例都造不出来。
