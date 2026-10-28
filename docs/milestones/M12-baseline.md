@@ -112,8 +112,13 @@ M12a 的第一优先级。
 | `issue51232.go` | `not enough type arguments for type Fn: have 1, want 2` | **无诊断** | ✗ 漏检（该 `TYP-WRONG-TYPE-ARG-COUNT`） |
 | `issue51233.go` | 同上 | **无诊断** | ✗ 漏检 |
 
-⇒ **今天 1/5**。注意 `TYP-WRONG-TYPE-ARG-COUNT`、`TYP-INVALID-INSTANCE-CYCLE`
+⇒ **今天 1/5（语义对）**。注意 `TYP-WRONG-TYPE-ARG-COUNT`、`TYP-INVALID-INSTANCE-CYCLE`
 **两个码都已经在 `DiagCode` 里**（M4 建的），不需要新增。
+
+⚠️ **两个读数的口径不同，不要混**：装置（`run-native-typeparam.sh --only errorcheck`）
+今天报 **2/5** —— 因为它比的是「首码 ∈ 登记的集合」，而 `issue50317.go` 的登记值就是
+`SYN-UNEXPECTED-TOKEN`（我们解析面先拒了，官方在检查面拒）。「语义对」只算 1 个，
+是因为阶段不同不算对齐。阶段差异登记在 `M12-report.md` 的偏差表里。
 
 ### 3.4 不做面的今天读数
 

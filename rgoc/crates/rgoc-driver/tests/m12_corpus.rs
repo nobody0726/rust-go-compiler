@@ -138,3 +138,49 @@ fn t_m12_01b_装置有牙() {
     assert_eq!(count_of(&out, "rejected"), Some(1), "b.go 没进 rejected：\n{out}");
     assert_eq!(count_of(&out, "dir"), Some(1), "c.go 没进 dir：\n{out}");
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-M12-02 装置打的是真靶
+// ════════════════════════════════════════════════════════════════════
+
+/// 跑 `run-native-typeparam.sh`，返回 `(退出码, 合并输出)`。
+fn run_oracle(args: &[&str]) -> (i32, String) {
+    let out = Command::new("bash")
+        .arg(repo_root().join("tools/run-oracle/run-native-typeparam.sh"))
+        .args(args)
+        .output()
+        .expect("跑不了 run-native-typeparam.sh");
+    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), s)
+}
+
+/// **已知红**的文件必须报 BAD，**已知绿**的必须报 OK。
+///
+/// # 为什么这条是「装置自身」的判据而不是语料的判据
+///
+/// 「装置能跑起来」不构成证据：一个永远报 OK 的装置也能跑。两边同时钉住
+/// （红的必须红、绿的必须绿）才排除了「恒 OK」与「恒 BAD」两种坏法 ——
+/// 这正是 `M11` 的 `T-M12-02` 想防的那类「探针打错靶」。
+///
+/// 选这两个文件是因为它们**今天**就是这个状态（`M12-baseline.md` §2）：
+/// `absdiff.go` 是 check 面失败（core type 运算），`issue47708.go` 是今天
+/// 3 个能跑通的之一。装置实现变了之后若两者状态互换，这条判据会红 ——
+/// 那时要改的是**这里登记的文件**，不是判据本身。
+#[test]
+fn t_m12_02_装置打的是真靶() {
+    let (rc_bad, out_bad) = run_oracle(&["--list", "--only", "run", "--filter", "absdiff.go"]);
+    assert_eq!(rc_bad, 1, "absdiff.go 今天应当红：\n{out_bad}");
+    assert!(
+        out_bad.contains("BAD") && out_bad.contains("absdiff.go"),
+        "红的理由必须指名道姓：\n{out_bad}"
+    );
+
+    let (rc_ok, out_ok) = run_oracle(&["--list", "--only", "run", "--filter", "issue47708.go"]);
+    assert_eq!(rc_ok, 0, "issue47708.go 今天应当绿：\n{out_ok}");
+    assert!(out_ok.contains("OK"), "应当有一行 OK：\n{out_ok}");
+    assert!(
+        out_ok.contains("run 1/1"),
+        "只筛了 1 个文件，分母必须是 1（不是 71 —— 否则 `--filter` 没生效）：\n{out_ok}"
+    );
+}
