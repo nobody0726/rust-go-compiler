@@ -396,9 +396,18 @@ impl Checker<'_> {
                     let inv = self.tt.invalid();
                     self.declare_in(cscope, ObjKind::Var, lhs, inv);
                 }
+                // 类型 switch 的 **default**：隐式变量的类型是 guard 表达式
+                // 自己（接口）—— 变量照样要声明，否则体里用它报
+                // `undefined: x`（`typeswitch3.go` / `typeswitch4.go` 实测：
+                // default 里的 `x.foo()`）。类型仍是 `invalid`（M4 判定）。
+                (Some(lhs), None) => {
+                    let inv = self.tt.invalid();
+                    self.declare_in(cscope, ObjKind::Var, lhs, inv);
+                }
                 // 表达式 switch：case 的值是**表达式**
                 (None, Some(vals)) => self.walk_case_values(sscope, vals),
-                _ => {}
+                // 表达式 switch 的 default：没有隐式变量
+                (None, None) => {}
             }
             self.walk_stmts(cscope, &c.body);
         }
@@ -487,6 +496,24 @@ impl Checker<'_> {
                     // 值里的名字照样要查（`const k = Undef` 该报 undefined）
                     for e in &c.values {
                         self.walk_expr(scope, e);
+                    }
+                }
+                Decl::Type(t) if t.tparams.is_empty() => {
+                    // **先占位、后填本体**（与包级 pass1/pass2 同构）：具名类型
+                    // 可以在**自己的本体里引用自己**（`type Bar func() Bar`，
+                    // `issue48137` 实测）—— 单趟「先解后声明」会让本体里的
+                    // `Bar` 报 `undefined`。占位是 named 条目（可后填），本体
+                    // 解完再 `set_named_underlying`。别名不能自引用（官方同），
+                    // 走原序（先解后声明）。
+                    if t.alias {
+                        let typ = self.resolve_type(scope, &t.type_);
+                        self.declare_in(scope, ObjKind::TypeName, &t.name, typ);
+                    } else {
+                        let n = self.tt.add_named(&t.name.value);
+                        let placeholder = self.tt.named_type(n);
+                        self.declare_in(scope, ObjKind::TypeName, &t.name, placeholder);
+                        let under = self.resolve_type(scope, &t.type_);
+                        self.tt.set_named_underlying(n, under);
                     }
                 }
                 Decl::Type(t) => {

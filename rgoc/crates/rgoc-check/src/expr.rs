@@ -443,6 +443,13 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             let sel_pos = s.sel.pos;
             return crate::unsafe_pkg::call(self, file, c, &sel, sel_pos);
         }
+        // **泛型调用点的前缀实参**（`issue48030` 的 `Seq2[int](5, "abc")`）：
+        // 显式给一部分类型实参，剩余的从函数实参推断。这只在**调用语境**可行
+        // —— 不产生「部分实例化的函数值」（那是 U-M12-01 的账），推断结果直接
+        // 合流成一次完整实例化。`None` ⇒ 不是这个形态，照原路走。
+        if let Some(op) = self.call_with_prefix_targs(file, c) {
+            return op;
+        }
         let f = self.expr(file, &c.fun);
         if f.mode == Mode::TypeExpr {
             let Some(target) = f.typ else {
@@ -471,6 +478,97 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             // 无效 / 类型族函数位 / 其他：不报（转换之外的类型族归 Task 23+）。
             _ => Operand::invalid(),
         }
+    }
+
+    /// **泛型调用点的前缀类型实参**：`F[T1](args…)`（显式实参数 < 形参数）。
+    ///
+    /// # 判定与分工
+    ///
+    /// * `c.fun` 必须是 `Index(Name(F), …)` 且 `F` 在 `generic_funcs` 里有账
+    ///   （与 [`Self::explicit_instantiation`] 同源）；
+    /// * 显式实参数 `==` 形参数 ⇒ `None`（原路径：完整实例化已经工作）；
+    /// * `>` ⇒ `None`（原路径报 `TYP-WRONG-TYPE-ARG-COUNT`）；
+    /// * `<` ⇒ 本函数接管：实参照常求值，`infer_for_call` 以
+    ///   `explicit = [Some(t)…, None…]` 解出**全量**实参，登记实例与调用点
+    ///   （lowering 的 `inst_target` 查 `Index` 的位置），再进真调用。
+    ///
+    /// # 实参会求值两遍
+    ///
+    /// 推断要先拿到实参类型，而 [`Self::call_value`] 内部还会再求一遍。
+    /// 检查面的求值没有运行期副作用，重复诊断靠 `reported_any` 抑制位兜底
+    /// （第一遍报过的错第二遍不再报）。
+    fn call_with_prefix_targs(&mut self, file: FileId, c: &CallExpr) -> Option<Operand> {
+        let Expr::Index(ix) = &*c.fun else {
+            return None;
+        };
+        let Expr::Name(n) = &*ix.x else {
+            return None;
+        };
+        let tparams = self.s.pkg.generic_funcs.get(&n.value)?.clone();
+        let arg_exprs: Vec<&Expr> = match &*ix.index {
+            Expr::List(l) => l.elems.iter().collect(),
+            other => vec![other],
+        };
+        // 只接管「**少于**」：等于走完整实例化（原路径），多于由原路径报错。
+        if arg_exprs.len() >= tparams.len() {
+            return None;
+        }
+        // 显式实参必须全是类型（有不是类型的 ⇒ 交给原路径报 `not a type`）。
+        let mut explicit = Vec::with_capacity(tparams.len());
+        for a in &arg_exprs {
+            match self.type_expr(file, a) {
+                Some(t) => explicit.push(Some(t)),
+                None => return None,
+            }
+        }
+        while explicit.len() < tparams.len() {
+            explicit.push(None);
+        }
+
+        // 原型签名（`F` 的形参里还是类型参数）。
+        let fop = self.expr(file, &ix.x);
+        let Some(sig) = fop.typ else {
+            return None;
+        };
+        let Some(sid) = self.signature_id(sig) else {
+            return None;
+        };
+        let sig_def = self.tt().signature_def(sid).clone();
+        let params = self.tuple_vars(sig_def.params);
+        // 实参（类型只用来推断；真正的求值在 call_value 里再做一遍）。
+        let inv = self.s.tt.invalid();
+        let arg_tys: Vec<TypeId> = c
+            .args
+            .iter()
+            .map(|a| self.expr(file, a).typ.unwrap_or(inv))
+            .collect();
+        // 变参 / 个数不齐的推断面没做（官方先按 `arguments` 打包）——
+        // 与 `Task 7` 的「变参不推断」同一条窄面。
+        if sig_def.variadic || arg_tys.len() != params.len() {
+            return None;
+        }
+        let par_tys: Vec<TypeId> = params.iter().map(|p| p.1).collect();
+        let targs = match rgoc_types::infer::infer_for_call(
+            self.s.tt,
+            &tparams,
+            &explicit,
+            &par_tys,
+            &arg_tys,
+            &[],
+        ) {
+            Ok(Some(t)) => t,
+            // 推断不出 / 失败 ⇒ 交回原路径（它会报出更准的「数量」类错误）。
+            _ => return None,
+        };
+        // 推断成功 ⇒ 与完整实例化同一条落地路径：登记实例 + 调用点。
+        self.s.request_inst(&n.value, &targs);
+        let name = rgoc_load::mono::mangled(self.s.tt, &n.value, &targs);
+        self.s.note_inst_site(ix.pos, &name);
+        // 用**全量实参替换后的签名**进真调用。
+        let map: SubstMap = tparams.iter().copied().zip(targs).collect();
+        let sig_ty = self.tt().signature_type(sid);
+        let inst = substitute(self.s.tt, sig_ty, &map);
+        Some(self.call_value(file, c, Some(inst)))
     }
 
     /// 官方 `Checker.conversion`（`conversions.go:20`）的窄面。

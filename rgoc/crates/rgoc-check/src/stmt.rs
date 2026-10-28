@@ -671,37 +671,43 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                     }
                 }
                 Decl::Type(t) => {
-                    let under = self
-                        .type_expr(file, &t.type_)
-                        .or_else(|| self.type_of_expr(file, &t.type_));
-                    // 局部**具名**类型（`type S struct{…}`）必须建成 named：
-                    // 名字参与同一性，`S` 与结构相同的 `T` **不**可赋值
-                    // （官方 `typexpr.go` 的 `definedType`）。别名
-                    // （`type A = B`）不建 named，直接绑本体。
-                    //
                     // **记忆化**（M5/Task 15）：同一份 AST 的同一个 `Decl::Type`
                     // 只许有一个 `TypeId` —— 检查期建、lowering 期读。否则
                     // lowering 按 `expr_in` 复查 `var x S` 时会再建一个 named，
                     // 两个 id 的同一性判断分叉（`range3.go` 的局部 `MyInt`、
                     // `closure2.go` 的局部 `X` 实测）。
                     let key = (t.pos.file, t.pos.line, t.pos.col);
-                    let ty = match self.s.local_types.get(&key).copied() {
-                        Some(cached) => cached,
-                        None => {
-                            let ty = match under {
-                                Some(u) if !t.alias => {
-                                    let n = self.s.tt.add_named(&t.name.value);
-                                    self.s.tt.set_named_underlying(n, u);
-                                    self.s.tt.named_type(n)
-                                }
-                                Some(u) => u,
-                                None => self.s.tt.invalid(),
-                            };
-                            self.s.local_types.insert(key, ty);
-                            ty
+                    if let Some(cached) = self.s.local_types.get(&key).copied() {
+                        self.env.declare(&t.name.value, Operand::type_expr(cached));
+                    } else if t.alias {
+                        // 别名（`type A = B`）不建 named，直接绑本体；不能
+                        // 自引用（官方同）⇒ 保持「先解后声明」。
+                        let under = self
+                            .type_expr(file, &t.type_)
+                            .or_else(|| self.type_of_expr(file, &t.type_));
+                        let ty = under.unwrap_or_else(|| self.s.tt.invalid());
+                        self.s.local_types.insert(key, ty);
+                        self.env.declare(&t.name.value, Operand::type_expr(ty));
+                    } else {
+                        // 局部**具名**类型（`type S struct{…}`）必须建成 named：
+                        // 名字参与同一性，`S` 与结构相同的 `T` **不**可赋值
+                        // （官方 `typexpr.go` 的 `definedType`）。
+                        //
+                        // **先占位、后填本体**：具名类型可以在自己的本体里
+                        // 引用自己（`type Bar func() Bar`，`issue48137` 实测）
+                        // —— 占位 named 先进 env 与 memo，本体解完再填。
+                        let n = self.s.tt.add_named(&t.name.value);
+                        let ph = self.s.tt.named_type(n);
+                        self.s.local_types.insert(key, ph);
+                        self.env
+                            .declare_type(&t.name.value, Operand::type_expr(ph));
+                        let under = self
+                            .type_expr(file, &t.type_)
+                            .or_else(|| self.type_of_expr(file, &t.type_));
+                        if let Some(u) = under {
+                            self.s.tt.set_named_underlying(n, u);
                         }
-                    };
-                    self.env.declare(&t.name.value, Operand::type_expr(ty));
+                    }
                 }
                 // 体内的 `func` 声明（Go 不允许；语法面已报）
                 Decl::Func(f) => {
