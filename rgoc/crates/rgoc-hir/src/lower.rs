@@ -203,6 +203,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             pkg,
             s,
             prog: Program {
+                pkgpath: pkg.name.clone(),
                 funcs: Vec::new(),
                 globals: Vec::new(),
                 init_order: Vec::new(),

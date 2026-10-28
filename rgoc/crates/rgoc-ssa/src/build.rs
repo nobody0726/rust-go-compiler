@@ -126,6 +126,7 @@ pub fn build(program: &Program, tt: &mut TypeTable) -> BuildOutcome {
 
     BuildOutcome {
         module: Module {
+            pkgpath: program.pkgpath.clone(),
             funcs,
             globals: (0..program.globals.len())
                 .map(|i| GlobalId(i as u32))

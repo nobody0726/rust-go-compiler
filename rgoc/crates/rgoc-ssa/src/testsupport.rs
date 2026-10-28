@@ -302,6 +302,7 @@ impl FnBuilder {
 #[must_use]
 pub fn module_of(funcs: Vec<SsaFunc>) -> Module {
     Module {
+        pkgpath: "main".to_string(),
         methods: Vec::new(),
         itabs: Vec::new(),
         funcs,

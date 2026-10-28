@@ -603,6 +603,29 @@ pub fn type_closure(m: &Module, tt: &TypeTable) -> BTreeMap<u32, TypeId> {
             // 任何「按 kind 找」的调试与判据都会歧义。
             // 本体真的被用到时它自己会在 `value_types` 里出现。
             rgoc_types::typ::Type::Alias(id) => stack.push(tt.alias_rhs(*id)),
+            // struct 的**字段类型**必须进闭包（M12/Task 30）：`ReflectMeta`
+            // 的字段表每个 `.quad __desc_…` 都指着它，字段类型没出现过的话
+            // 链接期 `undefined reference`。具名本体照旧不展开（理由同上）。
+            rgoc_types::typ::Type::Struct(id) => {
+                for f in &tt.struct_def(*id).fields {
+                    stack.push(f.typ);
+                }
+            }
+            // ⚠️ **具名** struct 的字段表从**本体**发（`emit_reflect_meta`
+            // 取 `underlying`），而本体不进闭包 ⇒ 匿名 struct 臂够不着它，
+            // 字段类型的 desc 同样缺。这里只把**字段类型**带进来（本体
+            // 依旧不带 —— 否则两块 `kind=Struct` 的 desc，歧义照旧）。
+            // 实测缺失形态：`issue51840` 链接期
+            // `undefined reference to __desc_d38d3a69`（来自 `__reflectfields_*`）。
+            rgoc_types::typ::Type::Named(_) => {
+                if let rgoc_types::typ::Type::Struct(sid) =
+                    tt.type_of(rgoc_types::identical::underlying(tt, t))
+                {
+                    for f in &tt.struct_def(*sid).fields {
+                        stack.push(f.typ);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -702,6 +725,16 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
             e.insert(asm.rodata_bytes(&bytes));
         }
     }
+    // 反射元数据的**下标分配**（1 起；`0` = 没有）。发射序按 hash 序 ——
+    // 与 desc 同序，`.s` 保持确定性（`T-GEN-04` 的口径）。
+    let mut meta_idx_of: BTreeMap<u32, u16> = BTreeMap::new();
+    let mut metas: Vec<(u32, TypeId)> = Vec::new();
+    for (h, t) in &closure {
+        if needs_reflect_meta(tt, *t) {
+            meta_idx_of.insert(*h, (metas.len() + 1) as u16);
+            metas.push((*h, *t));
+        }
+    }
     for (h, t) in &closure {
         let Some(d) = DescBuilder::new(tt, *t).map(DescBuilder::build) else {
             continue;
@@ -713,7 +746,10 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
         header.extend_from_slice(&d.hash.to_le_bytes());
         header.push(d.kind);
         header.push(d.flags);
-        header.extend_from_slice(&[0, 0]); // 对齐填充（`kind` + `flags` = 2 字节）
+        // +14..16：原来是对齐填充，M12（`C13` §5.1）语义改为 `meta_idx`
+        // （1 起；0 = 没有反射元数据）。**偏移一个没动** —— M9 的判据不受影响。
+        let meta_idx = meta_idx_of.get(h).copied().unwrap_or(0);
+        header.extend_from_slice(&meta_idx.to_le_bytes());
         let byte_list: Vec<String> = header.iter().map(u8::to_string).collect();
         let gc_label = if mask.iter().any(|b| *b) {
             bitmaps
@@ -749,6 +785,252 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
                 ),
             ],
         );
+    }
+    // ── ReflectMeta 发射（`C13` §5.2；M12/Task 30）───────────────────────
+    //
+    // 顺序在 desc 之后但**先分配下标**（见上面的 `meta_idx_of`）—— desc 头
+    // 里的 `meta_idx` 必须在 desc 发射前就定下来。块的发射顺序按 hash 序
+    //（与 desc 同序），保证 `.s` 的确定性（`T-GEN-04` 的口径）。
+    //
+    // `meta_idx` 是**下标**不是指针 ⇒ rt 侧要一张 index→指针 的表
+    //（`rt_reflect_metas`，1 起的下标减 1 取）。空表也发（rt.c 无条件
+    // extern 引用它，缺符号 = 链接错）。
+    let mut meta_labels: Vec<String> = Vec::new();
+    for (h, t) in metas {
+        let l = emit_reflect_meta(asm, tt, h, t, &meta_idx_of, &m.pkgpath);
+        meta_labels.push(l);
+    }
+    // ⚠️ rt.c 编译成独立的 `.rt.o`，而 `.s` 单独汇编成另一个 `.o` ——
+    // **局部符号不能跨目标文件解析**。所以这两个符号必须 `.global`
+    //（先例：`rt_zerobase` / `rt_globals` 同样是 `asm.global` + `*_named_raw`）。
+    asm.global("rt_reflect_metas");
+    asm.rodata_named_raw(
+        "rt_reflect_metas",
+        &meta_labels
+            .iter()
+            .map(|l| format!(".quad {l}"))
+            .collect::<Vec<_>>(),
+    );
+    asm.global("rt_reflect_nmetas");
+    asm.rodata_named_raw(
+        "rt_reflect_nmetas",
+        &[format!(".quad {}", meta_labels.len())],
+    );
+}
+
+/// 该类型要不要发 `ReflectMeta`（`C13` §5.1：`meta_idx == 0` ⇒ 最小信息）。
+///
+/// * **具名类型**（含泛型实例 `Box[int]`）：`Name` / `PkgPath` / `String` 需要；
+/// * **struct**（含匿名）：`NumField` / `Field(i)` 需要字段表；
+/// * 其余（基本 / 指针 / 切片 / 数组 / map / chan / func / 接口）：从 desc
+///   本体（size / kind / elem）就够 —— 不发，省 `.rodata`。
+fn needs_reflect_meta(tt: &TypeTable, t: TypeId) -> bool {
+    use rgoc_types::typ::Type;
+    matches!(tt.type_of(t), Type::Named(_) | Type::Struct(_))
+}
+
+/// 把一个类型的 `ReflectMeta`（含字段表与字符串）发射进 `.rodata`，
+/// 返回块符号名（给 `rt_reflect_metas` 表用）。
+#[allow(clippy::too_many_lines)]
+fn emit_reflect_meta(
+    asm: &mut Asm,
+    tt: &TypeTable,
+    h: u32,
+    t: TypeId,
+    meta_idx_of: &BTreeMap<u32, u16>,
+    pkgpath: &str,
+) -> String {
+    use rgoc_types::typ::Type;
+    let cstr = |asm: &mut Asm, s: &str| {
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.push(0);
+        asm.rodata_bytes(&bytes)
+    };
+    // `name`：具名类型渲染实例名（`Box[int]`）；匿名 struct 是空串。
+    // `pkgpath`：发射面取**包名**（跨包进 HIR 之前恒为 `main`）。
+    let name = match tt.type_of(t) {
+        Type::Named(_) => reflect_type_name(tt, t),
+        _ => String::new(),
+    };
+    let name_label = cstr(asm, &name);
+    let pkg_label = cstr(asm, pkgpath);
+
+    // 字段表（只有 struct 有；具名非 struct 的 `nfields` 是 0）。
+    //
+    // ⚠️ 具名 struct 的 `tt.type_of(t)` 是 `Type::Named` —— 必须**先取
+    // underlying**（`G-M12-01` 同族坑：`core_type` 当年就在 `Named` 上
+    // 翻过车）。匿名 struct 才直接是 `Type::Struct`。
+    let (fields_label, nfields) =
+        if let Type::Struct(sid) = tt.type_of(rgoc_types::identical::underlying(tt, t)) {
+            let def = tt.struct_def(*sid);
+            let offsets = rgoc_types::layout::field_offsets(tt, *sid).unwrap_or_default();
+            let mut labels: Vec<String> = Vec::new();
+            for (i, f) in def.fields.iter().enumerate() {
+                let fname = if f.embedded {
+                    // 嵌入字段：官方 `Name()` 返回**类型名**（`T` 的 `T`）。
+                    f.name.clone().unwrap_or_else(|| {
+                        reflect_type_name(tt, f.typ)
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                } else {
+                    f.name.clone().unwrap_or_default()
+                };
+                let name_l = cstr(asm, &fname);
+                let tag_l = cstr(asm, f.tag.as_deref().unwrap_or(""));
+                let desc_l = desc_symbol(type_hash(tt, f.typ));
+                let exported = fname.starts_with(|c: char| c.is_ascii_uppercase()) && !f.embedded;
+                let flags = (u8::from(f.embedded)) | (u8::from(exported) << 1);
+                let mut tail: Vec<u8> = Vec::with_capacity(8);
+                let off = offsets.get(i).copied().unwrap_or(0);
+                tail.extend_from_slice(&off.to_le_bytes());
+                tail.push(flags);
+                tail.extend_from_slice(&[0, 0, 0]);
+                labels.push(format!(".quad {name_l}"));
+                labels.push(format!(".quad {tag_l}"));
+                labels.push(format!(".quad {desc_l}"));
+                labels.push(format!(
+                    ".byte {}",
+                    tail.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+                ));
+            }
+            let n = def.fields.len() as u32;
+            let fl = format!("__reflectfields_{h:08x}");
+            asm.rodata_named_raw(&fl, &labels);
+            (fl, n)
+        } else {
+            ("0".to_string(), 0)
+        };
+
+    let meta_label = format!("__reflectmeta_{h:08x}");
+    let idx = meta_idx_of.get(&h).copied().unwrap_or(0);
+    debug_assert_ne!(idx, 0, "发射中的 ReflectMeta 必须有非零下标");
+    asm.rodata_named_raw(
+        &meta_label,
+        &[
+            format!(".quad {name_label}"),
+            format!(".quad {pkg_label}"),
+            format!(".quad {fields_label}"),
+            // +24 nfields u32 / +28 nmethods u32（Task 32 填实）。
+            format!(".byte {}", {
+                let mut b: Vec<u8> = Vec::with_capacity(8);
+                b.extend_from_slice(&nfields.to_le_bytes());
+                b.extend_from_slice(&0u32.to_le_bytes());
+                b.iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
+            // +32 methods *MethodMeta（Task 32）/ +40 params *ParamMeta（Task 33）。
+            ".quad 0".to_string(),
+            ".quad 0".to_string(),
+            // +48 nparams u32 / +52 nresults u32（Task 33）。
+            ".byte 0,0,0,0,0,0,0,0".to_string(),
+            // +56 results *ParamMeta（Task 33）。
+            ".quad 0".to_string(),
+        ],
+    );
+    meta_label
+}
+
+/// 官方 `reflect.Type.String()` 形态的类型名渲染（`C13` §4：实参按 **Go
+/// 语法**渲染，实例是 `Box[int]`）。
+///
+/// 只服务 ReflectMeta 的 `name` 字段 —— 不追求与官方**逐字节**一致（那是
+/// `T-REF-05` 的账），但形状要对：具名带实参、指针带 `*`、切片 `[]`、
+/// map / chan / 数组 / struct 按官方的空格习惯。
+fn reflect_type_name(tt: &TypeTable, t: TypeId) -> String {
+    use rgoc_types::typ::Type;
+    match tt.type_of(t) {
+        Type::Basic(b) => {
+            let s = b.as_str();
+            // 无类型常量按默认类型渲染（官方没有 untyped 的运行期类型）。
+            match s {
+                "untyped_bool" => "bool".to_string(),
+                "untyped_int" => "int".to_string(),
+                "untyped_rune" => "int32".to_string(),
+                "untyped_float" => "float64".to_string(),
+                "untyped_complex" => "complex128".to_string(),
+                "untyped_string" => "string".to_string(),
+                "unsafe_pointer" => "unsafe.Pointer".to_string(),
+                _ => s.to_string(),
+            }
+        }
+        Type::Named(nid) => {
+            let def = tt.named_def(*nid);
+            if def.targs.is_empty() {
+                def.name.clone()
+            } else {
+                let args: Vec<String> = def
+                    .targs
+                    .iter()
+                    .map(|&a| reflect_type_name(tt, a))
+                    .collect();
+                format!("{}[{}]", def.name, args.join(", "))
+            }
+        }
+        Type::Alias(id) => reflect_type_name(tt, tt.alias_rhs(*id)),
+        Type::Pointer(e) => format!("*{}", reflect_type_name(tt, *e)),
+        Type::Slice(e) => format!("[]{}", reflect_type_name(tt, *e)),
+        Type::Array { elem, .. } => {
+            // len 是常量表下标；数组长度渲染按十进制数值。这里没有常量表
+            // 的取值口 —— 用语料里唯一可行的途径：数组长度的 hash 无关紧要，
+            // 名字走 desc 的 hash 而不是这段渲染。发射面只对「进 ReflectMeta
+            // 的类型」调它，数组长度渲染错了会被 `T-REF-05` 抓。
+            let n = rgoc_types::layout::array_len_of(tt, t).unwrap_or(0);
+            format!("[{n}]{}", reflect_type_name(tt, *elem))
+        }
+        Type::Map { key, elem } => format!(
+            "map[{}]{}",
+            reflect_type_name(tt, *key),
+            reflect_type_name(tt, *elem)
+        ),
+        Type::Chan { dir, elem } => match dir {
+            rgoc_types::ChanDir::RecvOnly => format!("<-chan {}", reflect_type_name(tt, *elem)),
+            rgoc_types::ChanDir::SendOnly => format!("chan<- {}", reflect_type_name(tt, *elem)),
+            rgoc_types::ChanDir::SendRecv => format!("chan {}", reflect_type_name(tt, *elem)),
+        },
+        Type::Struct(sid) => {
+            let def = tt.struct_def(*sid);
+            if def.fields.is_empty() {
+                return "struct {}".to_string();
+            }
+            let parts: Vec<String> = def
+                .fields
+                .iter()
+                .map(|f| {
+                    let n = f.name.clone().unwrap_or_default();
+                    format!("{n} {}", reflect_type_name(tt, f.typ))
+                })
+                .collect();
+            format!("struct {{ {} }}", parts.join("; "))
+        }
+        Type::Signature(sid) => {
+            // 官方渲染 `func(int) string`（无名参数形态）。
+            let def = tt.signature_def(*sid);
+            let render_tuple = |tid: rgoc_types::TypeId| -> Vec<String> {
+                match tt.type_of(tid) {
+                    rgoc_types::typ::Type::Tuple(tid2) => tt
+                        .tuple_def(*tid2)
+                        .vars
+                        .iter()
+                        .map(|(_, t)| reflect_type_name(tt, *t))
+                        .collect(),
+                    _ => Vec::new(),
+                }
+            };
+            let pl = render_tuple(def.params);
+            let rl = render_tuple(def.results);
+            match rl.len() {
+                0 => format!("func({})", pl.join(", ")),
+                1 => format!("func({}) {}", pl.join(", "), rl[0]),
+                _ => format!("func({}) ({})", pl.join(", "), rl.join(", ")),
+            }
+        }
+        Type::Interface(_) => "interface {}".to_string(),
+        _ => String::new(),
     }
 }
 

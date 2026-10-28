@@ -102,6 +102,13 @@ pub struct TypeDesc {
     pub kind: u8,
     /// [`flags`] 的位组合。
     pub flags: u8,
+    /// 反射元数据表的下标（**1 起**；`0` = 没有 —— `C13` §5.1）。
+    ///
+    /// 这两个字节在 `C5` §10 里是**对齐填充**（`pad u16`）—— M12 把它的
+    /// **语义**改成 `meta_idx`，一个偏移都不动（40 字节不变，M9 的
+    /// `t_desc_*` 判据一条不用改）。`meta_idx == 0` ⇒ 反射只拿得到
+    /// size/kind/align（基本类型够用）；具名类型与 struct 必须有表。
+    pub meta_idx: u16,
     /// ptrmask：每 8 字节 1 位，`ptrdata == 0` 时为 `null`。
     pub gcdata: *const u8,
     /// `*T` / `[]T` / `[n]T` 的元素 desc；其余为 `null`。
@@ -118,6 +125,7 @@ impl TypeDesc {
         hash: 0,
         kind: Kind::Invalid as u8,
         flags: 0,
+        meta_idx: 0,
         gcdata: core::ptr::null(),
         elem: core::ptr::null(),
         methods: core::ptr::null(),
@@ -163,6 +171,95 @@ pub struct MethodEntry {
     /// 入口地址。
     pub func: *const u8,
 }
+
+// ── 反射元数据（`C13` §5.2；M12/Task 30）──────────────────────────────
+//
+// 下面四个结构是**发射面与 rt.c 共用的内存形状**（`.rodata` 里的字节布局，
+// 不是 Rust 侧的解析结构）。`meta_idx` 指向的就是 [`ReflectMeta`]。
+
+const _: () = assert!(
+    core::mem::size_of::<TypeDesc>() == 40,
+    "TypeDesc 必须是 40 字节（C5 §10 / C13 §5.1）"
+);
+
+/// 反射元数据块（64 字节，`.rodata`；`TypeDesc.meta_idx` 指它）。
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ReflectMeta {
+    /// 类型名（不含包名；实例渲染成 `Box[int]`，`C13` §4）。
+    pub name: *const u8,
+    /// 定义包路径（发射面取**包名**；跨包进 HIR 之前恒为 `main`）。
+    pub pkgpath: *const u8,
+    /// 字段表（`nfields` 条 [`FieldMeta`]，连续）。
+    pub fields: *const FieldMeta,
+    /// 字段数。
+    pub nfields: u32,
+    /// 方法数（Task 32 填实；骨架期 0）。
+    pub nmethods: u32,
+    /// 方法表（`nmethods` 条 [`MethodMeta`]）。
+    pub methods: *const MethodMeta,
+    /// 参数 ABI 表（Task 33 填实；骨架期 null）。
+    pub params: *const ParamMeta,
+    /// 参数数。
+    pub nparams: u32,
+    /// 结果数。
+    pub nresults: u32,
+    /// 结果 ABI 表（Task 33 填实；骨架期 null）。
+    pub results: *const ParamMeta,
+}
+
+/// 反射字段表里的一条（32 字节）。
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct FieldMeta {
+    /// 字段名（嵌入字段为空串）。
+    pub name: *const u8,
+    /// 结构体标签原文（无标签为空串）。
+    pub tag: *const u8,
+    /// 字段类型的 desc。
+    pub typ: *const TypeDesc,
+    /// 字段偏移（字节；`layout::field_offsets` 算好的）。
+    pub offset: u32,
+    /// 位 0 = anonymous（嵌入）；位 1 = exported。
+    pub flags: u8,
+    // 隐式 3 字节对齐填充到 32。
+}
+
+/// 反射方法表里的一条（24 字节；Task 32 填实）。
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct MethodMeta {
+    /// 方法名。
+    pub name: *const u8,
+    /// 签名的 desc。
+    pub sig: *const TypeDesc,
+    /// 入口（实例化后）。
+    pub func: *const u8,
+}
+
+/// 反射参数 ABI 表里的一条（16 字节；Task 33 填实）。
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct ParamMeta {
+    /// 参数类型的 desc。
+    pub typ: *const TypeDesc,
+    /// ABI 类（0=GPR 1=FPR 2=栈 3=零大小 —— M7 `abi_classify` 编译期算好）。
+    pub abi_class: u8,
+    // 隐式对齐填充。
+}
+
+const _: () = assert!(
+    core::mem::size_of::<ReflectMeta>() == 64,
+    "ReflectMeta 必须是 64 字节（C13 §5.2）"
+);
+const _: () = assert!(
+    core::mem::size_of::<FieldMeta>() == 32,
+    "FieldMeta 必须是 32 字节（C13 §5.2）"
+);
+const _: () = assert!(
+    core::mem::size_of::<MethodMeta>() == 24,
+    "MethodMeta 必须是 24 字节（C13 §5.2）"
+);
 
 /// 类型 → [`Kind`]。布局给不出来的类型 ⇒ [`Kind::Invalid`]。
 ///

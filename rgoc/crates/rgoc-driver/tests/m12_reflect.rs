@@ -235,3 +235,207 @@ fn t_ref_01_白名单对账() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-REF-02 元数据逐字段（Task 30 发射面 / Task 31 读面 API 共用）
+// ════════════════════════════════════════════════════════════════════
+
+/// `t_ref_02` 的 fixture：20 个类型的读面探测，builtin `println` 逐行输出。
+///
+/// 行序是判据的一部分：每类型先 `dump`（kind/size/align/name/pkgpath 五行），
+/// struct 追加 numfield + 每 field 四行（name/tag/offset/typekind），
+/// 容器类追加 elem/key kind 与 array 的 len。
+const T_REF_02_SRC: &str = r#"package main
+
+import "reflect"
+
+type Point struct {
+	X int
+	Y string
+}
+
+type Box[T any] struct {
+	v T
+}
+
+func dump(t reflect.Type) {
+	println(t.Kind())
+	println(t.Size())
+	println(t.Align())
+	println(t.Name())
+	println(t.PkgPath())
+}
+
+func fields(t reflect.Type) {
+	println(t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		println(f.Name)
+		println(f.Tag)
+		println(f.Offset)
+		println(f.Type.Kind())
+	}
+}
+
+func main() {
+	dump(reflect.TypeOf(int(1)))      // 1
+	dump(reflect.TypeOf(int8(1)))     // 2
+	dump(reflect.TypeOf(int64(1)))    // 3
+	dump(reflect.TypeOf(uint8(1)))    // 4
+	dump(reflect.TypeOf(float32(1)))  // 5
+	dump(reflect.TypeOf(float64(1)))  // 6
+	dump(reflect.TypeOf(true))        // 7
+	dump(reflect.TypeOf("s"))         // 8
+	dump(reflect.TypeOf(complex128(1i))) // 9
+	dump(reflect.TypeOf(new(int)))    // 10 *int
+	t := reflect.TypeOf(new(int))
+	println(t.Elem().Kind())
+	dump(reflect.TypeOf([]string{}))  // 11
+	t = reflect.TypeOf([]string{})
+	println(t.Elem().Kind())
+	dump(reflect.TypeOf(map[string]int{})) // 12
+	t = reflect.TypeOf(map[string]int{})
+	println(t.Key().Kind())
+	println(t.Elem().Kind())
+	dump(reflect.TypeOf(make(chan int))) // 13
+	t = reflect.TypeOf(make(chan int))
+	println(t.Elem().Kind())
+	dump(reflect.TypeOf(func(int) string { return "" })) // 14
+	dump(reflect.TypeOf(interface{}(nil)))               // 15
+	dump(reflect.TypeOf(error(nil)))                     // 16
+	dump(reflect.TypeOf(Point{}))                        // 17
+	fields(reflect.TypeOf(Point{}))
+	dump(reflect.TypeOf(struct {
+		X int `json:"x"`
+	}{})) // 18
+	fields(reflect.TypeOf(struct {
+		X int `json:"x"`
+	}{}))
+	dump(reflect.TypeOf([3]int{})) // 19
+	t = reflect.TypeOf([3]int{})
+	println(t.Len())
+	println(t.Elem().Kind())
+	dump(reflect.TypeOf(Box[int]{})) // 20
+	fields(reflect.TypeOf(Box[int]{}))
+}
+"#;
+
+/// 期望输出：**官方 Go 的语义常量**（`reflect.Kind` 的枚举序照官方
+/// `runtime/type.go`；size/align 照官方 ABI 事实），不是从 rgoc 实现里
+/// 抄的 —— 与 `desc_emit.rs` 的「期望值来自冻结事实」同一条纪律。
+///
+/// 每类型 5 行（kind/size/align/name/pkgpath）+ 追加行，与 fixture 的
+/// 打印序逐行对应。name/pkgpath 空则输出空行。
+#[test]
+#[ignore = "Task 31 读面 API 落地后启用（t_ref_02）：接口方法调用还没有实现者"]
+fn t_ref_02_元数据逐字段() {
+    let tmp = std::env::temp_dir().join(format!("rgoc-ref02-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("建 scratch 失败");
+    let main = tmp.join("main.go");
+    fs::write(&main, T_REF_02_SRC).expect("写 fixture 失败");
+
+    let out = Command::new(driver())
+        .args(["run", "-I"])
+        .arg(repo_root().join("stdlib"))
+        .arg(&main)
+        .output()
+        .expect("起不了 run");
+
+    let got = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = want_ref02_output();
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "反射读面 fixture 应当能编译运行：\n{}",
+        got
+    );
+    assert_eq!(got, want, "20 个类型的读面必须与官方逐字段相同");
+}
+
+/// 期望序列（与 `T_REF_02_SRC` 的打印序一一对应）。
+///
+/// `Kind` 枚举值照官方 `runtime/type.go`：Bool=1 Int=2 Int8=3 … Uint=7
+/// Uint8=8 … Float32=13 Float64=14 … Complex128=16 Array=17 Chan=18
+/// Func=19 Interface=20 Map=21 Ptr=22 Slice=23 String=24 Struct=25。
+/// size/align 照官方 ABI（string 16、interface 16、func/chan/map/ptr 8、
+/// complex128 16；struct 按字段序无填充时 24/8）。
+fn want_ref02_output() -> String {
+    let mut want: Vec<String> = Vec::new();
+    // (kind, size, align, name, pkgpath)
+    let scalars: &[(&str, &str, &str, &str)] = &[
+        ("2", "8", "8", "int"),          // 1  int
+        ("3", "1", "1", "int8"),         // 2  int8
+        ("6", "8", "8", "int64"),        // 3  int64
+        ("8", "1", "1", "uint8"),        // 4  uint8
+        ("13", "4", "4", "float32"),     // 5  float32
+        ("14", "8", "8", "float64"),     // 6  float64
+        ("1", "1", "1", "bool"),         // 7  bool
+        ("24", "16", "8", "string"),     // 8  string
+        ("16", "16", "8", "complex128"), // 9 complex128
+    ];
+    for (k, s, a, n) in scalars {
+        want.extend([
+            k.to_string(),
+            s.to_string(),
+            a.to_string(),
+            n.to_string(),
+            String::new(),
+        ]);
+    }
+    // 10 *int + elem
+    want.extend(["22", "8", "8", "", "", "2"].map(String::from));
+    // 11 []string + elem
+    want.extend(["23", "24", "8", "", "", "24"].map(String::from));
+    // 12 map[string]int + key/elem
+    want.extend(["21", "8", "8", "", "", "24", "2"].map(String::from));
+    // 13 chan int + elem
+    want.extend(["18", "8", "8", "", "", "2"].map(String::from));
+    // 14 func(int) string
+    want.extend(["19", "8", "8", "", ""].map(String::from));
+    // 15 interface{} / 16 error（接口没有 name/pkgpath）
+    for _ in 0..2 {
+        want.extend(["20", "16", "8", "", ""].map(String::from));
+    }
+    // 17 Point + fields（X@0 int、Y@8 string）
+    want.extend(["25", "24", "8", "Point", "main"].map(String::from));
+    want.extend(
+        [
+            "2", // NumField
+            "X", "", "0", "2", "Y", "", "8", "24",
+        ]
+        .map(String::from),
+    );
+    // 18 匿名 struct{ X int `json:"x"` } + fields
+    want.extend(["25", "8", "8", "", ""].map(String::from));
+    want.extend(
+        [
+            "1", // NumField
+            "X",
+            "json:\"x\"",
+            "0",
+            "2",
+        ]
+        .map(String::from),
+    );
+    // 19 [3]int + len/elem
+    want.extend(["17", "24", "8", "", ""].map(String::from));
+    want.extend(["3", "2"].map(String::from));
+    // 20 Box[int] + fields（v@0 int）
+    want.extend(["25", "8", "8", "Box", "main"].map(String::from));
+    want.extend(
+        [
+            "1", // NumField
+            "v", "", "0", "2",
+        ]
+        .map(String::from),
+    );
+
+    let mut s = want.join("\n");
+    s.push('\n');
+    s
+}

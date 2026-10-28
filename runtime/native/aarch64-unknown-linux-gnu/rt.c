@@ -1744,6 +1744,10 @@ void *rt_arena_alloc(u64 size, u64 align) {
  *
  * `flags` 的三位（与 `rgoc_meta::desc::flags` 同值）：
  *   bit0 COMPARABLE / bit1 HAS_POINTERS / bit2 NEEDS_ZERO
+ *
+ * `meta_idx`（M12/Task 30，`C13` §5.1）：原来是对齐填充 `pad`，语义改为
+ * 反射元数据表的下标（**1 起**；0 = 没有）。偏移一个没动 —— 40 字节不变。
+ * 下标 → 指针的换算走 `.s` 发的 `rt_reflect_metas` 表（见下方镜像）。
  */
 typedef struct {
     u32 size;
@@ -1751,13 +1755,69 @@ typedef struct {
     u32 hash;
     u8 kind;
     u8 flags;
-    u16 pad;
+    u16 meta_idx;
     const u8 *gcdata;
     const void *elem;
     const void *methods;
 } TypeDesc;
 
 _Static_assert(sizeof(TypeDesc) == 40, "TypeDesc 必须是 40 字节（C5 §10）");
+#define RT_OFFSETOF(s, m) __builtin_offsetof(s, m)
+
+_Static_assert(RT_OFFSETOF(TypeDesc, meta_idx) == 14, "meta_idx 必须在 +14（C13 §5.1）");
+_Static_assert(RT_OFFSETOF(TypeDesc, gcdata) == 16, "gcdata 必须在 +16（C13 §5.1）");
+
+/* ── 反射元数据（M12/Task 30，`C13` §5.2）──────────────────────────────
+ *
+ * 四个镜像结构与 Rust 侧 `rgoc_meta::desc` 同形；`.s` 里每个块是
+ * `__reflectmeta_<hash>`，下标→指针的表是 `rt_reflect_metas`（1 起的下标
+ * 减 1 取；**空表也发**，因为本文件无条件 extern 引用它）。
+ *
+ * 偏移判据照 TypeDesc 的口径：`_Static_assert` 逐字段钉住。
+ */
+typedef struct ReflectMeta ReflectMeta;
+typedef struct FieldMeta FieldMeta;
+
+struct ReflectMeta {
+    const char *name;          /* +0  不含包名；实例是 `Box[int]` */
+    const char *pkgpath;       /* +8  发射面取包名（今日恒 main） */
+    const FieldMeta *fields;   /* +16 */
+    u32 nfields;               /* +24 */
+    u32 nmethods;              /* +28 Task 32 填实 */
+    const void *methods;       /* +32 MethodMeta[]（Task 32） */
+    const void *params;        /* +40 ParamMeta[]（Task 33） */
+    u32 nparams;               /* +48 */
+    u32 nresults;              /* +52 */
+    const void *results;       /* +56 ParamMeta[]（Task 33） */
+};
+
+struct FieldMeta {
+    const char *name;   /* +0  嵌入字段 = 类型名 */
+    const char *tag;    /* +8  无标签 = 空串 */
+    const void *typ;    /* +16 字段类型的 desc */
+    u32 offset;         /* +24 */
+    u8 flags;           /* +28 bit0 anonymous / bit1 exported */
+    /* +29..32 对齐填充 */
+};
+
+_Static_assert(sizeof(ReflectMeta) == 64, "ReflectMeta 必须是 64 字节（C13 §5.2）");
+_Static_assert(sizeof(FieldMeta) == 32, "FieldMeta 必须是 32 字节（C13 §5.2）");
+_Static_assert(RT_OFFSETOF(ReflectMeta, nfields) == 24, "nfields 必须在 +24（C13 §5.2）");
+_Static_assert(RT_OFFSETOF(ReflectMeta, params) == 40, "params 必须在 +40（C13 §5.2）");
+_Static_assert(RT_OFFSETOF(FieldMeta, offset) == 24, "FieldMeta.offset 必须在 +24（C13 §5.2）");
+
+/* `.s` 发的下标→指针表（emit 侧 `rt_reflect_metas` / `rt_reflect_nmetas`）。 */
+extern const ReflectMeta *rt_reflect_metas[];
+extern const u64 rt_reflect_nmetas;
+
+/* `desc` 的反射元数据（没有 ⇒ null）。`meta_idx` 是 1 起的下标。 */
+const ReflectMeta *rt_reflect_meta(const TypeDesc *desc)
+{
+    if (desc == 0 || desc->meta_idx == 0 || desc->meta_idx > rt_reflect_nmetas) {
+        return 0;
+    }
+    return rt_reflect_metas[desc->meta_idx - 1];
+}
 
 /* ════════════════════════════════════════════════════════════════════
  * `hchan`（M11b/Task 16，`C11` §7 **布局冻结** / §3.2 四张表）
@@ -1852,7 +1912,7 @@ static const TypeDesc chan_desc = {
     .hash = 0,
     .kind = 0,
     .flags = 0,
-    .pad = 0,
+    .meta_idx = 0,
     .gcdata = chan_gcdata,
     .elem = 0,
     .methods = 0,

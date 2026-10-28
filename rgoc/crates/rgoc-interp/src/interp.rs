@@ -4962,6 +4962,7 @@ mod sched_tests {
     fn empty_prog() -> (Program, TypeTable) {
         (
             Program {
+                pkgpath: "main".to_string(),
                 funcs: Vec::new(),
                 globals: Vec::new(),
                 init_order: Vec::new(),
@@ -5058,6 +5059,7 @@ mod rng_tests {
     fn empty_prog() -> (Program, TypeTable) {
         (
             Program {
+                pkgpath: "main".to_string(),
                 funcs: Vec::new(),
                 globals: Vec::new(),
                 init_order: Vec::new(),

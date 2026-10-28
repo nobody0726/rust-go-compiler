@@ -70,6 +70,8 @@ impl GlobalId {
 /// 一个可执行的程序（单包）。
 #[derive(Clone, Debug)]
 pub struct Program {
+    /// 包路径（发射面 `ReflectMeta.pkgpath` 用；今日单包恒为包名 `main`）。
+    pub pkgpath: String,
     /// 全部函数（索引即 [`FuncId`]）。
     pub funcs: Vec<Func>,
     /// 包级变量。

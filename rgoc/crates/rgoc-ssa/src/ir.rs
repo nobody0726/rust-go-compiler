@@ -94,6 +94,8 @@ pub struct Sig {
 /// 一个模块（单包；`D-M6-2`）。
 #[derive(Clone, Debug, Default)]
 pub struct Module {
+    /// 包路径（`ReflectMeta.pkgpath` 用；M12/Task 30）。
+    pub pkgpath: String,
     /// 全部函数（顺序 = HIR 的 `Program::funcs` 顺序，dump 与求值都靠它保持确定性）。
     pub funcs: Vec<SsaFunc>,
     /// 包级变量（与 HIR 的 `GlobalId` 同编号空间）。
