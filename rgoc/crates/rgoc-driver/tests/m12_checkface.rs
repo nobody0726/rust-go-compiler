@@ -224,3 +224,178 @@ fn t_gen_08a_门禁清单非空且文件存在() {
         assert!(corpus().join(f).is_file(), "清单里的 {f} 不存在");
     }
 }
+
+// ════════════════════════════════════════════════════════════════════
+// 探针装置：把一段源码落到 `target/` 下再走命令行
+// ════════════════════════════════════════════════════════════════════
+
+/// 把 `src` 写成 `target/m12-checkface-src/<name>.go`，返回路径。
+///
+/// 落盘而不走 stdin：`check` 的入参就是文件（`C1` §2.2 的位置渲染也按它），
+/// 走一条判据里不存在的通道会验不到真东西。
+fn probe(name: &str, src: &str) -> PathBuf {
+    let dir = repo_root().join("target/m12-checkface-src");
+    fs::create_dir_all(&dir).expect("建不了探针目录");
+    let p = dir.join(format!("{name}.go"));
+    fs::write(&p, src).expect("写不了探针");
+    p
+}
+
+/// 跑 `check`，要求**退出 0**；失败时把诊断原文带出来。
+fn assert_check_ok(name: &str, src: &str) {
+    let p = probe(name, src);
+    let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+        .arg("check")
+        .arg(&p)
+        .output()
+        .expect("起不了 check");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "`{name}` 应当通过静态检查，实际退出 {:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// 跑 `check`，要求**退出 1** 且诊断码里含 `want`。
+fn assert_check_code(name: &str, src: &str, want: &str) {
+    let p = probe(name, src);
+    let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+        .arg("check")
+        .arg(&p)
+        .output()
+        .expect("起不了 check");
+    let mut all = String::from_utf8_lossy(&out.stdout).into_owned();
+    all.push_str(&String::from_utf8_lossy(&out.stderr));
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "`{name}` 应当被拒（退出 1），实际 {:?}\n{all}",
+        out.status.code()
+    );
+    assert!(
+        codes_of(&all).iter().any(|c| c == want),
+        "`{name}` 的诊断码应当含 {want}，实际 {:?}\n{all}",
+        codes_of(&all)
+    );
+}
+
+// ════════════════════════════════════════════════════════════════════
+// T-GEN-06 显式实例化
+// ════════════════════════════════════════════════════════════════════
+
+/// 六个形态：`Id[int](7)` / `Box[int]{v:3}` + 选择器 / 双形参 / 嵌套
+/// `Wrap[Wrap[int]]` / 实例**当值传** / 带容器的实例。
+///
+/// # 为什么这一条值 47 个文件
+///
+/// `M12-baseline.md` §3.1：门禁族 64 个 check 失败里 **47 个**的**第一个**诊断
+/// 都是 `CHK-INVALID-INDEX`（全语料 121 处 `cannot index value of type func`）
+/// —— 也就是「`F[int]` 被当成索引表达式」。修好这一处，那 47 个文件才有机会
+/// 露出它们**真正的**下一个错。
+#[test]
+fn t_gen_06_显式实例化() {
+    assert_check_ok(
+        "gen06a",
+        r#"
+package p
+
+func Id[T any](x T) T { return x }
+
+func use() { var _ int = Id[int](7) }
+"#,
+    );
+    assert_check_ok(
+        "gen06b",
+        r#"
+package p
+
+type Box[T any] struct{ v T }
+
+func use() {
+	b := Box[int]{v: 3}
+	var _ int = b.v
+}
+"#,
+    );
+    assert_check_ok(
+        "gen06c",
+        r#"
+package p
+
+type Pair[K any, V any] struct {
+	k K
+	v V
+}
+
+func use() { _ = Pair[string, int]{k: "a", v: 1} }
+"#,
+    );
+    assert_check_ok(
+        "gen06d",
+        r#"
+package p
+
+type Wrap[T any] struct{ x T }
+
+func use() { _ = Wrap[Wrap[int]]{x: Wrap[int]{x: 1}} }
+"#,
+    );
+    assert_check_ok(
+        "gen06e",
+        r#"
+package p
+
+func Id[T any](x T) T { return x }
+
+func use() {
+	var g func(int) int = Id[int]
+	_ = g
+}
+"#,
+    );
+    assert_check_ok(
+        "gen06f",
+        r#"
+package p
+
+type M[K comparable, V any] struct{ m map[K]V }
+
+func use() {
+	x := M[string, int]{m: map[string]int{"a": 1}}
+	var _ int = x.m["a"]
+}
+"#,
+    );
+}
+
+/// 反向：**类型实参写成值** / **实参个数不对** 必须被拒。
+///
+/// 这条挡的是「把所有 `x[...]` 都当实例化放过去」—— 那会让真正的错静默通过，
+/// 而 `T-GEN-03` 的拒绝面正是靠这类判据有牙。
+#[test]
+fn t_gen_06_负例() {
+    assert_check_code(
+        "gen06n1",
+        r#"
+package p
+
+func Id[T any](x T) T { return x }
+
+func use() { _ = Id[7](7) }
+"#,
+        "CHK-NOT-A-TYPE",
+    );
+    assert_check_code(
+        "gen06n2",
+        r#"
+package p
+
+func Id[T any](x T) T { return x }
+
+func use() { _ = Id[int, string](7) }
+"#,
+        "TYP-WRONG-TYPE-ARG-COUNT",
+    );
+}

@@ -54,7 +54,8 @@ use rgoc_const::{
 };
 use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, Pos};
 use rgoc_types::{
-    BasicId, NamedId, ObjKind, Object, ScopeId, ScopeTable, Type, TypeId, TypeTable, valid_type,
+    BasicId, NamedId, ObjKind, Object, ScopeId, ScopeTable, Type, TypeId, TypeParamId, TypeTable,
+    valid_type,
 };
 
 use crate::package::Package;
@@ -206,6 +207,9 @@ pub(crate) struct Checker<'a> {
     pub(crate) cur_file: Option<FileId>,
     /// 每个被接受文件 → 它的**文件作用域**（`import` 名与点导入注入的名字住这里）。
     pub(crate) file_scopes: BTreeMap<FileId, ScopeId>,
+    /// 包级泛型函数的类型参数表（`M12/Task 6`）—— 收尾时整体交给
+    /// `Package::generic_funcs`（与 `roots` 同一套路：借用期不能写 `pkg`）。
+    generic_funcs: BTreeMap<String, Vec<TypeParamId>>,
 }
 
 impl Checker<'_> {
@@ -243,6 +247,7 @@ impl Checker<'_> {
             bindings,
             cur_file: None,
             file_scopes: BTreeMap::new(),
+            generic_funcs: BTreeMap::new(),
         }
     }
 
@@ -301,14 +306,17 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
         bindings,
         cur_file: None,
         file_scopes,
+        generic_funcs: BTreeMap::new(),
     };
     ck.pass1_collect(&asts);
     ck.pass2_resolve(&asts);
     ck.pass3_validate();
     let roots = std::mem::take(&mut ck.roots);
+    let generic_funcs = std::mem::take(&mut ck.generic_funcs);
     drop(ck);
     pkg.scopes = scopes;
     pkg.type_roots = roots;
+    pkg.generic_funcs = generic_funcs;
     pkg.asts = asts;
 }
 
@@ -493,7 +501,14 @@ impl Checker<'_> {
                         }
                     }
                     Decl::Func(d) => {
-                        let (recv, t) = self.resolve_func_sig(d);
+                        let (recv, t, own_tps) = self.resolve_func_sig(d);
+                        // 包级泛型函数的类型参数表（`M12/Task 6`）：显式实例化与
+                        // 单态化都要按**位置**对齐「形参表 ↔ 实参表」，而
+                        // `SignatureDef` 没有这一栏 ⇒ 在 `Package` 上单开一张表。
+                        // 只收包级函数（方法不能显式指定类型实参）。
+                        if recv.is_none() && !own_tps.is_empty() && d.name.value != "_" {
+                            self.generic_funcs.insert(d.name.value.clone(), own_tps);
+                        }
                         // `func init` **不进包作用域**（M4/Task 34）⇒ 它的签名
                         // 也不是 dump 根：官方 dump 从包作用域枚举对象，
                         // `init` 不在里面。留着会让 `C7` 多一行 `signature`。
@@ -535,7 +550,10 @@ impl Checker<'_> {
     /// 返回 `(接收者类型, 签名)`：接收者回给调用方做**方法挂载**（M4/Task 7）；
     /// 普通函数为 `None`。接收者只在这里解析**一次**（复解析会在表里多造
     /// 结构型条目，`C7` 的号是全表遍历序）。
-    fn resolve_func_sig(&mut self, d: &rgoc_ast::FuncDecl) -> (Option<TypeId>, TypeId) {
+    fn resolve_func_sig(
+        &mut self,
+        d: &rgoc_ast::FuncDecl,
+    ) -> (Option<TypeId>, TypeId, Vec<TypeParamId>) {
         let (base, recv_tps) = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
             Some(fs) => self.declare_tparams(self.pkg_scope, &fs),
             None => (self.pkg_scope, Vec::new()),
@@ -543,12 +561,13 @@ impl Checker<'_> {
         // 接收者类型在**方法自己的**类型参数之外解析（官方：接收者不能引用方法
         // 自己的 `[P any]`）—— 但**能**引用接收者声明的类型参数 ⇒ 用 `base`。
         let recv = d.recv.as_ref().map(|r| self.resolve_type(base, &r.type_));
-        let scope = if d.tparams.is_empty() {
-            base
+        let (scope, own_tps) = if d.tparams.is_empty() {
+            (base, Vec::new())
         } else {
             // 方法**自己**的类型参数（`func (b Box[T]) M[P any]()` 的 `[P any]`）：
-            // M3 起只作为对象活在作用域里，不进签名（`SignatureDef` 无同栏）。
-            self.declare_tparams(base, &d.tparams).0
+            // 不进签名（`SignatureDef` 无同栏），但**必须回给调用方**
+            // （`M12/Task 6`：包级泛型函数要进 `Package::generic_funcs`）。
+            self.declare_tparams(base, &d.tparams)
         };
         let sig = match &d.type_ {
             Expr::FuncType(ft) => self.resolve_signature(scope, ft, recv),
@@ -563,7 +582,7 @@ impl Checker<'_> {
             let sid = *sid;
             self.tt.set_signature_recv_tparams(sid, recv_tps);
         }
-        (recv, sig)
+        (recv, sig, own_tps)
     }
 
     /// 接收者类型 → 本包具名基底（`T` / `*T`；泛型 `Box[T]` / `*Box[T]` 在

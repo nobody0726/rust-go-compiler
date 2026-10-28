@@ -109,7 +109,7 @@ use rgoc_const::{
 use rgoc_lex::{Diag, DiagCode, FileId, Pos};
 use rgoc_types::{
     ChanDir, ConstId, ObjKind, Type, TypeId, TypeTable, assignable, comparable, convertible,
-    identical, implements, unalias, underlying,
+    identical, implements, subst::SubstMap, substitute, unalias, underlying,
 };
 
 use crate::check::Session;
@@ -689,6 +689,16 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     /// 泛型面（`X[A]` 类型实例化作值语境 / 函数实例化 / 类型参数接口索引）
     /// 归 Task 16 的 API 与 Task 25 之后的语境，此处 `invalid` 且**不报**。
     fn index_expr(&mut self, file: FileId, e: &IndexExpr) -> Operand {
+        // ① 显式实例化（`M12/Task 6`）：`F[int]` 里的 `[int]` 不是索引。
+        //
+        // **必须先判**：`F` 的类型是 `func(...)`，落到下面的索引分派就必然
+        // 报 `CHK-INVALID-INDEX`（`M12-baseline.md` §3.1：全语料 121 处，
+        // 47 个文件的**第一个**诊断）。判定顺序反过来（先试索引、失败再试
+        // 实例化）会把 `a[i]` 里真索引的错误吃掉 —— 索引面已经有很多既有判据
+        // （`T-CK-*`），不能让它们变成「第二个错误」。
+        if let Some(op) = self.explicit_instantiation(file, e) {
+            return op;
+        }
         let mut x = self.expr(file, &e.x);
         if x.mode == Mode::Invalid || x.mode == Mode::TypeExpr {
             return Operand::invalid();
@@ -807,6 +817,86 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
     }
 
     /// 官方 `sliceExpr`（`index.go:233`）的窄面。
+    /// 显式实例化 `F[int]` / `F[int, string]`（`M12/Task 6`）。
+    ///
+    /// # 判据
+    ///
+    /// * `e.x` 必须是**包级泛型函数**的名字（`Package::generic_funcs` 里查得到）。
+    ///   查不到 ⇒ `None`（交回给索引分派：`a[i]` 的既有行为**一个字节不改**）。
+    /// * 类型实参：一个 ⇒ `e.index` 本身就是那个类型表达式；多个 ⇒ parser 会把
+    ///   它包成 `Expr::List`（`decl.rs:485` 的口径）。
+    /// * 不是类型 ⇒ `CHK-NOT-A-TYPE`（官方 `NotAType`：`1 is not a type`）。
+    /// * 个数不对 ⇒ `TYP-WRONG-TYPE-ARG-COUNT`（官方 `WrongTypeArgCount`）。
+    /// * 都对 ⇒ 用 `SubstMap` 把**签名**换掉，得到一个普通的函数值操作数。
+    ///
+    /// # 为什么是替换签名而不是「记一个待实例化请求」
+    ///
+    /// `F[int]` 在值语境的语义就是「那个实例化后的函数」—— 检查面需要它的
+    /// **签名**（`F[int](7)` 要按 `func(int) int` 判实参）。真正的代码生成交给
+    /// 单态化（`Task 13/14`）：那里会再走一遍同一个 `(origin, targs)` 并造实例体。
+    /// 两边共用的键是 `(函数名, TypeId 实参组)`，而 `TypeTable` 的
+    /// `substitute` 对同一组输入是幂等的（`visited` 记忆化）⇒ 不会造出两份签名。
+    fn explicit_instantiation(&mut self, file: FileId, e: &IndexExpr) -> Option<Operand> {
+        let Expr::Name(n) = &*e.x else { return None };
+        let tparams = self.s.pkg.generic_funcs.get(&n.value)?.clone();
+
+        // ① 类型实参（`F[int]` 一个；`F[int, string]` 是 `Expr::List`）。
+        let arg_exprs: Vec<&Expr> = match &*e.index {
+            Expr::List(l) => l.elems.iter().collect(),
+            other => vec![other],
+        };
+        let mut targs = Vec::with_capacity(arg_exprs.len());
+        let mut not_a_type = false;
+        for a in &arg_exprs {
+            match self.type_expr(file, a) {
+                Some(t) => targs.push(t),
+                None => {
+                    let op = self.expr(file, a);
+                    let what = operand_text(self.tt(), &op);
+                    self.report(
+                        a.start_pos(),
+                        DiagCode::ChkNotAType,
+                        format!("{what} is not a type"),
+                    );
+                    not_a_type = true;
+                }
+            }
+        }
+        if not_a_type {
+            return Some(Operand::invalid());
+        }
+
+        // ② 个数（官方 `WrongTypeArgCount` 的两段式：多了说 too many，少了说
+        //    not enough；都带 `have/want`）。
+        if targs.len() != tparams.len() {
+            let how = if targs.len() > tparams.len() {
+                "too many"
+            } else {
+                "not enough"
+            };
+            self.report(
+                e.index.pos(),
+                DiagCode::TypWrongTypeArgCount,
+                format!(
+                    "{how} type arguments for {}: have {}, want {}",
+                    n.value,
+                    targs.len(),
+                    tparams.len()
+                ),
+            );
+            return Some(Operand::invalid());
+        }
+
+        // ③ 替换签名。`e.x` 的操作数必须是签名（泛型函数在装载面**没有**特例）。
+        let callee = self.expr(file, &e.x);
+        let Some(sig) = callee.typ else {
+            return Some(Operand::invalid());
+        };
+        let map: SubstMap = tparams.iter().copied().zip(targs.iter().copied()).collect();
+        let inst = substitute(self.s.tt, sig, &map);
+        Some(Operand::value(Some(inst)))
+    }
+
     fn slice_expr(&mut self, file: FileId, e: &SliceExpr) -> Operand {
         let mut x = self.expr(file, &e.x);
         if x.mode == Mode::Invalid {

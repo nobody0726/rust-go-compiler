@@ -113,7 +113,7 @@
         "T-EX-32",
         "T-EX-33"
       ],
-      "evidence": "T-EX-25..31 全绿（含 1.22 loopvar 的 012、typed nil、断言双值、type switch 四支）；T-EX-32 只到 any + 推断（G-M5-03）；T-EX-33 拒绝确定但用通用 CHK 码（G-M5-04）"
+      "evidence": "T-EX-25..31 全绿（含 1.22 loopvar 的 012、typed nil、断言双值、type switch 四支）；T-EX-32 只到 any + 推断（G-M5-03）；T-EX-33 拒绝确定；显式实例化那条已拿到专属码（M12/Task 6），另两条仍是通用 CHK 码（G-M5-04）"
     },
     "EX-5": {
       "name": "defer/panic/recover",
@@ -443,7 +443,7 @@
       "id": "T-EX-33",
       "gate": "EX-4",
       "verdict": "partial",
-      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_33：三条超面形态退出码 1、stdout 空；码是通用 CHK-* 非专属（G-M5-04）",
+      "evidence": "rgoc/crates/rgoc-driver/tests/run_semantics.rs 的 t_ex_33：三条超面形态退出码 1、stdout 空；显式实例化那条已是专属码 HIR-UNSUPPORTED-GENERIC（M12/Task 6 兑现），另两条仍是通用 CHK-*（G-M5-04）",
       "leg": "甲",
       "name": "泛型超出面拒绝"
     },
@@ -959,7 +959,7 @@
       {
         "id": "G-M5-03",
         "item": "泛型只到「any 约束 + 类型推断」（T-EX-32）",
-        "note": "实测：Id(1)/Id(\"s\") 正确；F[int](1) 报 CHK-INVALID-INDEX、Box[int]{v:7} 报 CHK-INVALID-SELECTOR、Sum([]int{...}) 报 CHK-INVALID-ASSIGN。单态化的执行面在 interp 里已就位（HIR-UNSUPPORTED-GENERIC 码在），缺的是检查器对实例化表达式的识别 —— 与 G-M5-04 同根",
+        "note": "实测：Id(1)/Id(\"s\") 正确；F[int](1) 现在报 HIR-UNSUPPORTED-GENERIC（M12/Task 6 让检查器认识显式实例化，该腿已兑现）、Box[int]{v:7} 报 CHK-INVALID-SELECTOR、Sum([]int{...}) 报 CHK-INVALID-ASSIGN。单态化的执行面在 interp 里已就位，剩下两条仍卡在检查面 —— 与 G-M5-04 同根",
         "gate": "EX-4 / T-EX-32"
       },
       {

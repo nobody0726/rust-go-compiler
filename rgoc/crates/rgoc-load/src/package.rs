@@ -34,8 +34,8 @@ use rgoc_ast::{AstFile, Decl, ImportDecl};
 use rgoc_lex::{Diag, DiagBag, DiagCode, FileId, FileTable, Pos};
 use rgoc_parse::parse_file_in;
 use rgoc_types::{
-    ObjKind, Object, ScopeId, ScopeKind, ScopeRef, ScopeTable, TypeId, TypeTable, Versions,
-    declare_universe, pkg_versions,
+    ObjKind, Object, ScopeId, ScopeKind, ScopeRef, ScopeTable, TypeId, TypeParamId, TypeTable,
+    Versions, declare_universe, pkg_versions,
 };
 
 use crate::decls::collect_decls;
@@ -101,6 +101,23 @@ pub struct Package {
     /// ⚠️ 环**不会**进这里：环上那条 import 没有装载结果（见 `importer` 的模块文档），
     /// 所以这棵树在结构上无环。
     pub imports: BTreeMap<String, Package>,
+    /// **包级泛型函数**的类型参数表：函数名 → 它自己的 `[T any]`（声明序）。
+    ///
+    /// # 为什么需要这张表（M12/Task 6）
+    ///
+    /// `SignatureDef` **没有** `tparams` 栏（M3 的决定：类型参数只作为作用域
+    /// 对象存在，不进签名 —— 进了签名就会改变 `C7` 的 dump 口径）。于是
+    /// `func Id[T any](x T) T` 的 `T` 一旦离开那个作用域就无从取回，而
+    /// **显式实例化**（`Id[int]`）与**单态化**（`M12a` 的主体）都必须在
+    /// 调用点把「形参表」和「实参表」按位置对齐。
+    ///
+    /// 所以装载期把这张表**如实记下来**（就是 `declare_tparams` 已经算好的那组
+    /// 条目），检查面与单态化都从这一个来源取 —— 不在两处各推一遍。
+    ///
+    /// 只收**包级**函数：方法的类型参数分两类（接收者的在
+    /// `SignatureDef::recv_tparams`，方法自己的目前仍只活在作用域里），
+    /// `F[int]` 这种写法对方法不成立（Go 不允许给方法显式指定类型实参）。
+    pub generic_funcs: BTreeMap<String, Vec<TypeParamId>>,
 }
 
 impl Package {
@@ -311,6 +328,7 @@ pub fn load_decls_only(
         type_roots: Vec::new(),
         skipped: Vec::new(),
         imports: BTreeMap::new(),
+        generic_funcs: BTreeMap::new(),
     };
 
     for (name, src) in sources {
