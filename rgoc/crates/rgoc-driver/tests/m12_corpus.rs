@@ -41,7 +41,9 @@ fn run_check(corpus_override: Option<&Path>) -> (i32, String, String) {
     if let Some(dir) = corpus_override {
         cmd.env("RGOC_TYPEPARAM_DIR", dir);
     }
-    let out = cmd.output().expect("跑不了 m12-classify.sh（bash 不在 PATH？）");
+    let out = cmd
+        .output()
+        .expect("跑不了 m12-classify.sh（bash 不在 PATH？）");
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -88,7 +90,11 @@ fn t_m12_01_七份清单自洽() {
     }
 
     // ② 脚本自报的和
-    assert_eq!(count_of(&out, "sum"), Some(266), "七份之和不是 266：\n{out}");
+    assert_eq!(
+        count_of(&out, "sum"),
+        Some(266),
+        "七份之和不是 266：\n{out}"
+    );
 
     // ③ **自己**数一遍语料（不信任脚本的自报）
     let total = fs::read_dir(corpus())
@@ -128,14 +134,21 @@ fn t_m12_01b_装置有牙() {
     let (rc, out, err) = run_check(Some(&tmp));
     let _ = fs::remove_dir_all(&tmp);
 
-    assert_eq!(rc, 1, "合成语料只有 3 个文件，`--check` 必须红：\nstdout:\n{out}\nstderr:\n{err}");
+    assert_eq!(
+        rc, 1,
+        "合成语料只有 3 个文件，`--check` 必须红：\nstdout:\n{out}\nstderr:\n{err}"
+    );
     assert!(
         err.contains("!= 266"),
         "红的原因必须是「总数不对」，实际 stderr：\n{err}"
     );
     // 顺便证明三份都归到了对的地方（3 个文件：run 1 / rejected 1 / dir 1）
     assert_eq!(count_of(&out, "run"), Some(1), "a.go 没进 run：\n{out}");
-    assert_eq!(count_of(&out, "rejected"), Some(1), "b.go 没进 rejected：\n{out}");
+    assert_eq!(
+        count_of(&out, "rejected"),
+        Some(1),
+        "b.go 没进 rejected：\n{out}"
+    );
     assert_eq!(count_of(&out, "dir"), Some(1), "c.go 没进 dir：\n{out}");
 }
 
