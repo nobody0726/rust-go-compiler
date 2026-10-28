@@ -3118,7 +3118,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             Map(TypeId, TypeId),
             Other,
         }
-        let shape = {
+        // `(形状, 内层类型, 取址省略)`。`addr`：`{...}` 的类型底下是指针
+        // （`[]PS{{f:1}}` 的元素，官方 elision）⇒ 产出 `&内层{...}`。
+        let (shape, inner_typ, addr) = {
             let tt = &*self.s.tt;
             let mut cur = unalias(tt, typ);
             // 类型参数 ⇒ **核心类型**（`issue50833` 的
@@ -3129,16 +3131,28 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             {
                 cur = unalias(tt, c);
             }
-            if let Type::Pointer(e) = tt.type_of(cur) {
-                cur = unalias(tt, *e);
+            // 元素字面量的形状按「**指向的结构**」认（官方 `&T{...}` 的
+            // elision）：typ 直接是 `*T`，或 typ 是 `PS *S` 这类 defined
+            // type（underlying 才是指针）—— 两层都要剥（`issue50833` 的
+            // `func b() []PS { return []PS{{f: 1}} }` 实测：PS 是 Named，
+            // 只看 cur 永远剥不到指针）。
+            let mut und = underlying(tt, cur);
+            let pelem = match (tt.type_of(cur), tt.type_of(und)) {
+                (Type::Pointer(e), _) | (_, Type::Pointer(e)) => Some(*e),
+                _ => None,
+            };
+            let addr = pelem.is_some();
+            if let Some(e) = pelem {
+                cur = unalias(tt, e);
+                und = underlying(tt, cur);
             }
-            let und = underlying(tt, cur);
-            match tt.type_of(und) {
+            let shape = match tt.type_of(und) {
                 Type::Struct(sid) => Shape::Struct(tt.struct_def(*sid).fields.clone()),
                 Type::Array { elem, .. } | Type::Slice(elem) => Shape::Seq(*elem),
                 Type::Map { key, elem } => Shape::Map(*key, *elem),
                 _ => Shape::Other,
-            }
+            };
+            (shape, cur, addr)
         };
         let mut items = Vec::new();
         match shape {
@@ -3211,7 +3225,16 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 );
             }
         }
-        Expr::new(ExprKind::Composite(Composite { typ, items }), typ)
+        let lit = Expr::new(
+            ExprKind::Composite(Composite { typ: inner_typ, items }),
+            inner_typ,
+        );
+        // 取址省略（`[]PS{{f:1}}` 的元素）：官方语义是 `&S{f:1}`。
+        if addr {
+            Expr::new(ExprKind::AddrOf(Box::new(lit)), typ)
+        } else {
+            lit
+        }
     }
 
     fn lower_expr_hint(&mut self, e: &AExpr, hint: TypeId) -> Expr {
