@@ -36,6 +36,7 @@ pub mod export_summary;
 pub mod exported;
 pub mod importer;
 mod labels;
+pub mod mono;
 pub mod package;
 pub mod scope;
 pub mod typeexpr;
