@@ -185,6 +185,51 @@ ParamMeta（16 字节）
 `Value.Set*` 只做 `rt_memcpy`。**不需要写屏障**的前提是「STW + 单线程」——
 这条写进 `C12`（`D-M12-7`）。上并发 GC 时这条会**静默失效**，必须先改 `C12`。
 
+### 5.4 `TypeDesc` 扩展区（M12/Task 31）
+
+`elem` 槽（+24）只装 `*T` / `[]T` / `[n]T` 的元素（§5.1 的既有语义；map 的
+K/V 与 chan 的 elem 走 `isel` 的独立引用，desc 里是 null —— 那是 `C5` §10
+的原样）。反射要的 `Key()` / `Elem()` / `Len()` / `ReflectMeta` 指针没有槽可放，
+而 40 字节本体冻结 —— 所以**扩展区跟在 desc 块尾部**：
+
+```text
+desc 块 = 40 字节本体（§5.1）之后，按 kind 追加扩展 quad（按 kind 判读）：
+  Map   → +40 key *TypeDesc, +48 elem *TypeDesc, [+56 meta]（named 时）
+  Chan  → +40 elem *TypeDesc, [+48 meta]（named 时）
+  Array → +40 len u64, +48 elem *TypeDesc（匿名）… 或 +48 meta（named 时；
+          named array 的 elem 走本体 +24？—— 不，Named 的 +24 恒 null，
+          见下「规则」），[+56 meta]
+  Named | Struct
+        → meta *ReflectMeta（§5.2 的块符号）；named 聚合另有 elem/key len
+          排在 meta 之前（见「规则」）
+  其余  → 无扩展（named 基本类型只有 meta 一个 quad）
+```
+
+**规则**：扩展区镜像 **underlying 的形状**；`meta` 指针（`meta_idx != 0` 的类型）
+固定**收尾**。`Named` 的本体 `+24 elem` 恒为 null（`C5` §10 的 `elem_of` 只认
+表面形状，不改）—— 所以 named 聚合的 elem/key 全在扩展区：
+
+| 表面类型 | 扩展区 |
+|---|---|
+| map（匿名/named） | key, elem, [meta] |
+| chan | elem, [meta] |
+| array | len, elem, [meta]（named）/ len（匿名 —— elem 在本体 +24）|
+| named ptr / named slice | elem, meta |
+| struct（匿名/named）| meta |
+| named 基本类型 / named func / named iface | meta |
+| 匿名 ptr/slice/func/iface/标量 | 无扩展 |
+
+消费者必须**先判 kind 再读扩展**（`ext` 字段只在对应 kind 的分支里触碰）；
+`meta_idx != 0` ⇒ 是 named ⇒ elem/key 在扩展区；`== 0` ⇒ 匿名 ⇒ elem 在本体
+`+24`（struct 的 meta 恒存在，`meta_idx` 判定对 struct 不适用）。
+
+* **本体消费方零改动**：`rt` 侧按 40 字节读 `TypeDesc`，扩展 quad 看不见；
+  `elem_of` 的 Map/Chan 分支**不改**（+24 照旧 null）。
+* **M9 的 `t_desc_*` 判据零改动**：它们只读 header + 三根 `.quad`
+  （gcdata/elem/methods），不检查块尾后面还有什么。
+* `Array.len` 与 `size / elem.size` 恒相等（数组无内部填充）—— 两条来源
+  互相校验，发射侧用 `layout::array_len_of`（**长度怎么读的唯一口径**）。
+
 ---
 
 ## 6. 不做面
@@ -207,3 +252,5 @@ ParamMeta（16 字节）
 | 日期 | 变更 | 依据 |
 |---|---|---|
 | 2026-10-28 | 建（§1–§6）| M12/Task 1；`D-M12-2/5/8` |
+| 2026-10-28 | §5.4 扩展区（Map/Chan/Array/Named 的反射读面载体）| M12/Task 31；40 字节冻结 + `elem_of` 语义不变的折中 |
+| 2026-10-27 | Task 31 落地细则：① `FieldMeta.tag` 存**字面量的值**（不含反引号/引号定界符 —— `check::typeexpr` 原抄 `BasicLit.value` 带定界符，实测 `Tag` 打出 `` `json:"x"` ``，官方是 `json:"x"`；与 `rgoc_load::typeexpr::tag_text` 同口径）；② 匿名 struct 的 `PkgPath()` 返回空串（匿名也有 meta，但 `name` 空 ⇒ 包路径不外漏）；③ `kind` 升官方 27 档（见 `C5` §11.1 变更记录）；④ `type_hash` 按 `TypeId` 记忆化（自引用接口类型曾指数爆炸）+ 别名透明（别名臂直接返回 rhs hash） | M12/Task 31；t_ref_02 对官方 oracle 逐字段 |

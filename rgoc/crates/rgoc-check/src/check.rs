@@ -302,6 +302,14 @@ pub struct Session<'a> {
     /// 「不可能」—— 诊断被回滚但 operand 已 invalid，lowering 撞
     /// `HIR-MISSING-TYPE`。复查命中这个集合 ⇒ 跳过判定。
     pub(crate) assert_tparam_sites: std::collections::BTreeSet<rgoc_lex::Pos>,
+    /// **辅助包**（M12/Task 31 多包 lower）：依赖包的**装载产物**。
+    ///
+    /// lowering 复查依赖包的函数体时（`expr_in(dep_file, …)`），名字解析
+    /// 要走依赖包的作用域链（`lookup_in_file`），而主 `pkg` 里没有那些
+    /// 文件 —— 注册进这里，解析时按「file 属于哪个包」选链。只服务
+    /// **复查**（lowering 期）；dep 自己的正式检查在 importer 递归里已经
+    /// 用它自己的会话做完了。
+    aux_pkgs: Vec<&'a Package>,
 }
 
 impl std::fmt::Debug for Session<'_> {
@@ -364,7 +372,52 @@ impl<'a> Session<'a> {
             insts: Vec::new(),
             inst_sites: std::collections::BTreeMap::new(),
             inst_ctx: String::new(),
+            aux_pkgs: Vec::new(),
         }
+    }
+
+    /// 注册一个辅助包（多包 lower：依赖包的作用域链给复查用）。
+    pub fn register_pkg(&mut self, p: &'a Package) {
+        if !self.aux_pkgs.iter().any(|x| std::ptr::eq(*x, p)) {
+            self.aux_pkgs.push(p);
+        }
+    }
+
+    /// 名字解析：主包优先，辅助包按注册序 —— `file` 属于哪个包就走哪条链。
+    ///
+    /// 单包形态（`aux_pkgs` 空）行为与 `pkg.lookup_in_file` 完全一致。
+    #[must_use]
+    pub fn lookup_in_file(
+        &self,
+        file: rgoc_lex::FileId,
+        name: &str,
+    ) -> Option<&rgoc_types::Object> {
+        if let Some(o) = self.pkg.lookup_in_file(file, name) {
+            return Some(o);
+        }
+        self.aux_pkgs
+            .iter()
+            .find_map(|p| p.lookup_in_file(file, name))
+    }
+
+    /// `file` 所在的包（主包或某个辅助包）。
+    #[must_use]
+    pub fn pkg_of_file(&self, file: rgoc_lex::FileId) -> &'a Package {
+        if self.pkg.files.contains(&file) {
+            return self.pkg;
+        }
+        self.aux_pkgs
+            .iter()
+            .copied()
+            .find(|p| p.files.contains(&file))
+            .unwrap_or(self.pkg)
+    }
+
+    /// `file` 所在的包是否 import 了 `unsafe`（辅助包感知的
+    /// `unsafe_pkg::imports_unsafe`）。
+    #[must_use]
+    pub fn file_imports_unsafe(&self, file: rgoc_lex::FileId) -> bool {
+        crate::unsafe_pkg::imports_unsafe(self.pkg_of_file(file), file)
     }
 
     /// 请求实例化 `name[targs…]`（`M12/Task 14`）。

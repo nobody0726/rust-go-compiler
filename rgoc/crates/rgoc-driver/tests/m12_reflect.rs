@@ -189,10 +189,13 @@ fn t_ref_01_白名单对账() {
         }
     }
 
-    // 判据侧：登记集合（Task 29 骨架）。
+    // 判据侧：登记集合（Task 31 读面：StructTag / StructField 随
+    // Field(i) 的读面一起进来 —— 官方 `reflect.StructField` 的形状）。
     let want: BTreeSet<String> = [
         "type Kind",
         "type Type",
+        "type StructTag",
+        "type StructField",
         "type Value",
         "func TypeOf",
         "func ValueOf",
@@ -301,22 +304,24 @@ func main() {
 	t = reflect.TypeOf(make(chan int))
 	println(t.Elem().Kind())
 	dump(reflect.TypeOf(func(int) string { return "" })) // 14
-	dump(reflect.TypeOf(interface{}(nil)))               // 15
-	dump(reflect.TypeOf(error(nil)))                     // 16
-	dump(reflect.TypeOf(Point{}))                        // 17
+	dump(reflect.TypeOf(Point{}))                        // 15
 	fields(reflect.TypeOf(Point{}))
 	dump(reflect.TypeOf(struct {
 		X int `json:"x"`
-	}{})) // 18
+	}{})) // 16
 	fields(reflect.TypeOf(struct {
 		X int `json:"x"`
 	}{}))
-	dump(reflect.TypeOf([3]int{})) // 19
+	dump(reflect.TypeOf([3]int{})) // 17
 	t = reflect.TypeOf([3]int{})
 	println(t.Len())
 	println(t.Elem().Kind())
-	dump(reflect.TypeOf(Box[int]{})) // 20
+	dump(reflect.TypeOf(Box[int]{})) // 18
 	fields(reflect.TypeOf(Box[int]{}))
+	// **nil 接口上的方法调用**必须按官方 panic（文本逐字对齐）——
+	// `TypeOf(nil 接口)` 返回 nil `Type`，`t.Kind()` 是 nil itab 派发。
+	// 放在**最后**：panic 之后的块不会执行（官方行为，oracle 实测）。
+	dump(reflect.TypeOf(interface{}(nil)))
 }
 "#;
 
@@ -327,7 +332,6 @@ func main() {
 /// 每类型 5 行（kind/size/align/name/pkgpath）+ 追加行，与 fixture 的
 /// 打印序逐行对应。name/pkgpath 空则输出空行。
 #[test]
-#[ignore = "Task 31 读面 API 落地后启用（t_ref_02）：接口方法调用还没有实现者"]
 fn t_ref_02_元数据逐字段() {
     let tmp = std::env::temp_dir().join(format!("rgoc-ref02-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp);
@@ -335,13 +339,29 @@ fn t_ref_02_元数据逐字段() {
     let main = tmp.join("main.go");
     fs::write(&main, T_REF_02_SRC).expect("写 fixture 失败");
 
-    let out = Command::new(driver())
-        .args(["run", "-I"])
+    // **native 通路**（Ruling 31-1）：反射是 native 特性 —— `any` 的两字
+    // 表示 `{*TypeDesc, 数据指针}` 在解释器的 `Value` 模型里不可表达
+    // （`(*[2]unsafe.Pointer)(unsafe.Pointer(&i))` 的重解释，实测
+    // 2026-10-28「取字段的底座不是结构体」）。解释器缺口登记
+    // `G-M12-05`，本判据走 build + 执行产物。
+    let bin = tmp.join("ref02bin");
+    let build = Command::new(driver())
+        .args(["build", "-I"])
         .arg(repo_root().join("stdlib"))
+        .arg("-o")
+        .arg(&bin)
         .arg(&main)
         .output()
-        .expect("起不了 run");
+        .expect("起不了 build");
+    assert_eq!(
+        build.status.code(),
+        Some(0),
+        "反射读面 fixture 应当能编译：\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
 
+    let out = Command::new(&bin).output().expect("起不了产物");
     let got = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -350,11 +370,10 @@ fn t_ref_02_元数据逐字段() {
     let want = want_ref02_output();
     assert_eq!(
         out.status.code(),
-        Some(0),
-        "反射读面 fixture 应当能编译运行：\n{}",
-        got
+        Some(2),
+        "nil 接口的方法调用必须按官方 panic（rc=2）：\n{got}"
     );
-    assert_eq!(got, want, "20 个类型的读面必须与官方逐字段相同");
+    assert_eq!(got, want, "18 个类型的读面必须与官方逐字段相同");
 }
 
 /// 期望序列（与 `T_REF_02_SRC` 的打印序一一对应）。
@@ -364,6 +383,9 @@ fn t_ref_02_元数据逐字段() {
 /// Func=19 Interface=20 Map=21 Ptr=22 Slice=23 String=24 Struct=25。
 /// size/align 照官方 ABI（string 16、interface 16、func/chan/map/ptr 8、
 /// complex128 16；struct 按字段序无填充时 24/8）。
+///
+/// **结尾是 nil 接口 panic**（官方行为：`TypeOf(nil 接口)` ⇒ nil `Type`
+/// ⇒ 方法调用 nil 解引用；oracle 实测 rc=2、goroutine 转储不算内容契约）。
 fn want_ref02_output() -> String {
     let mut want: Vec<String> = Vec::new();
     // (kind, size, align, name, pkgpath)
@@ -397,11 +419,7 @@ fn want_ref02_output() -> String {
     want.extend(["18", "8", "8", "", "", "2"].map(String::from));
     // 14 func(int) string
     want.extend(["19", "8", "8", "", ""].map(String::from));
-    // 15 interface{} / 16 error（接口没有 name/pkgpath）
-    for _ in 0..2 {
-        want.extend(["20", "16", "8", "", ""].map(String::from));
-    }
-    // 17 Point + fields（X@0 int、Y@8 string）
+    // 15 Point + fields（X@0 int、Y@8 string）
     want.extend(["25", "24", "8", "Point", "main"].map(String::from));
     want.extend(
         [
@@ -410,7 +428,7 @@ fn want_ref02_output() -> String {
         ]
         .map(String::from),
     );
-    // 18 匿名 struct{ X int `json:"x"` } + fields
+    // 16 匿名 struct{ X int `json:"x"` } + fields
     want.extend(["25", "8", "8", "", ""].map(String::from));
     want.extend(
         [
@@ -422,17 +440,22 @@ fn want_ref02_output() -> String {
         ]
         .map(String::from),
     );
-    // 19 [3]int + len/elem
+    // 17 [3]int + len/elem
     want.extend(["17", "24", "8", "", ""].map(String::from));
     want.extend(["3", "2"].map(String::from));
-    // 20 Box[int] + fields（v@0 int）
-    want.extend(["25", "8", "8", "Box", "main"].map(String::from));
+    // 18 Box[int] + fields（v@0 int）—— 官方 Name() 是**实例化后的拼写**
+    // `Box[int]`（Task 30 手写 want 的 "Box" 是错的，oracle 实测）
+    want.extend(["25", "8", "8", "Box[int]", "main"].map(String::from));
     want.extend(
         [
             "1", // NumField
             "v", "", "0", "2",
         ]
         .map(String::from),
+    );
+    // nil 接口的方法调用 ⇒ 官方 panic 文本（一行；转储不算内容契约）。
+    want.push(
+        "panic: runtime error: invalid memory address or nil pointer dereference".to_string(),
     );
 
     let mut s = want.join("\n");

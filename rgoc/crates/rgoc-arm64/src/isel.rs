@@ -1655,9 +1655,21 @@ fn convert(cx: &Ctx<'_>, dst: ValueId, x: ValueId, typ: TypeId, asm: &mut Asm) {
 
     match (from_class, to_class) {
         (SlotClass::Int, SlotClass::Int) => {
-            ld_x(asm, "x10", s.off);
-            mask_to(asm, "x10", cx.tt, typ);
-            st_x(asm, "x10", d.off);
+            // `string ⇄ 具名 string`（`type Tag string` 的 `Tag(s)` / `string(tag)`）：
+            // string 是 **16 字节两字**的标量，必须整搬。到这里时 `int → string`
+            // 已被上面 `rt_i64_to_str` 拦下、切片是 `Agg` 类，所以两侧任一为
+            // string ⇒ 两侧都是 string 形状。实测 `tagd.go`：`SF{B: Tag(t)}` 只搬
+            // 1 个字，`len` 半截垃圾 ⇒ `StructField.Tag` 打出指针地址。
+            if is_string_ty(cx.tt, typ) || is_string_ty(cx.tt, from) {
+                ld_x(asm, "x10", s.off);
+                ld_x(asm, "x11", s.off + 8);
+                st_x(asm, "x10", d.off);
+                st_x(asm, "x11", d.off + 8);
+            } else {
+                ld_x(asm, "x10", s.off);
+                mask_to(asm, "x10", cx.tt, typ);
+                st_x(asm, "x10", d.off);
+            }
         }
         (SlotClass::Int, SlotClass::Float) => {
             ld_x(asm, "x10", s.off);
@@ -2722,6 +2734,15 @@ fn call(
             // `fn` **最后**取：上面装实参用过 `x9`/`x10`。`x16` 是 IP0（链接器
             // 用来做 veneer 的临时寄存器），被调方不会指望它保活。
             ld_x(asm, "x9", r.off);
+            // **nil itab**（nil 接口上的方法调用）⇒ 可恢复的 panic
+            // （`rt_panic_nil`，官方文本 `invalid memory address or nil pointer
+            // dereference`）。不检查就是「`ldr` 读地址 0」→ 裸 SIGSEGV，
+            // `recover` 救不回来（ref02 的 `interface{}(nil)` 实测，
+            // M12/Task 31；模式与下面的 `Indirect` 相同）。
+            asm.ins("cbnz x9, 1f");
+            asm.ins("bl rt_panic_nil");
+            asm.ins(&format!("b {}", panic_label(cx)));
+            asm.ins("1:");
             asm.ins(&format!("ldr x16, [x9, #{}]", 16 + 8 * slot));
             asm.ins("blr x16");
             take_results(cx, dsts, asm);

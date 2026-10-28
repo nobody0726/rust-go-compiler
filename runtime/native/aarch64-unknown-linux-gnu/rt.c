@@ -3212,7 +3212,7 @@ int rt_iface_eq(u64 a0, u64 a1, u64 b0, u64 b1, i64 eface) {
         /* 两边都是 nil 接口 */
         return 1;
     }
-    if (da->kind == 7 /* Kind::Pointer */) {
+    if (da->kind == 22 /* Kind::Pointer（官方 27 档，M12） */) {
         /* 指针动态类型：`data` 是**值本身**，比两个字 */
         return a1 == b1;
     }
@@ -3306,7 +3306,7 @@ u32 rt_hash(const TypeDesc *d, const void *p) {
     u32 h = 2166136261u;
     u64 n = d->size;
     const u8 *b = (const u8 *)p;
-    if (d->kind == 6 /* Kind::String */) {
+    if (d->kind == 24 /* Kind::String（官方 27 档，M12） */) {
         /* 两个字：ptr + len。按内容哈希。 */
         const u8 *sp = *(const u8 *const *)p;
         n = *(const u64 *)((const u8 *)p + 8);
@@ -3321,7 +3321,7 @@ u32 rt_hash(const TypeDesc *d, const void *p) {
 
 /* 键相等（与 `rt_hash` 同一套 kind 分派，见上面的窄化说明）。 */
 int rt_equal(const TypeDesc *d, const void *a, const void *b) {
-    if (d->kind == 6 /* Kind::String */) {
+    if (d->kind == 24 /* Kind::String（官方 27 档，M12） */) {
         u64 na = *(const u64 *)((const u8 *)a + 8);
         u64 nb = *(const u64 *)((const u8 *)b + 8);
         if (na != nb) {

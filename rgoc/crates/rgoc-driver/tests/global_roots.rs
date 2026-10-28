@@ -129,20 +129,20 @@ func main() {
     );
     assert!(addr.starts_with('g'), "addr 该是全局的标签，实际 {addr}");
 
-    // 第 2 条：string（size 16 / kind 6）
+    // 第 2 条：string（size 16 / kind 24 —— 官方 27 档，M12）
     let (sym, _) = &pairs[1];
     assert_eq!(
         d.get(sym).copied(),
-        Some((16, 6)),
+        Some((16, 24)),
         "b 的 desc 该是 string（16 字节 / Kind::String），实际 {sym} ⇒ {:?}",
         d.get(sym)
     );
 
-    // 第 3 条：*int（size 8 / kind 7）
+    // 第 3 条：*int（size 8 / kind 22 —— 官方 27 档，M12）
     let (sym, _) = &pairs[2];
     assert_eq!(
         d.get(sym).copied(),
-        Some((8, 7)),
+        Some((8, 22)),
         "c 的 desc 该是指针（8 字节 / Kind::Pointer），实际 {sym} ⇒ {:?}",
         d.get(sym)
     );

@@ -64,10 +64,70 @@ pub const DISCARD_SLOT: SlotId = SlotId(u32::MAX);
 /// 任一构造超出 M5 的支持面 ⇒ 返回**全部**拒绝（不是第一条）：
 /// 一次跑完能看见「还有多少处不支持」，只报第一条会让人反复重跑。
 pub fn lower<'p>(pkg: &'p Package, s: &mut Session<'p>) -> Result<Program, Vec<HirReject>> {
-    let mut lw = Lowerer::new(pkg, s);
-    lw.collect();
-    lw.lower_all();
-    lw.finish()
+    // ── 多包（M12/Task 31）：依赖包的函数也要发码 ─────────────────────
+    //
+    // M5 的「单包面」（模块文档第 20 行）被反射打破：`main` 调
+    // `reflect.TypeOf`，被调函数在**另一个包**里 —— 它的体必须进同一个
+    // `Program`（符号名按 `FuncId` 编号，`fn{N}` 天然不撞）。
+    //
+    // 包序 = **postorder DFS**（依赖先）：
+    // * 跨包调用是**前向引用** ⇒ 所有包的函数壳（collect）必须在任何
+    //   体下沉（lower_all）之前建好；
+    // * 初始化式执行序「依赖包先」（官方语义）正好由同一个序给出；
+    // * `unsafe` 空包 `asts` 为空，collect 空转，不需要特判。
+    let mut order: Vec<(&Package, String)> = Vec::new();
+    {
+        let mut seen: std::collections::BTreeSet<*const Package> =
+            std::collections::BTreeSet::new();
+        fn visit<'p>(
+            p: &'p Package,
+            path: String,
+            order: &mut Vec<(&'p Package, String)>,
+            seen: &mut std::collections::BTreeSet<*const Package>,
+        ) {
+            if !seen.insert(p as *const Package) {
+                return;
+            }
+            for (sub, dep) in &p.imports {
+                visit(dep, sub.clone(), order, seen);
+            }
+            order.push((p, path));
+        }
+        visit(pkg, String::new(), &mut order, &mut seen);
+    }
+
+    let mut prog = Program {
+        pkgpath: pkg.name.clone(),
+        funcs: Vec::new(),
+        globals: Vec::new(),
+        init_order: Vec::new(),
+        inits: Vec::new(),
+        main: None,
+    };
+    let mut cross = Cross::default();
+    let mut rejects: Vec<HirReject> = Vec::new();
+
+    let mut lw = Lowerer::new(pkg, s, &mut prog, &mut cross);
+    // 每包：collect（名字壳 + 实例壳 + 初始化式）→ lower_all（体下沉）。
+    //
+    // 为什么能连着做：跨包调用是**前向**引用，而 postorder 保证被依赖包的
+    // 壳先于依赖方处理 —— 轮到任何包时，它调得到的包都已 collect 完。
+    // （`pending` / `funcs_by_name` 等 per-package 状态必须在 collect 与
+    // lower_all 之间存活，所以不能「先全 collect 再全下沉」—— 那需要把
+    // 状态快照到驱动侧，不值得。）
+    for (p, path) in &order {
+        lw.adopt(p, path);
+        lw.collect();
+        rejects.append(&mut lw.take_rejects());
+        lw.lower_all();
+        rejects.append(&mut lw.take_rejects());
+    }
+    drop(lw);
+    if rejects.is_empty() {
+        Ok(prog)
+    } else {
+        Err(rejects)
+    }
 }
 
 /// 一个局部名字：槽 + 静态类型。
@@ -154,7 +214,13 @@ impl FnCtx {
 struct Lowerer<'a, 'p> {
     pkg: &'p Package,
     s: &'a mut Session<'p>,
-    prog: Program,
+    /// 共享的产物（多包 lower：每个依赖包都往里 push 函数/全局 ——
+    /// 符号名按 `FuncId` 编号，跨包不撞）。
+    prog: &'a mut Program,
+    /// 跨包函数名表（collect 轮登记、体下沉轮查询）。
+    cross: &'a mut Cross,
+    /// **当前包**的 import 路径（cross 表的键；根包是空串）。
+    self_path: String,
     /// 包级函数名 → 函数。
     funcs_by_name: BTreeMap<String, FuncId>,
     /// `(接收者基类型名, 方法名)` → 函数。
@@ -197,19 +263,30 @@ struct Lowerer<'a, 'p> {
     generic_names: BTreeSet<String>,
 }
 
+/// 跨包函数名表（M12/Task 31）：`(import 路径, 函数名) → FuncId`。
+///
+/// collect 轮由**每个包**登记自己的包级函数；体下沉轮由跨包 selector
+/// （`reflect.TypeOf`）查询。键用 **import 路径**（`import "reflect"` 的
+/// `reflect`），不用包名 —— 路径才是 import 语句里写的、selector 前缀
+/// 对应的东西。
+#[derive(Default)]
+struct Cross {
+    funcs: BTreeMap<(String, String), FuncId>,
+}
+
 impl<'a, 'p> Lowerer<'a, 'p> {
-    fn new(pkg: &'p Package, s: &'a mut Session<'p>) -> Self {
+    fn new(
+        pkg: &'p Package,
+        s: &'a mut Session<'p>,
+        prog: &'a mut Program,
+        cross: &'a mut Cross,
+    ) -> Self {
         Self {
             pkg,
             s,
-            prog: Program {
-                pkgpath: pkg.name.clone(),
-                funcs: Vec::new(),
-                globals: Vec::new(),
-                init_order: Vec::new(),
-                inits: Vec::new(),
-                main: None,
-            },
+            prog,
+            cross,
+            self_path: String::new(),
             funcs_by_name: BTreeMap::new(),
             methods: BTreeMap::new(),
             globals_by_name: BTreeMap::new(),
@@ -230,6 +307,41 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             insts: Vec::new(),
             generic_names: BTreeSet::new(),
         }
+    }
+
+    /// 切换到另一个包（多包 lower 的两轮都用它）。
+    ///
+    /// **保留**：`prog` / `cross` / `rejects`（跨包共享）；**重置**：本包的
+    /// 名字表与待下沉表（`funcs_by_name` / `methods` / `globals_by_name` /
+    /// `groups` / `group_of_name` / `pending` / `origins` / `insts*` /
+    /// `generic_names`）。`file` 指向新包第一个文件。
+    fn adopt(&mut self, pkg: &'p Package, path: &str) {
+        self.pkg = pkg;
+        self.self_path = path.to_string();
+        // 辅助包注册（M12/Task 31）：复查依赖包的体时，`ident` / 类型
+        // 表达式要沿**这个包**的作用域链解析（`Session::lookup_in_file`）。
+        self.s.register_pkg(pkg);
+        self.file = pkg
+            .files
+            .first()
+            .copied()
+            .unwrap_or_else(|| FileId::from_index(0));
+        self.funcs_by_name.clear();
+        self.methods.clear();
+        self.globals_by_name.clear();
+        self.groups.clear();
+        self.group_of_name.clear();
+        self.pending.clear();
+        self.origins.clear();
+        self.insts_by_name.clear();
+        self.insts.clear();
+        self.generic_names.clear();
+        debug_assert!(self.stack.is_empty(), "adopt 只能在包边界（栈平衡）调用");
+    }
+
+    /// 取走本轮累计的拒绝（多包驱动收集用）。
+    fn take_rejects(&mut self) -> Vec<HirReject> {
+        std::mem::take(&mut self.rejects)
     }
 
     // ───────────────────────── 类型小工具 ─────────────────────────
@@ -488,6 +600,13 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                         self.prog
                             .funcs
                             .push(Func::placeholder(f.name.value.clone()));
+                        // 跨包名表：collect 轮登记，其它包的体下沉轮查询
+                        //（`reflect.TypeOf` —— M12/Task 31）。键 = import 路径。
+                        // 每个包要拿「自己的 import 路径」—— 由驱动在 adopt 时
+                        // 记在 self.self_path 上（见 adopt）。
+                        self.cross
+                            .funcs
+                            .insert((self.self_path.clone(), f.name.value.clone()), fid);
                         // 分支判据是**有没有接收者**，不是「接收者解析得出基名」：
                         // 接收者非法（`recv_base()` 给 `None`）时它仍然是个方法，
                         // 不能掉进下面两个包级分支里去。
@@ -528,7 +647,10 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
             }
         }
-        self.prog.main = self.funcs_by_name.get("main").copied();
+        // `main` 只认**根包**（多包 lower：依赖包没有入口）。
+        if self.self_path.is_empty() {
+            self.prog.main = self.funcs_by_name.get("main").copied();
+        }
 
         // ② **实例**：名字与实参组都由检查面定（`CheckedPackage.instances`），
         //    这里只造壳；体在第二遍按替换下沉（`M12/Task 15`）。
@@ -663,7 +785,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             self.file = file;
             self.lower_func(fid, &f, &[]);
         }
-        self.prog.init_order = self.order_inits();
+        // 多包：依赖包的 init 组**先**执行 —— 包序（postorder）已经是
+        // 依赖先，这里 append（旧单包形态只有一轮，行为不变）。
+        self.prog.init_order.extend(self.order_inits());
     }
 
     /// 按 `initorder::analyze` 的顺序排初始化组。
@@ -1032,14 +1156,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
 
     fn reject(&mut self, pos: Pos, kind: RejectKind, msg: impl Into<String>) {
         self.rejects.push(HirReject::new(pos, kind, msg));
-    }
-
-    fn finish(self) -> Result<Program, Vec<HirReject>> {
-        if self.rejects.is_empty() {
-            Ok(self.prog)
-        } else {
-            Err(self.rejects)
-        }
     }
 
     // ───────────────────────── 语句 ─────────────────────────
@@ -2636,6 +2752,37 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             );
             return Expr::new(ExprKind::Nil, typ);
         }
+        // 包名选择器：`pkg.X` —— **必须在 base 求值之前**（`Name(pkg)` 不是
+        // 值，`type_of` 会把它判成 invalid 然后 reject）。
+        //
+        // M12/Task 31 起函数可以跨包：`reflect.TypeOf` 查跨包名表
+        //（collect 轮按 import 路径登记的壳），命中 ⇒ 函数值（`FuncLit`，
+        // 与本包方法表达式同形状）。查不到仍按窄面报 —— 类型 / 常量的
+        // 跨包引用还是窄面（`pkg.T` 的类型由检查面给，这里只在**值语境**走到）。
+        if let AExpr::Name(n) = &*se.x
+            && self.resolve(&n.value).is_none()
+            && !self.globals_by_name.contains_key(&n.value)
+            && self.pkg.imported(self.file, &n.value).is_some()
+        {
+            if let Some((_, path)) = self
+                .pkg
+                .import_bindings(self.file)
+                .into_iter()
+                .find(|(nm, _)| *nm == n.value)
+                && let Some(fid) = self.cross.funcs.get(&(path, se.sel.value.clone())).copied()
+            {
+                return Expr::new(ExprKind::FuncLit(fid), typ);
+            }
+            self.reject(
+                se.pos,
+                RejectKind::MissingType,
+                format!(
+                    "跨包引用 {}.{} 不在 HIR 面（函数之外的类型/常量还是单包窄面）",
+                    n.value, se.sel.value
+                ),
+            );
+            return Expr::new(ExprKind::Nil, typ);
+        }
         let mut base_typ = self.type_of(&se.x);
         // 类型参数接收者：方法选择看**约束接口的方法集**（issue54225 的
         // `v.contentLen()`）。注意不是 core type —— 纯方法约束（不含项）的
@@ -2647,19 +2794,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         // 走下面的 `find_method_path`。
         if let Some(ci) = self.tparam_iface(base_typ) {
             base_typ = ci;
-        }
-        // 包名选择器：`pkg.X`
-        if let AExpr::Name(n) = &*se.x
-            && self.resolve(&n.value).is_none()
-            && !self.globals_by_name.contains_key(&n.value)
-            && self.pkg.imported(self.file, &n.value).is_some()
-        {
-            self.reject(
-                se.pos,
-                RejectKind::MissingType,
-                format!("跨包引用 {}.{} 不在 M5 面（单包）", n.value, se.sel.value),
-            );
-            return Expr::new(ExprKind::Nil, typ);
         }
         let recv = self.lower_expr(&se.x);
         // 接口方法值
@@ -2730,6 +2864,33 @@ impl<'a, 'p> Lowerer<'a, 'p> {
     }
 
     fn lower_call(&mut self, c: &CallExpr, typ: TypeId) -> Expr {
+        // `unsafe.X(...)`：与检查面（`expr.rs::call` 开头的 unsafe 分派）同款
+        // —— `unsafe` 是伪包，选择器求值装不出对象表。`unsafe.Pointer(x)`
+        // 是**转换**（`unsafe_pkg::call` 的白名单口径），落成 `Convert`；
+        // `Sizeof` / `Alignof` / `Offsetof` 是常量面（常量折叠已处理），值
+        // 语境出现在 lowering ⇒ 窄面拒绝。
+        if let AExpr::Selector(s) = &*c.fun
+            && let AExpr::Name(n) = &*s.x
+            && n.value == "unsafe"
+        {
+            if s.sel.value == "Pointer" {
+                let to = self.s.tt.add_basic(BasicId::UnsafePointer);
+                let x = match c.args.first() {
+                    Some(a) => self.lower_expr(a),
+                    None => Expr::new(ExprKind::Nil, to),
+                };
+                return Expr::new(ExprKind::Convert { to, x: Box::new(x) }, to);
+            }
+            self.reject(
+                c.pos,
+                RejectKind::MissingType,
+                format!(
+                    "unsafe.{} 不在 lowering 面（常量面已在折叠期处理）",
+                    s.sel.value
+                ),
+            );
+            return Expr::new(ExprKind::Nil, typ);
+        }
         let env = self.check_env();
         let fop = self.s.expr_in(self.file, &c.fun, &env);
         // 转换：`T(x)`
@@ -2997,6 +3158,33 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             return Callee::Func(fid);
         }
         if let AExpr::Selector(se) = &*c.fun {
+            // 跨包函数（M12/Task 31）：`reflect.TypeOf(x)` —— 前缀是
+            // import 名，映射到 import 路径后查跨包名表。**必须在 base
+            // 求值之前**（`Name(pkg)` 不是值，求它只会拿到 invalid）。
+            if let AExpr::Name(n) = &*se.x
+                && self.resolve(&n.value).is_none()
+                && !self.globals_by_name.contains_key(&n.value)
+                && self.pkg.imported(self.file, &n.value).is_some()
+            {
+                if let Some((_, path)) = self
+                    .pkg
+                    .import_bindings(self.file)
+                    .into_iter()
+                    .find(|(nm, _)| *nm == n.value)
+                    && let Some(fid) = self.cross.funcs.get(&(path, se.sel.value.clone())).copied()
+                {
+                    return Callee::Func(fid);
+                }
+                self.reject(
+                    se.pos,
+                    RejectKind::MissingType,
+                    format!(
+                        "跨包调用 {}.{} 不在 HIR 面（函数之外的类型/常量还是单包窄面）",
+                        n.value, se.sel.value
+                    ),
+                );
+                return Callee::Value(Box::new(Expr::new(ExprKind::Nil, self.s.tt.invalid())));
+            }
             // 方法表达式**调用**：`T.M(recv, args…)`。`se.x` 是类型 ⇒ 接收者
             // 是**实参**（第 0 个），不是 `recv`。这里必须直接给出 `Func`，
             // 否则下面会去 `lower_expr(S)`（`method.go` / `method3.go` 实测
@@ -3055,6 +3243,20 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             // 包级函数
             if let Some(fid) = self.funcs_by_name.get(&se.sel.value) {
                 return Callee::Func(*fid);
+            }
+            // 跨包函数（M12/Task 31）：`reflect.TypeOf(x)` —— 前缀是
+            // import 名，映射到 import 路径后查跨包名表。
+            if let AExpr::Name(n) = &*se.x
+                && self.resolve(&n.value).is_none()
+                && !self.globals_by_name.contains_key(&n.value)
+                && let Some((_, path)) = self
+                    .pkg
+                    .import_bindings(self.file)
+                    .into_iter()
+                    .find(|(nm, _)| *nm == n.value)
+                && let Some(fid) = self.cross.funcs.get(&(path, se.sel.value.clone())).copied()
+            {
+                return Callee::Func(fid);
             }
         }
         if let AExpr::Name(n) = &*c.fun

@@ -176,7 +176,7 @@ func main() {
 "#,
     );
     let ds = parse_descs(&asm);
-    let st = by_kind(&ds, 9); // Kind::Struct
+    let st = by_kind(&ds, 25); // Kind::Struct（M12/Task 31 起官方 27 档编号）
     assert_eq!(st.len(), 1, "应只有一个结构体 desc：{ds:#?}");
     let s = st[0];
     assert_eq!(s.size, 24, "S = int(8) + string(16)");
@@ -223,7 +223,7 @@ func main() {
 
     // 按 `elem` 找 `*int` —— **不按个数**：程序里还可能有别的指针类型
     // （`*bool` 之类由 `println` 的展开带出来），而本判据只关心 `*int`。
-    let pint = by_kind(&ds, 7) // Kind::Pointer
+    let pint = by_kind(&ds, 22) // Kind::Pointer（M12/Task 31 起官方 27 档编号）
         .into_iter()
         .find(|d| d.elem.as_deref() == Some(ints[0].sym.as_str()))
         .unwrap_or_else(|| panic!("找不到 elem 指向 int 的指针 desc：{ds:#?}"));

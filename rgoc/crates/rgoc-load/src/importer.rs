@@ -87,8 +87,23 @@ impl ImportResolver {
     /// `None` ⇒ 所有 root 下都**没有这个目录**。调用方据此报「不支持的形式」
     /// （见 [`load_with_imports`] 的注释：找不到源码与「不支持这种 import 形式」
     /// 在 M3 里是同一件事——我们既不做模块解析也不读 export data）。
+    ///
+    /// # `unsafe` 是伪包（M12/Task 31）
+    ///
+    /// 标准库里没有 `unsafe/` 目录，但官方允许任何包 `import "unsafe"`
+    /// （stdlib 自己就这么干 —— `reflect` 是第一个）。这里给它一个**空包**
+    /// （目录键用哨兵路径）：缝进作用域后没有 `unsafe.X` 的对象，类型引用
+    /// `unsafe.Pointer` 由 typeexpr 的伪包识别（`typeexpr.rs::is_unsafe_pointer`
+    /// —— 它本来就不看 import）与检查面白名单（`rgoc-check::unsafe_pkg`）
+    /// 接管；`unsafe.Sizeof` 等调用只进检查面（M4 的豁免），HIR 面不会遇到。
     #[must_use]
     pub fn resolve(&self, path: &str) -> Option<ImportDir> {
+        if path == "unsafe" {
+            return Some(ImportDir {
+                dir: PathBuf::from("<unsafe:builtin>"),
+                files: Vec::new(),
+            });
+        }
         for root in &self.roots {
             let raw = root.join(path);
             if !raw.is_dir() {
@@ -268,6 +283,21 @@ impl Session<'_> {
             }
             if let Some(i) = self.stack.iter().position(|f| f.dir == id.dir) {
                 self.report_cycle(i, pos, &path);
+                continue;
+            }
+            if path == "unsafe" {
+                // `unsafe` 伪包（`resolve` 里特判的那个）：**空包** —— 没有
+                // 对象表。类型引用 `unsafe.Pointer` 由 typeexpr 伪包识别与
+                // 检查面白名单接管（见 `ImportResolver::resolve` 的注释）；
+                // 这里只需要一个能缝进文件作用域、能进缓存的包对象。
+                // （`file_table` 是全局的 —— 空装载不会往里塞东西。）
+                let (mut upkg, usub) = load_decls_only(self.tt, &mut self.file_table, &[], lang);
+                upkg.name = "unsafe".to_string();
+                for d in usub.into_sorted() {
+                    self.bag.push(d);
+                }
+                self.cache.insert(id.dir.clone(), upkg.clone());
+                pkg.imports.insert(path, upkg);
                 continue;
             }
             if id.files.is_empty() {

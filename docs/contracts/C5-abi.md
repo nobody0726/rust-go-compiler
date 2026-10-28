@@ -478,7 +478,7 @@ native 通路的静态元数据全部在 `.rodata`，形状是 `#[repr(C)]` 冻�
 | 0 | 4 | `size` | data 部分的字节数（**不含** 16 字节对象头，M10 起）|
 | 4 | 4 | `ptrdata` | `[0, ptrdata)` 前缀里可能有指针；`gcdata` 只覆盖这段（`string` 是 8，不是 16） |
 | 8 | 4 | `hash` | 类型 hash（接口 `==`、map 键、`__desc_<hash>` 的符号名都靠它） |
-| 12 | 1 | `kind` | `reflect.Kind` 的子集（15 个值，`C5` 冻结） |
+| 12 | 1 | `kind` | `reflect.Kind` 的**官方 27 档**（`Invalid=0 … UnsafePointer=26`，M12 起；此前是 15 档子集，`int8` 一度与 `int` 同档 ⇒ `TypeOf(int8(0)).Kind()` 错报 `Int`） |
 | 13 | 1 | `flags` | bit0 可比较 / bit1 含指针 / bit2 要清零 |
 | 14 | 2 | _（填充）_ | 对齐 `gcdata` |
 | 16 | 8 | `gcdata` | ptrmask，每 8 字节 1 位；`ptrdata == 0` 时为 **null** |
@@ -573,6 +573,7 @@ funcval = { fn: *u8, caps: [*u8; n] }     # 间接调用 `ldr x16, [x0; #0]`
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-27 | §11.1 `kind` 从 **15 档子集 → 官方 27 档**（`Invalid=0 … UnsafePointer=26`）：`rgoc_meta::Kind` 逐宽度映射，`desc_emit` 判据字面量同步（Struct 9→25 / Pointer 7→22） | M12/Task 31 实测：`int8` 的 desc kind=2（`Int`），`TypeOf(int8(0)).Kind()` 错报 `Int` —— 官方是 `Int8=3`。语义收紧非放宽（M9「一条不改」的契约级例外） |
 | 2026-10-26 | §11.1 对象头 **8 → 16 字节**（`D-M10-2`）：`{header, n\|kind}` 两行 + tag 位；`rt_alloc` 返回 `data`（块首 **+16**）；五种 kind 指向 `C12` §2.2 | M10 设计期：`make([]T, n)` 的 `n` 与闭包捕获个数是运行期的，GC 扫它们要「元素 desc + 个数」，8 字节装不下。备选侧表被否（每次标记多一次查表 + 表要跟着维护）|
 | 2026-10-26 | §11.1 补一句：**`rt_alloc` 返回 `data`（块首 + 8）**（`R-10-1`）| M10 设计期实测：`new(S)` 读字段 0 得到 `187650506776800`（desc 指针）—— 实现返回的是块首。M9 的判据先写满字段再读，覆盖不到 |
 | 2026-10-26 | 新增 §11（对象元数据布局，`R-9-40`）：`TypeDesc` 40 B / `MethodTable` / `ITab` / `GlobalRoot` / `RtFuncInfo` / funcval 与隐式第 0 实参 / sret 不用；变更记录顺延为 §12 | `M9-plan.md` Task 67。计划把这节写作「§10」，而 §10 是「本契约的验证方式」⇒ 落地在 §11 |

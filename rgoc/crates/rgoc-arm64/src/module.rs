@@ -762,29 +762,87 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
         let elem_label = elem_of(tt, *t)
             .map(|e| desc_symbol(type_hash(tt, e)))
             .unwrap_or_else(|| "0".to_string());
-        asm.rodata_named_raw(
-            &desc_symbol(*h),
-            &[
-                format!(".byte {}", byte_list.join(",")),
-                format!(".quad {gc_label}"),
-                format!(".quad {elem_label}"),
-                // methods：无方法表 ⇒ `.quad 0`（`C5` §10：`methods == null` 等价于「没有方法」）。
-                //
-                // `*T` 要**借用** `T` 的表：`rt_itab(desc(J), desc(*T))` 拿的是动态类型
-                // 的 desc，而指针接收者的方法全在 `T` 的表里（`collect_methods` 按
-                // 基类型分组）。不借的话 `x.(J)` 里 `x` 装着 `*T` 就永远「没实现」
-                // （实测 `ken/interfun.go`：`interface conversion: failed`）。
-                format!(
-                    ".quad {}",
-                    mt.get(h)
-                        .or_else(|| match tt.type_of(*t) {
-                            rgoc_types::typ::Type::Pointer(e) => mt.get(&type_hash(tt, *e)),
-                            _ => None,
-                        })
-                        .map_or_else(|| "0".to_string(), std::string::String::clone)
-                ),
-            ],
-        );
+        // 反射扩展区（`C13` §5.4）：desc 本体 40 字节之后按 kind 追加 quad。
+        // 本体消费方（rt / 位图 / itab）零改动；M9 的 `t_desc_*` 判据只读
+        // header + 三根 `.quad`，照旧不动。
+        //
+        // 规则：扩展区镜像 **underlying 的形状**（named 聚合的 +24 elem 恒为
+        // null —— `elem_of` 只认表面形状），`meta` 指针（有的话）固定**收尾**；
+        // 消费者按 `meta_idx != 0`（⇒ named）区分「本体 elem」与「扩展 elem」。
+        let reflect_ext: Vec<String> = {
+            use rgoc_types::typ::Type;
+            let named = matches!(tt.type_of(*t), Type::Named(_));
+            let under_t = if named {
+                rgoc_types::identical::underlying(tt, *t)
+            } else {
+                *t
+            };
+            let meta_q = || format!(".quad {}", meta_symbol(type_hash(tt, *t)));
+            match tt.type_of(under_t) {
+                Type::Map { key, elem } => {
+                    let mut v = vec![
+                        format!(".quad {}", desc_symbol(type_hash(tt, *key))),
+                        format!(".quad {}", desc_symbol(type_hash(tt, *elem))),
+                    ];
+                    if named {
+                        v.push(meta_q());
+                    }
+                    v
+                }
+                Type::Chan { elem, .. } => {
+                    let mut v = vec![format!(".quad {}", desc_symbol(type_hash(tt, *elem)))];
+                    if named {
+                        v.push(meta_q());
+                    }
+                    v
+                }
+                Type::Array { elem, .. } => {
+                    let mut v = vec![format!(
+                        ".quad {}",
+                        rgoc_types::layout::array_len_of(tt, *t).unwrap_or(0)
+                    )];
+                    if named {
+                        v.push(format!(".quad {}", desc_symbol(type_hash(tt, *elem))));
+                        v.push(meta_q());
+                    }
+                    v
+                }
+                Type::Pointer(e) | Type::Slice(e) if named => vec![
+                    format!(".quad {}", desc_symbol(type_hash(tt, *e))),
+                    meta_q(),
+                ],
+                _ => {
+                    // struct（匿名/具名）或 named 基本类型 / func / 接口。
+                    if needs_reflect_meta(tt, *t) {
+                        vec![meta_q()]
+                    } else {
+                        Vec::new()
+                    }
+                }
+            }
+        };
+        let mut body = vec![
+            format!(".byte {}", byte_list.join(",")),
+            format!(".quad {gc_label}"),
+            format!(".quad {elem_label}"),
+            // methods：无方法表 ⇒ `.quad 0`（`C5` §10：`methods == null` 等价于「没有方法」）。
+            //
+            // `*T` 要**借用** `T` 的表：`rt_itab(desc(J), desc(*T))` 拿的是动态类型
+            // 的 desc，而指针接收者的方法全在 `T` 的表里（`collect_methods` 按
+            // 基类型分组）。不借的话 `x.(J)` 里 `x` 装着 `*T` 就永远「没实现」
+            // （实测 `ken/interfun.go`：`interface conversion: failed`）。
+            format!(
+                ".quad {}",
+                mt.get(h)
+                    .or_else(|| match tt.type_of(*t) {
+                        rgoc_types::typ::Type::Pointer(e) => mt.get(&type_hash(tt, *e)),
+                        _ => None,
+                    })
+                    .map_or_else(|| "0".to_string(), std::string::String::clone)
+            ),
+        ];
+        body.extend(reflect_ext);
+        asm.rodata_named_raw(&desc_symbol(*h), &body);
     }
     // ── ReflectMeta 发射（`C13` §5.2；M12/Task 30）───────────────────────
     //
@@ -827,6 +885,12 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
 fn needs_reflect_meta(tt: &TypeTable, t: TypeId) -> bool {
     use rgoc_types::typ::Type;
     matches!(tt.type_of(t), Type::Named(_) | Type::Struct(_))
+}
+
+/// 反射元数据块符号（`C13` §5.4：desc 扩展区与块本体共用这一个名字）。
+#[must_use]
+pub fn meta_symbol(hash: u32) -> String {
+    format!("__reflectmeta_{hash:08x}")
 }
 
 /// 把一个类型的 `ReflectMeta`（含字段表与字符串）发射进 `.rodata`，
@@ -904,7 +968,7 @@ fn emit_reflect_meta(
             ("0".to_string(), 0)
         };
 
-    let meta_label = format!("__reflectmeta_{h:08x}");
+    let meta_label = meta_symbol(h);
     let idx = meta_idx_of.get(&h).copied().unwrap_or(0);
     debug_assert_ne!(idx, 0, "发射中的 ReflectMeta 必须有非零下标");
     asm.rodata_named_raw(

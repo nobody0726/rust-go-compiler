@@ -12,66 +12,80 @@
 use rgoc_types::TypeTable;
 use rgoc_types::layout;
 use rgoc_types::typ::{Type, TypeId};
+use std::collections::BTreeMap;
 
-/// 类型的 kind —— 与 `reflect.Kind` 对齐的**子集**。
+/// 类型的 kind —— **官方 `reflect.Kind` 的完整 27 档**。
 ///
-/// 为什么不用完整的 24 种：M9 只需要「怎么比、怎么 hash、怎么扫」这三件事
-/// 用得到的分组。`reflect` 的完整 kind 归 M12（`U-M9-04`）。
+/// M9 只需要「怎么比、怎么 hash、怎么扫」，当时用了 15 档的分组子集
+/// （`Int` 吞掉所有宽度的有符号整型）。M12/Task 31 的反射读面要求
+/// `Type.Kind()` 与官方逐值一致（`int8` 必须 3 而不是 2 —— 实测
+/// `dump(reflect.TypeOf(int8(1)))` 打 2），换成官方编号。
 ///
-/// 值是 `u8` 且**进契约**（`C5` §10）：加一个 kind 要同步 `ALL` 与计数测试。
+/// 值是 `u8` 且**进契约**（`C5` §10，M12 起从 15 档子集扩成官方 27 档）：
+/// 加一个 kind 要同步 `ALL` 与计数测试。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 #[repr(u8)]
 pub enum Kind {
     /// 非法的 / 未知的类型（`Invalid`、`Tuple`、`[...]T` 之类）。
     Invalid = 0,
-    /// 布尔。
     Bool = 1,
-    /// 有符号整数。
     Int = 2,
-    /// 无符号整数（含 `uintptr`）。
-    Uint = 3,
-    /// 浮点。
-    Float = 4,
-    /// 复数。
-    Complex = 5,
-    /// `string`（16 字节：ptr + len）。
-    String = 6,
-    /// 指针（含 `unsafe.Pointer`）。
-    Pointer = 7,
-    /// 数组（值语义）。
-    Array = 8,
-    /// 结构体（值语义）。
-    Struct = 9,
-    /// 切片（24 字节：ptr + len + cap）。
-    Slice = 10,
-    /// map（单字指针）。
-    Map = 11,
-    /// 通道（单字指针）。
-    Chan = 12,
-    /// 函数值（单字指针，指向 funcval）。
-    Func = 13,
-    /// 接口（16 字节：tab/type + data）。
-    Interface = 14,
+    Int8 = 3,
+    Int16 = 4,
+    Int32 = 5,
+    Int64 = 6,
+    Uint = 7,
+    Uint8 = 8,
+    Uint16 = 9,
+    Uint32 = 10,
+    Uint64 = 11,
+    Uintptr = 12,
+    Float32 = 13,
+    Float64 = 14,
+    Complex64 = 15,
+    Complex128 = 16,
+    Array = 17,
+    Chan = 18,
+    Func = 19,
+    Interface = 20,
+    Map = 21,
+    Pointer = 22,
+    Slice = 23,
+    String = 24,
+    Struct = 25,
+    UnsafePointer = 26,
 }
 
 impl Kind {
     /// 全部 kind（**按 `u8` 值序**，即字典序）。
-    pub const ALL: [Kind; 15] = [
+    pub const ALL: [Kind; 27] = [
         Kind::Invalid,
         Kind::Bool,
         Kind::Int,
+        Kind::Int8,
+        Kind::Int16,
+        Kind::Int32,
+        Kind::Int64,
         Kind::Uint,
-        Kind::Float,
-        Kind::Complex,
-        Kind::String,
-        Kind::Pointer,
+        Kind::Uint8,
+        Kind::Uint16,
+        Kind::Uint32,
+        Kind::Uint64,
+        Kind::Uintptr,
+        Kind::Float32,
+        Kind::Float64,
+        Kind::Complex64,
+        Kind::Complex128,
         Kind::Array,
-        Kind::Struct,
-        Kind::Slice,
-        Kind::Map,
         Kind::Chan,
         Kind::Func,
         Kind::Interface,
+        Kind::Map,
+        Kind::Pointer,
+        Kind::Slice,
+        Kind::String,
+        Kind::Struct,
+        Kind::UnsafePointer,
     ];
 }
 
@@ -281,14 +295,27 @@ fn kind_at(tt: &TypeTable, t: TypeId, depth: u32) -> Kind {
     match tt.type_of(t) {
         Type::Basic(b) => match b {
             B::Bool | B::UntypedBool => Kind::Bool,
-            B::Int | B::Int8 | B::Int16 | B::Int32 | B::Int64 | B::UntypedInt | B::UntypedRune => {
-                Kind::Int
-            }
-            B::Uint | B::Uint8 | B::Uint16 | B::Uint32 | B::Uint64 | B::Uintptr => Kind::Uint,
-            B::Float32 | B::Float64 | B::UntypedFloat => Kind::Float,
-            B::Complex64 | B::Complex128 | B::UntypedComplex => Kind::Complex,
+            B::Int => Kind::Int,
+            B::Int8 => Kind::Int8,
+            B::Int16 => Kind::Int16,
+            B::Int32 => Kind::Int32,
+            B::Int64 => Kind::Int64,
+            // 无类型默认类型（官方 `defaultType` 口径）：untyped int/rune ⇒ int。
+            B::UntypedInt | B::UntypedRune => Kind::Int,
+            B::Uint => Kind::Uint,
+            B::Uint8 => Kind::Uint8,
+            B::Uint16 => Kind::Uint16,
+            B::Uint32 => Kind::Uint32,
+            B::Uint64 => Kind::Uint64,
+            B::Uintptr => Kind::Uintptr,
+            B::Float32 => Kind::Float32,
+            // untyped float 的默认类型是 float64。
+            B::Float64 | B::UntypedFloat => Kind::Float64,
+            B::Complex64 => Kind::Complex64,
+            // untyped complex 的默认类型是 complex128。
+            B::Complex128 | B::UntypedComplex => Kind::Complex128,
             B::String | B::UntypedString => Kind::String,
-            B::UnsafePointer => Kind::Pointer,
+            B::UnsafePointer => Kind::UnsafePointer,
             B::UntypedNil => Kind::Invalid,
         },
         Type::Named(id) => kind_at(tt, tt.named_underlying(*id), depth + 1),
@@ -448,18 +475,69 @@ pub fn sig_hash(tt: &TypeTable, params: &[TypeId], results: &[TypeId]) -> u32 {
 /// map 的键相等最终走 `rt_equal`，hash 只用来选桶）。
 #[must_use]
 pub fn type_hash(tt: &TypeTable, t: TypeId) -> u32 {
+    let mut memo: BTreeMap<TypeId, Option<u32>> = BTreeMap::new();
+    hash_node(tt, t, &mut memo, 0)
+}
+
+/// 环标记（进行中的节点再被遇到时喂这个值）。
+fn hash_cycle() -> u32 {
     let mut h = FNV_OFFSET;
-    hash_into(tt, t, &mut h, 0);
+    mix(&mut h, b'#');
     h
 }
 
-fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
+/// 单节点的**独立 hash**（`type_hash` 的内部形态）。
+///
+/// # 为什么按 `TypeId` 记忆化（M12/Task 31）
+///
+/// 自引用接口（`reflect.Type` 的 `Elem() Type` / `Key() Type`）会让朴素
+/// 结构递归**指数爆炸**：`Type` 有 13 个方法，每个方法签名又含 `Type`，
+/// 深度守卫防住无限递归、防不住 `13^64`（实测 `dump(t reflect.Type)`
+/// 的原型卡死在 `sig_hash(Type.Elem)`，2026-10-28）。让每个节点在一次
+/// `type_hash` 里只算一遍（进行中 ⇒ 环标记），总代价 O(|types|)。
+///
+/// 已知边界：两个**同构**的自引用类型（`I{M() I}` 与 `J{M() J}`）在环
+/// 标记处截断后同 hash —— 32 位 hash 本就不承诺抗碰撞，此边界登记
+/// `G-M12-04`。
+fn hash_node(
+    tt: &TypeTable,
+    t: TypeId,
+    memo: &mut BTreeMap<TypeId, Option<u32>>,
+    depth: u32,
+) -> u32 {
     // 深度守卫：合法的 Go 类型不可能嵌套 64 层（检查器先拒环），
-    // 但 `type_hash` 是 `pub` 的 —— 手搓的环不该让它栈溢出。
+    // 但 `type_hash` 是 `pub` 的 —— 手搓的超长链不该让它栈溢出。
     if depth > 64 {
-        mix(h, 0xFF);
-        return;
+        let mut h = FNV_OFFSET;
+        mix(&mut h, 0xFF);
+        return h;
     }
+    if let Some(v) = memo.get(&t) {
+        return v.unwrap_or_else(hash_cycle);
+    }
+    memo.insert(t, None); // 进行中：再遇到它就是环
+    // 别名透明：**直接返回右边的 hash**（不加 tag、不多包一层）——
+    // 别名不是新类型，`hash(Q)` 必须逐位等于 `hash(rhs)`
+    // （`别名透明而具名不透明` 实测：包一层就破）。
+    if let Type::Alias(id) = tt.type_of(t) {
+        let hv = hash_node(tt, tt.alias_rhs(*id), memo, depth + 1);
+        memo.insert(t, Some(hv));
+        return hv;
+    }
+    let mut h = FNV_OFFSET;
+    hash_body(tt, t, memo, depth, &mut h);
+    memo.insert(t, Some(h));
+    h
+}
+
+/// `hash_node` 的 match 主体（拆出来只为控制函数长度）。
+fn hash_body(
+    tt: &TypeTable,
+    t: TypeId,
+    memo: &mut BTreeMap<TypeId, Option<u32>>,
+    depth: u32,
+    h: &mut u32,
+) {
     match tt.type_of(t) {
         Type::Basic(b) => {
             mix(h, b'B');
@@ -467,8 +545,8 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
             // 是 `C7` 冻结的（dump 里就写这个）。
             mix_bytes(h, b.as_str().as_bytes());
         }
-        // 别名透明：直接把右边喂进去，**不加 tag**。
-        Type::Alias(id) => hash_into(tt, tt.alias_rhs(*id), h, depth + 1),
+        // （别名在 `hash_node` 里已截获 —— 走不到这。）
+        Type::Alias(_) => unreachable!("别名已在 hash_node 截获"),
         // 具名不透明：名字进 hash，本体也进（两个同名的不同类型不会撞）。
         // **实例的 targs 也进**（`M12/Task 21`，`issue46591`）：实例的身份由
         // `(origin, targs)` 决定（`identical` 的 Named 臂同口径）——
@@ -480,17 +558,17 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
             mix_bytes(h, tt.named_def(*id).name.as_bytes());
             let def = tt.named_def(*id);
             for &a in &def.targs {
-                hash_into(tt, a, h, depth + 1);
+                mix_u32(h, hash_node(tt, a, memo, depth + 1));
             }
-            hash_into(tt, tt.named_underlying(*id), h, depth + 1);
+            mix_u32(h, hash_node(tt, tt.named_underlying(*id), memo, depth + 1));
         }
         Type::Pointer(e) => {
             mix(h, b'P');
-            hash_into(tt, *e, h, depth + 1);
+            mix_u32(h, hash_node(tt, *e, memo, depth + 1));
         }
         Type::Slice(e) => {
             mix(h, b'S');
-            hash_into(tt, *e, h, depth + 1);
+            mix_u32(h, hash_node(tt, *e, memo, depth + 1));
         }
         Type::Array { len, elem } => {
             mix(h, b'A');
@@ -498,17 +576,17 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
                 Some(n) => mix_u32(h, n),
                 None => mix(h, b'?'),
             }
-            hash_into(tt, *elem, h, depth + 1);
+            mix_u32(h, hash_node(tt, *elem, memo, depth + 1));
         }
         Type::Map { key, elem } => {
             mix(h, b'M');
-            hash_into(tt, *key, h, depth + 1);
-            hash_into(tt, *elem, h, depth + 1);
+            mix_u32(h, hash_node(tt, *key, memo, depth + 1));
+            mix_u32(h, hash_node(tt, *elem, memo, depth + 1));
         }
         Type::Chan { dir, elem } => {
             mix(h, b'C');
             mix(h, *dir as u8);
-            hash_into(tt, *elem, h, depth + 1);
+            mix_u32(h, hash_node(tt, *elem, memo, depth + 1));
         }
         Type::Struct(id) => {
             mix(h, b'T');
@@ -528,7 +606,7 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
                     Some(t) => mix_bytes(h, t.as_bytes()),
                     None => mix(h, b'~'),
                 }
-                hash_into(tt, f.typ, h, depth + 1);
+                mix_u32(h, hash_node(tt, f.typ, memo, depth + 1));
             }
         }
         Type::Signature(id) => {
@@ -537,13 +615,13 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
             match def.recv {
                 Some(r) => {
                     mix(h, b'R');
-                    hash_into(tt, r, h, depth + 1);
+                    mix_u32(h, hash_node(tt, r, memo, depth + 1));
                 }
                 None => mix(h, b'r'),
             }
             mix(h, u8::from(def.variadic));
-            hash_into(tt, def.params, h, depth + 1);
-            hash_into(tt, def.results, h, depth + 1);
+            mix_u32(h, hash_node(tt, def.params, memo, depth + 1));
+            mix_u32(h, hash_node(tt, def.results, memo, depth + 1));
         }
         Type::Tuple(id) => {
             mix(h, b'U');
@@ -554,7 +632,7 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
                     Some(n) => mix_bytes(h, n.as_bytes()),
                     None => mix(h, b'-'),
                 }
-                hash_into(tt, *ty, h, depth + 1);
+                mix_u32(h, hash_node(tt, *ty, memo, depth + 1));
             }
         }
         Type::Interface(id) => {
@@ -564,10 +642,10 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
             mix_u32(h, u32::try_from(def.methods.len()).unwrap_or(u32::MAX));
             for (name, sig) in &def.methods {
                 mix_bytes(h, name.as_bytes());
-                hash_into(tt, *sig, h, depth + 1);
+                mix_u32(h, hash_node(tt, *sig, memo, depth + 1));
             }
             // 类型集进 hash：`interface{}` 与 `comparable` 的表示差别只在这里。
-            hash_tset(tt, &def.tset, h, depth);
+            hash_tset(tt, &def.tset, h, memo, depth);
         }
         Type::TypeParam(_) | Type::Union(_) | Type::Invalid => {
             // 没有运行期表示的类型：喂一个稳定但独特的值，别让它们撞上正常类型。
@@ -577,7 +655,13 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
     }
 }
 
-fn hash_tset(tt: &TypeTable, ts: &rgoc_types::IfaceTSet, h: &mut u32, depth: u32) {
+fn hash_tset(
+    tt: &TypeTable,
+    ts: &rgoc_types::IfaceTSet,
+    h: &mut u32,
+    memo: &mut BTreeMap<TypeId, Option<u32>>,
+    depth: u32,
+) {
     use rgoc_types::IfaceTSet as S;
     match ts {
         S::All => mix(h, b'a'),
@@ -588,7 +672,7 @@ fn hash_tset(tt: &TypeTable, ts: &rgoc_types::IfaceTSet, h: &mut u32, depth: u32
             mix_u32(h, u32::try_from(terms.len()).unwrap_or(u32::MAX));
             for (tilde, ty) in terms {
                 mix(h, u8::from(*tilde));
-                hash_into(tt, *ty, h, depth + 1);
+                mix_u32(h, hash_node(tt, *ty, memo, depth + 1));
             }
         }
     }
@@ -708,7 +792,16 @@ mod tests {
         let mut uniq = vals.clone();
         uniq.dedup();
         assert_eq!(uniq.len(), vals.len(), "kind 值不许重复");
-        assert_eq!(Kind::ALL.len(), 15, "改数量要同步 C5 §10");
+        assert_eq!(Kind::ALL.len(), 27, "改数量要同步 C5 §10");
+        // 官方编号锚点（reflect 包的 iota 序）：抽头尾与几个易混档。
+        assert_eq!(Kind::Invalid as u8, 0);
+        assert_eq!(Kind::Bool as u8, 1);
+        assert_eq!(Kind::Int as u8, 2);
+        assert_eq!(Kind::Int8 as u8, 3);
+        assert_eq!(Kind::Uint8 as u8, 8);
+        assert_eq!(Kind::Float32 as u8, 13);
+        assert_eq!(Kind::Complex128 as u8, 16);
+        assert_eq!(Kind::UnsafePointer as u8, 26);
     }
 
     // ───────────────── Task 3：needs_zero 与 kind ─────────────────
@@ -795,7 +888,7 @@ mod tests {
 
         assert_eq!(kind_of(&tt, int_), Kind::Int);
         assert_eq!(kind_of(&tt, uint_), Kind::Uint);
-        assert_eq!(kind_of(&tt, f64_), Kind::Float);
+        assert_eq!(kind_of(&tt, f64_), Kind::Float64);
         assert_eq!(kind_of(&tt, string_), Kind::String);
         assert_eq!(kind_of(&tt, p_int), Kind::Pointer);
         assert_eq!(kind_of(&tt, s_int), Kind::Slice);
@@ -805,6 +898,28 @@ mod tests {
         assert_eq!(kind_of(&tt, tt.interface_type(iid)), Kind::Interface);
         let bool_ = tt.add_basic(BasicId::Bool);
         assert_eq!(kind_of(&tt, bool_), Kind::Bool);
+
+        // 逐宽度基本类型（M12/Task 31 起官方 27 档）：int8 必须是 3 而不是
+        // 2 —— 15 档分组子集时代的真错（实测 `dump(reflect.TypeOf(int8(1)))`
+        // 打 2，`int8` 的 Size 对、Kind/Name 全错位）。
+        let i8_ = tt.add_basic(BasicId::Int8);
+        let i16_ = tt.add_basic(BasicId::Int16);
+        let i32_ = tt.add_basic(BasicId::Int32);
+        let i64_ = tt.add_basic(BasicId::Int64);
+        let u8_ = tt.add_basic(BasicId::Uint8);
+        let up_ = tt.add_basic(BasicId::Uintptr);
+        let f32_ = tt.add_basic(BasicId::Float32);
+        let c128_ = tt.add_basic(BasicId::Complex128);
+        let uptr_ = tt.add_basic(BasicId::UnsafePointer);
+        assert_eq!(kind_of(&tt, i8_), Kind::Int8);
+        assert_eq!(kind_of(&tt, i16_), Kind::Int16);
+        assert_eq!(kind_of(&tt, i32_), Kind::Int32);
+        assert_eq!(kind_of(&tt, i64_), Kind::Int64);
+        assert_eq!(kind_of(&tt, u8_), Kind::Uint8);
+        assert_eq!(kind_of(&tt, up_), Kind::Uintptr);
+        assert_eq!(kind_of(&tt, f32_), Kind::Float32);
+        assert_eq!(kind_of(&tt, c128_), Kind::Complex128);
+        assert_eq!(kind_of(&tt, uptr_), Kind::UnsafePointer);
 
         // 具名类型看本体（`type MyInt int` ⇒ Int）
         let n = tt.add_named("MyInt");

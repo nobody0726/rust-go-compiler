@@ -297,7 +297,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         {
             return op.clone();
         }
-        match self.s.pkg.lookup_in_file(file, &n.value) {
+        match self.s.lookup_in_file(file, &n.value) {
             Some(obj) => {
                 let mut op = Operand::from_object(obj).unwrap_or_else(Operand::invalid);
                 // 装载面对「需类型信息」的 `const` 初始化式**不给值**
@@ -390,7 +390,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 self.type_expr(file, te)
             }
             Expr::Name(n) => {
-                let obj = self.s.pkg.lookup_in_file(file, &n.value)?;
+                let obj = self.s.lookup_in_file(file, &n.value)?;
                 if let Some(t) = obj.typ {
                     return Some(t);
                 }
@@ -437,7 +437,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         if let Expr::Selector(s) = &*c.fun
             && let Expr::Name(n) = &*s.x
             && n.value == crate::unsafe_pkg::PKG_NAME
-            && crate::unsafe_pkg::imports_unsafe(self.s.pkg, file)
+            && self.s.file_imports_unsafe(file)
         {
             let sel = s.sel.value.clone();
             let sel_pos = s.sel.pos;
@@ -1577,7 +1577,15 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                     fields.push(rgoc_types::Field {
                         name: f.name.as_ref().map(|n| n.value.clone()),
                         typ,
-                        tag: f.tag.as_ref().map(|t| t.value.clone()),
+                        // 标签存**字面量的值**（不含定界符）：`BasicLit.value` 是
+                        // 含反引号/引号的原文，直接抄会让 `StructField.Tag` 打出
+                        // `` `json:"x"` `` 而官方是 `json:"x"`。与
+                        // `rgoc_load::typeexpr::tag_text` 同口径（两份 typeexpr
+                        // 必须同判 —— `R-31-2`）。
+                        tag: f.tag.as_ref().and_then(|t| match const_from_literal(t) {
+                            Const::Str(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+                            _ => None,
+                        }),
                         embedded: f.name.is_none(),
                     });
                 }
@@ -1662,6 +1670,43 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                     && s.sel.value == "Pointer" =>
             {
                 Some(self.s.tt.add_basic(BasicId::UnsafePointer))
+            }
+            // `pkg.T`（M12/Task 31）：跨包类型名。
+            //
+            // # 为什么**现在**做（旧注释说「不在这里顺手做」）
+            //
+            // 反射把跨包类型带进了**函数体**：`var t reflect.Type` /
+            // `[]reflect.StructField` 的声明类型由本函数解析（lowering 复查
+            // 走 `type_expr_in`），解析不出 ⇒ 参数/局部变量静态类型 invalid
+            // ⇒ 选择器全军覆没（`sf.Offset` 报 HIR-MISSING-TYPE，实测
+            // 2026-10-28）。装载面那一份（`rgoc-load::typeexpr`）早已支持，
+            // 两份口径在这里对齐。
+            //
+            // # 为什么是**静默**查找
+            //
+            // 旧顾虑成立：`imports::select` 会报诊断，而本函数在检查结束后
+            // 还被 lowering 复查调一次 ⇒ 同一错误报两遍。所以这里不调它：
+            // import 绑定名 → 路径 → 依赖包顶层对象（`ObjKind::TypeName`）
+            // ⇒ 它的 TypeId；任何一步落空返回 `None`（与旧口径一致，诊断
+            // 仍由调用方负责）。放在 `unsafe.Pointer` 臂**之后**：`unsafe`
+            // 也是 import 绑定名，顺序反了会把 `Pointer` 抢走（它是伪包，
+            // 依赖包里没有对象）。
+            Expr::Selector(s) if matches!(&*s.x, Expr::Name(_)) => {
+                let Expr::Name(n) = &*s.x else {
+                    unreachable!("分支条件已保证 base 是名字")
+                };
+                let owner = self.s.pkg_of_file(file);
+                let (_, path) = owner
+                    .import_bindings(file)
+                    .into_iter()
+                    .find(|(nm, _)| *nm == n.value)?;
+                let dep = owner.imports.get(&path)?;
+                let df = *dep.files.first()?;
+                let obj = dep.lookup_in_file(df, s.sel.value.as_str())?;
+                if obj.kind != rgoc_types::ObjKind::TypeName {
+                    return None;
+                }
+                obj.typ
             }
             _ => None,
         }
