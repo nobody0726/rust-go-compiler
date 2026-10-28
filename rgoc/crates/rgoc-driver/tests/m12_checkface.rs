@@ -2271,3 +2271,68 @@ fn t_gen_04_实例名确定性() {
     assert_eq!(run.status.code(), Some(0));
     assert_eq!(run.stdout, b"1\nx\n4\n");
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-GEN-19 core_type 的多档约束（Task 25 的 Ruling 25-2）
+// ════════════════════════════════════════════════════════════════════
+
+/// **多档约束上要核心类型的操作必须被拒**（`core_type` 返回 `None` ⇒
+/// `under_or_core` 落回 `TypeParam` ⇒ 操作符判「不能这么用」）。
+///
+/// # 为什么单开一条（计划原文是「M-M12-03 → T-GEN-01 红」）
+///
+/// 实测 `M-M12-03`（core_type 不查「项表非空且 underlying 全同」）在
+/// `T-GEN-01` 上**不红** —— 不是判据缺形态，是**探针打错靶**：71 条 run
+/// 语料全是**官方跑得通**的程序，「多档约束上取核心类型」是官方**必拒**
+/// 的形状，天然不在其中。变异生效的形状在这里：
+///
+/// ```go
+/// func f[P interface{ ~*int | int }](p P) { _ = *p }   // 官方拒，变异放行
+/// ```
+///
+/// ⚠️ 约束必须**内联**：`type C interface{ ~*int | int }` 的具名约束在
+/// `core_type` 的 `Type::Interface` 判定处就返回 `None`（`unalias` 不解
+/// `Named`，已知偏离，台账 Task 25 行）—— 那条路径变异碰不到，探针必须
+/// 打在项表循环真的跑到的形状上。
+///
+/// 三段互为对照：① 多档不同 ⇒ 拒（变异的靶）；② 单档 ⇒ 过（证明拒的
+/// 理由是「多档」，不是「一律拒解引用」）；③ 多档**同**底层 ⇒ 过（项表
+/// 循环的 `identical` 分支真的在跑 —— 变异把这个循环变空壳后它照样过，
+/// 但①会翻绿，这就是牙）。
+#[test]
+fn t_gen_19_core_type_多档约束() {
+    // ① `~*int | int`：两项底层不同 ⇒ 没有核心类型 ⇒ `*p` 必拒。
+    assert_check_code(
+        "coretn",
+        r#"
+package p
+
+func f[P interface{ ~*int | int }](p P) { _ = *p }
+
+func main() { var x int; f(&x) }
+"#,
+        "CHK-INVALID-OPERATION",
+    );
+    // ② 对照：单档 `~*int` ⇒ 核心类型 `*int` ⇒ `*p` 过。
+    assert_check_ok(
+        "coreta",
+        r#"
+package p
+
+func f[P interface{ ~*int }](p P) int { return *p }
+
+func main() { var x int; _ = f(&x) }
+"#,
+    );
+    // ③ 对照：多档**同**底层（`~*int` 与 `*int`）⇒ 核心类型仍是 `*int` ⇒ 过。
+    assert_check_ok(
+        "coretb",
+        r#"
+package p
+
+func f[P interface{ ~*int | *int }](p P) int { return *p }
+
+func main() { var x int; _ = f(&x) }
+"#,
+    );
+}
