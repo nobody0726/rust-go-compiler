@@ -771,3 +771,43 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 | F | `go_eq_tt` 的 identical 归一恒不命中 | `equal`（interp 退出 2） |
 | G | `is_abstract` 退回只看布局（`type_mentions_tparam` 短路） | `issue54225`（HIR-MISSING-TYPE） |
 | H | interp 方法表 key 回到整个 mangled 名 | `issue48598` / `issue48645b`（interp 退出 2） |
+
+---
+
+## 16. Task 22：errorcheck 诊断码对齐 5/5
+
+### 16.1 修复：声明面的类型实参数校验（`759b680`）
+
+`issue51232/51233` 假绿（rc=0）：`Fn[RCT]`（`Fn` 要 2 个类型实参只给 1 个）
+全在**声明位置**（类型本体 / 接口方法签名 / struct 字段 / func 签名），
+归**装载面**解析；装载面 `resolve_type` 的 Index 臂把 instantiate 的数量错
+`unwrap_or(base)` 静默吞掉 —— 注释写着「数量错由检查器报」，但检查器的
+`type_expr` 看不到声明面，设计意图落空、两处都没报。
+
+修复（rgoc-load）：Index 臂在 instantiate 前做数量校验，报
+`TYP-WRONG-TYPE-ARG-COUNT`（官方两段式 too many / not enough，带 have/want），
+报完仍退回原型（建 `Fn·invalid` 实例会污染「按已存在实例反推方法实例」
+那一遍）。按**书写位置**去重 —— 类型表达式是克隆的（`x, y int` 拆两份
+`Field`），同一处解析两遍，官方只报一次。
+
+### 16.2 读数
+
+| 文件 | 目标码 | 状态 |
+|---|---|---|
+| `tparam1` | `TYP-DUPLICATE-DECL` | 原已对齐 |
+| `issue48711` | `TYP-INVALID-INSTANCE-CYCLE` | 原已对齐 |
+| `issue51232` | `TYP-WRONG-TYPE-ARG-COUNT` | **本次修复**（4 条，位置与官方 ERROR 行一致） |
+| `issue51233` | `TYP-WRONG-TYPE-ARG-COUNT` | **本次修复**（4 条） |
+| `issue50317` | `SYN-UNEXPECTED-TOKEN` | 原已对齐（阶段不同：官方 type 面我们 parse 面） |
+
+`run-native-typeparam.sh --only errorcheck` = **5/5**。
+
+`t_gen_05` 的 MIN_CHECKED 84 → **108**：Task 20/21 修复后 run 族 lower 到
+69（71 − `dictionaryCapture-noinline` − `issue44688`）+ compile 39 +
+errorcheck 0（5 条全报诊断 ⇒ lower 拒绝）。51232/51233 从「假绿计入」
+转为「真报错 skip」，不是退化。
+
+### 16.3 附带
+
+`issue50317`（parse 面提前拒绝）与 `issue48711`（实例化环）按脚本里
+`errorcheck_target` 的登记原样验收，不另动代码。
