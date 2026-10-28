@@ -61,6 +61,23 @@ impl Env {
         }
     }
 
+    /// 声明一个**类型**（类型参数 / 局部具名类型）—— **允许名字是 `_`**。
+    ///
+    /// # 为什么与 [`Self::declare`] 不同（`M12/Task 18`）
+    ///
+    /// `_` 作为**变量**没有绑定（`_ = 1` 不建名字，这是 `declare` 的判据），
+    /// 但它作为**类型参数名**完全合法：`func (Inner[_ any]) M()` 的接收者类型
+    /// 就是 `Inner[_]`，实例化之后要按位置换成实参。把 `_` 丢掉 ⇒ `Inner[_]`
+    /// 解析成 `invalid` ⇒ 接收者没有运行期布局
+    /// （`issue53406` 实测：`帧布局失败：函数 Inner·int.M：v0 的类型 t35`）。
+    ///
+    /// 只影响**类型**解析：`_` 出现在值位置时仍然查不到（那不是合法 Go）。
+    pub fn declare_type(&mut self, name: &str, op: Operand) {
+        if let Some(top) = self.scopes.last_mut() {
+            top.insert(name.to_owned(), op);
+        }
+    }
+
     /// 沿栈查（内层优先）。
     pub fn lookup(&self, name: &str) -> Option<&Operand> {
         self.scopes.iter().rev().find_map(|s| s.get(name))

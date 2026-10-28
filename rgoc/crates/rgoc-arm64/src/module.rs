@@ -568,6 +568,17 @@ pub fn type_closure(m: &Module, tt: &TypeTable) -> BTreeMap<u32, TypeId> {
             stack.push(t);
         }
     }
+    // **itab 的两侧都是根**（`M12/Task 18`）：`__itab_<iface>_<concrete>` 的头部
+    // 就是 `{iface: *TypeDesc, concrete: *TypeDesc}`，两个都会被 `.quad` 引用。
+    //
+    // 它们不会自己出现在上面的根里：`X I = 42` 的 `I` 有根（包级变量类型），
+    // 而 `42` 在 IR 里的类型是 `untyped int` —— 被 `is_untyped_basic` 过滤掉，
+    // 收敛后的 `int` 从来没有作为**值**出现过。于是 itab 指着一个没发射的
+    // `__desc_…`，链接期 `undefined reference`（`issue52124` 实测）。
+    for it in &m.itabs {
+        stack.push(it.iface);
+        stack.push(it.concrete);
+    }
     while let Some(t) = stack.pop() {
         // 没有布局的类型不进闭包（它们本就该被拒，`kind_of` 会给 `Invalid`）。
         if layout(tt, t).is_none() {

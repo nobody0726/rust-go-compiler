@@ -1517,6 +1517,11 @@ fn t_gen_17_布局与验证() {
         "issue51840",
         "issue45547",
         "issue46461",
+        // 同一个根因的**函数字面量**形态：`lower_funclit` 也在体下沉之后才写
+        // `result_types`，而且结果类型走的是不带替换的 `type_expr_of`
+        // （`G2` 解成 `Invalid`）。实测 `帧布局失败：函数 func@27:11：v4 的类型
+        // t31`（`t31 = Basic(UntypedNil)`）。
+        "issue51909",
     ] {
         let f = corpus().join(format!("{name}.go"));
         // ⚠️ 不能用 `-o /dev/null`：`build` 会拼 `.s` 后缀（`/dev/null.s` 写不进去）。
@@ -1576,5 +1581,97 @@ func main() {
     )
     .expect("native 编译/运行失败");
     assert_eq!(out.stdout, "true\ntrue\ntrue\n");
+    assert_eq!(out.exit, 0);
+}
+
+// ── Task 18：链接期缺符号 ──────────────────────────────────────────────
+
+/// `T-GEN-18`：四种「泛型形态走到链接期」的语料，`build` 必须退出 0。
+///
+/// # 两种缺符号，根因不同
+///
+/// **① `undefined reference to __desc_…`**（`issue52124`，`X I = 42` 这类
+/// 「无类型常量装箱进接口」）：
+/// `type_closure` 的根只取「包级变量类型 + 每个值的类型 + 取过地址的槽」，
+/// 而 `I` 的实参 `int` 在 IR 里从来没作为**值**出现过（`42` 是 `untyped int`，
+/// 被根过滤掉了）—— 于是 itab 的 `concrete` 那一格指向一个**没发射**的 desc。
+/// itab 自己引用了两个 desc，所以两者都必须是根。
+///
+/// **② `undefined reference to fn4294967295`**（`issue48049` / `issue52026`）：
+/// `fn4294967295` 是 `FuncId(u32::MAX)` —— `collect_itabs` 在
+/// `resolve_method` 失败时塞的**哨兵**，故意让发射期炸。失败的原因是方法
+/// **实例体根本没生成**：`fooer2[T].Foo` / `Some[T].sealedOption` 只在
+/// **动态分派**里被用到（没有静态调用点），而实例请求只从调用点发出。
+/// 所以方法是「用到了但没人请求」—— 见 [`request_typed_methods`]。
+///
+/// 判据用 `build` 退出码而不是报错文本：缺符号的名字里带 hash，不稳定。
+#[test]
+fn t_gen_18_链接() {
+    let mut bad = Vec::new();
+    for name in [
+        "issue52124",
+        "issue48049",
+        "issue52026",
+        "issue48198",
+        // 同名**方法**与包级泛型函数撞裸名（`func (n *node[T]) f` 声明在
+        // `func f[T any]()` 之前 ⇒ `f[int]` 被译成方法实例 `node·int.f`）。
+        "issue54535",
+    ] {
+        let f = corpus().join(format!("{name}.go"));
+        let target = std::env::temp_dir().join(format!("rgoc-t18-{name}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .arg("build")
+            .arg("-o")
+            .arg(&target)
+            .arg(&f)
+            .output()
+            .expect("起不了 build");
+        if out.status.code() != Some(0) {
+            bad.push(format!(
+                "{name}: 退出 {:?}｜{}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "这些语料的 build 仍失败：\n{}",
+        bad.join("\n")
+    );
+}
+
+/// `T-GEN-18b`：泛型**方法**的实例要真的能跑（不只是「符号链接得上」）。
+///
+/// `issue48049` / `issue52026` 只证明「方法实例存在」，它们 `main` 里一次都
+/// 没调过那个方法 —— 缺语义证据。这一条补上：值接收者读字段、指针接收者写
+/// 字段，两档都要求结果正确（`Set` 写错会读到旧值）。
+#[test]
+fn t_gen_18b_泛型方法实例语义() {
+    let out = support::native_harness::build_and_run(
+        "gen18b",
+        r#"
+package main
+
+type Box[T any] struct{ v T }
+
+func (b Box[T]) Get() T { return b.v }
+
+func (b *Box[T]) Set(x T) { b.v = x }
+
+func main() {
+	b := Box[int]{v: 7}
+	println(b.Get())
+	b.Set(9)
+	println(b.Get())
+}
+"#,
+    )
+    .expect("native 编译/运行失败");
+    assert_eq!(out.stdout, "7\n9\n");
     assert_eq!(out.exit, 0);
 }

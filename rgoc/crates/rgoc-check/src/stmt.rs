@@ -166,16 +166,16 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             // 变参的末位类型是 **切片**（与装载面 `resolve_signature` 同口径）
             let t = match &p.type_ {
                 Expr::DotsType(d) => {
-                    let elem = self.type_of_expr(file, &d.elem)?;
+                    let elem = self.decl_type(file, &d.elem)?;
                     self.s.tt.add_slice(elem)
                 }
-                other => self.type_of_expr(file, other)?,
+                other => self.decl_type(file, other)?,
             };
             params.push((p.name.as_ref().map(|n| n.value.clone()), t));
         }
         let mut results: TupleVars = Vec::with_capacity(ft.results.len());
         for r in &ft.results {
-            let t = self.type_of_expr(file, &r.type_)?;
+            let t = self.decl_type(file, &r.type_)?;
             results.push((r.name.as_ref().map(|n| n.value.clone()), t));
         }
         Some((params, results))
@@ -186,8 +186,8 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     /// 接收者只可能是 `T` / `*T` / `T[P]` 三种写法（语法层已保证），
     /// 所以取基类型名**不需要**完整求值 —— 直接读类型表达式。
     fn method_sig(&self, recv_ty: &Expr, name: &str) -> Option<TypeId> {
-        let base = recv_base_name(recv_ty)?;
-        let t = self.s.pkg.lookup(base)?.typ?;
+        let (base, _) = rgoc_ast::recv_base(recv_ty)?;
+        let t = self.s.pkg.lookup(&base)?.typ?;
         let tt = &*self.s.tt;
         let nid = match tt.type_of(t) {
             Type::Named(id) => *id,
@@ -222,6 +222,30 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         } else {
             None
         }
+    }
+
+    /// **声明位置**的类型表达式 → `TypeId`（`ast_sig` 与实例体的接收者用）。
+    ///
+    /// 先按**类型**求值（[`ExprChecker::type_expr`]），失败再回落到
+    /// [`Self::type_of_expr`]（按表达式求值，历史路径更宽松）。
+    ///
+    /// # 为什么要先走类型语境（`M12/Task 18`）
+    ///
+    /// `Set[T]` 在**表达式**语境是「对 `Set` 取下标」—— 而 `Set` 是个类型，
+    /// 于是整条链退化成 `invalid`，`ast_sig` 返回 `None`，参数表整个空掉。
+    /// 泛型**方法**的实例体是第一处会踩到的：`func (s Set[T]) Equals(other
+    /// Set[T])` 的 `other` 变 invalid ⇒ `EqualMap(s, other)` 的推断拿不到实参
+    /// 类型 ⇒ 没有实例 ⇒ `泛型函数 EqualMap 没有落到任何实例`（`issue51840`
+    /// 实测）。包级那一遍同样解析不出，只是那里的体不下沉，看不到症状。
+    fn decl_type(&mut self, file: FileId, e: &Expr) -> Option<TypeId> {
+        let typed = {
+            let mut cx = ExprChecker {
+                s: &mut *self.s,
+                env: Some(&self.env),
+            };
+            cx.type_expr(file, e)
+        };
+        typed.or_else(|| self.type_of_expr(file, e))
     }
 
     /// 无类型常量取**默认型**（`y := 1` 的 `y` 是 `int`）；其余返回自身。
@@ -286,11 +310,24 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         };
         self.env.push();
         for (name, t) in subst {
-            self.env.declare(name, Operand::type_expr(*t));
+            // `declare_type`：类型参数名可以是 `_`（见 `Env::declare_type`）。
+            self.env.declare_type(name, Operand::type_expr(*t));
         }
         let (params, results) = self.ast_sig(file, f).unwrap_or_default();
         self.results = results.clone();
         self.declare_func_locals(f, &params, &results);
+        // **接收者**（`M12/Task 18`）：`f.type_` 里没有它，它是 `f.recv` 那一栏。
+        // 不声明的话方法体里的 `c.l` / `s.Equals(other)` 全变 `invalid` ——
+        // 症状是「泛型函数 `EqualMap` 没有落到任何实例」（推断拿不到实参类型）
+        // 与「拿不到表达式 Call 的静态类型」，而**包级那一遍**（`T` 还是类型
+        // 参数）看不出问题，所以只有实例体这一遍会踩
+        // （`issue55101.go` / `issue51840.go` 实测）。
+        if let Some(recv) = &f.recv
+            && let Some(n) = &recv.name
+            && let Some(t) = self.decl_type(file, &recv.type_)
+        {
+            self.env.declare(&n.value, Operand::variable(Some(t)));
+        }
         self.check_body(file, body);
     }
 
@@ -361,7 +398,8 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
             let Some(name) = &field.name else { continue };
             if let Some(id) = ids.get(k).copied() {
                 let self_ty = self.s.tt.type_param_def(id).self_ty;
-                self.env.declare(&name.value, Operand::type_expr(self_ty));
+                self.env
+                    .declare_type(&name.value, Operand::type_expr(self_ty));
             }
         }
     }
@@ -385,7 +423,9 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     /// 拆不出）时 `zip` 自然截断，不会造出错的绑定。
     fn declare_recv_tparams(&mut self, f: &FuncDecl) {
         let Some(recv) = &f.recv else { return };
-        let names = recv_tparam_names(&recv.type_);
+        let Some((_, names)) = rgoc_ast::recv_base(&recv.type_) else {
+            return;
+        };
         if names.is_empty() {
             return;
         }
@@ -401,7 +441,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         };
         for (name, id) in names.iter().zip(ids) {
             let self_ty = self.s.tt.type_param_def(id).self_ty;
-            self.env.declare(name, Operand::type_expr(self_ty));
+            self.env.declare_type(name, Operand::type_expr(self_ty));
         }
     }
 
@@ -1777,51 +1817,6 @@ fn tuple_elems(tt: &rgoc_types::TypeTable, x: &Operand) -> Option<Vec<TypeId>> {
     match tt.type_of(t) {
         Type::Tuple(id) => Some(tt.tuple_def(*id).vars.iter().map(|(_, t)| *t).collect()),
         _ => None,
-    }
-}
-
-/// 接收者类型表达式的**基类型名**（`T` / `*T` / `T[P]` / `(T)`）。
-fn recv_base_name(e: &Expr) -> Option<&str> {
-    match e {
-        Expr::Name(n) => Some(&n.value),
-        Expr::Paren(p) => recv_base_name(&p.x),
-        Expr::Unary(u) if u.op == rgoc_ast::Op::Mul => recv_base_name(&u.x),
-        Expr::Index(i) => recv_base_name(&i.x),
-        _ => None,
-    }
-}
-
-/// 接收者写出的**类型参数名**（`func (s *Stream[T, U]) M()` ⇒ `["T", "U"]`）。
-///
-/// 形状由 Go 语法保证：`"(" [标识符] ["*"] Base [ "[" 标识符表 "]" ] ")"`。
-/// 剥掉括号与 `*` 之后不是「基名 + 纯标识符表」⇒ **空表**（`Stream[[]int]`
-/// 这种不是接收者声明的类型参数；装载面的 `recv_type_args` 同样返回 `None`，
-/// 于是 `recv_tparams` 也是空的 —— 两侧同判，不会错位）。
-fn recv_tparam_names(e: &Expr) -> Vec<String> {
-    let mut cur = e;
-    loop {
-        cur = match cur {
-            Expr::Paren(p) => &p.x,
-            Expr::Unary(u) if u.op == rgoc_ast::Op::Mul && u.y.is_none() => &u.x,
-            _ => break,
-        };
-    }
-    let Expr::Index(ix) = cur else {
-        return Vec::new();
-    };
-    match &*ix.index {
-        Expr::Name(n) => vec![n.value.clone()],
-        Expr::List(l) => {
-            let mut out = Vec::with_capacity(l.elems.len());
-            for el in &l.elems {
-                let Expr::Name(n) = el else {
-                    return Vec::new();
-                };
-                out.push(n.value.clone());
-            }
-            out
-        }
-        _ => Vec::new(),
     }
 }
 

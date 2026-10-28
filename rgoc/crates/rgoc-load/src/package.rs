@@ -440,6 +440,11 @@ pub fn evaluate_package(tt: &mut TypeTable, pkg: &mut Package, bag: &mut DiagBag
     // ⑦ 体内作用域与名字引用（Task 25）。放在最后：它要**读**包级对象的类型
     //    （`lookup_type` 只在对象已求值时才给得出东西），而包级求值在 ⑥ 才完成。
     crate::scope::resolve_bodies(pkg, tt, bag);
+
+    // ⑧ 实例的方法集与原型对齐（`M12/Task 18`）：声明按序求值 ⇒ 早建的实例抄到
+    //    的是**当时**的原型方法表（可能还是空的，方法在后面的行才挂上）。
+    //    详见 `rgoc_types::instantiate::refresh_instance_methods`。
+    rgoc_types::instantiate::refresh_instance_methods(tt);
 }
 
 /// 顶层声明的**名字**（不含 import —— 它们进文件作用域）。

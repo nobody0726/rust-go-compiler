@@ -1,6 +1,6 @@
 //! 声明族（`AST-01..08`）。
 
-use crate::aux::{BasicLit, Field, Group, Name, Pragma};
+use crate::aux::{BasicLit, Field, Group, Name, Op, Pragma};
 use crate::expr::Expr;
 use crate::stmt::BlockStmt;
 use rgoc_lex::pos::Pos;
@@ -124,4 +124,65 @@ pub struct FuncDecl {
     /// 函数级 `//go:` 指令。
     pub pragma: Pragma,
     pub pos: Pos,
+}
+
+impl FuncDecl {
+    /// 接收者的**基类型名**与形参名（见 [`recv_base`]）。
+    #[must_use]
+    pub fn recv_base(&self) -> Option<(String, Vec<String>)> {
+        recv_base(&self.recv.as_ref()?.type_)
+    }
+}
+
+/// 接收者**类型表达式**的基类型名与形参名：`*Box[T]` → `("Box", ["T"])`。
+///
+/// 非泛型接收者 `T` → `("T", [])`；不是「名字 + 可选下标」的形状
+/// （错误恢复的 `Bad`、`[]T` 之类非法接收者）→ `None`（调用方各自报诊断）。
+///
+/// # 为什么单独抽出来（`M12/Task 18`）
+///
+/// 同一份判断有**五处**消费者，抽出来之前是**三份**各自的实现
+/// （`rgoc-hir` 一份、`rgoc-check` 两份）：
+/// * `rgoc-check::Session::new` —— `Mono` 的 `FuncKey` 登记（方法实例名要带
+///   接收者）与「这个方法是不是泛型的」；
+/// * `rgoc-check::stmt` —— 接收者声明的类型参数（`func (s T[P]) M()`）；
+/// * `rgoc-check::initorder` —— 方法节点的键 `T.M`；
+/// * `rgoc-hir` —— `Func::method_of` 与方法查找表 `(基类型名, 方法名)`；
+/// * `rgoc-hir` —— 泛型方法的实例函数名。
+///
+/// 多份实现漂移的症状是「方法实例的名字与查表键差一个字符」—— 链接期报
+/// `undefined reference`，或在更坏的情况下**安静地少一个方法**。
+#[must_use]
+pub fn recv_base(e: &Expr) -> Option<(String, Vec<String>)> {
+    let mut cur = e;
+    loop {
+        cur = match cur {
+            Expr::Paren(p) => &p.x,
+            Expr::Unary(u) if u.op == Op::Mul && u.y.is_none() => &u.x,
+            _ => break,
+        };
+    }
+    match cur {
+        Expr::Name(n) => Some((n.value.clone(), Vec::new())),
+        Expr::Index(ix) => {
+            let Expr::Name(base) = &*ix.x else {
+                return None;
+            };
+            let mut names = Vec::new();
+            match &*ix.index {
+                Expr::Name(n) => names.push(n.value.clone()),
+                Expr::List(l) => {
+                    for el in &l.elems {
+                        let Expr::Name(n) = el else {
+                            return None;
+                        };
+                        names.push(n.value.clone());
+                    }
+                }
+                _ => return None,
+            }
+            Some((base.value.clone(), names))
+        }
+        _ => None,
+    }
 }

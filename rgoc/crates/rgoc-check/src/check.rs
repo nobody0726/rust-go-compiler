@@ -266,11 +266,25 @@ pub struct Session<'a> {
     reported_any: bool,
     /// 单态化的**待实例化队列 + memo**（`M12/Task 14`）。
     pub(crate) mono: rgoc_load::mono::Mono,
-    /// 函数名 → `FuncKey`（声明序登记；方法也占一个键）。
+    /// **包级函数**名 → `FuncKey`（声明序登记）。
     ///
     /// 同名只认**第一个**（重名声明是另案，`T-CK-*` 已报；这里不能因为重名
     /// 把两个 `FuncKey` 混起来）。
+    ///
+    /// ⚠️ **方法不进这张表**（`M12/Task 18` 的返工）：键是裸名，而方法与包级
+    /// 函数可以同名 —— `issue54535.go` 里 `func (n *node[T]) f(...)` 声明在
+    /// `func f[T any]()` **之前**，`or_insert` 于是让包级 `f` 拿到了方法的键，
+    /// `f[int]` 的请求被译成方法实例（`node·int.f`）而不是 `f·int`，症状是
+    /// lowering 报 `HIR-UNSUPPORTED-GENERIC`（`inst_sites` 记着 `f·int`，
+    /// 但 `instances` 里没有它）。方法要靠 [`Self::method_keys`] 或
+    /// 接收者基类型名定位。
     func_keys: std::collections::BTreeMap<String, rgoc_load::mono::FuncKey>,
+    /// 泛型**方法**的键：`(接收者基类型名, 方法名)` → `FuncKey`（`M12/Task 18`）。
+    ///
+    /// 为什么不能只用 [`Self::func_keys`]（键是裸函数名）：同名方法可以挂在
+    /// 不同接收者上（`issue48049` 的 `fooer1[T].Foo` 与 `fooer2[T].Foo`），
+    /// 裸名一套就混。仅收**泛型方法**（接收者带形参表）—— 非泛型方法没有实例。
+    pub(crate) method_keys: std::collections::BTreeMap<(String, String), rgoc_load::mono::FuncKey>,
     /// 已受理的实例（受理序）。`take_inst` 取走的请求在这里留底 ——
     /// 它最终成为 [`CheckedPackage::instances`]。
     insts: Vec<rgoc_load::mono::InstRequest>,
@@ -303,11 +317,27 @@ impl<'a> Session<'a> {
         // 两边会指到不同的函数。
         let mut mono = rgoc_load::mono::Mono::new();
         let mut func_keys = std::collections::BTreeMap::new();
+        let mut method_keys = std::collections::BTreeMap::new();
         for ast in &pkg.asts {
             for d in &ast.decls {
                 if let Decl::Func(f) = d {
-                    let k = mono.declare(f.name.value.clone());
-                    func_keys.entry(f.name.value.clone()).or_insert(k);
+                    // 方法要**带接收者**登记：实例名是 `<接收者实例>.<方法>`
+                    // （`mono::OriginName` 的说明里记了同名撞车的实测）。
+                    let rb = f.recv_base();
+                    let k = match &rb {
+                        Some((base, _)) => mono.declare_method(base.clone(), f.name.value.clone()),
+                        None => mono.declare(f.name.value.clone()),
+                    };
+                    // 只有**包级函数**进 `func_keys`（裸名空间）：方法留在这里会
+                    // 与同名的包级函数互相覆盖（见字段文档里 `issue54535` 的实测）。
+                    if rb.is_none() {
+                        func_keys.entry(f.name.value.clone()).or_insert(k);
+                    }
+                    if let Some((base, tparams)) = rb
+                        && !tparams.is_empty()
+                    {
+                        method_keys.insert((base, f.name.value.clone()), k);
+                    }
                 }
             }
         }
@@ -321,6 +351,7 @@ impl<'a> Session<'a> {
             reported_any: false,
             mono,
             func_keys,
+            method_keys,
             insts: Vec::new(),
             inst_sites: std::collections::BTreeMap::new(),
             inst_ctx: String::new(),
@@ -336,6 +367,22 @@ impl<'a> Session<'a> {
         let Some(&k) = self.func_keys.get(name) else {
             return false;
         };
+        // ⚠️ 这里**不挡**「实参有没有运行期布局」（`M12/Task 18` 的返工）。
+        //
+        // 包级那一遍检查泛型体时会发出 `g[T]` 这样的请求（`T` 还是形参本身），
+        // 得到的 `g·tp0` 没有布局。试过在这一行挡掉它，两条判据立刻塌：
+        //
+        // * `t_gen_14b_递归实例`：自引用链 `Loop[T] → Loop·tp0` 被拒 ⇒ 受理表
+        //   只剩 1 条（判据要 2 条 —— 链必须**收敛**，不是被挡）；
+        // * `t_gen_14d_实例化环有码`：`issue48711.go` 的环**只**在类型参数实参
+        //   上暴露（每层 `[]T` 长一级，是唯一能让深度长起来的东西），挡住它
+        //   `TYP-INVALID-INSTANCE-CYCLE` 就再也报不出来，只剩一条
+        //   `TYP-WRONG-TYPE-ARG-COUNT` 的假症状。
+        //
+        // 真正要挡的是**发码**：`issue50264` / `issue51909` 炸在帧布局
+        // （`帧布局失败：函数 Some2·tp5：v0 的类型 t52 没有运行期布局`），而拒绝
+        // 一个合法请求的代价比少发一个「谁也不调」的函数大得多。过滤放在
+        // `rgoc-hir` 造实例函数那一处（`instance::is_abstract`）。
         self.mono.request(self.tt, k, targs)
     }
 

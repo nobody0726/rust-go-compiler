@@ -406,11 +406,23 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         if let Type::Named(nid) = tt.type_of(cur) {
             let def = tt.named_def(*nid);
             if def.methods.iter().any(|(m, _)| m == name) {
-                let fid = self
-                    .methods
-                    .get(&(def.name.clone(), name.to_owned()))
-                    .copied()?;
-                return Some((fid, Vec::new()));
+                // 非泛型方法：原型本身发码。
+                if let Some(&fid) = self.methods.get(&(def.name.clone(), name.to_owned())) {
+                    return Some((fid, Vec::new()));
+                }
+                // 泛型方法（`M12/Task 18`）：原型**不发码**（形参还是 `T`），
+                // 真正的函数体是实例 `Box·int.Get`。名字的口径由
+                // `rgoc_load::mono::mangled` + `Mono` 定，这里只查表。
+                if def.origin.is_some() {
+                    let inst_name = format!(
+                        "{}.{name}",
+                        rgoc_load::mono::mangled(tt, &def.name, &def.targs)
+                    );
+                    if let Some(&fid) = self.insts_by_name.get(&inst_name) {
+                        return Some((fid, Vec::new()));
+                    }
+                }
+                return None;
             }
         }
         // 嵌入字段的方法提升：**不限具名类型**。`struct{ T }.m2`（字面量结构体
@@ -475,8 +487,11 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                         self.prog
                             .funcs
                             .push(Func::placeholder(f.name.value.clone()));
-                        if let Some(recv) = &f.recv {
-                            if let Some(base) = recv_base_name(&recv.type_) {
+                        // 分支判据是**有没有接收者**，不是「接收者解析得出基名」：
+                        // 接收者非法（`recv_base()` 给 `None`）时它仍然是个方法，
+                        // 不能掉进下面两个包级分支里去。
+                        if f.recv.is_some() {
+                            if let Some((base, _)) = f.recv_base() {
                                 self.methods.insert((base, f.name.value.clone()), fid);
                             }
                         } else if f.name.value == "init" {
@@ -522,7 +537,19 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         //
         //    必须排在初始化式**之前**：`var x = Id(7)` 的右侧要在
         //    `insts_by_name` 里查得到 `Id·int`。
-        let reqs: Vec<InstRequest> = self.s.instances().to_vec();
+        //
+        //    ⚠️ **「泛型原型自己」不发码**（`instance::is_abstract`）：实参里有
+        //    类型参数 / `invalid` 的实例（`Some2·tp5`、`Loop·tp0`）没有运行期
+        //    布局，下沉它在帧布局阶段就炸。它们留在检查面的受理表里（环检测与
+        //    `t_gen_14b` 的收敛判据都要），但不进 `prog.funcs` —— 谁也不会调
+        //    它们，因为原型本身不下沉（`is_generic_decl`）。
+        let reqs: Vec<InstRequest> = self
+            .s
+            .instances()
+            .iter()
+            .filter(|r| !rgoc_check::instance::is_abstract(self.s, r))
+            .cloned()
+            .collect();
         for req in &reqs {
             let fid = FuncId(u32::try_from(self.prog.funcs.len()).unwrap_or(u32::MAX));
             self.prog.funcs.push(Func::placeholder(req.name.clone()));
@@ -762,7 +789,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         func.captured = ctx.captures;
         func.variadic = variadic;
         func.named_results = named_results;
-        func.method_of = f.recv.as_ref().and_then(|r| recv_base_name(&r.type_));
+        func.method_of = f.recv_base().map(|(base, _)| base);
         func.labels = ctx.labels;
     }
 
@@ -990,7 +1017,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
                 if let Some(layer) = ctx.types.get(i) {
                     for (name, typ) in layer {
-                        env.declare(name, Operand::type_expr(*typ));
+                        // `declare_type`（不是 `declare`）：类型参数名可以是 `_`
+                        // （`func (Inner[_]) M()`），而 `declare` 会把它丢掉。
+                        env.declare_type(name, Operand::type_expr(*typ));
                     }
                 }
             }
@@ -3033,9 +3062,15 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
             }
             for r in &ft.results {
+                // ⚠️ 走 `type_in_body`（带实例替换），**不是** `Session::type_expr_of`。
+                // 结果是 `G2` 这类类型参数时，`type_expr_of` 看不见 `subst` ⇒
+                // `Invalid`；而 `result_types` 一旦非空，`return` 就会把常量收敛到
+                // 它上面 ⇒ `Float(619.2)` 拿到类型 `Invalid`
+                // （`issue48191` 实测：`V3` 报
+                // `常量 Float(619.2) 不可能有类型 TypeId(32)（t32 = Invalid）`）。
+                // 形参那一侧本来就是 `param_type` → `type_in_body`，两边必须同一口径。
                 let typ = self
-                    .s
-                    .type_expr_of(self.file, &r.type_)
+                    .type_in_body(&r.type_)
                     .unwrap_or_else(|| self.s.tt.invalid());
                 let slot = ctx.alloc_t(typ);
                 results.push(slot);
@@ -3046,6 +3081,12 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 }
             }
         }
+        // ⚠️ 同 `lower_func` 的那条：结果类型必须**在下沉函数体之前**挂上去。
+        // 函数字面量体里的 `return nil` 一样走 `result_types_of_current()`，
+        // 晚写 ⇒ 读到空表 ⇒ `untyped nil` 直通后端
+        // （`issue51909` 实测：`帧布局失败：函数 func@27:11：v4 的类型 t31`，
+        // `t31 = Basic(UntypedNil)`）。
+        self.prog.funcs[fid.index()].result_types = result_types.clone();
         self.stack.push(ctx);
         let saved_hint = self.hint.take();
         let body = self.lower_body_block(&fl.body, true);
@@ -3468,16 +3509,6 @@ fn rat_to_f64(r: &rgoc_const::BigRat) -> f64 {
     let num: f64 = r.num().to_dec().parse().unwrap_or(0.0);
     let den: f64 = r.den().to_dec().parse().unwrap_or(1.0);
     if den == 0.0 { 0.0 } else { num / den }
-}
-
-fn recv_base_name(e: &AExpr) -> Option<String> {
-    match e {
-        AExpr::Name(n) => Some(n.value.clone()),
-        AExpr::Paren(p) => recv_base_name(&p.x),
-        AExpr::Unary(o) if o.op == Op::Mul => recv_base_name(&o.x),
-        AExpr::Index(i) => recv_base_name(&i.x),
-        _ => None,
-    }
 }
 
 fn is_loop_or_switch(s: &AStmt) -> bool {

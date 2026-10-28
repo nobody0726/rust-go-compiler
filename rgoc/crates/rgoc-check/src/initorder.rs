@@ -323,12 +323,11 @@ impl<'a> Build<'a> {
     fn func_decl(&mut self, f: &'a FuncDecl, order: &mut usize) {
         match &f.recv {
             Some(recv) => {
-                let Some(base) = recv_base_name(&recv.type_) else {
+                let Some((base, _)) = rgoc_ast::recv_base(&recv.type_) else {
                     return;
                 };
                 let key = format!("{base}.{}", f.name.value);
-                self.methods
-                    .insert((base.to_owned(), f.name.value.clone()), f);
+                self.methods.insert((base, f.name.value.clone()), f);
                 let i = self.push_node(
                     Kind::Func,
                     &key,
@@ -720,17 +719,6 @@ fn shape_of(e: &Expr) -> Shape {
             iface: true,
         },
         _ => Shape::default(),
-    }
-}
-
-/// 接收者类型表达式的**基类型名**（`T` / `*T` / `T[P]` / `(T)`）。
-fn recv_base_name(e: &Expr) -> Option<&str> {
-    match e {
-        Expr::Name(n) => Some(&n.value),
-        Expr::Paren(p) => recv_base_name(&p.x),
-        Expr::Unary(u) if u.op == Op::Mul => recv_base_name(&u.x),
-        Expr::Index(i) => recv_base_name(&i.x),
-        _ => None,
     }
 }
 

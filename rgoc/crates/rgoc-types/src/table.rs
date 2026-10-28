@@ -419,6 +419,22 @@ impl TypeTable {
         id
     }
 
+    /// 遍历**所有实例条目**：`(实例, 原型, 实参)`，按条目下标升序。
+    ///
+    /// # 消费者（`M12/Task 18`）
+    ///
+    /// 检查面的「方法实例补请求」：只在**动态分派**里被用到的方法没有静态调用点
+    /// （`x.M()` 走 itab），请求自然发不出来。唯一的反推途径是「哪个类型实例
+    /// 存在」—— 即本函数。原型（`origin == None`）不出现：它不发码。
+    ///
+    /// 顺序是**条目下标**（= 建实例的先后），因此下游拿到的请求序是确定的。
+    pub fn named_instances(&self) -> impl Iterator<Item = (NamedId, NamedId, &[TypeId])> {
+        self.named.iter().enumerate().filter_map(|(i, d)| {
+            let origin = d.origin?;
+            Some((NamedId::from_index(i), origin, d.targs.as_slice()))
+        })
+    }
+
     /// 实例 memo 查询：`(origin, args)` 命中的实例（实参按
     /// [`identical`](crate::identical::identical) 比对 —— 等价写法也命中）。
     pub(crate) fn lookup_instance(&self, origin: NamedId, args: &[TypeId]) -> Option<NamedId> {

@@ -101,11 +101,25 @@ pub struct InstRequest {
     pub depth: usize,
 }
 
+/// 被实例化的**原型**。
+///
+/// 两档：包级泛型函数（`method == None`）与**泛型方法**（`method == Some`）。
+/// 方法必须分开记 —— 实例名要把**接收者**编进去，否则 `A[int].Get` 与
+/// `B[int].Get` 会同名（`Get·int`），而 lowering 用名字当 `FuncId` 的键，
+/// 后者会安静地覆盖前者（`M12/Task 18` 实测过这条路径）。
+#[derive(Clone, PartialEq, Eq, Debug)]
+struct OriginName {
+    /// 名字前缀：函数名，或方法的**接收者基类型名**。
+    base: String,
+    /// 方法名（`None` = 包级函数）。
+    method: Option<String>,
+}
+
 /// 待实例化队列 + 已请求过的 memo。
 #[derive(Default, Debug)]
 pub struct Mono {
-    /// `FuncKey` → 泛型函数的名字（登记序即 `FuncKey`）。
-    origins: Vec<String>,
+    /// `FuncKey` → 原型（登记序即 `FuncKey`）。
+    origins: Vec<OriginName>,
     /// 待实例化（FIFO）。
     queue: VecDeque<InstRequest>,
     /// 已请求过的 `(origin, args)`；`args` 已规范化。
@@ -122,17 +136,38 @@ impl Mono {
         Self::default()
     }
 
-    /// 登记一个泛型函数（**必须按 `FuncDecl` 的声明序调用**），返回它的 [`FuncKey`]。
+    /// 登记一个泛型**函数**（**必须按 `FuncDecl` 的声明序调用**），返回它的 [`FuncKey`]。
     pub fn declare(&mut self, name: impl Into<String>) -> FuncKey {
         let key = self.origins.len();
-        self.origins.push(name.into());
+        self.origins.push(OriginName {
+            base: name.into(),
+            method: None,
+        });
         key
     }
 
-    /// `FuncKey` 对应的函数名（诊断与命名用）。
+    /// 登记一个泛型**方法**：实例名会是 `<接收者实例>.<方法名>`。
+    ///
+    /// **同样必须按 `FuncDecl` 的声明序调用** —— `FuncKey` 是「第几个 `Decl::Func`」，
+    /// 与 [`crate::mono::Mono::declare`] 共用一个编号空间（`rgoc-check::instance::func_of`
+    /// 按同一个走访序解析）。
+    pub fn declare_method(
+        &mut self,
+        base: impl Into<String>,
+        method: impl Into<String>,
+    ) -> FuncKey {
+        let key = self.origins.len();
+        self.origins.push(OriginName {
+            base: base.into(),
+            method: Some(method.into()),
+        });
+        key
+    }
+
+    /// `FuncKey` 对应的名字前缀（函数名 / 接收者基类型名；诊断与命名用）。
     #[must_use]
     pub fn origin_name(&self, key: FuncKey) -> Option<&str> {
-        self.origins.get(key).map(String::as_str)
+        self.origins.get(key).map(|o| o.base.as_str())
     }
 
     /// 队列里还有多少条待办。
@@ -153,7 +188,7 @@ impl Mono {
     /// 缺陷（拿错下标），不是运行时输入。静默返回 `false` 会让实例**永远不产**，
     /// 而症状要到链接期才出现。
     pub fn request(&mut self, tt: &mut TypeTable, origin: FuncKey, args: &[TypeId]) -> bool {
-        let name = self
+        let o = self
             .origins
             .get(origin)
             .unwrap_or_else(|| panic!("Mono::request 收到未登记的 FuncKey {origin}"))
@@ -166,7 +201,11 @@ impl Mono {
         {
             return false;
         }
-        let name = mangled(tt, &name, &norm);
+        let recv = mangled(tt, &o.base, &norm);
+        let name = match &o.method {
+            None => recv,
+            Some(m) => format!("{recv}.{m}"),
+        };
         self.seen.push((origin, norm.clone()));
         self.queue.push_back(InstRequest {
             origin,

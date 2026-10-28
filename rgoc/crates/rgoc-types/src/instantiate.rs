@@ -180,6 +180,52 @@ pub(crate) fn instantiate_at(
     Ok(tt.named_type(inst))
 }
 
+/// 把**原型上后来才挂上的方法**补进已存在的实例（`M12/Task 18`）。
+///
+/// # 什么时候需要
+///
+/// 声明是**按序**求值的：`type Cache[T] struct{ l *List[entry[T]] }` 在第 11 行
+/// 就把 `List[entry[T]]` 实例化了，而 `func (l *List[T]) Len()` 在第 16 行才挂到
+/// 原型上。`expand_instance` 那一刻照 `origin.methods` 抄了一份 —— 抄到的是**空表**，
+/// 于是实例 `List·entry·error` 的方法集永远缺 `Len`。
+///
+/// 症状出现在**方法选择器**上：`c.l.Len()` 在 lowering 里找不到方法
+/// （`issue55101.go` 实测）。以前看不到是因为泛型方法原型不发码，那两个体根本
+/// 没被下沉过。
+///
+/// 本函数在装载收尾跑一次：实例的方法集 = 原型当前的方法集（按实参替换），
+/// 缺的补上，已有的不动。幂等。
+pub fn refresh_instance_methods(tt: &mut TypeTable) {
+    let list: Vec<(NamedId, NamedId, Vec<TypeId>)> = tt
+        .named_instances()
+        .map(|(inst, origin, targs)| (inst, origin, targs.to_vec()))
+        .collect();
+    for (inst, origin, args) in list {
+        let methods = tt.named_def(origin).methods.clone();
+        for (name, sig) in methods {
+            if tt.named_def(inst).methods.iter().any(|(m, _)| *m == name) {
+                continue;
+            }
+            let rtps = match tt.type_of(sig) {
+                Type::Signature(sid) => tt.signature_def(*sid).recv_tparams.clone(),
+                _ => Vec::new(),
+            };
+            let msig = if !rtps.is_empty() && rtps.len() == args.len() {
+                let mmap: SubstMap = rtps.iter().copied().zip(args.iter().copied()).collect();
+                match substitute_inst(tt, sig, &mmap, 1) {
+                    Ok(s) => s,
+                    // 替换失败（实参没布局 / 约束判不出）⇒ 不补。真错由别处报，
+                    // 这里补一个半成品只会把症状推到更远的地方。
+                    Err(_) => continue,
+                }
+            } else {
+                sig
+            };
+            tt.add_named_method(inst, name, msig);
+        }
+    }
+}
+
 /// 展开实例的本体与方法（[`instantiate_at`] 的第 ⑥⑦ 步；失败由调用方回滚）。
 fn expand_instance(
     tt: &mut TypeTable,

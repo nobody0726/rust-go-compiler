@@ -140,6 +140,19 @@ impl Checker<'_> {
                 if self.tt.named_def(nid).type_params.is_empty() {
                     return base;
                 }
+                // 实参解不出来（`Some[T]` 里的 `T` 是**函数级**类型参数 ——
+                // 装载面的作用域链只有「文件 → 包 → universe」，看不见它）
+                // ⇒ 退回原型，**不建实例**。
+                //
+                // ⚠️ 不挡的后果不只是多一个条目：实例名会把 `invalid` 编进去
+                // （`Some·invalid`），而 `M12/Task 18` 的「方法实例补请求」
+                // 按**已存在的实例**反推 —— 于是给一个不存在的类型发方法体，
+                // 症状是 `帧布局失败：函数 Some·invalid.Value：v0 的类型 t63
+                // 没有运行期布局`（`issue52026` 实测）。检查面那一遍会把
+                // `T` 解成实参、建出真正的 `Some·int`，一个都不少。
+                if args.iter().any(|&a| *self.tt.type_of(a) == Type::Invalid) {
+                    return base;
+                }
                 rgoc_types::instantiate(self.tt, nid, &args).unwrap_or(base)
             }
 

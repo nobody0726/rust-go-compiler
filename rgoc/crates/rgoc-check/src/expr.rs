@@ -1374,6 +1374,15 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 if self.s.tt.named_def(nid).type_params.is_empty() {
                     return None;
                 }
+                // 实参解不出来就**不建实例**（同装载面 `resolve_type` 的口径）：
+                // 建出来的 `X·invalid` 会污染「按已存在实例反推方法实例」的
+                // 那一遍（`M12/Task 18`），而真有错的实参上游已经报过诊断。
+                if args
+                    .iter()
+                    .any(|&a| *self.s.tt.type_of(a) == rgoc_types::Type::Invalid)
+                {
+                    return None;
+                }
                 rgoc_types::instantiate(self.s.tt, nid, &args).ok()
             }
             // `...T` 单独出现只在参数表里，落到这里说明上下文不对。
