@@ -366,20 +366,44 @@ fn label_into(tt: &TypeTable, t: TypeId, out: &mut String, depth: usize) {
                 label_into(tt, f.typ, out, d);
             }
         }
-        // 下面五档不作值类型的实参（`signature`/`tuple`/`union`/`typeparam`
-        // 在 Go 里都不是类型字面量能写进实参位置的），匿名 `interface{}` 则是
-        // 可能的 —— 都按下标命名，代价见模块文档的「多造 vs 合并」。
+        // 下面四档**必须结构性命名**（与上面的 struct 同理，且更狠）：
+        // 同一份 AST 会走多遍（主检查遍 + 实例体复查/不动点收集），匿名
+        // 接口/签名实参**每遍都新建条目**，按下标命名会让「调用点记账名」
+        // 与「不动点受理的实例名」漂移（`f[interface{}](nil)` 实测：
+        // 记账 `f·iface11`、实例表里只有 `f·iface11`，lowering 却查到
+        // `f·iface13` ⇒ `insts_by_name` 不认识 ⇒ `HIR-UNSUPPORTED-GENERIC`）。
+        // 结构同 ⇒ 名同，漂移消失；不同结构必不同名 ⇒ 不会错误合并。
         Type::Interface(iid) => {
             push_tag(out, "iface");
-            out.push_str(&iid.index().to_string());
+            let def = tt.interface_def(*iid);
+            for (name, sig) in &def.methods {
+                out.push(INNER_SEP);
+                push_ident(out, name);
+                out.push(INNER_SEP);
+                label_into(tt, *sig, out, d);
+            }
+            if let Some(terms) = def.terms {
+                out.push(INNER_SEP);
+                label_into(tt, terms, out, d);
+            }
         }
         Type::Signature(sid) => {
             push_tag(out, "func");
-            out.push_str(&sid.index().to_string());
+            let def = tt.signature_def(*sid);
+            if def.variadic {
+                push_tag(out, "v");
+            }
+            out.push(INNER_SEP);
+            label_into(tt, def.params, out, d);
+            out.push(INNER_SEP);
+            label_into(tt, def.results, out, d);
         }
         Type::Tuple(tid) => {
             push_tag(out, "tuple");
-            out.push_str(&tid.index().to_string());
+            for (_, t) in &tt.tuple_def(*tid).vars {
+                out.push(INNER_SEP);
+                label_into(tt, *t, out, d);
+            }
         }
         Type::TypeParam(tpid) => {
             push_tag(out, "tp");
@@ -387,7 +411,13 @@ fn label_into(tt: &TypeTable, t: TypeId, out: &mut String, depth: usize) {
         }
         Type::Union(uid) => {
             push_tag(out, "union");
-            out.push_str(&uid.index().to_string());
+            for (approx, t) in &tt.union_def(*uid).terms {
+                if *approx {
+                    push_tag(out, "t");
+                }
+                out.push(INNER_SEP);
+                label_into(tt, *t, out, d);
+            }
         }
         Type::Invalid => push_tag(out, "invalid"),
     }
