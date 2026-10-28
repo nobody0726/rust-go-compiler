@@ -162,8 +162,14 @@ pub struct Global {
 /// 一个初始化组（`var a, b = f()` 是一组）。
 #[derive(Clone, Debug)]
 pub struct InitGroup {
-    /// 组内的全局变量（按声明序）。
-    pub globals: Vec<GlobalId>,
+    /// 组内的全局变量（按声明序）。`None` = 空白标识符 `_`：**位置上要占一格**
+    /// （右侧的多值调用要按格数拆），但它不是一个全局，写完即丢。
+    ///
+    /// ⚠️ 早先是 `Vec<GlobalId>` 且 `_` 也登记成全局 —— `globals_by_name` 是
+    /// `BTreeMap`，同一组里的两个 `_` 互相覆盖 ⇒ 组里只剩 1 格 ⇒
+    /// `var _, _ = f()` 的多值调用被当单值求值、元组进了值槽
+    /// （`帧布局失败：v2 的类型 t48 没有运行期布局`，`issue45547` 实测）。
+    pub globals: Vec<Option<GlobalId>>,
     /// 右侧表达式（个数与 `globals` 的元数关系同赋值语句）。
     pub rhs: Vec<Expr>,
 }

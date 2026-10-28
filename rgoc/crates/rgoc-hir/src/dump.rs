@@ -38,7 +38,7 @@ pub fn dump_program(p: &Program) -> String {
         .flat_map(|g| {
             g.globals
                 .iter()
-                .map(|id| p.globals[id.index()].name.as_str())
+                .map(|id| id.map_or("_", |id| p.globals[id.index()].name.as_str()))
         })
         .collect();
     let _ = writeln!(w, "# init: {}", init.join(","));

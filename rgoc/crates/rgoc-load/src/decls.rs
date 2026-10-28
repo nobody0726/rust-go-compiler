@@ -743,20 +743,31 @@ impl Checker<'_> {
         else {
             unreachable!("resolve_type_item 只接 Item::Type")
         };
-        // 类型参数作用域（`[T any]`）：本体与约束都在里面解析
-        let (scope, tparam_ids) = if tparams.is_empty() {
+        // 类型参数作用域（`[T any]`）：本体与约束都在里面解析。
+        //
+        // ⚠️ 这里**只建名字**（`declare_tparam_names`），约束留到形参表挂上
+        // `NamedDef` 之后 —— 自引用约束 `type T[U interface{ M() T[U] }]` 的
+        // `T[U]` 要靠 `NamedDef::type_params` 才认得出是泛型（`issue46461`）。
+        let (scope, tparam_entries) = if tparams.is_empty() {
             // 无类型参数 ⇒ 本体直接在该声明的**文件作用域**里解析
             // （`import` 名与点导入注入的名字只在那里可见，M4/Task 35）
             (self.decl_scope(), Vec::new())
         } else {
-            self.declare_tparams(self.pkg_scope, &tparams)
+            self.declare_tparam_names(self.pkg_scope, &tparams)
         };
+        let tparam_ids: Vec<rgoc_types::TypeParamId> =
+            tparam_entries.iter().map(|(tp, _)| *tp).collect();
         let inv = self.tt.invalid();
         if alias {
             let a = self.tt.add_alias(name);
             self.tt.set_alias_rhs(a, inv);
             let self_ty = self.tt.alias_type(a);
             self.write_object(name, self_ty, None);
+            // 泛型别名的形参约束（`AliasDef` 没有 `type_params` 栏，但约束
+            // 本身仍要解析 —— 里面的名字引用与环诊断都在这一遍发生）。
+            if !tparams.is_empty() {
+                self.resolve_tparam_constraints(scope, &tparams, &tparam_entries);
+            }
             let r = self.resolve_type(scope, &rhs);
             self.tt.set_alias_rhs(a, r);
         } else {
@@ -769,6 +780,10 @@ impl Checker<'_> {
             self.tt.set_named_type_params(n, tparam_ids);
             let self_ty = self.tt.named_type(n);
             self.write_object(name, self_ty, None);
+            // 形参表已挂上 ⇒ 约束里的 `T[U]` 现在能实例化（自引用约束）。
+            if !tparams.is_empty() {
+                self.resolve_tparam_constraints(scope, &tparams, &tparam_entries);
+            }
             let u = self.resolve_type(scope, &rhs);
             self.tt.set_named_underlying(n, u);
         }

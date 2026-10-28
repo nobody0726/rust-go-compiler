@@ -300,6 +300,9 @@ fn build_init(
         // 右侧**全部先求值**再逐个写（与赋值语句同一套语义）
         let vs = fb.rhs_values(&g.rhs, g.globals.len());
         for (gid, v) in g.globals.iter().zip(vs) {
+            // 空白标识符：位置上占一格（多值要按格数拆），但它不是全局 ——
+            // 求值照做（右侧可能有副作用），写丢弃。
+            let Some(gid) = gid else { continue };
             let root = RootId(gid.0);
             let t = fb.elem_type(root);
             let v = fb.coerce_to(t, v);

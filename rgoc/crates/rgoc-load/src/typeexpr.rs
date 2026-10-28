@@ -140,7 +140,16 @@ impl Checker<'_> {
                 if self.tt.named_def(nid).type_params.is_empty() {
                     return base;
                 }
-                rgoc_types::instantiate(self.tt, nid, &args).unwrap_or(base)
+                let r = rgoc_types::instantiate(self.tt, nid, &args);
+                if r.is_err() {
+                    eprintln!(
+                        "DBG load inst {} args={:?} err={:?}",
+                        self.tt.named_def(nid).name,
+                        args,
+                        r.as_ref().err()
+                    );
+                }
+                r.unwrap_or(base)
             }
 
             // `unsafe.Pointer`（M4/Task 31）：`unsafe` 是**编译器伪包** ——
@@ -653,6 +662,26 @@ impl Checker<'_> {
         parent: ScopeId,
         tparams: &[AstField],
     ) -> (ScopeId, Vec<TypeParamId>) {
+        let (scope, ids) = self.declare_tparam_names(parent, tparams);
+        self.resolve_tparam_constraints(scope, tparams, &ids);
+        (scope, ids.iter().map(|(tp, _)| *tp).collect())
+    }
+
+    /// [`Self::declare_tparams`] 的**前半段**：只建类型参数的条目与对象，不碰约束。
+    ///
+    /// 拆出来的唯一理由是**自引用约束**：`type T[U interface{ M() T[U] }] int`
+    /// 的约束里要实例化 `T[U]`，而 `instantiate` 要靠 `NamedDef::type_params`
+    /// 认出「`T` 是泛型」。类型声明只能在本体解析前把形参表挂上去
+    /// （`resolve_type_item`），于是那边走这两段、中间插一句
+    /// `set_named_type_params`。不拆的话解析约束时 `T` 的形参表还是空的 ⇒
+    /// `T[U]` 被当成「非泛型 + 多给了实参」⇒ `TypWrongTypeArgCount` ⇒
+    /// `invalid`（`issue46461` 实测：约束里的方法签名变成 `M() Invalid`，
+    /// 于是 `X` 被判成不满足约束）。
+    pub(crate) fn declare_tparam_names(
+        &mut self,
+        parent: ScopeId,
+        tparams: &[AstField],
+    ) -> (ScopeId, Vec<(TypeParamId, TypeId)>) {
         let scope = self.scopes.child(rgoc_types::ScopeKind::Block, parent);
         let mut ids = Vec::with_capacity(tparams.len());
         for (i, f) in tparams.iter().enumerate() {
@@ -671,6 +700,18 @@ impl Checker<'_> {
                 self.scopes.insert(scope, obj);
             }
         }
+        (scope, ids)
+    }
+
+    /// [`Self::declare_tparams`] 的**后半段**：解析约束并回填。
+    ///
+    /// `ids` 来自 [`Self::declare_tparam_names`]，`scope` 必须与它同源。
+    pub(crate) fn resolve_tparam_constraints(
+        &mut self,
+        scope: ScopeId,
+        tparams: &[AstField],
+        ids: &[(TypeParamId, TypeId)],
+    ) {
         for ((tp, _), f) in ids.iter().zip(tparams.iter()) {
             // 约束位置上，`~T` / `A | B` 这两种写法在官方那里会被包成
             // **隐式接口**（实测 oracle：`type C[T ~[]int]` ⇒ `interface 0 1`
@@ -711,7 +752,6 @@ impl Checker<'_> {
             };
             self.tt.set_type_param_constraint(*tp, c);
         }
-        (scope, ids.iter().map(|(tp, _)| *tp).collect())
     }
 
     /// 这个类型**是不是接口类型**（官方 `Underlying().(*Interface)` 的对应物）。

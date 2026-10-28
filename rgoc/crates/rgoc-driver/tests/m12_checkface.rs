@@ -1475,3 +1475,87 @@ func main() {
     assert_eq!(out.stdout, "7\nhi\n3\nz\n");
     assert_eq!(out.exit, 0);
 }
+
+// ── Task 17：帧布局（无类型残留）────────────────────────────────────────
+
+/// `T-GEN-17`：`layout` 归零 —— 四个语料的 `build` 必须退出 0。
+///
+/// # 两条根因（都不是「布局算不出来」）
+///
+/// 1. **`return nil` 没被收敛**（`issue55101` / `issue51832` / `issue51840`）：
+///    `lower_func` 把 `result_types` 写进 `prog.funcs[fid]` 的时机在**函数体下沉
+///    之后**，而 `return` 在体内用 `result_types_of_current()` 读它 —— 永远读到
+///    空表 ⇒ `untyped nil` 原样带到后端 ⇒ `帧布局失败：v0 的类型 tXX 没有运行期
+///    布局`。`untyped nil` **没有**默认类型（`layout.rs` 的注释就是这么写的），
+///    所以这条只能在上游收敛，不能在后端兜底。
+/// 2. **包级 `var _, _ = f()` 的 `_` 被登记成全局**（`issue45547`）：`globals_by_name`
+///    是 `BTreeMap`，两个 `_` 互相覆盖 ⇒ 组里只剩 1 个目标 ⇒ 右侧的多值调用被当成
+///    单值求值（类型是元组）⇒ 元组进了值槽。
+///
+/// 判据用**四个语料文件的 build 退出码**（而不是四个各自的报错文本）：报错文本是
+/// 症状，退出码才是「这类形态现在能不能编」。语义另由 `t_gen_17b` 钉住 ——
+/// 「不报错」不等于「`return nil` 真的写成了空指针」。
+#[test]
+fn t_gen_17_布局与验证() {
+    let mut bad = Vec::new();
+    for name in ["issue55101", "issue51832", "issue51840", "issue45547"] {
+        let f = corpus().join(format!("{name}.go"));
+        // ⚠️ 不能用 `-o /dev/null`：`build` 会拼 `.s` 后缀（`/dev/null.s` 写不进去）。
+        let target = std::env::temp_dir().join(format!("rgoc-t17-{name}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .arg("build")
+            .arg("-o")
+            .arg(&target)
+            .arg(&f)
+            .output()
+            .expect("起不了 build");
+        if out.status.code() != Some(0) {
+            bad.push(format!(
+                "{name}: 退出 {:?}｜{}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "这些语料的 build 仍失败：\n{}",
+        bad.join("\n")
+    );
+}
+
+/// `T-GEN-17b`：`return nil` 的**语义**要对 —— 不只是「能编了」。
+///
+/// 三档：返回指针、返回具名函数类型、返回 `nil` 之后判空。前两档来自
+/// `issue55101` / `issue51832` 的形状；第三档证明收敛后的 `nil` 真的是空指针
+/// （如果只把类型改成指针却没有零值，`p == nil` 会是假）。
+#[test]
+fn t_gen_17b_return_nil_语义() {
+    let out = support::native_harness::build_and_run(
+        "gen17b",
+        r#"
+package main
+
+type F func() F
+
+type Box[T any] struct{ v T }
+
+func p() *Box[int] { return nil }
+
+func f() F { return nil }
+
+func main() {
+	println(p() == nil)
+	println(f() == nil)
+	var g F
+	println(g == nil)
+}
+"#,
+    )
+    .expect("native 编译/运行失败");
+    assert_eq!(out.stdout, "true\ntrue\ntrue\n");
+    assert_eq!(out.exit, 0);
+}

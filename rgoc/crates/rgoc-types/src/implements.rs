@@ -165,6 +165,31 @@ fn has_all_methods(tt: &TypeTable, v: TypeId, tid: InterfaceId) -> Result<bool, 
         }
         return Ok(true);
     }
+    // 类型参数：方法集 = 它**约束接口**的方法集（官方 `typeSet().methods`
+    // 的接口面；官方的完整判定是类型集包含，这里只做方法面 —— 是**下界**，
+    // 与 `U-M4` 的口径一致）。
+    //
+    // 为什么要这一档：`type T[U interface{ M() T[U] }] int` 的自引用约束在
+    // 解析声明时就要 `instantiate(T, [U])`，而约束校验要问「`U` 满足这个
+    // 约束吗」。不认类型参数 ⇒ 方法集恒空 ⇒ 恒假 ⇒ `T[U]` 变成 `invalid`
+    // ⇒ 方法签名成了 `M() Invalid` ⇒ `X` 被判成不满足约束（`issue46461`）。
+    if let Type::TypeParam(tp) = tt.type_of(crate::identical::unalias(tt, v)) {
+        let c = tt.type_param_def(*tp).constraint;
+        let cu = underlying(tt, c);
+        let Type::Interface(ci) = tt.type_of(cu) else {
+            return Ok(false);
+        };
+        let have = tt.interface_def(*ci).methods.clone();
+        for (name, sig) in &required {
+            let Some((_, vsig)) = have.iter().find(|(n, _)| n == name) else {
+                return Ok(false);
+            };
+            if !identical(tt, *vsig, *sig)? {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    }
     let ms = methodset(tt, v)?;
     for (name, sig) in &required {
         let Some(e) = ms.iter().find(|e| e.name == *name) else {

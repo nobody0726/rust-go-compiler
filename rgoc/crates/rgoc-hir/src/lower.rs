@@ -488,6 +488,12 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                     }
                     Decl::Var(v) => {
                         for n in &v.names {
+                            // 空白标识符**不是**对象（官方 `blank` 不进包作用域）。
+                            // 登记它会让同一组的两个 `_` 在 `globals_by_name` 里
+                            // 互相覆盖 —— 组的格数就少了一格（`issue45547`）。
+                            if n.value == "_" {
+                                continue;
+                            }
                             let typ = pkg
                                 .lookup(&n.value)
                                 .and_then(|o| o.typ)
@@ -532,17 +538,22 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 if v.values.is_empty() {
                     continue;
                 }
-                let ids: Vec<GlobalId> = v
+                // 按**位置**收集（`_` 占位为 `None`）：右侧是多值调用时，格的
+                // 个数决定怎么拆（`rhs_values` 的 `want`）。
+                let ids: Vec<Option<GlobalId>> = v
                     .names
                     .iter()
-                    .filter_map(|n| self.globals_by_name.get(&n.value).copied())
+                    .map(|n| self.globals_by_name.get(&n.value).copied())
                     .collect();
+                // 全是 `_`（`var _, _ = f()`）也要保留这一组：右侧的求值有副作用。
                 if ids.is_empty() {
                     continue;
                 }
                 let gi = self.groups.len();
                 for n in &v.names {
-                    self.group_of_name.insert(n.value.clone(), gi);
+                    if n.value != "_" {
+                        self.group_of_name.insert(n.value.clone(), gi);
+                    }
                 }
                 let rhs: Vec<Expr> = v
                     .values
@@ -555,6 +566,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 // 声明一个 `invalid` 变量，之后每个用到它的表达式都
                 // 判成 invalid（`zerosize.go` 实测）。
                 for (i, gid) in ids.iter().enumerate() {
+                    let Some(gid) = gid else { continue };
                     let cur = self.prog.globals[gid.0 as usize].typ;
                     if cur == self.s.tt.invalid()
                         && let Some(e) = rhs.get(i)
@@ -720,6 +732,15 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 format!("函数 {} 的签名不是 FuncType", f.name.value),
             );
         }
+
+        // ⚠️ 结果类型必须**在下沉函数体之前**就挂到 `prog.funcs` 上：
+        // `return` 用 `result_types_of_current()`（读 `prog.funcs[fid]`）收敛
+        // 无类型常量与 `nil`（`R-22-2`），而体下沉发生在这段之后 —— 晚写就等于
+        // 「体内永远看到空表」，`return nil` 会把 `untyped nil` 原样带到后端
+        // （症状：`帧布局失败：v0 的类型 t31 没有运行期布局`；
+        // `issue55101` / `issue51832` / `issue51840` 三个语料实测）。
+        // 体下沉之后仍会整体覆盖一次（那时 `results` / `nslots` 才定）。
+        self.prog.funcs[fid.index()].result_types = result_types.clone();
 
         // 进了新函数体，外层复合字面量的元素类型提示就不再适用。
         let saved_hint = self.hint.take();

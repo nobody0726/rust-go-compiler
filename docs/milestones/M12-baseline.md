@@ -432,3 +432,40 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 做 `substitute` —— 而 `substitute` 进不到 `Box[T1]` 的实参里 ⇒ 形参仍是
 `Box[T1]` ⇒ `is_parameterized(par, [T2])` 为假 ⇒ ① 段的统一**整位跳过** ⇒
 `T` 无绑定 ⇒ `TypCannotInferTypeArgs`。所以修的是 `subst.rs`，不是 `declare_tparams`。
+
+---
+
+## 11. Task 17 读数（2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t17b/baseline.tsv`。
+
+### 11.1 做了什么（四条，全是「上游漏收敛」而不是「布局算不出来」）
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `issue55101` / `issue51832` / `issue51840`：`帧布局失败：v0 的类型 tXX` | `lower_func` 把 `result_types` 写进 `prog.funcs[fid]` 的时机在**函数体下沉之后**，而 `return` 在体内读它 ⇒ 永远空表 ⇒ `untyped nil` 没被收敛 | 体下沉**之前**先写一次 `result_types` |
+| 2 | `issue45547`：`帧布局失败：v2 的类型 t48`（元组进值槽） | 包级 `var _, _ = f()` 的两个 `_` 都被登记成全局，`globals_by_name` 里后者覆盖前者 ⇒ 组里只剩 1 格 ⇒ 多值调用按单值求值 | `InitGroup::globals` 改 `Vec<Option<GlobalId>>`（`None` = 空白标识符占位），`_` 不进全局表 |
+| 3 | `issue46461` 回归（Task 16 修好 `X[A]` 之后新暴露）：`M` 的结果类型是 `Invalid` | ① 声明 `type T[U interface{ M() T[U] }]` 解析约束时 `T` 的 `type_params` 还没挂 ⇒ `T[U]` 被当非泛型；② `implements` 完全不认类型参数（方法集空 ⇒ 恒假） | 拆 `declare_tparams` 成 `declare_tparam_names` + `resolve_tparam_constraints`，类型声明在两段之间挂形参表；`has_all_methods` 补「类型参数 ⇒ 用约束接口的方法集」 |
+| 4 | 同上 | memo 登记在**约束校验之后** ⇒ 自引用约束无界重入 | 照官方 `context.instance` 顺序：先 `add_named_instance` + `record_instance`，再校验；失败时 `remove_instance` 回滚 |
+
+另外 `instantiate` 加了一档宽限：约束**提到自己的实例**（`mentions_origin`）时跳过该位校验 ——
+装载期的方法集此刻还没挂满（方法挂载在签名解析之后），判不了；真不满足的约束由检查面
+（方法集完整时）照报。
+
+### 11.2 读数
+
+| 项 | t16b | t17b |
+|---|---|---|
+| build 失败合计 | 46 | **40** |
+| `missing_type` | 31 | **31** |
+| `layout` | 4 | **0** |
+| `other` | 10 | 8 |
+| `panic` | 1 | 1 |
+| `compile` build_ok | 22/40 | **28/40** |
+| `run` build_ok | 37/71 | 37/71 |
+
+逐文件对比：**只有一处变化** —— `issue46461` 从 `layout` 变 `ok`（它的 `check` 也过）。
+其余 173 个文件的判定逐字节不变。全量 **246 suite / 2310 passed / 0 failed / 2 ignored**。
+
+> `layout` 这一栏到此清零，`verify` 早在 Task 16 就清零（t16b 的形态表里没有它）。
+> 计划里写的「`VerifyError` 2 个」是被 Task 16 的实例化顺带解决的。

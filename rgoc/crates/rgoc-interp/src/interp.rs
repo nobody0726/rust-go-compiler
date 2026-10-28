@@ -309,7 +309,8 @@ enum Pending<'a> {
         vbase: usize,
     },
     Globals {
-        ids: &'a [GlobalId],
+        /// 组内目标（`None` = 空白标识符：位置上占一格，值丢掉）。
+        ids: &'a [Option<GlobalId>],
         vbase: usize,
     },
     IfCond {
@@ -2108,6 +2109,7 @@ impl<'a> G<'a> {
             Pending::Globals { ids, vbase } => {
                 let vals: Vec<Value> = self.values.split_off(vbase);
                 for (i, g) in ids.iter().enumerate() {
+                    let Some(g) = g else { continue };
                     if let (Some(v), Some(c)) = (vals.get(i), sh.globals.get(g.index())) {
                         *c.borrow_mut() = v.clone();
                     }

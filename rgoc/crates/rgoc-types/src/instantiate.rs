@@ -114,26 +114,62 @@ pub(crate) fn instantiate_at(
     if depth > MAX_INSTANTIATION_DEPTH {
         return Err(DiagCode::TypInvalidInstanceCycle);
     }
-    // ④ 约束：bound 先按**全量**映射替换（官方 verify 的 smap）。
+    // ④ 先建实例并登记 memo —— **在约束校验之前**（官方 `context.instance` 的
+    //    顺序：`newNamed(orig, targs, nil)` + 登记 `ctxt.instances`，然后才
+    //    `expandNamed` 与 `verify`）。
+    //
+    //    ⚠️ 顺序反过来（先校验后登记）会让**自引用约束**无界重入：
+    //    `type T[U interface{ M() T[U] }] int` 校验 `X` 是否实现 `M() T[X]` 时
+    //    要问 `T[X]` 是谁 —— memo 里还没有 ⇒ 再走一遍 instantiate ⇒ 再校验 ⇒ …
+    //    直到触到深度上限，于是 `T[X]` 解析失败、签名结果是 `invalid`
+    //    （`issue46461` 实测：`帧布局失败：v1 的类型 t32`，t32 = `Invalid`）。
+    //    登记之后这一步在 memo 处闭合，拿到的是同一条（本体尚未填的）实例。
+    let inst = tt.add_named_instance(origin, args.to_vec());
+    tt.record_instance(origin, args.to_vec(), inst);
+
+    // ⑤ 约束：bound 先按**全量**映射替换（官方 verify 的 smap）。
     let map: SubstMap = tparams.iter().copied().zip(args.iter().copied()).collect();
     for (i, tp) in tparams.iter().enumerate() {
         let bound = tt.type_param_def(*tp).constraint;
-        let bound = substitute_inst(tt, bound, &map, depth)?;
-        // ④′ 递归链上的实参可能是**展开进行中**的实例（本体未填）：除空接口外
+        let bound = match substitute_inst(tt, bound, &map, depth) {
+            Ok(b) => b,
+            Err(code) => {
+                tt.remove_instance(origin, inst);
+                return Err(code);
+            }
+        };
+        // ⑤′ 递归链上的实参可能是**展开进行中**的实例（本体未填）：除空接口外
         //     的约束必须在看本体后才能判，而本层（急切展开）此刻看不到 ——
         //     按 `D-M4-5` 显式拒绝，不 panic、不静默答真（`U-M4-09`）。
         if !is_trivially_any(tt, bound) && contains_pending_instance(tt, args[i]) {
+            tt.remove_instance(origin, inst);
             return Err(DiagCode::TypUnsupportedPendingInstanceArg);
+        }
+        // ⑤″ **自引用约束**（`type T[U interface{ M() T[U] }] int`）：约束的方法
+        //     签名里提到了 `origin` 自己的实例 ⇒ 判定要拿「实参的方法集」来比，
+        //     而装载期的方法集**此刻还没挂满** —— 方法挂载发生在签名解析**之后**
+        //     （`resolve_func_sig` 先 `resolve_signature`、再 `add_named_method`），
+        //     于是 `X.M()` 的签名正在解析、方法集里还没有 `M`。
+        //
+        //     官方能过是因为它**先声明方法对象、后填签名**，比签名时两侧是同一个
+        //     壳；本层的 `SignatureDef` 是一次成型、没有可变壳。这里按
+        //     「未知 ⇒ 满足」跳过（与 `implements` ①「无效 ⇒ 真」同口径）——
+        //     真的不满足的约束会在**检查面**（方法集已完整）照常报出来。
+        if !is_trivially_any(tt, bound) && mentions_origin(tt, bound, origin, &mut Vec::new()) {
+            continue;
         }
         match implements(tt, args[i], bound, true) {
             Ok(true) => {}
-            Ok(false) => return Err(DiagCode::TypInvalidTypeArg),
-            Err(code) => return Err(code),
+            Ok(false) => {
+                tt.remove_instance(origin, inst);
+                return Err(DiagCode::TypInvalidTypeArg);
+            }
+            Err(code) => {
+                tt.remove_instance(origin, inst);
+                return Err(code);
+            }
         }
     }
-    // ⑤ 建实例并登记 memo（先登记再展开 —— 自引用在 memo 处闭合）。
-    let inst = tt.add_named_instance(origin, args.to_vec());
-    tt.record_instance(origin, args.to_vec(), inst);
     let under = tt.named_underlying(origin);
     let methods = tt.named_def(origin).methods.clone();
     // ⑥⑦ 展开；失败回滚 memo（半成品实例不可见）。
@@ -170,6 +206,60 @@ fn expand_instance(
         tt.add_named_method(inst, name, msig);
     }
     Ok(())
+}
+
+/// `t` 的结构里是否提到 `origin` 的**实例**（自引用约束的判据）。
+///
+/// 走签名 / 元组 / 具名实例实参 / 接口方法；后者的签名是自引用最常见的落点
+/// （`interface{ M() T[U] }`）。环形结构用 `seen` 兜住。
+fn mentions_origin(tt: &TypeTable, t: TypeId, origin: NamedId, seen: &mut Vec<TypeId>) -> bool {
+    let t = crate::identical::unalias(tt, t);
+    if seen.contains(&t) {
+        return false;
+    }
+    seen.push(t);
+    match tt.type_of(t) {
+        Type::Named(n) => {
+            let d = tt.named_def(*n);
+            if d.origin == Some(origin) {
+                return true;
+            }
+            let args = d.targs.clone();
+            args.iter().any(|a| mentions_origin(tt, *a, origin, seen))
+        }
+        Type::Pointer(e) | Type::Slice(e) | Type::Array { elem: e, .. } => {
+            mentions_origin(tt, *e, origin, seen)
+        }
+        Type::Map { key, elem } => {
+            mentions_origin(tt, *key, origin, seen) || mentions_origin(tt, *elem, origin, seen)
+        }
+        Type::Chan { elem, .. } => mentions_origin(tt, *elem, origin, seen),
+        Type::Tuple(tu) => {
+            let vars = tt.tuple_def(*tu).vars.clone();
+            vars.iter()
+                .any(|(_, v)| mentions_origin(tt, *v, origin, seen))
+        }
+        Type::Struct(sd) => {
+            let fields = tt.struct_def(*sd).fields.clone();
+            fields
+                .iter()
+                .any(|f| mentions_origin(tt, f.typ, origin, seen))
+        }
+        Type::Signature(sd) => {
+            let d = tt.signature_def(*sd).clone();
+            mentions_origin(tt, d.params, origin, seen)
+                || mentions_origin(tt, d.results, origin, seen)
+        }
+        Type::Interface(id) => {
+            let d = tt.interface_def(*id).clone();
+            d.methods
+                .iter()
+                .any(|(_, sig)| mentions_origin(tt, *sig, origin, seen))
+        }
+        Type::Basic(_) | Type::TypeParam(_) | Type::Union(_) | Type::Alias(_) | Type::Invalid => {
+            false
+        }
+    }
 }
 
 /// `bound` 是**空接口**（`any` / `interface{}`）—— 一切类型都满足，判定不需要
