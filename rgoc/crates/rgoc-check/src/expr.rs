@@ -1007,25 +1007,42 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 None
             }
         };
+        // 类型参数且无共同底层：约束的每一项都可索引且元素一致 ⇒ 索引仍合法
+        // （官方 index.go 的 generic 判定，`issue49659b` 的 `a.val[2]`）。
+        let tp_elem = {
+            let tt = self.tt();
+            let is_tp = matches!(tt.type_of(unalias(tt, xt)), Type::TypeParam(_));
+            if is_tp && cu.is_none() {
+                let tt = &mut *self.s.tt;
+                index_elem_of_terms(tt, xt)
+            } else {
+                None
+            }
+        };
         let shape = {
             let tt = self.tt();
-            let base = cu.unwrap_or_else(|| underlying(tt, xt));
-            match tt.type_of(base) {
-                Type::Basic(b) if b.is_string() => Shape::Str,
-                Type::Array { len, elem } => Shape::Arr {
-                    len: arr_len(tt, *len),
-                    elem: *elem,
-                },
-                Type::Pointer(base) => match tt.type_of(underlying(tt, *base)) {
-                    Type::Array { len, elem } => Shape::PtrArr {
+            if let Some(elem) = tp_elem {
+                // 元素是变量（可寻址），与切片元素同语义。
+                Shape::Slice(elem)
+            } else {
+                let base = cu.unwrap_or_else(|| underlying(tt, xt));
+                match tt.type_of(base) {
+                    Type::Basic(b) if b.is_string() => Shape::Str,
+                    Type::Array { len, elem } => Shape::Arr {
                         len: arr_len(tt, *len),
                         elem: *elem,
                     },
+                    Type::Pointer(base) => match tt.type_of(underlying(tt, *base)) {
+                        Type::Array { len, elem } => Shape::PtrArr {
+                            len: arr_len(tt, *len),
+                            elem: *elem,
+                        },
+                        _ => Shape::Other,
+                    },
+                    Type::Slice(elem) => Shape::Slice(*elem),
+                    Type::Map { elem, .. } => Shape::Map(*elem),
                     _ => Shape::Other,
-                },
-                Type::Slice(elem) => Shape::Slice(*elem),
-                Type::Map { elem, .. } => Shape::Map(*elem),
-                _ => Shape::Other,
+                }
             }
         };
         let mut length: i64 = -1;
@@ -3565,6 +3582,40 @@ pub(crate) fn under_is(tt: &TypeTable, t: TypeId, f: impl Fn(&Type) -> bool) -> 
             .all(|(_, ty)| f(tt.type_of(underlying(tt, *ty))));
     }
     f(tt.type_of(underlying(tt, t)))
+}
+
+/// 类型参数的**索引元素**（官方 `indexExpr` 对类型参数操作数的 generic 判定）。
+///
+/// `commonUnder` 命不中的时候索引还有一条活路（`issue49659b` 的
+/// `A[T interface{ []int | [5]int }]` 里的 `a.val[2]`）：约束的**每一项**
+/// 都可索引（slice / array / string）且元素类型逐对 `identical` ⇒ 元素类型。
+/// 元素是变量（可寻址 ⇒ `&a.val[2]` 合法），与切片元素同语义。
+///
+/// 任何一项不可索引 / 元素对不上 ⇒ `None`（调用方落回原判定去报错）。
+pub(crate) fn index_elem_of_terms(tt: &mut TypeTable, t: TypeId) -> Option<TypeId> {
+    let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) else {
+        return None;
+    };
+    let terms: Vec<(bool, TypeId)> = type_param_terms(tt, *tp)?.to_vec();
+    let mut elem: Option<TypeId> = None;
+    for (_, ty) in &terms {
+        let u = underlying(tt, *ty);
+        let e = match tt.type_of(u) {
+            Type::Slice(e) => *e,
+            Type::Array { elem, .. } => *elem,
+            Type::Basic(b) if b.is_string() => tt.add_basic(BasicId::Uint8),
+            _ => return None,
+        };
+        match elem {
+            None => elem = Some(e),
+            Some(prev) => {
+                if !matches!(identical(tt, prev, e), Ok(true)) {
+                    return None;
+                }
+            }
+        }
+    }
+    elem
 }
 
 /// 官方 `commonUnder`（`go/types/under.go:79`，`M12/Task 9`）的窄面。
