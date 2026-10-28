@@ -373,9 +373,18 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
         // 别名透明：直接把右边喂进去，**不加 tag**。
         Type::Alias(id) => hash_into(tt, tt.alias_rhs(*id), h, depth + 1),
         // 具名不透明：名字进 hash，本体也进（两个同名的不同类型不会撞）。
+        // **实例的 targs 也进**（`M12/Task 21`，`issue46591`）：实例的身份由
+        // `(origin, targs)` 决定（`identical` 的 Named 臂同口径）——
+        // `T[struct{ int }]` 与 `T[struct{ int "x" }]` 的 underlying 都是
+        // `struct{}`，漏 targs ⇒ 同一个 desc ⇒ interface key 判同 ⇒
+        // map 少一个条目（`len(m)=1` 官方是 2）。
         Type::Named(id) => {
             mix(h, b'N');
             mix_bytes(h, tt.named_def(*id).name.as_bytes());
+            let def = tt.named_def(*id);
+            for &a in &def.targs {
+                hash_into(tt, a, h, depth + 1);
+            }
             hash_into(tt, tt.named_underlying(*id), h, depth + 1);
         }
         Type::Pointer(e) => {
@@ -414,6 +423,14 @@ fn hash_into(tt: &TypeTable, t: TypeId, h: &mut u32, depth: u32) {
                     None => mix(h, b'-'),
                 }
                 mix(h, u8::from(f.embedded));
+                // **tag 进 hash**（`M12/Task 21`，`issue46591`）：tag 参与类型
+                // 身份（`identical` 严格面比 `f.tag`）—— `T[struct{ int }]{}`
+                // 与 `T[struct{ int "x" }]{}` 是**两个**类型，map 里两个 key；
+                // 漏了 tag ⇒ 同一个 desc ⇒ 值相等的零值被判同 key ⇒ len=1。
+                match &f.tag {
+                    Some(t) => mix_bytes(h, t.as_bytes()),
+                    None => mix(h, b'~'),
+                }
                 hash_into(tt, f.typ, h, depth + 1);
             }
         }

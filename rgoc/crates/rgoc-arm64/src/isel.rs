@@ -1465,6 +1465,19 @@ fn type_assert(
     }
 
     if to_iface {
+        // 到**空接口**（`x.(any)` / `x.(I)` 且 I 方法集为空）：非 nil 接口
+        // **恒成功**（官方：任何类型都实现空接口）。type 字放 concrete desc
+        // （与 `retag_iface` 的 any 分支同口径 —— 目标 any 不需要 itab），
+        // data 原样；nil 接口（x11 已被上面的 nil 检查置 0）⇒ 失败。
+        // `rt_itab` 走不通：它对「接口方法数 0」返回 0（= 未实现），
+        // 而 any 的 itab 应该是非 nil 的空方法表。
+        if iface_arity(cx.tt, typ) == 0 {
+            st_x(asm, "x11", d.off);
+            ld_x(asm, "x10", s.off + 8);
+            st_x(asm, "x10", d.off + 8);
+            finish_assert(cx, ok, asm, "x11");
+            return;
+        }
         // 到接口：tab = rt_itab(desc(J), concrete)；null 表示失败
         //
         // ⚠️ 源是 **nil 接口**时 `concrete == 0`，那是「没有动态类型」而不是

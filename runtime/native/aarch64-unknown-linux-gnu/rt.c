@@ -3123,15 +3123,30 @@ void *rt_itab(const TypeDesc *iface, const TypeDesc *concrete) {
  *
  * 实测：`ken/interbasic.go` 的 `panic("a")`（两个 `any("abc")` 判不等）。 */
 int rt_iface_eq(u64 a0, u64 a1, u64 b0, u64 b1, i64 eface) {
-    if (a0 != b0) {
+    /* **动态类型**各自解出来再比（`M12/Task 21`，`issue53477`）：
+     *
+     * 非 eface 的第 0 字是 **itab**，而比较的两个值的**静态接口类型可以
+     * 不同**（官方 spec：接口比较看 dynamic type/value——`Mer[T](t)` 与
+     * `MNer[T](t)` 包的是同一个 `X`，itab 各有各的但动态类型相同 ⇒ 相等）。
+     * 直接比 itab 指针永远不等 ⇒ switch 误走 default ⇒ `panic("FAIL")`。
+     * 动态类型在 itab[1]（`rt_itab` 的第 1 字 / 静态 itab 同形）。 */
+    const TypeDesc *da;
+    const TypeDesc *db;
+    if (eface) {
+        da = (const TypeDesc *)a0;
+        db = (const TypeDesc *)b0;
+    } else {
+        da = a0 ? *(const TypeDesc **)(a0 + 8) : 0;
+        db = b0 ? *(const TypeDesc **)(b0 + 8) : 0;
+    }
+    if (da != db) {
         return 0;
     }
-    if (a0 == 0) {
+    if (da == 0) {
         /* 两边都是 nil 接口 */
         return 1;
     }
-    const TypeDesc *d = eface ? (const TypeDesc *)a0 : *(const TypeDesc **)(a0 + 8);
-    if (d->kind == 7 /* Kind::Pointer */) {
+    if (da->kind == 7 /* Kind::Pointer */) {
         /* 指针动态类型：`data` 是**值本身**，比两个字 */
         return a1 == b1;
     }
@@ -3139,7 +3154,7 @@ int rt_iface_eq(u64 a0, u64 a1, u64 b0, u64 b1, i64 eface) {
      * ⚠️ 这里不能用 `memcmp`：`any("abc")` 的盒子里是 `{ptr,len}`，按字节比
      * 就是在比**指针** —— 两个内容相同的字面量各有各的 `.rodata` 时判不等
      * （实测 `ken/interbasic.go` 的 `panic("a")`）。 */
-    return rt_equal(d, (const void *)a1, (const void *)b1);
+    return rt_equal(da, (const void *)a1, (const void *)b1);
 }
 
 /* 断言失败（`v := x.(T)` 的单值形态）。
