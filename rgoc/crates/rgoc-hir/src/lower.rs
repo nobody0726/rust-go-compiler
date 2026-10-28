@@ -2428,16 +2428,19 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             }
             AExpr::Call(c) => self.lower_call(c, typ),
             AExpr::Index(ix) => {
-                // 泛型实例化 `f[T]` / `T[P]`
+                // 泛型实例化 `f[T]` / `T[P]`。**先按位置查实例账**（`M12/Task 15`）：
+                // 不能先求 `ix.index` —— 多实参的 `F[int, string]` 里 index 是
+                // `Expr::List`，它不是表达式（check 面对单独的 List 恒 invalid），
+                // 先求它会把「实例化」误判成「普通索引」
+                // （`smoketest.go` 的 `var _ = f2[int, string, struct{}]` 实测）。
+                // `a[i]` 没有账，自然落回下面的索引路径。
+                if let Some(fid) = self.inst_target(e) {
+                    return Expr::new(ExprKind::FuncLit(fid), typ);
+                }
                 let iop_env = self.check_env();
                 let iop = self.s.expr_in(self.file, &ix.index, &iop_env);
                 if iop.mode == Mode::TypeExpr {
-                    // `F[int]` 在值语境里就是**那个实例化后的函数**
-                    // （`M12/Task 15`）：检查面已经把它落到某个实例上，
-                    // 这里翻成函数值。
-                    if let Some(fid) = self.inst_target(e) {
-                        return Expr::new(ExprKind::FuncLit(fid), typ);
-                    }
+                    // 类型语境但没落到实例 ⇒ 超出单态化面。
                     self.reject(
                         ix.pos,
                         RejectKind::Generic,

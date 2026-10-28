@@ -28,7 +28,7 @@
 use rgoc_lex::diag::DiagCode;
 
 use crate::comparable::comparable_type;
-use crate::identical::{identical, underlying};
+use crate::identical::{identical, unalias, underlying};
 use crate::table::TypeTable;
 use crate::typ::TypeId;
 
@@ -279,4 +279,46 @@ fn term_disjoint(tt: &TypeTable, x: &(bool, TypeId), y: &(bool, TypeId)) -> Resu
     let ux = if y.0 { underlying(tt, x.1) } else { x.1 };
     let uy = if x.0 { underlying(tt, y.1) } else { y.1 };
     Ok(!identical(tt, ux, uy)?)
+}
+
+/// 类型参数的**核心类型**（官方 `coreType`，`go/types/predicates.go`）。
+///
+/// # 规范怎么说
+///
+/// 「If `T` is a type parameter, `T`'s core type is the core type of its type
+/// set」；type set 的**所有**类型的 underlying **相同**时，那个 underlying 就是
+/// 核心类型。有了它，`*p` / `ch <- x` / `x[i]` / `f()` 这些**操作符**才判得下去：
+/// `p T` 且 `T interface{ ~*int }` 时 `*p` 合法，理由不是 `T` 是指针类型，而是
+/// 「`T` 的每个类型都是指针」。
+///
+/// # 只做一档：项表非空且 underlying 全同
+///
+/// 语料里的形状就是这一档（`~int` / `~*int` / `~chan int` / `~func()` /
+/// `~map[string]V` / `~[10]int` / `~[]E`）。其余（`interface{}`、只有方法集的、
+/// 项表里 underlying 不一致的）⇒ `None`，调用方按「没有核心类型 ⇒ 不能这么用」
+/// 处理，与官方一致。
+///
+/// 非类型参数 ⇒ `None`（本函数的用途就是「把类型参数往回填一层」；
+/// 具体类型的行为不该被它改写 —— 那是 `underlying` 的事）。
+#[must_use]
+pub fn core_type(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    use crate::typ::Type;
+    let Type::TypeParam(id) = tt.type_of(t) else {
+        return None;
+    };
+    let constraint = unalias(tt, tt.type_param_def(*id).constraint);
+    let Type::Interface(iid) = tt.type_of(constraint) else {
+        return None;
+    };
+    let IfaceTSet::Terms(terms) = &tt.interface_def(*iid).tset else {
+        return None;
+    };
+    let mut rest = terms.iter();
+    let first = underlying(tt, rest.next()?.1);
+    for (_, x) in rest {
+        if !identical(tt, underlying(tt, *x), first).unwrap_or(false) {
+            return None;
+        }
+    }
+    Some(first)
 }

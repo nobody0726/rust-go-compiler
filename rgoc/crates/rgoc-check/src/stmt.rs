@@ -135,9 +135,16 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     /// `too many return values`（Task 33 实测：`check/init1.go` 6 行、
     /// `check/init2.go` 20 行假诊断，把真环诊断全淹了）。
     fn func_sig(&mut self, file: FileId, f: &FuncDecl) -> Option<(TupleVars, TupleVars)> {
+        // ⚠️ 名字是**空白标识符**时一律走 AST：`_` 不是可引用的名字，包作用域
+        // 里那个 `_` 可能是**另一条** `func _` 的签名（`typelist.go` 有 5 条
+        // `func _[T …]`）。用错了的症状是「五个函数都按同一个签名判 return」
+        // —— 实测每一条都报 `too many return values / want ()`，指向的行却是
+        // 自己那一条，看不出串了。
         let t = if let Some(recv) = &f.recv {
             self.method_sig(&recv.type_, &f.name.value)?
-        } else if let Some(obj) = self.s.pkg.lookup(&f.name.value) {
+        } else if f.name.value != "_"
+            && let Some(obj) = self.s.pkg.lookup(&f.name.value)
+        {
             obj.typ?
         } else {
             // 名字**不在**包作用域：`func init`（Task 34：官方有意不声明）、
@@ -274,13 +281,19 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let Some(body) = &f.body else {
             return;
         };
-        let (params, results) = self.func_sig(file, f).unwrap_or_default();
-        self.results = results.clone();
-
-        // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
+        // ⚠️ 顺序：**类型参数先声明**，再求签名。
+        //
+        // `func_sig` 的兜底档（`func init` / `func _` / 重名输掉的那个）走
+        // [`Self::ast_sig`]，而 `ast_sig` 的类型表达式走 `eval` —— `eval` 看
+        // `Env`。顺序反过来的话 `func _[T any](x T) T` 的结果类型 `T` 解不出
+        // ⇒ `ast_sig` 的 `?` 提前返回 `None` ⇒ `unwrap_or_default()` 给空表
+        // ⇒ 每个这样的体都误报 `too many return values`（`typelist.go` 实测）。
         self.env.push();
         self.declare_tparams(f);
         self.declare_recv_tparams(f);
+        let (params, results) = self.func_sig(file, f).unwrap_or_default();
+        self.results = results.clone();
+        // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
         self.declare_func_locals(f, &params, &results);
         self.check_body(file, body);
     }
@@ -389,7 +402,15 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
     /// 没有名字；AST 的 `tparams` 有名字且**逐个名字一个 `Field`**。两边都按
     /// 声明序走，逐位配对。
     fn declare_tparams(&mut self, f: &FuncDecl) {
-        let Some(ids) = self.s.pkg.generic_funcs.get(&f.name.value).cloned() else {
+        // `func _[T …]` 不在 `generic_funcs` 里（它的键是名字，`_` 会有很多条）
+        // ⇒ 按**声明位置**查 `blank_func_tparams`。查不到（非泛型、或者 `_`
+        // 后面那个空列表）就直接返回。
+        let ids = if f.name.value == "_" {
+            self.s.pkg.blank_func_tparams.get(&f.pos).cloned()
+        } else {
+            self.s.pkg.generic_funcs.get(&f.name.value).cloned()
+        };
+        let Some(ids) = ids else {
             return;
         };
         // `Field` 是**逐名字**的（parser 把 `[T, U any]` 拆成两个 `Field`），
@@ -577,7 +598,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let Some(ct) = c.typ else { return };
         let elem = {
             let tt = &*self.s.tt;
-            match tt.type_of(underlying(tt, ct)) {
+            match tt.type_of(crate::expr::under_or_core(tt, ct)) {
                 Type::Chan {
                     dir: ChanDir::SendRecv | ChanDir::SendOnly,
                     elem,

@@ -459,7 +459,14 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             // 则被报成 `assignment mismatch: 2 variables but f returns 1 value`
             // （`method5.go:103` 的实测形态）。官方 `call` 对**任何**非类型表达式
             // 的操作数都按其类型走 `arguments`，不区分「声明函数」与「函数值」。
-            Mode::Value | Mode::Variable => self.call_value(file, c, f.typ),
+            // `m[k]()` / `(<-ch)()` / `x.(T)()`（`issue47878` 实测三种）：
+            // 这些操作数在**值语境**下就是普通值，`typ` 是结果（签名）类型
+            // —— 官方 `call` 只问「操作数是不是类型、底层是不是签名」，不问
+            // 它是名字算出来的还是索引/收发/断言算出来的。map index 与
+            // comma-ok 的 `typ` 正是主值类型，直接进真调用。
+            Mode::Value | Mode::Variable | Mode::MapIndex | Mode::CommaOk => {
+                self.call_value(file, c, f.typ)
+            }
             Mode::Builtin => self.call_builtin(file, c, &c.fun),
             // 无效 / 类型族函数位 / 其他：不报（转换之外的类型族归 Task 23+）。
             _ => Operand::invalid(),
@@ -825,6 +832,12 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         if let Some(op) = self.explicit_instantiation(file, e) {
             return op;
         }
+        // ①′ **类型实例化**（`T[P]`，官方 `indexExpr` 的 generic 类型支）：
+        // `Value[int]`（`issue53762` 的转换目标）、`(*Q[int])`（`issue49516`
+        // 的方法表达式基）—— `x` 是类型且指向泛型原型时 `[…]` 不是索引。
+        if let Some(op) = self.type_instantiation(file, e) {
+            return op;
+        }
         let mut x = self.expr(file, &e.x);
         if x.mode == Mode::Invalid || x.mode == Mode::TypeExpr {
             return Operand::invalid();
@@ -1047,6 +1060,89 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         let map: SubstMap = tparams.iter().copied().zip(targs.iter().copied()).collect();
         let inst = substitute(self.s.tt, sig, &map);
         Some(Operand::value(Some(inst)))
+    }
+
+    /// **类型实例化**（`T[P…]`，官方 `indexExpr` 的 generic **类型**支）。
+    ///
+    /// 与函数实例化（[`Self::explicit_instantiation`]）的分工：那边 `x` 必须
+    /// 是**泛型函数**的名字（`generic_funcs` 里有账）；这边 `x` 求成
+    /// `Mode::TypeExpr` 且指向**带类型参数的 named 原型**。两边判定条件互斥
+    /// （函数名不是类型），顺序谁先都行 —— 放在函数版之后是为了不动
+    /// `T-CK-*` 既有索引判据的报点顺序。
+    ///
+    /// 结果是**类型**（`Mode::TypeExpr`），不是值：`Value[int](1)` 的转换、
+    /// `var x Value[int]` 的声明都从它走。实例由
+    /// [`rgoc_types::instantiate`] 造（memo / 约束 / 深度守门都在里面），
+    /// 诊断原样报出。
+    fn type_instantiation(&mut self, file: FileId, e: &IndexExpr) -> Option<Operand> {
+        let x = self.expr(file, &e.x);
+        if x.mode != Mode::TypeExpr {
+            return None;
+        }
+        let t = x.typ?;
+        // 原型判定：unalias 后是 Named 且 type_params 非空。**实例**的
+        // `type_params` 是空的，天然排除 —— `Value[int][int]` 不会走这里。
+        let origin = {
+            let tt = self.tt();
+            match tt.type_of(unalias(tt, t)) {
+                Type::Named(nid) if !tt.named_def(*nid).type_params.is_empty() => *nid,
+                _ => return None,
+            }
+        };
+        let tparams = self.s.tt.named_def(origin).type_params.clone();
+
+        // 实参必须全是类型（与 explicit_instantiation 同构）。
+        let arg_exprs: Vec<&Expr> = match &*e.index {
+            Expr::List(l) => l.elems.iter().collect(),
+            other => vec![other],
+        };
+        let mut targs = Vec::with_capacity(arg_exprs.len());
+        let mut not_a_type = false;
+        for a in &arg_exprs {
+            match self.type_expr(file, a) {
+                Some(t) => targs.push(t),
+                None => {
+                    let op = self.expr(file, a);
+                    let what = operand_text(self.tt(), &op);
+                    self.report(
+                        a.start_pos(),
+                        DiagCode::ChkNotAType,
+                        format!("{what} is not a type"),
+                    );
+                    not_a_type = true;
+                }
+            }
+        }
+        if not_a_type {
+            return Some(Operand::invalid());
+        }
+        // 个数（官方 `WrongTypeArgCount` 的两段式）。
+        if targs.len() != tparams.len() {
+            let how = if targs.len() > tparams.len() {
+                "too many"
+            } else {
+                "not enough"
+            };
+            self.report(
+                e.index.pos(),
+                DiagCode::TypWrongTypeArgCount,
+                format!(
+                    "{how} type arguments for {}: have {}, want {}",
+                    self.s.tt.named_def(origin).name,
+                    targs.len(),
+                    tparams.len()
+                ),
+            );
+            return Some(Operand::invalid());
+        }
+        match rgoc_types::instantiate(self.s.tt, origin, &targs) {
+            Ok(inst) => Some(Operand::type_expr(inst)),
+            Err(code) => {
+                let name = self.s.tt.named_def(origin).name.clone();
+                self.report(e.index.pos(), code, format!("cannot instantiate {name}"));
+                Some(Operand::invalid())
+            }
+        }
     }
 
     fn slice_expr(&mut self, file: FileId, e: &SliceExpr) -> Operand {

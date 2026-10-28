@@ -118,6 +118,18 @@ pub struct Package {
     /// `SignatureDef::recv_tparams`，方法自己的目前仍只活在作用域里），
     /// `F[int]` 这种写法对方法不成立（Go 不允许给方法显式指定类型实参）。
     pub generic_funcs: BTreeMap<String, Vec<TypeParamId>>,
+    /// **空白名字**函数（`func _[T any](x T) T`）的类型参数表，键 = 声明位置。
+    ///
+    /// # 为什么不是 [`Self::generic_funcs`] 的一格
+    ///
+    /// `generic_funcs` 的键是名字，而 `_` 可以声明很多次（`typelist.go` 有 8 条
+    /// `func _[T …]`），后一条会盖掉前一条。`_` 又**不进包作用域**
+    /// （`write_object` 跳过它）⇒ 检查面既查不到签名、也拿不到类型参数。
+    /// 症状是「每条 `func _` 的体都按**别的** `_` 的签名判 `return`」
+    /// （`typelist.go` 实测 5 条 `too many return values / want ()`）。
+    ///
+    /// 键用 `FuncDecl::pos`：`_` 不参与实例化、不需要名字，位置就是它唯一的身份。
+    pub blank_func_tparams: BTreeMap<rgoc_lex::Pos, Vec<TypeParamId>>,
 }
 
 impl Package {
@@ -329,6 +341,7 @@ pub fn load_decls_only(
         skipped: Vec::new(),
         imports: BTreeMap::new(),
         generic_funcs: BTreeMap::new(),
+        blank_func_tparams: BTreeMap::new(),
     };
 
     for (name, src) in sources {

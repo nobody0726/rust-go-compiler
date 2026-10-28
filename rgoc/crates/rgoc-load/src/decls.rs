@@ -210,6 +210,8 @@ pub(crate) struct Checker<'a> {
     /// 包级泛型函数的类型参数表（`M12/Task 6`）—— 收尾时整体交给
     /// `Package::generic_funcs`（与 `roots` 同一套路：借用期不能写 `pkg`）。
     generic_funcs: BTreeMap<String, Vec<TypeParamId>>,
+    /// `func _[T …]` 的类型参数表，键 = 声明位置（`Package::blank_func_tparams`）。
+    blank_func_tparams: BTreeMap<rgoc_lex::Pos, Vec<TypeParamId>>,
 }
 
 impl Checker<'_> {
@@ -248,6 +250,7 @@ impl Checker<'_> {
             cur_file: None,
             file_scopes: BTreeMap::new(),
             generic_funcs: BTreeMap::new(),
+            blank_func_tparams: BTreeMap::new(),
         }
     }
 
@@ -307,16 +310,19 @@ pub fn collect_decls(pkg: &mut Package, tt: &mut TypeTable, bag: &mut DiagBag) {
         cur_file: None,
         file_scopes,
         generic_funcs: BTreeMap::new(),
+        blank_func_tparams: BTreeMap::new(),
     };
     ck.pass1_collect(&asts);
     ck.pass2_resolve(&asts);
     ck.pass3_validate();
     let roots = std::mem::take(&mut ck.roots);
     let generic_funcs = std::mem::take(&mut ck.generic_funcs);
+    let blank_func_tparams = std::mem::take(&mut ck.blank_func_tparams);
     drop(ck);
     pkg.scopes = scopes;
     pkg.type_roots = roots;
     pkg.generic_funcs = generic_funcs;
+    pkg.blank_func_tparams = blank_func_tparams;
     pkg.asts = asts;
 }
 
@@ -506,8 +512,14 @@ impl Checker<'_> {
                         // 单态化都要按**位置**对齐「形参表 ↔ 实参表」，而
                         // `SignatureDef` 没有这一栏 ⇒ 在 `Package` 上单开一张表。
                         // 只收包级函数（方法不能显式指定类型实参）。
-                        if recv.is_none() && !own_tps.is_empty() && d.name.value != "_" {
-                            self.generic_funcs.insert(d.name.value.clone(), own_tps);
+                        if recv.is_none() && !own_tps.is_empty() {
+                            if d.name.value == "_" {
+                                // `_` 可以声明很多次 ⇒ 键用位置，见
+                                // `Package::blank_func_tparams`。
+                                self.blank_func_tparams.insert(d.pos, own_tps);
+                            } else {
+                                self.generic_funcs.insert(d.name.value.clone(), own_tps);
+                            }
                         }
                         // `func init` **不进包作用域**（M4/Task 34）⇒ 它的签名
                         // 也不是 dump 根：官方 dump 从包作用域枚举对象，

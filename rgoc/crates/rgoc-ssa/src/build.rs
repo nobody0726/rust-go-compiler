@@ -1130,6 +1130,15 @@ fn scan_expr(tt: &TypeTable, e: &Expr, sc: &mut Scanned) {
             if let Callee::Value(v) = callee {
                 scan_expr(tt, v, sc);
             }
+            // 方法调用的**接收者**也要扫（`issue47878` 实测）：指针接收者 +
+            // 可寻址变量时，lowering 生成 `recv = Addr(Place::Slot(s))`
+            // （`recv_expr_path` 的 `want_ptr && is_addr_expr` 分支）—— 这与
+            // 显式 `&x` 完全同形，`x` 必须成根，否则建图时
+            // `place_addr_root(Place::Slot)` 撞「槽没有根」。接口调用的
+            // 接收者不会取槽地址，扫一遍只是保守，不改结果。
+            if let Callee::Method { recv, .. } | Callee::Iface { recv, .. } = callee {
+                scan_expr(tt, recv, sc);
+            }
             for a in args {
                 scan_expr(tt, a, sc);
             }
@@ -2085,6 +2094,13 @@ impl Def<'_> {
                 if let Callee::Value(v) = callee {
                     self.expr(v);
                 }
+                // 方法调用的接收者也是一次读（`issue47878` 实测）：值接收者
+                // `src2.Next()` 的 recv 是 `Addr(Place::Slot(s))`（指针接收者）
+                // 或槽值本身 —— 不读它，槽会被当成「确定赋值」提升成纯值，
+                // 建图时 `read_slot` 撞「既不提升也没有根」。
+                if let Callee::Method { recv, .. } | Callee::Iface { recv, .. } = callee {
+                    self.expr(recv);
+                }
                 for a in args {
                     self.expr(a);
                 }
@@ -2681,10 +2697,9 @@ impl Fb<'_> {
                 if let Some(&p) = self.slot_ptr.get(s) {
                     return (p, Some(self.heap_root()));
                 }
-                let root = *self
-                    .slot_root
-                    .get(s)
-                    .unwrap_or_else(|| panic!("槽 s{} 没有根", s.0));
+                let root = *self.slot_root.get(s).unwrap_or_else(|| {
+                    panic!("槽 s{} 没有根（函数 {}）", s.0, self.f.name)
+                });
                 (self.addr_of(root), Some(root))
             }
             Place::Global(g) => {

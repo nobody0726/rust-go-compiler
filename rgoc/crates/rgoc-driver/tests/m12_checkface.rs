@@ -1866,3 +1866,73 @@ fn undefended_control(tt: &mut rgoc_types::TypeTable, prog: &rgoc_hir::Program) 
         "塞了 `TypeParam` 却查不出来 —— 判据恒真：{got:?}"
     );
 }
+
+/// `T-GEN-02`：`compile` 族 **39 / 40**（Task 20）。
+///
+/// # 为什么不是 40 / 40
+///
+/// `typelist.go` 的最后两条诊断（92 / 112 行）是**部分实例化**
+/// （`f := f2[byte]` 只给 1 个实参，剩余的从调用实参推断）。官方里
+/// 「部分实例化的函数值」是一等公民：它的类型是**仍带类型参数的签名**，
+/// 调用点再推断。我们的类型系统没有这个维度 —— 要支持它得让「部分泛型值」
+/// 贯穿 check（`Operand` 表示）→ HIR（槽里存什么？）→ SSA（帧布局）三层，
+/// 是一条独立的里程碑级工作，不是 `Task 20` 的局部补丁。登记为
+/// **U-M12-01**（白名单，见 `M12-baseline.md` §14.3）。
+///
+/// # 白名单要冻住
+///
+/// 断言里同时钉死「白名单条数 == 1」：将来把别的文件从这条判据里放走时，
+/// 必须先在这里把条数改掉 —— 防止白名单悄悄变大（§11.3 的同一条纪律：
+/// 「记一笔 open_gap」不等于收口）。
+#[test]
+fn t_gen_02_compile_39of40() {
+    let lists = std::env::temp_dir().join("rgoc-t20-lists");
+    classify(&lists);
+    const WHITELIST: [&str; 1] = ["typelist"];
+    let mut bad = Vec::new();
+    let mut total = 0usize;
+    let mut skipped = 0usize;
+    for name in read_list(&lists, "compile") {
+        total += 1;
+        let stem = name.trim_end_matches(".go");
+        if WHITELIST.contains(&stem) {
+            skipped += 1;
+            continue;
+        }
+        let f = corpus().join(&name);
+        let target = std::env::temp_dir().join(format!("rgoc-t20-{stem}"));
+        let out = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .arg("build")
+            .arg("-o")
+            .arg(&target)
+            .arg(&f)
+            .output()
+            .expect("起不了 build");
+        if out.status.code() != Some(0) {
+            bad.push(format!(
+                "{stem}: 退出 {:?}｜{}",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+        }
+    }
+    assert_eq!(
+        total, 40,
+        "compile 族的划分变了 —— 这条判据的口径要跟着 m12-classify.sh 走"
+    );
+    assert_eq!(
+        skipped,
+        WHITELIST.len(),
+        "白名单失效（文件名对不上清单？）—— 要么改名单，要么把文件从白名单里请出去"
+    );
+    assert!(
+        bad.is_empty(),
+        "compile 族 build 仍失败 {} 个：\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
