@@ -2760,7 +2760,38 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         }
         // 方法 / 函数值 / 直接调用
         let callee = self.lower_callee(c, &fop);
-        let arg_types = self.callee_param_types(&callee);
+        let mut arg_types = self.callee_param_types(&callee);
+        if arg_types.is_empty() && matches!(callee, Callee::Func(_)) {
+            // 实例壳还是 **placeholder**（下沉序：本实例先于被调实例下沉，
+            // `issue48598` 的 `Foo·int` 体内调 `FromIterator·int` 实测）——
+            // `prog.funcs` 里没有形参表 ⇒ 实参 `coerce` 拿不到目标类型 ⇒
+            // **接口实参不装箱**，`it` 存的是裸 nil func，接口分派报
+            // 「nil 解引用」。用**检查面**的签名兜底：`c.fun` 的 check 类型
+            // 就是 `infer` 的产物。
+            //
+            // ⚠️ 只信**实例化后**的签名：形参里还有类型参数 ⇒ 这是**原型**
+            // 签名（`issue51840` 实测：把 tp 塞进 targets，函数体内的槽类型
+            // 落在 tp 上，帧布局当场炸「没有运行期布局」），保守回退旧行为。
+            let tt = self.tt();
+            if let Some(ft) = fop.typ
+                && let Type::Signature(sid) = tt.type_of(unalias(tt, ft))
+            {
+                let d = tt.signature_def(*sid);
+                if let Type::Tuple(tid) = tt.type_of(d.params) {
+                    let vars: Vec<TypeId> =
+                        tt.tuple_def(*tid).vars.iter().map(|(_, t)| *t).collect();
+                    let has_tp = vars.iter().any(|&t| {
+                        matches!(
+                            tt.type_of(rgoc_types::identical::unalias(tt, t)),
+                            Type::TypeParam(_)
+                        )
+                    });
+                    if !has_tp {
+                        arg_types = vars;
+                    }
+                }
+            }
+        }
         let mut args: Vec<Expr> = c.args.iter().map(|a| self.lower_expr(a)).collect();
         // `f(g())`：唯一实参是多值调用 ⇒ `g` 的多个结果直接充当 `f` 的实参列表
         // （Go 规范 Calls：`f(g())` 里 `g` 的结果必须正好匹配 `f` 的形参）。

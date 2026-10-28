@@ -723,8 +723,18 @@ impl<'a> Shared<'a> {
         }
         for (i, f) in self.prog.funcs.iter().enumerate() {
             if let Some(base) = &f.method_of {
+                // 方法名是壳名的**最后一段**（`M12/Task 21`）：方法实例的壳名
+                // 是 mangled 的 `IteratorFunc·int.Iterate`（原型方法不发码，
+                // 发码的是实例），key 若用整个名字，接口分派按 ("IteratorFunc",
+                // "Iterate") 查不到 ⇒ 假「nil 解引用」（issue48598 实测）。
+                // 原型方法（非泛型）的壳名本来就是方法名，rsplit 不变。
+                let mname = f
+                    .name
+                    .rsplit_once('.')
+                    .map(|(_, m)| m)
+                    .unwrap_or(f.name.as_str());
                 self.methods
-                    .insert((base.clone(), f.name.clone()), FuncId(i as u32));
+                    .insert((base.clone(), mname.to_string()), FuncId(i as u32));
             }
         }
     }
@@ -2930,6 +2940,13 @@ impl<'a> G<'a> {
             Value::Iface { typ, data } => ((*typ)?, data.as_ref().clone()),
             _ => return None,
         };
+        if std::env::var_os("DBG_IF").is_some() {
+            eprintln!(
+                "DBGIF resolve name={name} dt={} data_kind={:?}",
+                dt.index(),
+                std::mem::discriminant(&data)
+            );
+        }
         // 先直接查动态类型自己的方法；查不到再沿**嵌入字段**提升。
         //
         // 为什么解释器也要走一遍提升：接口的动态类型可能是外层结构体，而方法
