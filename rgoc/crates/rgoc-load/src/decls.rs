@@ -554,13 +554,32 @@ impl Checker<'_> {
         &mut self,
         d: &rgoc_ast::FuncDecl,
     ) -> (Option<TypeId>, TypeId, Vec<TypeParamId>) {
-        let (base, recv_tps) = match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
-            Some(fs) => self.declare_tparams(self.pkg_scope, &fs),
-            None => (self.pkg_scope, Vec::new()),
-        };
+        let (base, recv_tps, generic_recv) =
+            match d.recv.as_ref().and_then(|r| self.recv_tparam_fields(r)) {
+                Some(fs) => {
+                    let (s, ids) = self.declare_tparams(self.pkg_scope, &fs);
+                    (s, ids, true)
+                }
+                None => (self.pkg_scope, Vec::new(), false),
+            };
         // 接收者类型在**方法自己的**类型参数之外解析（官方：接收者不能引用方法
         // 自己的 `[P any]`）—— 但**能**引用接收者声明的类型参数 ⇒ 用 `base`。
-        let recv = d.recv.as_ref().map(|r| self.resolve_type(base, &r.type_));
+        //
+        // ⚠️ 泛型接收者的**形参表那一段不解析**（`M12/Task 10`）。官方
+        // `collectRecv`（`signature.go:216`）先用 `unpackRecv` 拆出
+        // 「基 + 形参表」，再把形参逐个 `declareTypeParam`（`decl.go:662`），
+        // `recvType = instance(baseType, recvTParams)` 的实参是刚声明的类型参数
+        // **自己** —— 形参那棵表达式根本没过 `typ()`。照抄这一点：
+        // `Box[_]` / `Box[T]` 都只解析基名 `Box`，`[_]` 不碰。
+        // 解析它就会把 `_` 当引用 ⇒ `TYP-INVALID-BLANK`（语料 4 个文件：
+        // `issue47710.go` / `issue53406.go` / `smoketest.go` / `list2.go`）。
+        let recv = d.recv.as_ref().map(|r| {
+            if generic_recv {
+                self.resolve_recv_generic(base, &r.type_)
+            } else {
+                self.resolve_type(base, &r.type_)
+            }
+        });
         let (scope, own_tps) = if d.tparams.is_empty() {
             (base, Vec::new())
         } else {
@@ -583,6 +602,39 @@ impl Checker<'_> {
             self.tt.set_signature_recv_tparams(sid, recv_tps);
         }
         (recv, sig, own_tps)
+    }
+
+    /// **泛型**接收者类型：只解析基名，形参表那一段不碰（`M12/Task 10`）。
+    ///
+    /// 官方 `collectRecv` 的实参是刚 `declareTypeParam` 出来的类型参数**自己**
+    /// （`recvType = instance(baseType, recvTParams)`），形参那棵表达式从不过
+    /// `typ()`。所以 `Box[_]` 的 `_` 在官方那里是**声明**，不是引用。
+    ///
+    /// 调用前提：`recv_tparam_fields` 已返回 `Some` ⇒ 剥掉 `Paren` / `*` 之后
+    /// 必定是 `Index{base: Name, index: 全标识符}`，且个数与类型声明的形参表对齐。
+    /// 指针层数照原样包回去（`*Box[T]` 的结果要与 `resolve_type` 走老路时同一个）。
+    fn resolve_recv_generic(&mut self, scope: ScopeId, e: &rgoc_ast::Expr) -> TypeId {
+        let mut ptr = 0usize;
+        let mut cur = e;
+        loop {
+            match cur {
+                Expr::Paren(p) => cur = &p.x,
+                Expr::Unary(u) if u.op == Op::Mul && u.y.is_none() => {
+                    ptr += 1;
+                    cur = &u.x;
+                }
+                _ => break,
+            }
+        }
+        // 不是 `Index` 只能是「上游换了形状」—— 兜底走全量解析，绝不假装成功
+        let Expr::Index(ix) = cur else {
+            return self.resolve_type(scope, cur);
+        };
+        let mut t = self.resolve_type(scope, &ix.x);
+        for _ in 0..ptr {
+            t = self.tt.add_pointer(t);
+        }
+        t
     }
 
     /// 接收者类型 → 本包具名基底（`T` / `*T`；泛型 `Box[T]` / `*Box[T]` 在

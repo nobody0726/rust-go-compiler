@@ -790,3 +790,184 @@ func use() { _ = Bad[map[string]int]() }
         "CHK-INVALID-BUILTIN-ARG",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-GEN-10 两个边角（`_` 与 `range`）
+// ════════════════════════════════════════════════════════════════════
+
+/// 两个**边角位置**，各自只值两三个文件，但都是「把合法代码误判成错」。
+///
+/// # ① 接收者的类型实参位置：`_` 合法
+///
+/// `func (b Box[_]) M()` 里的 `_` **不是引用**。官方 `collectRecv`
+/// （`signature.go:216`）先用 `unpackRecv` 把 `Box[_]` 拆成
+/// 「基 `Box` + 形参表 `[_]`」，然后 `declareTypeParam`（`decl.go:662`）
+/// 把 `_` 当**类型参数声明**——`recvType = instance(baseType, recvTParams)`
+/// 用的是刚声明的类型参数**自己**，形参表那棵表达式根本没过 `typ()`。
+///
+/// 我们这两条路都会把它当引用：`rgoc-load` 的 `use_name`（`scope.rs:723`）
+/// 与 `rgoc-check` 的 `resolve_type(Name "_")`（`typeexpr.rs:84`）。
+/// 本仓 `recv_tparam_fields`（`decls.rs:621`）已经按官方口径把实参当声明收了，
+/// 但 `resolve_func_sig` 紧接着又把**整棵** `Box[_]` 交给 `resolve_type` ⇒ 撞上。
+///
+/// 语料：`issue47710.go` / `issue53406.go` / `smoketest.go` / `list2.go`（4 个文件）。
+///
+/// # ② `range` 一个类型参数：按**共同底层**判
+///
+/// 官方 `rangeKeyVal`（`range.go:212`）第一句就是
+/// `commonUnder(orig, …)`，不是 `under(orig)` —— `under(TypeParam)` 在官方
+/// 返回**类型参数自己**（`*TypeParam.Underlying()` 就是它自己），直接
+/// `switch` 会落到 default ⇒ 误报 `cannot range over`。
+///
+/// 语料：`issue48453.go`（`CopyMap[M ~map[K]V]` 里 `for k, v := range m`）。
+///
+/// # 两条都要**留牙**
+///
+/// 放开的只是「声明位置」与「类型参数」两个面：
+/// `var x _` / `func f(x _) {}` 仍然要 `TYP-INVALID-BLANK`；
+/// 类型集**没有共同底层**（`~int | ~string`）或**只写通道**的 range 仍然要拒。
+#[test]
+fn t_gen_10_边角() {
+    // ① 接收者的类型实参位置（含指针、多形参、部分 `_`）。
+    assert_check_ok(
+        "gen10a",
+        r#"
+package p
+
+type Box[T any] int
+
+func (b Box[T]) A() {}
+func (b Box[_]) B() {}
+func (b *Box[_]) C() {}
+
+type Pair[A, B any] int
+
+func (p Pair[A, B]) X() {}
+func (p Pair[_, B]) Y() {}
+func (p Pair[_, _]) Z() {}
+"#,
+    );
+    // ② `_` 作为**类型参数名**与**类型名**声明（`smoketest.go:28` / `issue53406.go:20`）。
+    assert_check_ok(
+        "gen10b",
+        r#"
+package p
+
+type _ int
+type _ []string
+
+type Inner[_ any] int
+
+func (Inner[_]) M() {}
+
+func (i Inner[int]) N() {}
+"#,
+    );
+    // ③ 负例：`_` 当**类型引用**仍然拒（别把牙拔了）。
+    assert_check_code(
+        "gen10n1",
+        r#"
+package p
+
+var x _
+"#,
+        "TYP-INVALID-BLANK",
+    );
+    // ④ 负例：`_` 当**形参类型**仍然拒。
+    assert_check_code(
+        "gen10n2",
+        r#"
+package p
+
+func f(x _) {}
+"#,
+        "TYP-INVALID-BLANK",
+    );
+    // ⑤ `range` 类型参数：map / slice / chan / 数组（`issue48453.go` 的形态）。
+    assert_check_ok(
+        "gen10c",
+        r#"
+package p
+
+func R1[M ~map[K]V, K comparable, V any](m M) int {
+	n := 0
+	for k, v := range m {
+		_, _ = k, v
+		n++
+	}
+	return n
+}
+
+func R2[S ~[]E, E any](s S) int {
+	n := 0
+	for i, v := range s {
+		_, _ = i, v
+		n++
+	}
+	return n
+}
+
+func R3[C ~chan int](ch C) int {
+	n := 0
+	for v := range ch {
+		_ = v
+		n++
+	}
+	return n
+}
+
+func R4[A ~[4]E, E any](a A) int {
+	n := 0
+	for i := range a {
+		_ = i
+		n++
+	}
+	return n
+}
+
+func use() {
+	_ = R1(map[string]int{})
+	_ = R2([]int{1})
+	_ = R3(make(chan int))
+	_ = R4([4]int{})
+}
+"#,
+    );
+    // ⑥ 负例：类型集**没有共同底层**（`~int | ~string`）⇒ 拒。
+    // 这条钉的是 `common_under` 的「共同」语义：换成「取第一个 term」它就绿了。
+    assert_check_code(
+        "gen10n3",
+        r#"
+package p
+
+func Bad[T ~int | ~string](x T) int {
+	n := 0
+	for range x {
+		n++
+	}
+	return n
+}
+
+func use() { _ = Bad(1) }
+"#,
+        "CHK-INVALID-RANGE-EXPR",
+    );
+    // ⑦ 负例：只写通道的类型参数仍然拒（`commonUnder` 之后 SendOnly 判定还得在）。
+    assert_check_code(
+        "gen10n4",
+        r#"
+package p
+
+func Bad[C ~chan<- int](ch C) int {
+	n := 0
+	for range ch {
+		n++
+	}
+	return n
+}
+
+func use() { _ = Bad(make(chan<- int)) }
+"#,
+        "CHK-INVALID-RANGE-EXPR",
+    );
+}

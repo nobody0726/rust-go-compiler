@@ -51,8 +51,8 @@ use rgoc_types::{ChanDir, Type, TypeId, underlying};
 use crate::check::Session;
 use crate::env::Env;
 use crate::expr::{
-    At, BinSrc, ExprChecker, all_boolean, all_integer, all_numeric, basic_kind, expr_label,
-    is_non_typeparam_interface, is_untyped, operand_text, type_str,
+    At, BinSrc, ExprChecker, all_boolean, all_integer, all_numeric, basic_kind, common_under,
+    expr_label, is_non_typeparam_interface, is_untyped, operand_text, type_str,
 };
 use crate::operand::{Mode, Operand};
 use crate::version::{self, Feat};
@@ -1225,11 +1225,22 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
         let rune_ty = self.s.tt.add_basic(BasicId::Int32);
         let gated_int = !version::allow(&self.s.pkg.versions, file, Feat::RangeOverInt);
         let gated_func = !version::allow(&self.s.pkg.versions, file, Feat::RangeOverFunc);
-        let tt = &*self.s.tt;
-        if matches!(tt.type_of(t), Type::Invalid) {
+        if matches!(self.s.tt.type_of(t), Type::Invalid) {
             return RangeKV::Bad(None);
         }
-        let u = underlying(tt, t);
+        // ⚠️ 官方 `rangeKeyVal`（`range.go:212`）第一句是 **`commonUnder(orig, …)`**，
+        // 不是 `under(orig)`（`M12/Task 10`）。`under(TypeParam)` 在官方返回类型参数
+        // **自己**（`(*TypeParam).Underlying()` 就是它自己）⇒ 直接 `switch` 会落
+        // default ⇒ 把 `for k, v := range m`（`m` 是 `~map[K]V`）误报成
+        // `cannot range over value of type type parameter`（`issue48453.go`）。
+        //
+        // `common_under` 的「共同」语义正好是官方那一条：类型集没有共同底层
+        // （`~int | ~string`）⇒ `None` ⇒ 官方同样 `bad`。非类型参数走
+        // `underlying` 一支，与改之前逐字等价。
+        let Some(u) = common_under(&mut *self.s.tt, t) else {
+            return RangeKV::Bad(None);
+        };
+        let tt = &*self.s.tt;
 
         // 只写通道不能 range（官方 `receive from send-only channel %s`）
         if let Type::Chan {
