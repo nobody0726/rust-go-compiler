@@ -1685,3 +1685,184 @@ func main() {
     assert_eq!(out.stdout, "7\n9\n");
     assert_eq!(out.exit, 0);
 }
+
+// ── Task 19：无类型参数残留（`T-GEN-05`）──────────────────────────────
+
+/// 一个语料文件能 lower 成功时，拿回**类型表**与 HIR。
+///
+/// `check` 有诊断、或 lowering 拒绝，都返回 `None` —— 那两类失败由
+/// `t_gen_17` / `t_gen_18`（`build` 退出码）与 Phase 3 的 40/71 判据盯，
+/// 本条只问一件事：**编出来的 HIR 里还有没有类型参数 / `invalid`**。
+fn lower_file(path: &Path) -> Option<(rgoc_types::TypeTable, rgoc_hir::Program)> {
+    let src = fs::read(path).ok()?;
+    let mut tt = rgoc_types::TypeTable::new();
+    let files: [(&str, &[u8]); 1] = [("a.go", &src)];
+    let (pkg, bag) = rgoc_load::load_sources(&mut tt, &files, None);
+    let opts = rgoc_check::CheckOptions::default();
+    let (checked, lowered) =
+        rgoc_check::check::check_package_with(&pkg, &mut tt, bag, &opts, |s| {
+            rgoc_hir::lower(&pkg, s)
+        });
+    if checked.rendered_count() > 0 {
+        return None;
+    }
+    Some((tt, lowered.ok()?))
+}
+
+/// HIR 里的**类型参数与 `invalid` 残留**（一处一行，人类可读）。
+///
+/// # 查哪三处、为什么`slot_types` 单独一档
+///
+/// * `param_types` / `result_types` / 全局类型：出现 `TypeParam` 或 `Invalid`
+///   都只能是**漏收敛**（实参没替换进去、或者类型表达式解失败被兜成
+///   `invalid`）。这三处一个都不许有。
+/// * `slot_types`：**允许 `Invalid`** —— `types.rs` 的约定就是「`Invalid` ⇒
+///   无类型临时槽」（`var x int` 这种不产生赋值的槽、闭包环境槽都用它）。
+///   但**不允许 `TypeParam`**：那是替换没生效。
+fn type_residue(tt: &rgoc_types::TypeTable, prog: &rgoc_hir::Program) -> Vec<String> {
+    use rgoc_types::Type;
+    // ⚠️ 先看**原类型**是不是 `TypeParam`，再看 underlying：`underlying` 会把
+    // 类型参数解到它约束里（接口），于是 `Type::TypeParam` 这一档永远匹配不到
+    // —— 阴性对照第一次就是这么恒真的（塞了 `TypeParam` 却报空）。
+    let what = |t: rgoc_types::TypeId| {
+        if matches!(tt.type_of(t), Type::TypeParam(_)) {
+            return Some("类型参数");
+        }
+        match tt.type_of(rgoc_types::underlying(tt, t)) {
+            Type::Invalid => Some("invalid"),
+            _ => None,
+        }
+    };
+    let mut out = Vec::new();
+    for (i, f) in prog.funcs.iter().enumerate() {
+        for (k, &t) in f.param_types.iter().enumerate() {
+            if let Some(w) = what(t) {
+                out.push(format!("func#{i} {} 形参#{k}: {w}", f.name));
+            }
+        }
+        for (k, &t) in f.result_types.iter().enumerate() {
+            if let Some(w) = what(t) {
+                out.push(format!("func#{i} {} 结果#{k}: {w}", f.name));
+            }
+        }
+        for (k, &t) in f.slot_types.iter().enumerate() {
+            if matches!(tt.type_of(t), Type::TypeParam(_)) {
+                out.push(format!("func#{i} {} 槽#{k}: 类型参数", f.name));
+            }
+        }
+    }
+    for (i, g) in prog.globals.iter().enumerate() {
+        if let Some(w) = what(g.typ) {
+            out.push(format!("全局#{i} {}: {w}", g.name));
+        }
+    }
+    out
+}
+
+/// `T-GEN-05`：门禁语料编出来的 HIR 里**没有类型参数残留**。
+///
+/// # 这条判据在问什么
+///
+/// 「单态化做全了」的**唯一**直接观测点：HIR 里所有类型都已经是具体类型。
+/// `build` 退出 0 证不出这件事 —— `Invalid` 能在帧布局阶段侥幸有布局
+/// （`slot_types` 允许 `Invalid`），而 `TypeParam` 撞上「零大小」或
+/// 「指针形状」时也能混过去。反过来，这条判据一旦红，失败位置精确到
+/// 「哪个函数的第几个形参」，比 `帧布局失败：v4 的类型 t31` 有用得多。
+///
+/// # 为什么不断言「116 个全过」
+///
+/// 116 = `run` 71 + `compile` 40 + `errorcheck` 5。后两批今天还有失败
+/// （Phase 3 的账，`M12-plan.md` Task 20/21），`errorcheck` 一族本来就该报诊断。
+/// 所以这里只查**能 lower 成功**的那些，并把**查了多少个**作为断言的一部分：
+/// 门槛写今天的实测值，将来某个文件从 ok 变 reject 时这条判据会红 ——
+/// 否则它会悄悄退化成「一个都没查」。
+///
+/// # 阴性对照
+///
+/// 同一条测试里做两次**反向验证**：往一份真 HIR 的结果类型里塞一个
+/// `invalid` / 一个 `TypeParam`，断言 [`type_residue`] 立刻非空。
+/// 没有这两步，「残留为空」可能只是判据恒真（`§11.3` / `§12.3` 的教训）。
+#[test]
+fn t_gen_05_无残留() {
+    let lists = std::env::temp_dir().join("rgoc-t19-lists");
+    classify(&lists);
+    let mut checked = 0usize;
+    let mut skipped = Vec::new();
+    let mut bad = Vec::new();
+    for fam in ["run", "compile", "errorcheck"] {
+        for name in read_list(&lists, fam) {
+            let p = corpus().join(&name);
+            let Some((mut tt, prog)) = lower_file(&p) else {
+                skipped.push(format!("{fam}/{name}"));
+                continue;
+            };
+            checked += 1;
+            for line in type_residue(&tt, &prog) {
+                bad.push(format!("{name}: {line}"));
+            }
+            // 阴性对照用第一份真 HIR，做在下面（借它的类型表）。
+            if fam == "run" && name.starts_with("issue47708") {
+                undefended_control(&mut tt, &prog);
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "这些文件的 HIR 里还有类型参数 / invalid 残留（共 {} 处）：\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+    assert!(
+        checked >= MIN_CHECKED,
+        "只查到 {checked} 个文件（门槛 {MIN_CHECKED}）—— 判据正在退化：\n跳过 {}",
+        skipped.join(" ")
+    );
+}
+
+/// 今天实测能 lower 成功的门禁文件数：`run` 47 + `compile` 35 + `errorcheck` 2
+/// = **84**。
+///
+/// 三族的差分别是：`run` 71 − 24 个跳过、`compile` 40 − 5、`errorcheck` 5 − 3
+/// （`tparam1` / `issue48711` / `issue50317` 本来就该报诊断）。
+///
+/// 只许**涨**：某个文件从 ok 变成 reject 时，`t_gen_05` 会红着提醒
+/// 「这条判据少查了一个，别当它还是全覆盖」。
+const MIN_CHECKED: usize = 84;
+
+/// 阴性对照：往真 HIR 里塞 `invalid` / `TypeParam`，判据必须报出来。
+fn undefended_control(tt: &mut rgoc_types::TypeTable, prog: &rgoc_hir::Program) {
+    let mut f = prog.funcs[0].clone();
+    assert!(
+        !f.result_types.contains(&tt.invalid()),
+        "对照的前提是这份 HIR 本身没有 invalid"
+    );
+    f.result_types.push(tt.invalid());
+    let mut prog2 = prog.clone();
+    prog2.funcs[0] = f;
+    let got = type_residue(tt, &prog2);
+    assert!(
+        got.iter().any(|l| l.contains("invalid")),
+        "塞了 `invalid` 却查不出来 —— 判据恒真：{got:?}"
+    );
+    // 类型参数那半边：类型表里得先有一个 `TypeParam` 条目。
+    let mut tp = None;
+    for i in 0..tt.len() {
+        let t = rgoc_types::TypeId::from_index(i);
+        if matches!(tt.type_of(t), rgoc_types::Type::TypeParam(_)) {
+            tp = Some(t);
+            break;
+        }
+    }
+    let Some(tp) = tp else {
+        panic!("类型表里一个 `TypeParam` 都没有 —— 语料选错了，半边对照没做");
+    };
+    let mut f = prog.funcs[0].clone();
+    f.result_types.push(tp);
+    let mut prog3 = prog.clone();
+    prog3.funcs[0] = f;
+    let got = type_residue(tt, &prog3);
+    assert!(
+        got.iter().any(|l| l.contains("类型参数")),
+        "塞了 `TypeParam` 却查不出来 —— 判据恒真：{got:?}"
+    );
+}

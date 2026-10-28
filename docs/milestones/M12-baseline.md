@@ -582,3 +582,65 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 判据是「造不造函数」，不是「认不认这条请求」——两者的分界线在发码口。拒绝一个
 合法请求的代价比少发一个「谁也不调」的函数大得多（泛型原型本身不发码，所以没有
 活代码会引用这些实例）。这条写进了 `Session::request_inst` 的注释里。
+
+## 13. Task 19：`T-GEN-05` 无类型参数残留（2026-10-28）
+
+判据 `t_gen_05_无残留`（`m12_checkface.rs`）。
+
+### 13.1 判据换了载体：不是 `grep 'type parameter'`
+
+计划里写的是「逐个 `--emit=asm` + `--dump=hir`，断言 `grep -c 'type parameter' == 0`」。
+实测两处都数不出这个词：
+
+| 载体 | 今天的内容 | 数得到 `type parameter` 吗 |
+|---|---|---|
+| `run --dump-hir`（HIR dump） | `# func 0 main` / `0 Func params=0 …` / `7 Expr const Int(7)` —— **只有结构，没有类型名** | ❌ 恒 0 |
+| `types --dump`（`C7` 中性 dump） | `0 named 12` / `3 invalid` / `4 tuple 1` —— 类型**种类**用小写单词写 | ❌ 恒 0（`TypeParam` 不在 `C7` 的词表里） |
+
+两条都恒 0 ⇒ 那样的判据是**恒真**的（`§11.3` 的同一条纪律）。
+改成查**真实字段**：走库 API 拿 `Program` + `TypeTable`，逐函数查
+`param_types` / `result_types` / `slot_types` 与全局类型。
+
+三处口径分开写：
+
+* `param_types` / `result_types` / 全局类型：`TypeParam` 与 `Invalid` **一个都不许有**；
+* `slot_types`：**允许 `Invalid`**（`types.rs` 的约定就是「`Invalid` ⇒ 无类型临时槽」），
+  但**不许** `TypeParam`。
+
+> `TypeParam` 要**先看原类型**再看 `underlying`：`underlying` 会把类型参数解到约束
+> 里的接口上，于是 `Type::TypeParam` 那一档永远匹配不到 —— 阴性对照第一次就是这么
+> 恒真的（塞了 `TypeParam` 却报空）。
+
+### 13.2 读数
+
+| 项 | 值 |
+|---|---|
+| 查了的门禁文件 | **84**（`run` 47 + `compile` 35 + `errorcheck` 2） |
+| 残留 | **0** |
+| 跳过 | 42（`run` 24 + `compile` 5 + `errorcheck` 3，全是还没编过的 —— Phase 3 的账） |
+
+门槛 `MIN_CHECKED = 84` 是断言的一部分：某个文件从 ok 变 reject 时这条判据会红，
+否则它会悄悄退化成「一个都没查」。
+
+### 13.3 判据有牙的三份证据
+
+1. **内建阴性对照**（每次跑都做）：往一份真 HIR 的 `result_types` 里塞 `invalid` /
+   塞一个 `TypeParam`，断言 `type_residue` 立刻非空。没有它，「残留为空」可能只是
+   判据恒真。
+2. **真实残留**：拿 §12.3 的变异 E（`is_abstract` 恒 `false`，让「泛型原型自己」
+   也发码）跑这条判据，立刻红，且**位置精确到形参**：
+   ```
+   issue50264.go: func#3 Some2·tp5 形参#0: 类型参数
+   issue50264.go: func#3 Some2·tp5 槽#0: 类型参数
+   ```
+   比 `帧布局失败：函数 Some2·tp5：v0 的类型 t52` 有用得多 —— 后者要读到
+   「帧布局」才知道是类型没替换，前者直接说「哪个函数第几个形参还是 T」。
+3. 门槛断言（§13.2）。
+
+### 13.4 顺带发现的一处假绿（归 Task 22）
+
+`errorcheck` 族的 `issue51232` / `issue51233` 现在 `check` **退出 0** —— 它们本该
+报 `TYP-WRONG-TYPE-ARG-COUNT`（`M12-plan.md` Task 22 的账）。因为 check 干净，
+`t_gen_05` 把它们当成「能 lower 成功的文件」计入了 84。这不是本 Task 引入的问题，
+但**必须记账**：Task 22 修好之后这两个文件会从 84 里掉出去，`MIN_CHECKED` 要跟着
+改成 82。
