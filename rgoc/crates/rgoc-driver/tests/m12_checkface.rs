@@ -2188,3 +2188,86 @@ fn t_gen_11_泛型并发三态() {
         collections
     );
 }
+
+/// `T-GEN-04`（M12/Task 25 前置）：**实例名确定性**。
+///
+/// # 原始定义与可测形态（`M12-tests.md` §3）
+///
+/// 原文要求「两次编译（清 `target` 后）的 `.s` 逐字节相同 + 实例名含
+/// `·`」。落地时发现 `.s` 里**没有** mangled 名 —— arm64 后端把所有
+/// 函数重编号成 `fn0/fn1/…`（`M12 Ruling 25-1`：符号名在 `.s` 层不
+/// 保留）。所以拆成两半，各挑最接近的观测面：
+///
+/// 1. **确定性**：同一份源码两次 `build --keep-asm`，`.s` 逐字节相同
+///    （两次都是独立进程、全新 scratch，等价于「清 target 后重编」）；
+/// 2. **实例名**：`run --dump-hir` 的 `# func N <名字>` 里，`Sum·int` /
+///    `Sum·string` 两个实例与用户符号 `Sum_int` **并存**（对照组：
+///    真叫 `Sum_int` 的函数不许与实例撞名）。
+///
+/// fixture `gen_names.go`：泛型 `Sum[T]` 两个实例 + 用户 `Sum_int`。
+#[test]
+fn t_gen_04_实例名确定性() {
+    const SRC: &str = include_str!("fixtures/m12/gen_names.go");
+    let src = repo_root().join("rgoc/crates/rgoc-driver/tests/fixtures/m12/gen_names.go");
+    let _ = SRC;
+    let tmp = std::env::temp_dir();
+
+    // ① 两次独立 build 的 `.s` 逐字节相同
+    let mut asm: Vec<Vec<u8>> = Vec::new();
+    for i in 0..2 {
+        let out = tmp.join(format!("rgoc-tg4-{i}"));
+        let b = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .args(["build", "--keep-asm", "-o"])
+            .arg(&out)
+            .arg(&src)
+            .output()
+            .expect("起不了 build");
+        assert_eq!(
+            b.status.code(),
+            Some(0),
+            "第 {i} 次 build 失败：{}",
+            String::from_utf8_lossy(&b.stderr)
+        );
+        let s = tmp.join(format!("rgoc-tg4-{i}.s"));
+        asm.push(fs::read(&s).unwrap_or_else(|e| panic!("读不到 {s:?}：{e}")));
+    }
+    assert_eq!(
+        asm[0], asm[1],
+        "两次编译的 .s 不一致 —— 实例名/布局不确定（M-M12-02 的靶子）"
+    );
+
+    // ② HIR 名单：两个实例 + 用户符号并存
+    let dump = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+        .args(["run", "--dump-hir"])
+        .arg(&src)
+        .output()
+        .expect("起不了 dump-hir");
+    let text = String::from_utf8_lossy(&dump.stdout).to_string();
+    for want in ["Sum·int", "Sum·string", "Sum_int"] {
+        assert!(
+            text.contains(&format!("# func 0 {want}\n")) || text.contains(&format!(" {want}\n")),
+            "dump-hir 里没有 `{want}`：\n{}",
+            text.lines()
+                .filter(|l| l.starts_with("# func"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+    // ③ native 跑通且输出正确（1 / x / 4）
+    let exe = tmp.join("rgoc-tg4-run");
+    let b = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+        .args(["build", "-o"])
+        .arg(&exe)
+        .arg(&src)
+        .output()
+        .expect("起不了 build");
+    assert_eq!(
+        b.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&b.stderr)
+    );
+    let run = Command::new(&exe).output().expect("起不了 ELF");
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(run.stdout, b"1\nx\n4\n");
+}

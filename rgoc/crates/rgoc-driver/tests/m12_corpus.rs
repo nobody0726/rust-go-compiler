@@ -168,35 +168,81 @@ fn run_oracle(args: &[&str]) -> (i32, String) {
     (out.status.code().unwrap_or(-1), s)
 }
 
-/// **已知红**的文件必须报 BAD，**已知绿**的必须报 OK。
+/// 跑装置，但用**临时语料 / 临时清单 / 临时 OUT**（脚本头声明的三个环境变量）。
+fn run_oracle_in(tmp: &Path, args: &[&str]) -> (i32, String) {
+    let out = Command::new("bash")
+        .arg(repo_root().join("tools/run-oracle/run-native-typeparam.sh"))
+        .args(args)
+        .env("RGOC_TYPEPARAM_DIR", tmp.join("corpus"))
+        .env("RGOC_M12_LISTS", tmp.join("lists"))
+        .env("RGOC_M12_ORACLE", tmp.join("out"))
+        .output()
+        .expect("跑不了 run-native-typeparam.sh（合成语料）");
+    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), s)
+}
+
+/// **红**的必须报 BAD，**绿**的必须报 OK。
 ///
 /// # 为什么这条是「装置自身」的判据而不是语料的判据
 ///
 /// 「装置能跑起来」不构成证据：一个永远报 OK 的装置也能跑。两边同时钉住
-/// （红的必须红、绿的必须绿）才排除了「恒 OK」与「恒 BAD」两种坏法 ——
-/// 这正是 `M11` 的 `T-M12-02` 想防的那类「探针打错靶」。
+/// （红的必须红、绿的必须绿）才排除了「恒 OK」与「恒 BAD」两种坏法。
 ///
-/// 选这两个文件是因为它们**今天**就是这个状态：
+/// # 为什么红靶改成了**合成反例**（§17.2 之后）
 ///
-/// * **红**：`dottype.go` —— `x := i.(T)` 之后的多值调用撞上 SSA 的
-///   `todo!()`（`build.rs:4106`，`build101`）。它是**真的**坏，且与单态化
-///   正交（`M12` 的 Task 17/18 才轮到），拿它当「已知红」不会被下一次
-///   实例化改动顺手修掉。
-/// * **绿**：`absdiff.go` —— `M12/Task 15` 之前它是 check 面失败（core type
-///   上的 `-`）；实例体发码之后**它翻绿了**。这条判据的旧版拿它当「已知红」，
-///   于是 Task 15 一落地判据就红 —— 装置没坏，是登记的状态过期了。
-///   按判据自己的原话：「要改的是这里登记的文件，不是判据本身」。
+/// 这条判据的旧版拿 `dottype.go` 当「已知红」—— 但 Task 24（§17.2）把
+/// `U-M12-09` / `U-M12-S15` 的 8 条 native 输出级老缺口**冻结进白名单**之后，
+/// run 族已经**没有天然红的文件**了（71 条 = 63 绿 + 8 SKIP）。而历史教训
+/// （Task 15 时 absdiff 从红翻绿）恰好说明：把判据绑在「今天恰好红」的
+/// 语料上，状态一过期判据就跟着红 —— 装置没坏，是登记的状态过期了。
 ///
-/// 装置实现变了之后若两者状态互换，这条判据会红。
+/// 所以照 `M10` / `M11` manifest 的同款思路（「合成反例都必须红」）：
+/// 红靶改用**自己造**的语料 —— 一个保证 `build` 失败的文件 + 一个真绿的
+/// `absdiff.go`，通过装置自己的环境变量口子（`RGOC_TYPEPARAM_DIR` /
+/// `RGOC_M12_LISTS` / `RGOC_M12_ORACLE`）喂进去。合成反例**永远**红，
+/// 不再随实现进展翻绿；绿靶继续在真实语料上验 `--filter` 生效。
 #[test]
 fn t_m12_02_装置打的是真靶() {
-    let (rc_bad, out_bad) = run_oracle(&["--list", "--only", "run", "--filter", "dottype.go"]);
-    assert_eq!(rc_bad, 1, "dottype.go 今天应当红：\n{out_bad}");
+    // ── 红靶：合成语料（1 绿 + 1 必红）───────────────────────────────
+    let tmp = std::env::temp_dir().join(format!("rgoc-m12-oracle-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(tmp.join("corpus")).expect("建临时语料目录失败");
+    fs::create_dir_all(tmp.join("lists")).expect("建临时清单目录失败");
+    // 绿：真语料的 absdiff.go 原样拷入（官方 go run 跑得通 ⇒ 走完整 L1+L2）。
+    fs::copy(corpus().join("absdiff.go"), tmp.join("corpus/absdiff.go"))
+        .expect("拷 absdiff.go 失败");
+    // 红：`undefined` 必然 check 失败 ⇒ 装置在 build 步就报 BAD。
+    fs::write(
+        tmp.join("corpus/zzmutant.go"),
+        "// run\npackage main\n\nfunc main() { undefined() }\n",
+    )
+    .expect("写 zzmutant.go 失败");
+    // 清单只有这两个文件 —— 分母是 2，顺带证明临时清单真被用上了。
+    fs::write(
+        tmp.join("lists/typeparam-run.txt"),
+        "absdiff.go\nzzmutant.go\n",
+    )
+    .expect("写临时清单失败");
+
+    let (rc, out) = run_oracle_in(&tmp, &["--list", "--only", "run"]);
+    let _ = fs::remove_dir_all(&tmp);
+    assert_eq!(rc, 1, "含必红文件的语料，装置必须退出 1：\n{out}");
     assert!(
-        out_bad.contains("BAD") && out_bad.contains("dottype.go"),
-        "红的理由必须指名道姓：\n{out_bad}"
+        out.contains("BAD") && out.contains("zzmutant.go"),
+        "红的理由必须指名道姓点到 zzmutant.go：\n{out}"
+    );
+    assert!(
+        out.contains("OK") && out.contains("absdiff.go"),
+        "absdiff.go 必须照常报 OK：\n{out}"
+    );
+    assert!(
+        out.contains("run 1/2"),
+        "两个文件必须 1 绿 1 红（不是 0/2 或 2/2）：\n{out}"
     );
 
+    // ── 绿靶：真实语料 + `--filter` ─────────────────────────────────
     let (rc_ok, out_ok) = run_oracle(&["--list", "--only", "run", "--filter", "absdiff.go"]);
     assert_eq!(rc_ok, 0, "absdiff.go 今天应当绿：\n{out_ok}");
     assert!(out_ok.contains("OK"), "应当有一行 OK：\n{out_ok}");
