@@ -47,10 +47,11 @@
 use rgoc_ast::CallExpr;
 use rgoc_const::{BasicId, Const};
 use rgoc_lex::{DiagCode, FileId, Pos};
-use rgoc_types::{Type, TypeId, identical, underlying};
+use rgoc_types::{Type, TypeId, identical, unalias, underlying};
 
 use crate::expr::{
-    ExprChecker, all_ordered, basic_kind, expr_label, is_untyped, operand_text, type_str,
+    ExprChecker, all_ordered, basic_kind, common_map_key, common_slice_elem, common_under,
+    expr_label, is_untyped, operand_text, type_str, under_is,
 };
 use crate::operand::{Mode, Operand};
 
@@ -197,6 +198,41 @@ fn len_cap(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr, name: &str)
     let Some(t) = x.typ else {
         return Operand::invalid();
     };
+    // ── 类型参数面（`M12/Task 9`）：官方 `underIs`（`builtins.go:186`）────────
+    //
+    // 官方对类型参数只判「形状认得出」，结果恒 `int` 且**不是常量**
+    // （`mode = value`，不走 `constant_` 分支）—— 所以这里不需要具体形状，
+    // 只要「类型集里每个 term 的底层都是 len/cap 支持的形状」。
+    // `*[N]T` 也算（官方 `arrayPtrDeref`）。
+    let tp_verdict = {
+        let tt = cx.type_table();
+        if matches!(tt.type_of(unalias(tt, t)), Type::TypeParam(_)) {
+            Some(under_is(tt, t, |u| match u {
+                Type::Basic(b) => b.is_string() && name == "len",
+                Type::Array { .. } | Type::Slice(_) | Type::Chan { .. } => true,
+                Type::Pointer(p) => {
+                    matches!(tt.type_of(underlying(tt, *p)), Type::Array { .. })
+                }
+                Type::Map { .. } => name == "len",
+                _ => false,
+            }))
+        } else {
+            None
+        }
+    };
+    if let Some(ok) = tp_verdict {
+        if ok {
+            let int_t = cx.tt_mut().add_basic(BasicId::Int);
+            return Operand::value(Some(int_t));
+        }
+        let what = arg_text(cx, &x);
+        cx.report(
+            arg.start_pos(),
+            DiagCode::ChkInvalidBuiltinArg,
+            format!("invalid argument: {what} for built-in {name}"),
+        );
+        return Operand::invalid();
+    }
     enum K {
         Str,
         Arr(i64),
@@ -267,12 +303,11 @@ fn append(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     let Some(st) = s.typ else {
         return Operand::invalid();
     };
+    // 元素类型：官方 `sliceElem`（`builtins.go:992`）—— 「所有 term 的底层都是
+    // 同一个 `[]E`」⇒ `E`。类型参数面（`M12/Task 9`）。
     let elem = {
         let tt = cx.type_table();
-        match tt.type_of(underlying(tt, st)) {
-            Type::Slice(e) => Some(*e),
-            _ => None,
-        }
+        common_slice_elem(tt, st)
     };
     let Some(elem) = elem else {
         let what = arg_text(cx, &s);
@@ -395,6 +430,39 @@ fn close(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     let Some(t) = x.typ else {
         return Operand::invalid();
     };
+    // ── 类型参数面（`M12/Task 9`）：官方 `underIs`（`builtins.go:254`）───────
+    //
+    // 官方把两种否决写在同一个谓词里并**分别报消息**，`underIs` 只回 bool
+    // ⇒ 这里分两趟：先「都是 chan」，再「都不是 `RecvOnly`」。
+    let tp = {
+        let tt = cx.type_table();
+        matches!(tt.type_of(unalias(tt, t)), Type::TypeParam(_))
+    };
+    if tp {
+        let all_chan = {
+            let tt = cx.type_table();
+            under_is(tt, t, |u| matches!(u, Type::Chan { .. }))
+        };
+        let all_sendable = all_chan && {
+            let tt = cx.type_table();
+            under_is(
+                tt,
+                t,
+                |u| matches!(u, Type::Chan { dir, .. } if *dir != rgoc_types::ChanDir::RecvOnly),
+            )
+        };
+        if all_sendable {
+            return Operand::no_value();
+        }
+        let what = arg_text(cx, &x);
+        let msg = if all_chan {
+            format!("invalid operation: cannot close receive-only channel {what}")
+        } else {
+            format!("invalid operation: cannot close non-channel {what}")
+        };
+        cx.report(arg.start_pos(), DiagCode::ChkInvalidOperation, msg);
+        return Operand::invalid();
+    }
     enum K {
         Ok,
         RecvOnly,
@@ -446,12 +514,11 @@ fn delete(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     let Some(mt) = m.typ else {
         return Operand::invalid();
     };
+    // 类型参数面（`M12/Task 9`）：官方 `underIs`（`builtins.go:428`）——
+    // 每个 term 的底层都必须是 map，且**所有 term 的 key 必须 identical**。
     let key = {
         let tt = cx.type_table();
-        match tt.type_of(underlying(tt, mt)) {
-            Type::Map { key, .. } => Some(*key),
-            _ => None,
-        }
+        common_map_key(tt, mt)
     };
     let Some(key) = key else {
         let what = arg_text(cx, &m);
@@ -480,10 +547,9 @@ fn clear(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     };
     let ok = {
         let tt = cx.type_table();
-        matches!(
-            tt.type_of(underlying(tt, t)),
-            Type::Map { .. } | Type::Slice(_)
-        )
+        // 类型参数面（`M12/Task 9`）：官方 `underIs` —— 每个 term 的底层都得是
+        // map 或 slice。
+        under_is(tt, t, |u| matches!(u, Type::Map { .. } | Type::Slice(_)))
     };
     if ok {
         return Operand::no_value();
@@ -775,12 +841,24 @@ fn make(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     let Some(t) = cx.type_expr(file, &c.args[0]) else {
         return Operand::invalid();
     };
+    // ── 形状面（`M12/Task 9`）：官方 `commonUnder`（`under.go:79`）────────────
+    //
+    // 这里**不能**用 `underIs`：`make` 要靠具体形状定参数个数（切片 2..3、
+    // map/chan 1..2），所以必须拿到「所有 term 的**共同**底层」。
+    // `map[string]int | map[string]float64` 有共同底层吗？没有（两个 map 不同）
+    // ⇒ 官方 `commonUnder` 报 `different underlying types`，这里落同一个码。
+    let cu = {
+        let tt = cx.tt_mut();
+        common_under(tt, t)
+    };
     let shape = {
         let tt = cx.type_table();
-        matches!(
-            tt.type_of(underlying(tt, t)),
-            Type::Slice(_) | Type::Map { .. } | Type::Chan { .. }
-        )
+        cu.is_some_and(|u| {
+            matches!(
+                tt.type_of(u),
+                Type::Slice(_) | Type::Map { .. } | Type::Chan { .. }
+            )
+        })
     };
     if !shape {
         let a = {
@@ -800,8 +878,8 @@ fn make(cx: &mut ExprChecker<'_, '_>, file: FileId, c: &CallExpr) -> Operand {
     // `task29-make.go` 实测：`5:9` / `6:9` / `7:9`。
     let (lo, hi) = {
         let tt = cx.type_table();
-        match tt.type_of(underlying(tt, t)) {
-            Type::Slice(_) => (2, 3),
+        match cu.map(|u| tt.type_of(u)) {
+            Some(Type::Slice(_)) => (2, 3),
             _ => (1, 2),
         }
     };

@@ -832,9 +832,26 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Map(TypeId),
             Other,
         }
+        // 类型参数面（`M12/Task 9`）：官方 `index` 用 `under(t)`，而官方
+        // `under(TypeParam)` 是 **core type**（`commonUnder`）—— 所以这里先取
+        // 共同底层，再按底层形状分类。没有共同底层 ⇒ 落 `Shape::Other`
+        // （官方同样报 `cannot index …`）。
+        let cu = {
+            let is_tp = {
+                let tt = self.tt();
+                matches!(tt.type_of(unalias(tt, xt)), Type::TypeParam(_))
+            };
+            if is_tp {
+                let tt = &mut *self.s.tt;
+                common_under(tt, xt)
+            } else {
+                None
+            }
+        };
         let shape = {
             let tt = self.tt();
-            match tt.type_of(underlying(tt, xt)) {
+            let base = cu.unwrap_or_else(|| underlying(tt, xt));
+            match tt.type_of(base) {
                 Type::Basic(b) if b.is_string() => Shape::Str,
                 Type::Array { len, elem } => Shape::Arr {
                     len: arr_len(tt, *len),
@@ -1415,9 +1432,24 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             }
             None => match hint {
                 Some(h) => {
+                    // 类型参数面（`M12/Task 9`）：官方 `literal` 用 `under(x)`
+                    // —— 对类型参数是共同底层。不先归一，`[]P{{f: 1}}`
+                    // （`P` 约束为 `*S`）会既剥不掉指针、也认不出 struct。
+                    let cu = {
+                        let is_tp = {
+                            let tt = self.tt();
+                            matches!(tt.type_of(unalias(tt, h)), Type::TypeParam(_))
+                        };
+                        if is_tp {
+                            let tt = &mut *self.s.tt;
+                            common_under(tt, h)
+                        } else {
+                            None
+                        }
+                    };
                     let base = {
                         let tt = self.tt();
-                        match tt.type_of(underlying(tt, h)) {
+                        match tt.type_of(cu.unwrap_or_else(|| underlying(tt, h))) {
                             Type::Pointer(inner) => *inner,
                             _ => h,
                         }
@@ -1443,9 +1475,21 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             Map { key: TypeId, elem: TypeId },
             Other,
         }
+        let cu = {
+            let is_tp = {
+                let tt = self.tt();
+                matches!(tt.type_of(unalias(tt, base)), Type::TypeParam(_))
+            };
+            if is_tp {
+                let tt = &mut *self.s.tt;
+                common_under(tt, base)
+            } else {
+                None
+            }
+        };
         let shape = {
             let tt = self.tt();
-            match tt.type_of(underlying(tt, base)) {
+            match tt.type_of(cu.unwrap_or_else(|| underlying(tt, base))) {
                 Type::Struct(id) => Shape::Struct(tt.struct_def(*id).fields.clone()),
                 Type::Array { len, elem } => Shape::Array {
                     len: arr_len(tt, *len),
@@ -1463,10 +1507,15 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         match shape {
             Shape::Struct(fields) => {
                 if !e.elems.is_empty() {
+                    // 字段查找的基类型：类型参数 ⇒ 共同底层（`M12/Task 9`）。
+                    // 否则 `lookup_field_or_method(type parameter, …)` 查不到任何
+                    // 字段，每个字段名都会报 `unknown field`
+                    // （`issue48538.go` 实测 4 条）。
+                    let lb = cu.unwrap_or(base);
                     if matches!(e.elems[0], Expr::KeyValue(_)) {
-                        self.struct_lit_keyed(file, e, base, &fields);
+                        self.struct_lit_keyed(file, e, lb, &fields);
                     } else {
-                        self.struct_lit_values(file, e, base, &fields);
+                        self.struct_lit_values(file, e, lb, &fields);
                     }
                 }
             }
@@ -3185,6 +3234,151 @@ pub(crate) fn is_untyped(tt: &TypeTable, t: TypeId) -> bool {
     basic_kind(tt, t).is_some_and(BasicId::is_untyped)
 }
 
+/// 类型参数的**有限项表**（`IfaceTSet::Terms`）；不是类型参数、或约束没有
+/// 有限项 ⇒ `None`。
+///
+/// 官方对应 `_TypeSet.terms` + `hasTerms()`：`All` / `Comparable` / `Empty`
+/// 都**不是** `hasTerms`（`Comparable` 的项面是 𝓤）。
+pub(crate) fn type_param_terms(
+    tt: &TypeTable,
+    tp: rgoc_types::TypeParamId,
+) -> Option<&[(bool, TypeId)]> {
+    let c = tt.type_param_def(tp).constraint;
+    let Type::Interface(iid) = tt.type_of(underlying(tt, c)) else {
+        return None;
+    };
+    match &tt.interface_def(*iid).tset {
+        rgoc_types::typeset::IfaceTSet::Terms(terms) => Some(terms),
+        _ => None,
+    }
+}
+
+/// 官方 `underIs`（`go/types/under.go:14`，`M12/Task 9`）。
+///
+/// 类型参数 ⇒ 类型集里**每个 term 的底层类型**都满足 `f`；没有有限项 ⇒ 假。
+/// 其余 ⇒ `f(自身底层)`。
+///
+/// 与 [`all_basic`] 的关系：那个判「底层是某个 **Basic**」，这个判「底层满足
+/// 任意形状谓词」。官方确实是两个函数（`allBasic` 与 `underIs`），别合并 ——
+/// `allBasic` 判的是 `BasicInfo` 位，`underIs` 判的是 `Type` 的形状。
+pub(crate) fn under_is(tt: &TypeTable, t: TypeId, f: impl Fn(&Type) -> bool) -> bool {
+    if let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) {
+        let Some(terms) = type_param_terms(tt, *tp) else {
+            return false;
+        };
+        return terms
+            .iter()
+            .all(|(_, ty)| f(tt.type_of(underlying(tt, *ty))));
+    }
+    f(tt.type_of(underlying(tt, t)))
+}
+
+/// 官方 `commonUnder`（`go/types/under.go:79`，`M12/Task 9`）的窄面。
+///
+/// 返回所有 term 的**共同底层类型**：全都 `identical` ⇒ 它；通道之间按官方的
+/// 方向合并规则（同向保持 / 一个是 `SendRecv` 就取受限的 / 两个都受限且不同
+/// ⇒ 冲突）；其余 ⇒ `None`。
+///
+/// 与 [`under_is`] 的区别是**要一个具体类型**：`make` 得靠它定参数个数
+/// （切片 2..3、map/chan 1..2），所以不能只用布尔谓词。
+pub(crate) fn common_under(tt: &mut TypeTable, t: TypeId) -> Option<TypeId> {
+    let mut cur: Option<TypeId> = None;
+    let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) else {
+        return Some(underlying(tt, t));
+    };
+    // 拷出来再走：通道合并要 `add_chan`（`&mut`），而 `type_param_terms` 借的是 `&`。
+    // 项表本来就很小（官方也只是一张链表），拷贝不构成问题。
+    let terms: Vec<(bool, TypeId)> = type_param_terms(tt, *tp)?.to_vec();
+    for (_, ty) in &terms {
+        let u = underlying(tt, *ty);
+        let Some(c) = cur else {
+            cur = Some(u);
+            continue;
+        };
+        // `identical` 的 `Err` 是能力边界 —— 只有**确定相同**才算同一个底层
+        // （判不出就当作不共同：`make` 宁可拒也不猜，猜错会生成错形状的分配）。
+        if c == u || matches!(identical(tt, c, u), Ok(true)) {
+            continue;
+        }
+        // 通道特例（官方 `commonUnder`）：元素必须 same，方向按合并规则取受限的。
+        let (Type::Chan { dir: d1, elem: e1 }, Type::Chan { dir: d2, elem: e2 }) =
+            (tt.type_of(c), tt.type_of(u))
+        else {
+            return None;
+        };
+        if !matches!(identical(tt, *e1, *e2), Ok(true)) {
+            return None;
+        }
+        let dir = if d1 == d2 {
+            *d1
+        } else if *d1 == ChanDir::SendRecv {
+            *d2
+        } else if *d2 != ChanDir::SendRecv {
+            return None;
+        } else {
+            *d1
+        };
+        cur = Some({
+            let e = *e1;
+            tt.add_chan(dir, e)
+        });
+    }
+    cur
+}
+
+/// 「所有 term 的底层都是同一个 `[]E`」⇒ `E`（官方 `sliceElem`，
+/// `go/types/builtins.go:992`，`M12/Task 9`）。
+///
+/// spec 的原话是「If S is a type parameter, all types in its type set must have
+/// the same underlying slice type `[]E`」—— 所以是「共同元素类型」，不是
+/// 「每个都是切片就行」（后者会让 `append` 拿不到该往哪个元素类型上转）。
+pub(crate) fn common_slice_elem(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    let mut elem: Option<TypeId> = None;
+    if let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) {
+        for (_, ty) in type_param_terms(tt, *tp)? {
+            let Type::Slice(e) = tt.type_of(underlying(tt, *ty)) else {
+                return None;
+            };
+            match elem {
+                None => elem = Some(*e),
+                Some(prev) if matches!(identical(tt, prev, *e), Ok(true)) => {}
+                Some(_) => return None,
+            }
+        }
+        return elem;
+    }
+    match tt.type_of(underlying(tt, t)) {
+        Type::Slice(e) => Some(*e),
+        _ => None,
+    }
+}
+
+/// 「所有 term 的底层都是 map、且 key 都 `identical`」⇒ 那个 key
+/// （官方 `_Delete` 的 `underIs`，`go/types/builtins.go:428`，`M12/Task 9`）。
+///
+/// 官方注释写明「The key cannot be a type parameter for now」—— 这里同样不接
+/// 类型参数作 key。
+pub(crate) fn common_map_key(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
+    let mut key: Option<TypeId> = None;
+    if let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) {
+        for (_, ty) in type_param_terms(tt, *tp)? {
+            let Type::Map { key: k, .. } = tt.type_of(underlying(tt, *ty)) else {
+                return None;
+            };
+            match key {
+                None => key = Some(*k),
+                Some(prev) if matches!(identical(tt, prev, *k), Ok(true)) => {}
+                Some(_) => return None,
+            }
+        }
+        return key;
+    }
+    match tt.type_of(underlying(tt, t)) {
+        Type::Map { key, .. } => Some(*key),
+        _ => None,
+    }
+}
+
 /// 官方 `allBasic`（`go/types/predicates.go:62`，`M12/Task 8`）。
 ///
 /// ```go
@@ -3208,11 +3402,7 @@ pub(crate) fn is_untyped(tt: &TypeTable, t: TypeId) -> bool {
 /// 不算 hasTerms；`All` 更是连「所有类型都 numeric」都不成立）。
 fn all_basic(tt: &TypeTable, t: TypeId, f: impl Fn(BasicId) -> bool) -> bool {
     if let Type::TypeParam(tp) = tt.type_of(unalias(tt, t)) {
-        let c = tt.type_param_def(*tp).constraint;
-        let Type::Interface(iid) = tt.type_of(underlying(tt, c)) else {
-            return false;
-        };
-        let rgoc_types::typeset::IfaceTSet::Terms(terms) = &tt.interface_def(*iid).tset else {
+        let Some(terms) = type_param_terms(tt, *tp) else {
             return false;
         };
         return terms

@@ -238,6 +238,7 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
 
         // 函数层：参数 + 命名结果（类型取自签名 —— 装载面不给它们类型）
         self.env.push();
+        self.declare_tparams(f);
         if let Expr::FuncType(ft) = &f.type_ {
             for (i, p) in ft.params.iter().enumerate() {
                 if let Some(n) = &p.name {
@@ -266,6 +267,41 @@ impl<'s, 'p> StmtChecker<'s, 'p> {
                 DiagCode::ChkMissingReturn,
                 "missing return".to_owned(),
             );
+        }
+    }
+
+    /// 把泛型函数的类型参数声明进**函数层**作用域（`M12/Task 9`）。
+    ///
+    /// # 为什么必须有
+    ///
+    /// 官方把类型参数声明在「函数声明的作用域」里，函数体在其内 ⇒ 体里能看见
+    /// `T`。本仓的 [`rgoc_load::Package::lookup_in_file`] 只有「文件 → 包 →
+    /// universe」三层，**看不见函数级类型参数**，于是泛型函数体里的
+    /// `type_expr(T)` 直接失败。
+    ///
+    /// 那个失败**不报错**（`type_expr` 返回 `None`，各调用方各自决定怎么办），
+    /// 而 `make` 的写法是 `let Some(t) = cx.type_expr(…) else { return
+    /// Operand::invalid() }` ⇒ 整个 `make` 面在泛型函数体里等于**没检查**。
+    /// 实测：`test/typeparam/builtins.go` 的 `make(S1, 10)` / `make(M1)` 一处
+    /// 诊断都没有（同一个文件的 `make(M1)` 报错是因为 `M1` 是**包级**接口）。
+    ///
+    /// # 名字与 id 怎么配对
+    ///
+    /// `pkg.generic_funcs` 存的是**声明序**的 `TypeParamId` 表（Task 6 建的），
+    /// 没有名字；AST 的 `tparams` 有名字且**逐个名字一个 `Field`**。两边都按
+    /// 声明序走，逐位配对。
+    fn declare_tparams(&mut self, f: &FuncDecl) {
+        let Some(ids) = self.s.pkg.generic_funcs.get(&f.name.value).cloned() else {
+            return;
+        };
+        // `Field` 是**逐名字**的（parser 把 `[T, U any]` 拆成两个 `Field`），
+        // 所以名字与 id 是按下标一一对应。
+        for (k, field) in f.tparams.iter().enumerate() {
+            let Some(name) = &field.name else { continue };
+            if let Some(id) = ids.get(k).copied() {
+                let self_ty = self.s.tt.type_param_def(id).self_ty;
+                self.env.declare(&name.value, Operand::type_expr(self_ty));
+            }
         }
     }
 

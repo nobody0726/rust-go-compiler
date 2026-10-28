@@ -650,3 +650,143 @@ func use() { _ = Add(1, 2) }
         "CHK-INVALID-OPERATION",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// Task 9 的局部判据：类型参数上的内建
+// ════════════════════════════════════════════════════════════════════
+
+/// 六个内建在类型参数上必须认得出「形状」。
+///
+/// # 官方是两套谓词，不是一套
+///
+/// * `close` / `delete` / `len` / `cap` / `append` 用官方 `underIs`
+///   （`go/types/under.go:14`）= 「类型集里**每个 term 的底层类型**都满足」；
+/// * `make` 用官方 `commonUnder`（`under.go:79`）= 「所有 term 的**共同**底层」，
+///   因为它要拿具体形状定参数个数（切片 2..3、map/chan 1..2）。
+///
+/// 两者对 `~[]E` 这种单 term 集合同判，但对 `map[string]int | map[string]float64`
+/// 这类集合不同：`delete` 只需「都是 map」（`underIs`），`make` 要「同一个 map」。
+#[test]
+fn t_gen_09_内建() {
+    // ① `len` / `cap` 在切片类型参数上。
+    assert_check_ok(
+        "gen09a",
+        r#"
+package p
+
+func Len[T any, S ~[]T](s S) int { return len(s) + cap(s) }
+
+func use() { _ = Len([]int{1}) }
+"#,
+    );
+    // ② `append`（含 `t...` 展开）。
+    assert_check_ok(
+        "gen09b",
+        r#"
+package p
+
+func Add[S ~[]T, T any](s S, vs ...T) S { return append(s, vs...) }
+
+func use() { _ = Add([]int{1}, 2) }
+"#,
+    );
+    // ③ `close` 在通道类型参数上。
+    assert_check_ok(
+        "gen09c",
+        r#"
+package p
+
+func Shut[T ~chan int](ch T) { close(ch) }
+
+func use() { Shut(make(chan int)) }
+"#,
+    );
+    // ④ `delete`：类型集里多个 map，**key 都相同** ⇒ 通过。
+    assert_check_ok(
+        "gen09d",
+        r#"
+package p
+
+type MV interface{ map[string]int | map[string]float64 }
+
+func Del[T MV](m T) { delete(m, "k") }
+
+func use() { Del(map[string]int{}) }
+"#,
+    );
+    // ⑤ `make`：要的是**共同底层**（`~[]T` 只有一个 term）。
+    assert_check_ok(
+        "gen09e",
+        r#"
+package p
+
+func New[S ~[]T, T any]() S { return make(S, 0, 8) }
+
+func use() { _ = New[[]int, int]() }
+"#,
+    );
+    // ⑥ 扩展元素类型与 `~[]E` 的索引（`append.go` 的形态）。
+    assert_check_ok(
+        "gen09f",
+        r#"
+package p
+
+type sliceOf[E any] interface{ ~[]E }
+
+func At[S sliceOf[T], T any](s S, i int) T { return s[i] }
+
+func use() { _ = At([]int{1}, 0) }
+"#,
+    );
+    // ⑦ 负例：类型集的 term 不是切片 ⇒ `len` 要拒（别把判定放宽）。
+    assert_check_code(
+        "gen09n1",
+        r#"
+package p
+
+func Bad[T ~int](x T) int { return len(x) }
+
+func use() { _ = Bad(1) }
+"#,
+        "CHK-INVALID-BUILTIN-ARG",
+    );
+    // ⑧ 负例：类型集里**有一个** term 不是切片 ⇒ 拒。这条钉的是
+    // `under_is` 的 `all` 语义（换成 `any` 它就绿了 —— 真验过）。
+    assert_check_code(
+        "gen09n3",
+        r#"
+package p
+
+func Bad[T ~int | ~[]byte](x T) int { return len(x) }
+
+func use() { _ = Bad(1) }
+"#,
+        "CHK-INVALID-BUILTIN-ARG",
+    );
+    // ⑨ 负例：`close` 的类型集里混了非通道 ⇒ 拒（同一条 `all` 语义）。
+    assert_check_code(
+        "gen09n4",
+        r#"
+package p
+
+func Bad[T ~chan int | ~int](ch T) { close(ch) }
+
+func use() { Bad(make(chan int)) }
+"#,
+        "CHK-INVALID-OPERATION",
+    );
+    // ⑩ 负例：`make` 的类型集有两个**不同**的 map ⇒ 没有共同底层 ⇒ 拒。
+    assert_check_code(
+        "gen09n2",
+        r#"
+package p
+
+type MV interface{ map[string]int | map[string]float64 }
+
+func Bad[T MV]() T { return make(T) }
+
+func use() { _ = Bad[map[string]int]() }
+"#,
+        "CHK-INVALID-BUILTIN-ARG",
+    );
+}
