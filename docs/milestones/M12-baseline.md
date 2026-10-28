@@ -811,3 +811,61 @@ errorcheck 0（5 条全报诊断 ⇒ lower 拒绝）。51232/51233 从「假绿�
 
 `issue50317`（parse 面提前拒绝）与 `issue48711`（实例化环）按脚本里
 `errorcheck_target` 的登记原样验收，不另动代码。
+
+---
+
+## 17. Task 24：不回归收口（`5e6baa0`）
+
+### 17.1 Ruling 24-1：与官方比要用**合并流**
+
+官方 `println` builtin 进 **stderr**（Go 规范「writes the results to
+standard error」），我们的契约（`C9` §4.1，M5 的 `D-M5-6`）定的是
+「`println` + panic 合并流写 **stdout**」。脚本 L2（native vs 官方）逐流
+比必然假红：`native.out` 有字节、`oracle.out` 空、字节全在 `oracle.err`
+—— `typeswitch6` 的输出逐字节全对，就因为流不同被判 L2-1。
+
+改法：L2 用 `cmp_merged`（out+err 拼接逐字节 + 退出码）—— 官方
+`testdir_test.go` 的判据形态同样是合并比。L1（native vs 解释器）保持
+逐流比：两套实现同口径（都写 stdout），逐流比更强。
+
+### 17.2 U-M12-09：合并流口径暴露的 5 条 native 输出级老缺口
+
+| 文件 | 症状（native） | 官方 |
+|---|---|---|
+| `typeswitch3` | `case T` 断言后方法调用返回垃圾（`other 2814739…`） | `other 8` |
+| `typeswitch4` | `T/myint32` case 走错 + 垃圾值 | 全对 |
+| `typeswitch5` | `case interface{foo() T}` 匹配后 `x.foo()` 返回 0 | `fooer 9` |
+| `issue51522b` | `switch i { case t: }` 接口比较空输出 | 静默成功 |
+| `eface` | 接口往返 test 2/4 failed | 静默成功 |
+
+**不是回归**：在 `ec8fd74`（Task 21 修复前的最后一个 commit）实测
+native 输出同样的错误。之前没暴露是因为基线判据只看 rc（`m12-baseline.sh`
+的 run 列），输出内容第一次被合并流 L1/L2 逐字节比到。修复在 native
+接口断言 / itab 的深水区（类型参数接口 case 的 itab 匹配与方法调用），
+登记后由独立任务跟进；白名单冻在脚本 `run_whitelist` 里。
+
+### 17.3 Ruling 24-2：局部 named 本体解不出时填 invalid（panic 修复）
+
+`nested.go`（rejected 族）让 driver **panic**（`table.rs:303` named 本体
+未填）。根因链：check 面局部泛型类型声明**不挂 `type_params`**
+（`add_named` 只造名字）⇒ `type V U[int]` 的本体 `U[int]` 被 `type_expr`
+Index 臂判「非泛型 named + 实参」⇒ `None` ⇒ 局部 named 的本体**静默
+不填** ⇒ 第一个读它的表达式（`V(0)` 转换 → `underlying`）panic。
+
+修复：本体解不出时填 `invalid` 占位（half-built 表不该被读到，但更不该
+panic）。行为缺口登记 **U-M12-10**：局部泛型类型的实例化（官方合法，
+`nested.go` 的面；M12 门禁无覆盖语料）。`nested` 回到干净拒绝 ⇒
+**rejected 76/76** 兑现。
+
+### 17.4 读数（Task 24 收口态）
+
+| 族 | 读数 | 白名单 |
+|---|---|---|
+| run | 63/71 | skip 5（U-M12-09）+ 3（§15.3）= skip 8 |
+| compile | 39/40 | skip 1（U-M12-01 typelist） |
+| errorcheck | **5/5** | — |
+| rejected | **76/76** | — |
+| 合计 | **bad=0** | skip 9 |
+
+M11 并发门禁三态不回归：`run-native-chan.sh --gc=off|on|stress` 各
+7/7 + M' 12/12×3。全量 **246 suite / 2322 passed / 0 failed / 2 ignored**。
