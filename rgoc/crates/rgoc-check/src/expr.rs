@@ -572,12 +572,9 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             if arg_tys.len() < n_fixed {
                 return None;
             }
-            let Some(elem) = params
+            let elem = params
                 .last()
-                .and_then(|p| common_slice_elem(self.s.tt, p.1))
-            else {
-                return None;
-            };
+                .and_then(|p| common_slice_elem(self.s.tt, p.1))?;
             let mut ps: Vec<TypeId> = params[..n_fixed].iter().map(|p| p.1).collect();
             ps.resize(arg_tys.len(), elem);
             ps

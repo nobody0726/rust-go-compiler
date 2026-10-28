@@ -2049,3 +2049,142 @@ fn t_gen_01_run_68of71() {
         bad.join("\n")
     );
 }
+
+/// `T-GEN-06`（M12/Task 23）：**泛型 × 并发三态**。
+///
+/// # 语料（4 个）
+///
+/// | 来源 | 文件 | 覆盖什么 |
+/// |---|---|---|
+/// | 门禁 `run` 族现成 | `append.go` | `chan<- int` 作泛型切片元素 |
+/// | 门禁 `run` 族现成 | `issue47901.go` | `Chan[T any] chan Chan[T]` 递归泛型 chan 类型 |
+/// | 新 fixture | `fixtures/m12/gen_conc.go` | 泛型 + **goroutine**：显式实例化的 `go` 调用 + range chan 汇合 |
+/// | 新 fixture | `fixtures/m12/gen_queue.go` | 泛型 + **chan**：泛型类型的 chan 字段 + 泛型方法 + select(default) |
+///
+/// 两个 fixture 刻意避开 M11 的两条白名单：不用 select 的 comma-ok
+/// （`U-M11-09`）、`go` 的实参全是单字（chan / slice，避开 `U-M11-10`
+/// 的聚合浮点实参）—— 那两条是**已知范围外**，不该由本判据兜底。
+///
+/// # 三态逐字节
+///
+/// `off`（`RGOC_GC=0`）/ `on`（默认）/ `stress`（`RGOC_GC_STRESS=1`）的
+/// stdout / stderr / 退出码三样完全一样。`stderr` 也要比：panic / 死锁
+/// 文本只进 stderr（`C9` §5），只比 stdout 会漏「stress 态打了一行
+/// panic 但 stdout 碰巧一样」。
+///
+/// # 为什么 STRESS=1 而不是 M11 的 8
+///
+/// Task 23 计划（Step 2）要求 `stress` 态断言 `collections > 0`，否则
+/// 判据恒真。实测 `gen_conc.go` 全程只分配 6 次 —— `STRESS=8` 时
+/// **一次 GC 都不触发**（`collections=0`），恒真警告成真。`STRESS=1`
+/// （每次分配都收）下实测 `collections=4`。高频收发对 goroutine 调度
+/// 与 chan 原语是**更狠**的扰动，正好是本判据要的。
+///
+/// # stress 的 collections 断言
+///
+/// 用 `RGOC_GC_STATS=1` 读 stderr 的 `gc: collections=N` 行，对 4 个语料
+/// 逐一断言 N > 0 —— 「stress 态真的在收垃圾」是三态一致的**前提**：
+/// 收了垃圾还不一样才是真语义 bug，没收垃圾的 stress 只是空跑。
+#[test]
+fn t_gen_11_泛型并发三态() {
+    const GEN_CONC: &str = include_str!("fixtures/m12/gen_conc.go");
+    const GEN_QUEUE: &str = include_str!("fixtures/m12/gen_queue.go");
+    let cases: Vec<(&str, String)> = vec![
+        (
+            "append.go",
+            fs::read_to_string(corpus().join("append.go")).expect("读 append.go"),
+        ),
+        (
+            "issue47901.go",
+            fs::read_to_string(corpus().join("issue47901.go")).expect("读 issue47901.go"),
+        ),
+        ("gen_conc.go", GEN_CONC.to_string()),
+        ("gen_queue.go", GEN_QUEUE.to_string()),
+    ];
+    let mut bad: Vec<String> = Vec::new();
+    let mut collections: Vec<(&str, u64)> = Vec::new();
+    for (name, src) in &cases {
+        let mut seen: Option<(String, String, i32)> = None;
+        for (tag, env) in [
+            ("off", vec![("RGOC_GC", "0")]),
+            ("on", vec![]),
+            ("stress", vec![("RGOC_GC_STRESS", "1")]),
+        ] {
+            let out =
+                support::native_harness::build_and_run_env(&format!("g11-{name}-{tag}"), src, &env)
+                    .unwrap_or_else(|e| panic!("`{name}` 的 {tag} 态跑不起来：\n{e}"));
+            match &seen {
+                None => seen = Some((out.stdout.clone(), out.stderr.clone(), out.exit)),
+                Some((o, e, x)) => {
+                    if out.stdout != *o {
+                        bad.push(format!(
+                            "{name} [{tag}]: stdout {:?} ≠ off 态 {:?}",
+                            out.stdout, o
+                        ));
+                    }
+                    if out.stderr != *e {
+                        bad.push(format!(
+                            "{name} [{tag}]: stderr {:?} ≠ off 态 {:?}",
+                            out.stderr, e
+                        ));
+                    }
+                    if out.exit != *x {
+                        bad.push(format!(
+                            "{name} [{tag}]: 退出码 {} ≠ off 态 {}",
+                            out.exit, x
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some((o, _, x)) = &seen {
+            if *x != 0 {
+                bad.push(format!(
+                    "{name}: off 态退出码 {x}（三态一致的前提是都成功）"
+                ));
+            }
+            // 门禁语料（append / issue47901）的官方语义就是**静默成功**
+            // （rc=0 无输出），空 stdout 是期望不是恒真风险；两个 fixture
+            // 是自己写的，必须打印可校验的输出。
+            if name.starts_with("gen_") && o.is_empty() {
+                bad.push(format!(
+                    "{name}: stdout 空 —— fixture 必须打印可校验的输出，否则三态一致恒真"
+                ));
+            }
+        }
+        // stress 的 collections 断言（统计行进 stderr，见 `C12` §5.2）。
+        let stats = support::native_harness::build_and_run_env(
+            &format!("g11-{name}-stats"),
+            src,
+            &[("RGOC_GC_STATS", "1"), ("RGOC_GC_STRESS", "1")],
+        )
+        .unwrap_or_else(|e| panic!("`{name}` 的 stats 态跑不起来：\n{e}"));
+        let line = stats
+            .stderr
+            .lines()
+            .find(|l| l.starts_with("gc: "))
+            .unwrap_or_else(|| panic!("`{name}` stress 态没有统计行：{:?}", stats.stderr));
+        let n: u64 = line
+            .split(' ')
+            .find_map(|kv| kv.strip_prefix("collections="))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if n == 0 {
+            bad.push(format!(
+                "{name}: stress 态 collections=0 —— GC 一次都没跑，判据恒真"
+            ));
+        }
+        collections.push((name, n));
+    }
+    assert!(
+        bad.is_empty(),
+        "泛型 × 并发三态不一致：\n{}",
+        bad.join("\n")
+    );
+    // 读数回显（失败时也能从断言消息里看到）。
+    assert!(
+        collections.iter().all(|(_, n)| *n > 0),
+        "collections 全部要 > 0：{:?}",
+        collections
+    );
+}
