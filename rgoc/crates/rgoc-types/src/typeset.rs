@@ -322,3 +322,172 @@ pub fn core_type(tt: &TypeTable, t: TypeId) -> Option<TypeId> {
     }
     Some(first)
 }
+
+/// 类型图里**任何可达位置**是类型参数 ⇒ `true`（`M12/Task 21`）。
+///
+/// `is_abstract`（发码口）的判据：`rgoc-load/src/mono.rs` 原来只看
+/// `layout(..).is_none()` —— 直接是类型参数（`Some2·tp5`）挡得住，但
+/// **named 包着的**（`issue54225` 的 `Two[Node[One.tp0]]`：实参是
+/// `Node[tp0]`，struct 实例有布局）挡不住 ⇒ 被当具体实例下沉，体内
+/// `v.contentLen()` 去找永远不会存在的 `Node·tp0.contentLen` ⇒ 误报。
+///
+/// 与官方对齐：官方从不实例化「体内引用类型参数」的泛型（`One` 的原型
+/// 体不生成代码，`Two[Node[One.tp0]]` 无从发起）；发码口的抽象判定因此
+/// 必须**递归** —— named 的 `targs`、named 的本体、指针/切片/数组/map/
+/// chan 的元素、struct 字段、签名参数/结果、接口方法签名，任何一层碰到
+/// `Type::TypeParam` 都算。
+///
+/// 防环：`seen` 记已访的 `TypeId`（递归类型 `type N struct{ p *N }` 终止）。
+#[must_use]
+pub fn type_mentions_tparam(tt: &TypeTable, t: TypeId) -> bool {
+    use crate::typ::Type;
+    fn go(tt: &TypeTable, t: TypeId, seen: &mut Vec<TypeId>) -> bool {
+        let cur = unalias(tt, t);
+        if seen.contains(&cur) {
+            return false;
+        }
+        seen.push(cur);
+        match tt.type_of(cur) {
+            Type::TypeParam(_) => true,
+            Type::Named(nid) => {
+                let def = tt.named_def(*nid);
+                def.targs.iter().any(|&a| go(tt, a, seen))
+                    || def.underlying.is_some_and(|u| go(tt, u, seen))
+            }
+            Type::Pointer(e) | Type::Slice(e) | Type::Chan { elem: e, .. } => go(tt, *e, seen),
+            Type::Array { elem, .. } => go(tt, *elem, seen),
+            Type::Map { key, elem } => go(tt, *key, seen) || go(tt, *elem, seen),
+            Type::Struct(sid) => tt
+                .struct_def(*sid)
+                .fields
+                .iter()
+                .any(|f| go(tt, f.typ, seen)),
+            Type::Signature(sid) => {
+                let def = tt.signature_def(*sid);
+                def.recv.is_some_and(|r| go(tt, r, seen))
+                    || go(tt, def.params, seen)
+                    || go(tt, def.results, seen)
+            }
+            Type::Tuple(tid) => tt
+                .tuple_def(*tid)
+                .vars
+                .iter()
+                .any(|(_, ty)| go(tt, *ty, seen)),
+            Type::Interface(iid) => {
+                let def = tt.interface_def(*iid);
+                def.methods.iter().any(|(_, sig)| go(tt, *sig, seen))
+                    || def.terms.is_some_and(|u| go(tt, u, seen))
+            }
+            Type::Union(uid) => tt
+                .union_def(*uid)
+                .terms
+                .iter()
+                .any(|(_, ty)| go(tt, *ty, seen)),
+            Type::Basic(_) | Type::Invalid => false,
+            // `unalias` 已剥别名 ⇒ 此臂不可达；穷尽匹配要求写出。
+            Type::Alias(_) => false,
+        }
+    }
+    go(tt, t, &mut Vec::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::type_mentions_tparam;
+    use crate::table::{Field, TypeTable};
+    use crate::typ::{ChanDir, Type};
+
+    use rgoc_const::BasicId;
+
+    fn empty_iface(t: &mut TypeTable) -> crate::typ::TypeId {
+        let iface = t.add_interface(Vec::new(), None, super::IfaceTSet::All);
+        t.interface_type(iface)
+    }
+
+    #[test]
+    fn 直接类型参数命中() {
+        let mut t = TypeTable::new();
+        let iface_ty = empty_iface(&mut t);
+        let tp = t.add_type_param(0, iface_ty);
+        let tp_ty = t.type_param_type(tp);
+        assert!(matches!(t.type_of(tp_ty), Type::TypeParam(_)));
+        assert!(type_mentions_tparam(&t, tp_ty));
+    }
+
+    #[test]
+    fn 具体类型不命中() {
+        let mut t = TypeTable::new();
+        let int = t.add_basic(BasicId::Int);
+        let p = t.add_pointer(int);
+        let s = t.add_slice(p);
+        let m = t.add_map(int, s);
+        assert!(!type_mentions_tparam(&t, m));
+    }
+
+    #[test]
+    fn named实例的targs含类型参数命中_issue54225形态() {
+        // `One[V Value]` 原型体里的 `Node[V]`：Node 实例的 targs = [V]
+        let mut t = TypeTable::new();
+        let iface_ty = empty_iface(&mut t);
+        let tp = t.add_type_param(0, iface_ty);
+        let tp_ty = t.type_param_type(tp);
+        // 原型 Node（underlying = struct{}）
+        let node = t.add_named("Node");
+        let st = t.add_struct(Vec::new());
+        t.set_named_underlying(node, t.struct_type(st));
+        // 实例 Node[V]
+        let inst = t.add_named_instance(node, vec![tp_ty]);
+        assert!(type_mentions_tparam(&t, t.named_type(inst)));
+        // 原型自身不命中
+        assert!(!type_mentions_tparam(&t, t.named_type(node)));
+    }
+
+    #[test]
+    fn named本体struct字段含类型参数命中() {
+        // `type Box[T any] struct{ v T }` 的原型：underlying 的字段是 T
+        let mut t = TypeTable::new();
+        let iface_ty = empty_iface(&mut t);
+        let tp = t.add_type_param(0, iface_ty);
+        let tp_ty = t.type_param_type(tp);
+        let bx = t.add_named("Box");
+        let st = t.add_struct(vec![Field {
+            name: Some("v".into()),
+            typ: tp_ty,
+            tag: None,
+            embedded: false,
+        }]);
+        t.set_named_underlying(bx, t.struct_type(st));
+        assert!(type_mentions_tparam(&t, t.named_type(bx)));
+    }
+
+    #[test]
+    fn 各容器壳都下钻() {
+        let mut t = TypeTable::new();
+        let iface_ty = empty_iface(&mut t);
+        let tp = t.add_type_param(0, iface_ty);
+        let v = t.type_param_type(tp);
+        let arr = t.add_array(None, v);
+        let ch = t.add_chan(ChanDir::SendRecv, v);
+        let tid = t.add_tuple(vec![(None, v)]);
+        let tup = t.tuple_type(tid);
+        assert!(type_mentions_tparam(&t, arr));
+        assert!(type_mentions_tparam(&t, ch));
+        assert!(type_mentions_tparam(&t, tup));
+    }
+
+    #[test]
+    fn 递归类型不挂() {
+        // `type N struct{ p *N }`：走访终止
+        let mut t = TypeTable::new();
+        let n = t.add_named("N");
+        let ptr = t.add_pointer(t.named_type(n));
+        let st = t.add_struct(vec![Field {
+            name: Some("p".into()),
+            typ: ptr,
+            tag: None,
+            embedded: false,
+        }]);
+        t.set_named_underlying(n, t.struct_type(st));
+        assert!(!type_mentions_tparam(&t, t.named_type(n)));
+    }
+}

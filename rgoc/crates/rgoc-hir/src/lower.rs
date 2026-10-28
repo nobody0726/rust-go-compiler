@@ -2610,7 +2610,18 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             );
             return Expr::new(ExprKind::Nil, typ);
         }
-        let base_typ = self.type_of(&se.x);
+        let mut base_typ = self.type_of(&se.x);
+        // 类型参数接收者：方法选择看**约束接口的方法集**（issue54225 的
+        // `v.contentLen()`）。注意不是 core type —— 纯方法约束（不含项）的
+        // 类型集里各类型底层各异，**没有** core（官方 `coreType` 对
+        // `interface{ m() }` 返回 nil）；官方 `lookupFieldOrMethod` 对类型
+        // 参数接收者直接查约束的接口方法集。check 面已用 `under_or_core`
+        // 同口径；lowering 的分派也要先解 —— 主遍原型体里落 `Bound::Iface`
+        // （产物不链接）；实例体遍里 `var v V` 的类型已被替换成具体类型，
+        // 走下面的 `find_method_path`。
+        if let Some(ci) = self.tparam_iface(base_typ) {
+            base_typ = ci;
+        }
         // 包名选择器：`pkg.X`
         if let AExpr::Name(n) = &*se.x
             && self.resolve(&n.value).is_none()
@@ -2666,6 +2677,30 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             format!("选择器 .{} 在 lowering 期找不到字段或方法", se.sel.value),
         );
         Expr::new(ExprKind::Nil, typ)
+    }
+
+    /// 类型参数的**约束接口**（方法选择用）：约束的 underlying 是接口
+    /// ⇒ 那个约束；否则 `None`（`issue54225` 的 `v.contentLen()`）。
+    ///
+    /// 为什么不是 core type：纯方法约束（不含项）的类型集里各类型底层各异，
+    /// **没有** core（官方 `coreType` 对 `interface{ m() }` 返回 nil）；
+    /// 官方 `lookupFieldOrMethod` 对类型参数接收者直接查约束的接口方法集。
+    /// check 面已用 `under_or_core` 同口径；lowering 的分派（`lower_selector`
+    /// 与 `lower_callee`）也要先解 —— 主遍原型体里落 `Bound::Iface` /
+    /// `Callee::Iface`（产物不链接）；实例体遍里 `var v V` 的类型已被替换
+    /// 成具体类型，走 `find_method_path`。
+    fn tparam_iface(&self, t: TypeId) -> Option<TypeId> {
+        let tp = match self.s.tt.type_of(rgoc_types::unalias(self.s.tt, t)) {
+            rgoc_types::typ::Type::TypeParam(tp) => *tp,
+            _ => return None,
+        };
+        let constraint = self.s.tt.type_param_def(tp).constraint;
+        let cu = rgoc_types::underlying(self.s.tt, constraint);
+        if matches!(self.s.tt.type_of(cu), rgoc_types::typ::Type::Interface(_)) {
+            Some(constraint)
+        } else {
+            None
+        }
     }
 
     fn lower_call(&mut self, c: &CallExpr, typ: TypeId) -> Expr {
@@ -2921,7 +2956,12 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                     }
                 }
             }
-            let base_typ = self.type_of(&se.x);
+            let mut base_typ = self.type_of(&se.x);
+            // 类型参数接收者：方法选择看**约束接口的方法集**（同
+            // `lower_selector`；issue54225 的 `v.contentLen()`）。
+            if let Some(ci) = self.tparam_iface(base_typ) {
+                base_typ = ci;
+            }
             if self.is_iface(base_typ) {
                 let recv = self.lower_expr(&se.x);
                 return Callee::Iface {
@@ -3226,7 +3266,10 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             }
         }
         let lit = Expr::new(
-            ExprKind::Composite(Composite { typ: inner_typ, items }),
+            ExprKind::Composite(Composite {
+                typ: inner_typ,
+                items,
+            }),
             inner_typ,
         );
         // 取址省略（`[]PS{{f:1}}` 的元素）：官方语义是 `&S{f:1}`。

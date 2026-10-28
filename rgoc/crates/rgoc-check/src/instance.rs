@@ -299,7 +299,14 @@ pub fn subst_of(s: &Session<'_>, req: &InstRequest) -> Vec<(String, TypeId)> {
 /// 会引用这些实例 —— 非泛型体里的实参不可能是类型参数。
 #[must_use]
 pub fn is_abstract(s: &Session<'_>, req: &InstRequest) -> bool {
-    req.args
-        .iter()
-        .any(|&a| rgoc_types::layout::layout(s.tt, a).is_none())
+    req.args.iter().any(|&a| {
+        rgoc_types::layout::layout(s.tt, a).is_none()
+            // **递归**判据（`M12/Task 21`）：named 包着的类型参数也算。
+            // `issue54225` 的 `Two[Node[One.tp0]]`：实参 `Node[tp0]` 是
+            // struct 实例**有布局**，但它体内引用的类型参数 `One.tp0` 的
+            // 方法实例（`Node·tp0.contentLen`）永远不会被请求（原型不发码）
+            // —— 下沉它会在体内 `v.contentLen()` 处误报「找不到方法」。
+            // 官方根本不会实例化这条链，所以发码口必须跟着抽象。
+            || rgoc_types::type_mentions_tparam(s.tt, a)
+    })
 }

@@ -93,6 +93,7 @@ pub use typ::{
 };
 pub use typeset::IfaceTSet;
 pub use typeset::core_type;
+pub use typeset::type_mentions_tparam;
 pub use unify::{Unifier, UnifyMode, unify};
 pub use universe::{declare_universe, declared_names, universe};
 pub use validtype::{MAX_TYPE_NEST_DEPTH, valid_type};
