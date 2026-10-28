@@ -216,11 +216,13 @@ fn shift_right(a: i128, b: i128, k: BasicId) -> i128 {
 
 /// 比较（`== != < <= > >=`）；不可比 ⇒ `None`（调用方按 false 处理）。
 #[must_use]
-pub fn compare(op: rgoc_hir::BinOp, x: &Value, y: &Value) -> Option<bool> {
+pub fn compare(op: rgoc_hir::BinOp, x: &Value, y: &Value, tt: &TypeTable) -> Option<bool> {
     use rgoc_hir::BinOp as B;
     match op {
-        B::Eq => Some(crate::value::go_eq(x, y)),
-        B::Ne => Some(!crate::value::go_eq(x, y)),
+        // 比较走**类型表感知**的入口：接口动态类型按 `identical` 判等
+        // （`go_eq` 的裸 `TypeId` 相等会被重复的基本型条目骗过）。
+        B::Eq => Some(crate::value::go_eq_tt(tt, x, y)),
+        B::Ne => Some(!crate::value::go_eq_tt(tt, x, y)),
         _ => {
             let ord = match (x, y) {
                 (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),

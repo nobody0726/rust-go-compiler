@@ -4073,7 +4073,7 @@ impl<'a> G<'a> {
     fn apply_binary(&mut self, sh: &mut Shared<'a>, op: BinOp, x: Value, y: Value, typ: TypeId) {
         match op {
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-                let r = ops::compare(op, &x, &y).unwrap_or(false);
+                let r = ops::compare(op, &x, &y, sh.tt).unwrap_or(false);
                 self.values.push(Value::Bool(r));
             }
             _ => match ops::bin_arith(op, &x, &y, typ, sh.tt) {

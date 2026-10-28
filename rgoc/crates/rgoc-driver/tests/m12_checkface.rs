@@ -1936,3 +1936,110 @@ fn t_gen_02_compile_39of40() {
         bad.join("\n")
     );
 }
+
+/// `T-GEN-01`：`run` 族 **68 / 71**（Task 21）。
+///
+/// # 判据（三层）
+///
+/// 每条非白名单语料：
+/// 1. `build -o` 成功（check + HIR + SSA + arm64 全链不放行任何拒绝面）；
+/// 2. `driver run`（**L1 解释器**，主判据）退出码 0 —— 官方这批语料全部
+///    正常退出，语义对不对以官方 `go run` 为参照（基线装置
+///    `m12-baseline.sh` 对比输出，这里钉退出码 + 无 panic 输出）；
+/// 3. 编译出的 **native ELF** 直接执行退出码 0（L3）。
+///
+/// # 为什么不是 71 / 71（白名单，`M12-baseline.md` §15.3）
+///
+/// * `issue44688` —— **U-M5-13**（接口方法表达式 `I.M`，M5 起登记的面外项）；
+/// * `dottype` —— `println(f2[int](i))` 的**内建多值实参展开**：
+///   HIR 的实参表没有「一个表达式占多个实参位」的表示（`spread` 只记
+///   个数，内建调用没有 spread 通道），要动 check/HIR/SSA/interp 四层；
+/// * `dictionaryCapture-noinline` —— **无类型全局 var 的类型推导**：
+///   `var x interface{...} = s[int]{...}` / `var hh2 = s[int].g2` 的
+///   全局类型装载面不推（只写显式声明型），要补装载面的初始化式推导序。
+///
+/// 三条都是「独立的功能面」而不是 Task 21 的局部缺口，登记白名单；
+/// 断言钉死条数，防白名单悄悄变大。
+#[test]
+fn t_gen_01_run_68of71() {
+    let lists = std::env::temp_dir().join("rgoc-t20-lists");
+    classify(&lists);
+    const WHITELIST: [&str; 3] = ["dictionaryCapture-noinline", "dottype", "issue44688"];
+    let mut bad = Vec::new();
+    let mut total = 0usize;
+    let mut skipped = 0usize;
+    for name in read_list(&lists, "run") {
+        total += 1;
+        let stem = name.trim_end_matches(".go");
+        if WHITELIST.contains(&stem) {
+            skipped += 1;
+            continue;
+        }
+        let f = corpus().join(&name);
+        let target = std::env::temp_dir().join(format!("rgoc-t21-{stem}"));
+        let build = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .arg("build")
+            .arg("-o")
+            .arg(&target)
+            .arg(&f)
+            .output()
+            .expect("起不了 build");
+        if build.status.code() != Some(0) {
+            bad.push(format!(
+                "{stem}: build 退出 {:?}｜{}",
+                build.status.code(),
+                String::from_utf8_lossy(&build.stderr)
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+            continue;
+        }
+        // L1：解释器（主判据）。
+        let interp = Command::new(env!("CARGO_BIN_EXE_rgoc-driver"))
+            .arg("run")
+            .arg(&f)
+            .output()
+            .expect("起不了 driver run");
+        if interp.status.code() != Some(0) {
+            bad.push(format!(
+                "{stem}: interp 退出 {:?}｜{}",
+                interp.status.code(),
+                String::from_utf8_lossy(&interp.stderr)
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+        }
+        // L3：native ELF。
+        let native = Command::new(&target).output().expect("起不了 ELF");
+        if native.status.code() != Some(0) {
+            bad.push(format!(
+                "{stem}: native 退出 {:?}｜{}",
+                native.status.code(),
+                String::from_utf8_lossy(&native.stderr)
+                    .lines()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            ));
+        }
+    }
+    assert_eq!(
+        total, 71,
+        "run 族的划分变了 —— 这条判据的口径要跟着 m12-classify.sh 走"
+    );
+    assert_eq!(
+        skipped,
+        WHITELIST.len(),
+        "白名单失效（文件名对不上清单？）—— 要么改名单，要么把文件从白名单里请出去"
+    );
+    assert!(
+        bad.is_empty(),
+        "run 族仍失败 {} 个（build/interp/native 任一层）：\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}

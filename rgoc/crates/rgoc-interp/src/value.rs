@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use rgoc_const::{BasicId, Const};
 use rgoc_hir::FuncId;
-use rgoc_types::{Type, TypeId, TypeTable, unalias, underlying};
+use rgoc_types::{Type, TypeId, TypeTable, identical, unalias, underlying};
 
 use crate::chan::ChanObj;
 
@@ -216,6 +216,39 @@ impl Value {
             Value::Bool(b) => Some(*b),
             _ => None,
         }
+    }
+}
+
+/// [`go_eq`] 的**类型表感知**入口：接口的动态类型按 `identical` 判等。
+///
+/// 为什么需要它：`TypeTable::add_basic` **不去重**（设计如此），同一个 `int`
+/// 在表里可能有多个 `TypeId` 条目 —— 检查器的 `default_type`（`stmt.rs`
+/// 的 `add_basic(default_type_of(b))`）与 universe 预置表各造了一个。装箱
+/// 的动态类型来自不同源头时，`go_eq` 的 `TypeId` 相等判定会把两个
+/// `Basic(Int)` 误判成不同动态类型，`var x int == i`（`i` 装箱自常量 3）
+/// 恒 false（`equal.go` 的 `g[T comparable]` 实测）。Go 语义里动态类型
+/// 看的是**类型同一性**，不是表条目号 —— 所以先按 `identical` 归一。
+#[must_use]
+pub fn go_eq_tt(tt: &TypeTable, a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (
+            Value::Iface {
+                typ: Some(tx),
+                data: dx,
+            },
+            Value::Iface {
+                typ: Some(ty),
+                data: dy,
+            },
+        ) if tx != ty && identical(tt, *tx, *ty).unwrap_or(false) => {
+            // 类型 identical 但条目不同：把 y 的动态类型归一到 x 的条目再比。
+            let y2 = Value::Iface {
+                typ: Some(*tx),
+                data: dy.clone(),
+            };
+            go_eq(a, &y2)
+        }
+        _ => go_eq(a, b),
     }
 }
 

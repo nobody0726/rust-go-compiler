@@ -2416,6 +2416,31 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                 if !matches!(o.op, Op::Shl | Op::Shr) {
                     self.match_const_side(&o.x, rhs_ast, &mut x, &mut y);
                 }
+                // 接口混合比较：官方 `comparison`（`expr.go:513`）在两侧类型
+                // 不同、但一侧可赋给另一侧时，把那一侧**隐式转换**到对侧类型
+                // —— 对「值 vs 接口」就是装箱（官方 spec：接口比较比的是
+                // 动态类型 + 动态值）。检查器只做可赋值判定、不动表达式树
+                // （HIR 里裸的 `slot == slot`），解释器拿裸值和 `Iface` 比
+                // 相等恒 false（`go_eq` 没有 `(Int, Iface)` 臂；`equal.go`
+                // 的 `g[T comparable](t T, i interface{})` 实测）。装箱必须
+                // 在 lower 做：这里还有操作数的**静态类型**，运行时没有。
+                // 两侧同为接口 / 指针 vs `nil` 等原有形态不动。
+                if matches!(o.op, Op::Eql | Op::Neq) && x.typ != y.typ {
+                    let (xi, yi) = (self.is_iface(x.typ), self.is_iface(y.typ));
+                    if xi && !yi && !matches!(y.kind, ExprKind::Nil) && !self.is_nil_type(y.typ) {
+                        let t = x.typ;
+                        let old = std::mem::replace(&mut y, Expr::new(ExprKind::Nil, t));
+                        y = self.coerce(old, t);
+                    } else if yi
+                        && !xi
+                        && !matches!(x.kind, ExprKind::Nil)
+                        && !self.is_nil_type(x.typ)
+                    {
+                        let t = y.typ;
+                        let old = std::mem::replace(&mut x, Expr::new(ExprKind::Nil, t));
+                        x = self.coerce(old, t);
+                    }
+                }
                 let op = binop(o.op);
                 Expr::new(
                     ExprKind::Binary {

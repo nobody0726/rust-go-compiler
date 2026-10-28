@@ -1480,7 +1480,7 @@ fn is_numeric(tt: &TypeTable, t: TypeId) -> bool {
 fn eval_bin(op: BinOp, x: &Value, y: &Value, typ: TypeId, tt: &TypeTable) -> Result<Value, Halt> {
     match op {
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
-            Ok(Value::Bool(ops::compare(op, x, y).unwrap_or(false)))
+            Ok(Value::Bool(ops::compare(op, x, y, tt).unwrap_or(false)))
         }
         // `&&` / `||` 在构建期已经拆成控制流（`Task 33b`）：出现即构建 bug
         BinOp::LAnd | BinOp::LOr => Err(Halt::Runtime(
