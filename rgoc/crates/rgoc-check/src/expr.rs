@@ -179,6 +179,32 @@ pub(crate) struct ExprChecker<'s, 'p> {
     pub(crate) env: Option<&'s crate::env::Env>,
 }
 
+/// 一次泛型调用的**已实例化签名**（`M12/Task 7`）。
+///
+/// 调用点要一次拿走三样（签名 + 形参表 + 结果表），散着传容易漏改其中一样：
+/// 漏了 `sig` 则变参判定还按老签名、漏了 `results` 则返回值类型停在 `T`。
+/// clippy 的 `type_complexity` 也不接受裸四元组 —— 这里本来也该有个名字。
+struct InstSig {
+    sig: rgoc_types::SignatureDef,
+    params: Vec<(Option<String>, TypeId)>,
+    results: Vec<(Option<String>, TypeId)>,
+}
+
+impl InstSig {
+    /// 不做实例化（不是泛型被调者 / 推不出来 / 签名取不到）⇒ 原样返回。
+    fn unchanged(
+        sig: rgoc_types::SignatureDef,
+        params: Vec<(Option<String>, TypeId)>,
+        results: Vec<(Option<String>, TypeId)>,
+    ) -> Self {
+        Self {
+            sig,
+            params,
+            results,
+        }
+    }
+}
+
 // ─────────────────────────────── 入口分派 ───────────────────────────────
 
 impl<'s, 'p> ExprChecker<'s, 'p> {
@@ -585,6 +611,23 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
             return Operand::invalid();
         }
 
+        // ②.5 泛型被调者：**先推断、再替换形参**（`M12/Task 7`）。
+        //
+        // 为什么必须在可赋值性之前：形参里带 `T` 时，`assignable([]int, []T)`
+        // 判的是「`[]int` 能不能赋给 `[]T`」—— 那不是语言里的问题，是**还没
+        // 实例化**。推不出 `T = int` 就去比，必然判假，于是
+        // `Len([]int{1,2})` 被报成 `cannot use value of type []int as
+        // []type parameter`（`M12-baseline.md` §3.1 的实测形态）。
+        //
+        // 推断失败**不报**：官方的 `cannot infer T` 有它自己的报点与消息，
+        // 而本仓的推断面只覆盖「实参够用」这一档；报错会把「我们推不出来」
+        // 说成「你的代码错」。保持沉默 = 维持既有能力边界（`U-M12-05`）。
+        let InstSig {
+            sig,
+            params,
+            results,
+        } = self.instantiate_callee(&c.fun, t, sig, params, results, &args);
+
         // ③ 逐参可赋值性（变参末尾不展开 —— 窄面）
         if !sig.variadic {
             for (i, p) in params.iter().enumerate() {
@@ -615,6 +658,80 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
                 Operand::value(Some(tup))
             }
         }
+    }
+
+    /// 泛型被调者的**推断 + 替换**（`M12/Task 7`）。
+    ///
+    /// 返回替换后的 [`InstSig`]；不做实例化时**原样返回**。
+    /// （返回类型一度写成裸四元组 —— clippy 的 `type_complexity` 拒了，
+    /// 而这里确实该有个名字：调用点要一次性拿走三样，散着传容易漏改。）
+    ///
+    /// # 三道闸各自的作用
+    ///
+    /// 1. `generic_callee_tparams` 只认**包级泛型函数的名字**（`F`）—— 函数值、
+    ///    方法值、显式实例化（`F[int]`，签名里已没有 `T`）都不进来；
+    /// 2. `infer_for_call` 是 M4 建的推断面（官方 `infer.go` 的对齐实现）。
+    ///    它的 `Err` 与 `Ok(None)` 都按**推不出**处理：不报错、不替换；
+    /// 3. 推出来之后走 `substitute`，与 `explicit_instantiation` 用的是**同一个**
+    ///    替换函数 —— 显式 `F[int](…)` 与推断 `F(…)` 因此落在同一组类型条目上。
+    fn instantiate_callee(
+        &mut self,
+        fun: &Expr,
+        sig_ty: TypeId,
+        sig: rgoc_types::SignatureDef,
+        params: Vec<(Option<String>, TypeId)>,
+        results: Vec<(Option<String>, TypeId)>,
+        args: &[Operand],
+    ) -> InstSig {
+        let Some(tparams) = self.generic_callee_tparams(fun) else {
+            return InstSig::unchanged(sig, params, results);
+        };
+        // 变参被调者**不推断**（`M12/Task 7`）。
+        //
+        // `infer_for_call` 要求逐位对齐（`infer.rs` 的断言 `形参表与实参表
+        // 必须等长`）：官方是先按 `call.go` 的 `arguments` 把末尾实参打包成
+        // 一个 slice、再交给 `infer`，我们这一步还没做。于是
+        // `Append([]int{1}, 2, 3)` 会把 2 个形参对 3 个实参送进去 ⇒
+        // **process panic（rc=101）**，而它本该只是一次普通的「能力未及」。
+        //
+        // 实测踩点：`test/typeparam/slices.go`。修法不是放宽断言（那会让
+        // 推断读到越界/错位），而是**这一档不推断**：形参保持 `[]T` /
+        // `...T`，可赋值性照旧走 `call_value` 的变参窄面（不判）。
+        if sig.variadic || args.len() != params.len() {
+            return InstSig::unchanged(sig, params, results);
+        }
+        // 实参类型（`invalid` 照官方：参与推断但不可能满足任何约束）。
+        let inv = self.s.tt.invalid();
+        let arg_tys: Vec<TypeId> = args.iter().map(|a| a.typ.unwrap_or(inv)).collect();
+        let par_tys: Vec<TypeId> = params.iter().map(|p| p.1).collect();
+        let explicit: Vec<Option<TypeId>> = vec![None; tparams.len()];
+        let Ok(Some(targs)) = rgoc_types::infer::infer_for_call(
+            self.s.tt,
+            &tparams,
+            &explicit,
+            &par_tys,
+            &arg_tys,
+            &[],
+        ) else {
+            return InstSig::unchanged(sig, params, results);
+        };
+        let map: SubstMap = tparams.iter().copied().zip(targs).collect();
+        let inst = substitute(self.s.tt, sig_ty, &map);
+        let Some(sid) = self.signature_id(inst) else {
+            return InstSig::unchanged(sig, params, results);
+        };
+        let sig2 = self.tt().signature_def(sid).clone();
+        InstSig {
+            params: self.tuple_vars(sig2.params),
+            results: self.tuple_vars(sig2.results),
+            sig: sig2,
+        }
+    }
+
+    /// 被调者是**包级泛型函数** ⇒ 它的类型参数表。
+    fn generic_callee_tparams(&self, fun: &Expr) -> Option<Vec<rgoc_types::TypeParamId>> {
+        let Expr::Name(n) = fun else { return None };
+        self.s.pkg.generic_funcs.get(&n.value).cloned()
     }
 
     /// 内建调用（Task 29 起由 [`crate::builtins`] 接管签名与静态约束）。

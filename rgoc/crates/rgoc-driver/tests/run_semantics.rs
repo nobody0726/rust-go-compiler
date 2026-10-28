@@ -996,7 +996,7 @@ fn t_ex_32_generics_monomorphization() {
 /// |---|---|---|
 /// | 显式实例化 `F[int](1)` | **`HIR-UNSUPPORTED-GENERIC`** | check 过了，lower 面拒（`M12/Task 6` 之后）|
 /// | 泛型类型字面量 `Box[int]{…}` | `CHK-INVALID-SELECTOR` | 实例化后的类型是 invalid，取不到字段 |
-/// | 带类型集约束的泛型函数 `Sum([]int{…})` | `CHK-INVALID-ASSIGN` | 推断不出 `T`，实参对不上 |
+/// | 带类型集约束的泛型函数 `Sum([]int{…})` | **`HIR-MISSING-TYPE`** | check 过了，lower 的 `range xs`（`[]T`）判不出遍历形态（`M12/Task 7` 之后）|
 ///
 /// ⚠️ **判据的措辞要收紧**：`M5-tests.md` 要求的是「**稳定拒绝码**」，第一版
 /// 三条拿到的都是**通用的**检查诊断码（`CHK-*`），不是专属的
@@ -1005,7 +1005,12 @@ fn t_ex_32_generics_monomorphization() {
 ///
 /// **`M12/Task 6` 兑现了第一条腿**：检查器现在认识显式实例化（`F[int]` 不再被
 /// 读成「对函数取下标」）⇒ `F[int](1)` 一路走到 lower，拿到**专属码**。
-/// 剩下两条仍卡在检查面（选择器 / 可赋值，`M12` 的 Task 7/15）。
+///
+/// **`M12/Task 7` 兑现了第三条腿**：`Sum([]int{1,2,3})` 现在能推出 `T = int`
+/// ⇒ 实参面精确通过 ⇒ 检查面不再报 `CHK-INVALID-ASSIGN`，而是走到 lower，
+/// 卡在 `range xs`（`xs` 的静态类型还是 `[]T`，单态化之前 lower 认不出来）。
+/// 码因此从检查面漂到 HIR 面 —— 这是**能力前进**，不是回归。
+/// 剩下第二条仍卡在检查面（选择器，`M12` 的 Task 15）。
 ///
 /// ⚠️ `M12` 收口时这三条**会全部变成能跑**（那是 a 线的目的）。届时这条判据的
 /// 前提就消失了，要改成「`M12` 的 `T-GEN-*` 接管」而不是继续要求拒绝 ——
@@ -1057,7 +1062,7 @@ fn t_ex_33_out_of_surface_generics_are_rejected() {
          func main() {\n\
          \tprintln(Sum([]int{1, 2, 3}))\n\
          }\n",
-        "CHK-INVALID-ASSIGN",
+        "HIR-MISSING-TYPE",
     );
 }
 

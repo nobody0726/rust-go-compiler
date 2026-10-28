@@ -399,3 +399,170 @@ func use() { _ = Id[int, string](7) }
         "TYP-WRONG-TYPE-ARG-COUNT",
     );
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-GEN-07 实例化后的可赋值
+// ════════════════════════════════════════════════════════════════════
+
+/// 五种「形参里带类型参数」的实参形态。
+///
+/// # 为什么这一族今天会红（`M12-baseline.md` §3.1）
+///
+/// 检查面对**类型参数的可赋值性**一直是「能力边界 ⇒ 不判」（
+/// `assignable` 返回 `Err` 时按通过处理），于是：
+///
+/// * `[]int` vs `[]T` ⇒ **报** `cannot use value of type []int as []type parameter`；
+/// * `func(int) int` vs `func(T) T` ⇒ **报** `cannot use value of type func as func`。
+///
+/// 两边的形状根本不同：前者是「`assignable` 判出了假」，后者是「两边都印成
+/// `func` 但签名不同」。共同点是**没人把形参按推断结果替换过** —— 拿 `[]T`
+/// 去和 `[]int` 比，永远不可能相等。
+///
+/// 所以这一条要的不是「放宽判定」，而是**先替换、再判定**：推断出 `T = int`
+/// 之后，形参就是 `[]int`，判定是**精确**的（该拒的仍然拒）。
+#[test]
+fn t_gen_07_实例化后可变赋值() {
+    // ① 切片元素
+    assert_check_ok(
+        "gen07a",
+        r#"
+package p
+
+func Len[T any](xs []T) int { return len(xs) }
+
+func use() {
+	var x int
+	x = Len([]int{1, 2})
+	_ = x
+}
+"#,
+    );
+    // ② 函数实参（`func(int) int` 对上 `func(T) T`）
+    assert_check_ok(
+        "gen07b",
+        r#"
+package p
+
+func Apply[T any](f func(T) T, x T) T { return f(x) }
+
+func use() {
+	var x int
+	x = Apply(func(v int) int { return v }, 1)
+	_ = x
+}
+"#,
+    );
+    // ③ 具名泛型类型作形参
+    assert_check_ok(
+        "gen07c",
+        r#"
+package p
+
+type Box[T any] struct{ v T }
+
+func Get[T any](b Box[T]) T { return b.v }
+
+func use() {
+	var x int
+	x = Get(Box[int]{v: 1})
+	_ = x
+}
+"#,
+    );
+    // ④ map 的键与值
+    assert_check_ok(
+        "gen07d",
+        r#"
+package p
+
+func Keys[K comparable, V any](m map[K]V) int { return len(m) }
+
+func use() {
+	var x int
+	x = Keys(map[string]int{"a": 1})
+	_ = x
+}
+"#,
+    );
+    // ⑤ 类型参数切片上的索引（元素类型的来源是形参 `[]T`）
+    assert_check_ok(
+        "gen07e",
+        r#"
+package p
+
+func At[T any](xs []T, i int) T { return xs[i] }
+
+func use() {
+	var x int
+	x = At([]int{1, 2}, 0)
+	_ = x
+}
+"#,
+    );
+}
+
+/// 变参被调者**不能把进程打崩**（`M12/Task 7` 引入的活儿）。
+///
+/// `instantiate_callee` 一上线，**每个**泛型调用都会进推断面，于是变参调用
+/// （形参 2、实参 3）撞上 `infer_for_call` 的「等长」断言 —— 那是 `assert!`，
+/// 不是诊断：`test/typeparam/slices.go` 实测 **rc=101**，而它本该只是
+/// 「变参面没做」的普通能力边界。
+///
+/// 判据只要求**不崩且不误报**（rc=0）：变参的逐参可赋值性本来就是
+/// `call_value` 的窄面（不判），这里不替它加戏。
+#[test]
+fn t_gen_07_变参被调者不炸() {
+    assert_check_ok(
+        "gen07v",
+        r#"
+package p
+
+func Append[T any](s []T, vs ...T) []T { return s }
+
+func use() { Append([]int{1}, 2, 3) }
+"#,
+    );
+}
+
+/// 替换之后判定必须是**精确**的：形状对不上仍然要拒。
+///
+/// 这条挡的是「为了让 ①–⑤ 过，把类型参数面的判定整个放宽」—— 那样
+/// `Len(42)` 会静默通过，而它显然是错代码。
+#[test]
+fn t_gen_07_替换后仍然精确() {
+    assert_check_code(
+        "gen07n1",
+        r#"
+package p
+
+func Len[T any](xs []T) int { return len(xs) }
+
+func use() { var _ int = Len(42) }
+"#,
+        "CHK-INVALID-ASSIGN",
+    );
+    // `gen07n2` 的牙**只在返回类型面**，所以形参特意选**裸 `T`**：
+    //
+    // * 不替换时：实参 `string` vs 形参 `T` ⇒ `assignable` 给 `Err`（能力边界）
+    //   ⇒ **不报**；返回 `T` 赋给 `int` 同样 `Err` ⇒ 不报 ⇒ 退出 0 ⇒ 这条测试红；
+    // * 替换后：`T = string`，实参面精确通过，返回 `string` 赋给 `int` ⇒ 报。
+    //
+    // 反过来若形参写成 `[]T`，**旧路径自己就会报**（`[]string` vs `[]T` 判假），
+    // 那条负例就成了「不管替换有没有生效都绿」的空断言 —— 实测过：
+    // 注入「不替换」变异时它照样绿。
+    assert_check_code(
+        "gen07n2",
+        r#"
+package p
+
+func Id[T any](v T) T { return v }
+
+func use() {
+	var x int
+	x = Id("a")
+	_ = x
+}
+"#,
+        "CHK-INVALID-ASSIGN",
+    );
+}
