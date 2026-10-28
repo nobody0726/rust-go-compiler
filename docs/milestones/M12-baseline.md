@@ -469,3 +469,36 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 
 > `layout` 这一栏到此清零，`verify` 早在 Task 16 就清零（t16b 的形态表里没有它）。
 > 计划里写的「`VerifyError` 2 个」是被 Task 16 的实例化顺带解决的。
+
+### 11.3 变异验证：3 / 3 全红，其中 C 差点被误判成「冗余」
+
+三处改动逐一变异（`instantiate.rs` / `lower.rs` / `types.rs`），方法如下：
+
+| # | 变异 | 变红的判据 |
+|---|---|---|
+| A | `lower_func` 把 `result_types` 的写入挪回体下沉之后 | `t_gen_17`（`issue55101` 等 build 退出 2）+ `t_gen_17b` |
+| B | `InitGroup::globals` 改回 `Vec<GlobalId>`（`_` 重新进全局表） | `t_gen_17`（`issue45547`） |
+| C | `instantiate_at` 的 `add_named_instance` **与** `record_instance` 一起后移到约束校验之后 | `t_gen_17`（`issue46461`：`TypInvalidInstanceCycle` ⇒ 退出 2） |
+
+**C 第一次跑是绿的，结论是错的。** 当时按「判据打不到的路径不留」把 memo 提前**回退**了，
+留了段注释说「④″ 宽限已经把自引用约束整个跳过，memo 先后没有可观测差别」。
+回退后立刻实测：`issue46461` 变成 `TypInvalidInstanceCycle` +
+`帧布局失败：函数 M：v1 的类型 t32 没有运行期布局` —— 说明 memo 提前**不是**冗余。
+
+两个原因叠在一起，才让它看起来像冗余：
+
+1. **变异做的不彻底**：第一版只挪了 `record_instance`，`add_named_instance` 留在原处。
+   memo 查询读的是 record 表，但半成品实例的行为已经被 `add_named_instance` 那一步
+   改变了 —— 真实路径未完全破坏，变异强度不够。
+2. **判据缺形态**（`§11` 开头那条纪律的①档）：`t_gen_17` 当时只列了四个「根因直接
+   命中」的语料（`issue55101` / `issue51832` / `issue51840` / `issue45547`），
+   **没有 `issue46461`**。而 §11.1 第 4 条的 memo 顺序恰好只由 `issue46461` 这一种
+   形态（`type T[U interface{ M() T[U] }]`）打到。全量测试里也没有别的断言编它。
+
+处置：把 `issue46461` 补进 `t_gen_17` 的语料表（第五个），重跑变异 C（两个调用一起后移）
+⇒ 变红，报错文本与人工实测一致。教训写进判据的文档注释里：
+**变异绿先怀疑判据缺形态，别急着判「路径冗余」。**
+
+顺带清掉两处变异残留：`rgoc-types/src/implements.rs.bak`（带 `DBG impl` 打点的副本，
+被误提交进 `291f428`）与 `typeexpr.rs` 里 `DBG load inst` 那一段 `eprintln!`（同一提交）。
+

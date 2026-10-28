@@ -140,16 +140,7 @@ impl Checker<'_> {
                 if self.tt.named_def(nid).type_params.is_empty() {
                     return base;
                 }
-                let r = rgoc_types::instantiate(self.tt, nid, &args);
-                if r.is_err() {
-                    eprintln!(
-                        "DBG load inst {} args={:?} err={:?}",
-                        self.tt.named_def(nid).name,
-                        args,
-                        r.as_ref().err()
-                    );
-                }
-                r.unwrap_or(base)
+                rgoc_types::instantiate(self.tt, nid, &args).unwrap_or(base)
             }
 
             // `unsafe.Pointer`（M4/Task 31）：`unsafe` 是**编译器伪包** ——
