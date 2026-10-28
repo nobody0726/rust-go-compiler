@@ -3075,6 +3075,12 @@ void *rt_box(const TypeDesc *d, const void *src) {
  * 内存用 `rt_arena_alloc`（**不带对象头**）：itab 是元数据，不是 Go 对象 ——
  * 与切片底层数组同一条理由（`R-9-5`）。 */
 void *rt_itab(const TypeDesc *iface, const TypeDesc *concrete) {
+    /* ⚠️ **先**判 concrete==0（`M12/Task 21`，typeswitch6 实测）：nil 接口的
+     * 动态类型是 0，`x.(J)` 的判定链会对它发 `rt_itab(desc(J), 0)` ——
+     * 先解引用再判空就是 SEGV（isel 的注释预期「拿 0 查 ⇒ 0」）。 */
+    if (concrete == 0) {
+        return 0;
+    }
     const MethodTable *imt = (const MethodTable *)iface->methods;
     const MethodTable *cmt = (const MethodTable *)concrete->methods;
     if (imt == 0 || imt->count == 0) {
