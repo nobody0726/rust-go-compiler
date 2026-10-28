@@ -12,7 +12,7 @@
 //! 每个 `GlobalId` 一个 `.data` 标签 `g<id>`，大小按 `global_types` 的布局给、
 //! 内容全零（Go 的包级变量零值语义）。零大小全局只发标签不发字节。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rgoc_meta::desc::{DescBuilder, name_hash, sig_hash, type_hash};
 use rgoc_ssa::ir::{Hop, Module, SsaFunc};
@@ -854,8 +854,19 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
     //（`rt_reflect_metas`，1 起的下标减 1 取）。空表也发（rt.c 无条件
     // extern 引用它，缺符号 = 链接错）。
     let mut meta_labels: Vec<String> = Vec::new();
+    // 签名 desc 去重（`__sigdesc_<hash>`）：同一签名只发一块。
+    let mut sigs: BTreeMap<u32, String> = BTreeMap::new();
     for (h, t) in metas {
-        let l = emit_reflect_meta(asm, tt, h, t, &meta_idx_of, &m.pkgpath);
+        let l = emit_reflect_meta(
+            asm,
+            tt,
+            h,
+            t,
+            &meta_idx_of,
+            &m.methods,
+            &mut sigs,
+            &m.pkgpath,
+        );
         meta_labels.push(l);
     }
     // ⚠️ rt.c 编译成独立的 `.rt.o`，而 `.s` 单独汇编成另一个 `.o` ——
@@ -893,15 +904,17 @@ pub fn meta_symbol(hash: u32) -> String {
     format!("__reflectmeta_{hash:08x}")
 }
 
-/// 把一个类型的 `ReflectMeta`（含字段表与字符串）发射进 `.rodata`，
+/// 把一个类型的 `ReflectMeta`（含字段表、方法表与字符串）发射进 `.rodata`，
 /// 返回块符号名（给 `rt_reflect_metas` 表用）。
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn emit_reflect_meta(
     asm: &mut Asm,
     tt: &TypeTable,
     h: u32,
     t: TypeId,
     meta_idx_of: &BTreeMap<u32, u16>,
+    methods: &[rgoc_ssa::ir::MethodSet],
+    sigs: &mut BTreeMap<u32, String>,
     pkgpath: &str,
 ) -> String {
     use rgoc_types::typ::Type;
@@ -971,6 +984,91 @@ fn emit_reflect_meta(
     let meta_label = meta_symbol(h);
     let idx = meta_idx_of.get(&h).copied().unwrap_or(0);
     debug_assert_ne!(idx, 0, "发射中的 ReflectMeta 必须有非零下标");
+
+    // ── 方法表（`C13` §5.2 的 MethodMeta；M12/Task 32）─────────────────
+    //
+    // * **具名接口**：方法来自 `InterfaceDef.methods`（sig 是 Signature
+    //   TypeId），`fn` 恒 0 —— 接口没有实现。
+    // * **具名具体类型**：方法来自 `MethodSet`（`m.methods`，按基类型分组、
+    //   名字升序）。⚠️ `MethodSet` 把**指针接收者**的方法也并进基类型
+    //   （`collect_methods` 按 `strip_ptr(recv)` 分组 —— itab 要），而官方
+    //   的值类型方法集只有值接收者方法 ⇒ 值类型的 meta 要**滤掉**指针
+    //   接收者。指针性从 `named_def.methods` 的签名 `recv` 读（实例的
+    //   方法表由 `refresh_instance_methods` 填好，签名已实例化）。
+    // * 签名 desc：`sig_hash` 编码与 `MethodTable` 同源 —— `Implements`
+    //   在运行期比它的 +8（hash）字段，两侧同码才比得起来。
+    let mut method_labels: Vec<String> = Vec::new();
+    let mut nmethods: u32 = 0;
+    let under = rgoc_types::identical::underlying(tt, t);
+    match (tt.type_of(t), tt.type_of(under)) {
+        (Type::Named(_), Type::Interface(iid)) => {
+            let idef = tt.interface_def(*iid);
+            for (name, sig) in &idef.methods {
+                let name_l = cstr(asm, name);
+                let sig_l = match tt.type_of(*sig) {
+                    Type::Signature(sid) => {
+                        let sd = tt.signature_def(*sid);
+                        sig_desc_symbol(
+                            asm,
+                            tt,
+                            sigs,
+                            &tuple_types(tt, sd.params),
+                            &tuple_types(tt, sd.results),
+                        )
+                    }
+                    _ => "0".to_string(),
+                };
+                method_labels.push(format!(".quad {name_l}"));
+                method_labels.push(format!(".quad {sig_l}"));
+                method_labels.push(".quad 0".to_string());
+                nmethods += 1;
+            }
+        }
+        (Type::Named(nid), _) => {
+            let ptr_recv: BTreeSet<String> = tt
+                .named_def(*nid)
+                .methods
+                .iter()
+                .filter(|(_, sig)| {
+                    let Type::Signature(sid) = tt.type_of(*sig) else {
+                        return false;
+                    };
+                    matches!(
+                        tt.signature_def(*sid).recv.map(|r| tt.type_of(r)),
+                        Some(Type::Pointer(_))
+                    )
+                })
+                .map(|(n, _)| n.clone())
+                .collect();
+            // ⚠️ `MethodSet.ty` 是**具名基类型**（`collect_methods` 按
+            // `strip_ptr(recv)` 分组），不是 underlying —— `type Num int`
+            // 的方法是挂在 `Num` 下，按 `underlying`（=int）找永远落空。
+            let base_h = type_hash(tt, t);
+            // 没有方法体（原型不发码的泛型方法、或类型根本没方法）⇒ 空表。
+            if let Some(ms) = methods.iter().find(|ms| type_hash(tt, ms.ty) == base_h) {
+                for mi in &ms.methods {
+                    // 值类型的方法集：官方只含值接收者方法（指针接收者的归 `*T`）。
+                    if ptr_recv.contains(&mi.name) {
+                        continue;
+                    }
+                    let name_l = cstr(asm, &mi.name);
+                    let sig_l = sig_desc_symbol(asm, tt, sigs, &mi.params, &mi.results);
+                    method_labels.push(format!(".quad {name_l}"));
+                    method_labels.push(format!(".quad {sig_l}"));
+                    method_labels.push(format!(".quad {}", isel::fn_sym(mi.func)));
+                    nmethods += 1;
+                }
+            }
+        }
+        _ => {}
+    }
+    let methods_label = if method_labels.is_empty() {
+        "0".to_string()
+    } else {
+        let ml = format!("__reflectmethods_{h:08x}");
+        asm.rodata_named_raw(&ml, &method_labels);
+        ml
+    };
     asm.rodata_named_raw(
         &meta_label,
         &[
@@ -981,14 +1079,14 @@ fn emit_reflect_meta(
             format!(".byte {}", {
                 let mut b: Vec<u8> = Vec::with_capacity(8);
                 b.extend_from_slice(&nfields.to_le_bytes());
-                b.extend_from_slice(&0u32.to_le_bytes());
+                b.extend_from_slice(&nmethods.to_le_bytes());
                 b.iter()
                     .map(|x| x.to_string())
                     .collect::<Vec<_>>()
                     .join(",")
             }),
             // +32 methods *MethodMeta（Task 32）/ +40 params *ParamMeta（Task 33）。
-            ".quad 0".to_string(),
+            format!(".quad {methods_label}"),
             ".quad 0".to_string(),
             // +48 nparams u32 / +52 nresults u32（Task 33）。
             ".byte 0,0,0,0,0,0,0,0".to_string(),
@@ -997,6 +1095,48 @@ fn emit_reflect_meta(
         ],
     );
     meta_label
+}
+
+/// 方法签名的**描述块**（kind=Func 的 40 字节 desc；`C13` §5.2 的
+/// `MethodMeta.sig` 指它）。
+///
+/// 它不进 `type_closure`（方法签名不是值类型），所以 `emit_descs` 的
+/// 主循环看不见它 —— 这里按需发、按 `sig_hash` 去重。布局照 `C5` §10：
+/// `size=8`（函数值是一个字）、`hash` 就是 `sig_hash` 编码 —— 运行期的
+/// `Implements` 读 +8 比签名，两侧同码是硬前提。
+fn sig_desc_symbol(
+    asm: &mut Asm,
+    tt: &TypeTable,
+    sigs: &mut BTreeMap<u32, String>,
+    params: &[TypeId],
+    results: &[TypeId],
+) -> String {
+    let h = sig_hash(tt, params, results);
+    if let Some(l) = sigs.get(&h) {
+        return l.clone();
+    }
+    let sym = format!("__sigdesc_{h:08x}");
+    let mut head: Vec<u8> = Vec::with_capacity(16);
+    head.extend_from_slice(&8u32.to_le_bytes()); // +0 size（函数值 8 字节）
+    head.extend_from_slice(&8u32.to_le_bytes()); // +4 ptrdata
+    head.extend_from_slice(&h.to_le_bytes()); // +8 hash
+    head.push(19); // +12 kind = Func（官方枚举序）
+    head.push(0); // +13 flags
+    head.extend_from_slice(&0u16.to_le_bytes()); // +14 meta_idx
+    asm.rodata_named_raw(
+        &sym,
+        &[
+            format!(
+                ".byte {}",
+                head.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+            ),
+            ".quad 0".to_string(), // +16 gcdata
+            ".quad 0".to_string(), // +24 elem
+            ".quad 0".to_string(), // +32 methods
+        ],
+    );
+    sigs.insert(h, sym.clone());
+    sym
 }
 
 /// 官方 `reflect.Type.String()` 形态的类型名渲染（`C13` §4：实参按 **Go

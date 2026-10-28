@@ -112,6 +112,17 @@ type fieldMeta struct {
 	flags  uint8          // +28（bit0 anonymous / bit1 exported）
 }
 
+// methodMeta 是 MethodMeta 的 Go 侧镜像（C13 §5.2，24 字节）。
+//
+// `sig` 指向**签名描述块**（kind=Func 的 40 字节 desc，发射面按
+// `sig_hash` 编码发、跨方法去重）——`Implements` 比签名就比它的
+// `hash` 字段（desc +8；两侧同编码，`iface_sig_hash` / `sig_hash`）。
+type methodMeta struct {
+	name unsafe.Pointer // +0  cstring
+	sig  unsafe.Pointer // +8  *TypeDesc（签名 desc）
+	fn   unsafe.Pointer // +16 方法入口（接口方法是 0）
+}
+
 // cstr 把 NUL 结尾的 C 字符串读成 Go 字符串。
 //
 // `(*[256]byte)(p)` 只建视图不碰内存（越界页只在索引时才触碰），循环
@@ -202,6 +213,26 @@ type Type interface {
 	Key() Type
 	// Elem 返回元素类型（ptr/slice/array/chan/map；其余 panic）。
 	Elem() Type
+	// NumMethod 返回**导出**方法的个数（官方同口径：非导出不计）。
+	NumMethod() int
+	// Method 返回第 i 个导出方法（字母序；越界 panic，文本对齐官方）。
+	Method(i int) Method
+	// Implements 报告本类型是否实现接口 u（u 非接口恒 false，官方同）。
+	Implements(u Type) bool
+	// AssignableTo 报告本类型的值是否可赋给 u（同一类型或 u 是已实现的接口）。
+	AssignableTo(u Type) bool
+	// ConvertibleTo 报告本类型的值是否可转换成 u（可赋值或两侧都是数值类）。
+	ConvertibleTo(u Type) bool
+}
+
+// Method 是类型单个方法的元数据（官方同名结构的收窄版：
+// `Func`（方法值）需要反向 trampoline（U-M12-02 同族），`Index` 由调用方
+// 自己数 —— 都不进收窄面）。
+type Method struct {
+	// Name 是方法名（不含类型前缀）。
+	Name string
+	// Type 是方法的签名类型（kind 是 Func；**不含接收者**，官方同）。
+	Type Type
 }
 
 // StructTag 是字段 tag（字段声明里反引号里的原文）。
@@ -358,12 +389,29 @@ func (t rtype) PkgPath() string {
 	return ""
 }
 
-// String 返回类型的可读描述。
+// String 返回类型的可读描述（官方 `reflect.Type.String` 形态）。
 //
-// Task 31 的口径：具名类型 `pkgpath.name`（官方对 defined type 用的是
-// **名字不带包路径**的 `String()` —— 完整对账在 Task 32 / T-REF-05），
-// 复合形状先返回 kind 名占位。
+// 具名类型 `pkgpath.name`（实例的 name 字段本身就是 `Box[int]` 形，
+// 发射面渲染）；复合形状沿 elem 链递归：`*T` / `[]T` / `[N]T` /
+// `map[K]V` / `chan T`。其余（func / iface / struct 的完整官方拼写）
+// 不在收窄面（`U-M12` 族），退 kind 名。
 func (t rtype) String() string {
+	d := t.d()
+	if d == nil {
+		return "<nil>"
+	}
+	switch Kind(d.kind) {
+	case Pointer:
+		return "*" + (rtype{desc: t.elemDesc()}).String()
+	case Slice:
+		return "[]" + (rtype{desc: t.elemDesc()}).String()
+	case Array:
+		return "[" + itoa(t.Len()) + "]" + (rtype{desc: t.elemDesc()}).String()
+	case Map:
+		return "map[" + (rtype{desc: d.ext0}).String() + "]" + (rtype{desc: d.ext1}).String()
+	case Chan:
+		return "chan " + (rtype{desc: d.ext0}).String()
+	}
 	if m := t.meta(); m != nil {
 		n := cstr(m.name)
 		p := cstr(m.pkgpath)
@@ -372,7 +420,148 @@ func (t rtype) String() string {
 		}
 		return n
 	}
-	return kindName(Kind(t.d().kind))
+	return kindName(Kind(d.kind))
+}
+
+// itoa 是十进制无符号渲染（`Array` 的 len；runtime 没有 strconv）。
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := ""
+	for n > 0 {
+		digits = string(rune('0'+n%10)) + digits
+		n /= 10
+	}
+	return digits
+}
+
+// methodsOf 返回方法表视图（没有 meta / 没有方法返回 nil）。
+func (t rtype) methodsOf() *[64]methodMeta {
+	m := t.meta()
+	if m == nil || m.methods == nil || m.nmethods == 0 {
+		return nil
+	}
+	return (*[64]methodMeta)(m.methods)
+}
+
+// exportedMethods 返回**导出**方法的下标表（官方 `NumMethod`/`Method`
+// 的口径：非导出方法不进反射的方法列表 —— 但 `Implements` 看全集）。
+func (t rtype) exportedMethods() []int {
+	mm := t.methodsOf()
+	if mm == nil {
+		return nil
+	}
+	var out []int
+	for i := 0; i < int(t.meta().nmethods); i++ {
+		if c := cstr(mm[i].name); c != "" && c[0] >= 'A' && c[0] <= 'Z' {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// NumMethod 返回导出方法的个数。
+func (t rtype) NumMethod() int {
+	return len(t.exportedMethods())
+}
+
+// Method 返回第 i 个导出方法（字母序 —— 发射面按名字升序发）。
+func (t rtype) Method(i int) Method {
+	exp := t.exportedMethods()
+	if i < 0 || i >= len(exp) {
+		panic("reflect: Method index out of range")
+	}
+	mm := t.methodsOf()[exp[i]]
+	return Method{Name: cstr(mm.name), Type: rtype{desc: mm.sig}}
+}
+
+// Implements 报告本类型是否实现接口 u。
+//
+// 判据：u 的**每个**方法都能在本类型的方法表里找到同名且**签名 desc 的
+// hash 相同**的条目（两侧同走 `sig_hash` 编码 —— desc 块的 +8 就是它）。
+// u 非接口、或 u 是没有方法表的接口形状 ⇒ false（官方同）。
+func (t rtype) Implements(u Type) bool {
+	ut, ok := u.(rtype)
+	if !ok {
+		return false
+	}
+	ud := ut.d()
+	if ud == nil || Kind(ud.kind) != Interface {
+		return false
+	}
+	um := ut.methodsOf()
+	if um == nil {
+		// 没有方法的接口（`interface{}`）—— 谁都实现。
+		return true
+	}
+	mm := t.methodsOf()
+	if mm == nil {
+		return false
+	}
+	n := int(ut.meta().nmethods)
+	for i := 0; i < n; i++ {
+		want := cstr(um[i].name)
+		wantSig := (rtype{desc: um[i].sig}).d()
+		found := false
+		for j := 0; j < int(t.meta().nmethods); j++ {
+			if cstr(mm[j].name) != want {
+				continue
+			}
+			got := (rtype{desc: mm[j].sig}).d()
+			if got != nil && wantSig != nil && got.hash == wantSig.hash {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// AssignableTo 报告本类型的值是否可赋给 u：同一类型（desc 同一块），
+// 或 u 是已实现的接口（官方口径的收窄面 —— 常量可表示性、双向 chan
+// 等不在语料里，不判）。
+func (t rtype) AssignableTo(u Type) bool {
+	ut, ok := u.(rtype)
+	if !ok {
+		return false
+	}
+	ud := ut.d()
+	if ud == nil || t.d() == nil {
+		return false
+	}
+	if Kind(ud.kind) == Interface {
+		return t.Implements(u)
+	}
+	return t.d().hash == ud.hash
+}
+
+// ConvertibleTo 报告本类型的值是否可转换成 u：可赋值，或两侧都是
+// 数值类（bool/string 之外的标量 kind 区间，官方 §转换 的收窄面 ——
+// string⇄[]byte、struct 同形等不在 t_ref_05 的对账范围里，不判）。
+func (t rtype) ConvertibleTo(u Type) bool {
+	if t.AssignableTo(u) {
+		return true
+	}
+	ut, ok := u.(rtype)
+	if !ok {
+		return false
+	}
+	ud := ut.d()
+	d := t.d()
+	if ud == nil || d == nil {
+		return false
+	}
+	return numericKind(Kind(d.kind)) && numericKind(Kind(ud.kind))
+}
+
+// numericKind 判「数值类 kind」（整数 / 浮点 / 复数；bool/string/
+// unsafe.Pointer 不算 —— string(i) 的码点转换官方也不是「数值转换」）。
+func numericKind(k Kind) bool {
+	return k >= Int && k <= Complex128
 }
 
 // NumField 返回 struct 的字段数（非 struct panic，文本对齐官方）。

@@ -190,12 +190,14 @@ fn t_ref_01_白名单对账() {
     }
 
     // 判据侧：登记集合（Task 31 读面：StructTag / StructField 随
-    // Field(i) 的读面一起进来 —— 官方 `reflect.StructField` 的形状）。
+    // Field(i) 的读面一起进来；Task 32 方法表：Method 随 NumMethod/Method
+    // 一起进来 —— 官方 `reflect.Method` 的收窄版）。
     let want: BTreeSet<String> = [
         "type Kind",
         "type Type",
         "type StructTag",
         "type StructField",
+        "type Method",
         "type Value",
         "func TypeOf",
         "func ValueOf",
@@ -461,4 +463,109 @@ fn want_ref02_output() -> String {
     let mut s = want.join("\n");
     s.push('\n');
     s
+}
+
+// ════════════════════════════════════════════════════════════════════
+// T-REF-05 方法表 + 类型身份（Task 32）
+// ════════════════════════════════════════════════════════════════════
+
+/// `t_ref_05` 的 fixture：实例的 `String()` / 方法表 / 实现与赋值转换判定。
+///
+/// * `Box[int]`（泛型实例，值接收者 `Get` + 指针接收者 `Set`）：
+///   `String()` 是 `main.Box[int]`（实例化拼写），`NumMethod()` 官方口径
+///   只数**值接收者**的（=1），`Method(0).Name == "Get"`（字母序）。
+/// * `Num`（具名基本类型，方法 `Two`）实现 `Twoer` 接口。
+/// * `Implements/AssignableTo/ConvertibleTo` 各取官方判真与判假各一。
+const T_REF_05_SRC: &str = r#"package main
+
+import "reflect"
+
+type Box[T any] struct {
+	v T
+}
+
+func (b Box[T]) Get() T   { return b.v }
+func (b *Box[T]) Set(x T) { b.v = x }
+
+type Num int
+
+func (n Num) Two() int { return 2 }
+
+type Twoer interface {
+	Two() int
+}
+
+func main() {
+	bi := reflect.TypeOf(Box[int]{})
+	bs := reflect.TypeOf(Box[string]{})
+	println(bi.String())
+	println(bs.String())
+	gt := reflect.TypeOf((*Twoer)(nil)).Elem()
+	println(bi.NumMethod())
+	println(bi.Method(0).Name)
+	n := reflect.TypeOf(Num(0))
+	println(n.NumMethod())
+	println(n.Method(0).Name)
+	println(n.Implements(gt))
+	println(reflect.TypeOf(7).Implements(gt))
+	println(n.AssignableTo(gt))
+	println(n.AssignableTo(reflect.TypeOf(Num(0))))
+	println(n.ConvertibleTo(reflect.TypeOf(0)))
+	println(reflect.TypeOf(3.5).ConvertibleTo(n))
+}
+"#;
+
+/// 期望输出 —— **官方 `go run` 的逐行实测**（oracle，2026-10-27；
+/// 12 行：String×2 / NumMethod+Method 名×2 组 / Implements 判真假 /
+/// AssignableTo 判真假 / ConvertibleTo 判真假）。
+#[test]
+fn t_ref_05_方法表与类型身份() {
+    let tmp = std::env::temp_dir().join(format!("rgoc-ref05-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("建 scratch 失败");
+    let main = tmp.join("main.go");
+    fs::write(&main, T_REF_05_SRC).expect("写 fixture 失败");
+
+    let bin = tmp.join("ref05bin");
+    let build = Command::new(driver())
+        .args(["build", "-I"])
+        .arg(repo_root().join("stdlib"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&main)
+        .output()
+        .expect("起不了 build");
+    assert_eq!(
+        build.status.code(),
+        Some(0),
+        "反射方法表 fixture 应当能编译：\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let out = Command::new(&bin).output().expect("起不了产物");
+    let got = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = [
+        "main.Box[int]",
+        "main.Box[string]",
+        "1",
+        "Get",
+        "1",
+        "Two",
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+    ]
+    .join("\n");
+    // println 逐行输出 ⇒ 末尾有换行。
+    let want = want + "\n";
+    assert_eq!(out.status.code(), Some(0), "fixture 必须正常退出：\n{got}");
+    assert_eq!(got, want, "方法表与类型身份必须与官方逐行相同");
 }
