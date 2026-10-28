@@ -1522,6 +1522,16 @@ fn t_gen_17_布局与验证() {
         // （`G2` 解成 `Invalid`）。实测 `帧布局失败：函数 func@27:11：v4 的类型
         // t31`（`t31 = Basic(UntypedNil)`）。
         "issue51909",
+        // 「泛型原型自己」的实例**不发码**（`instance::is_abstract`）：包级那一遍
+        // 检查泛型体会请求 `Some2·tp5`，它的形参没有运行期布局。少了那道过滤
+        // 就是 `帧布局失败：函数 Some2·tp5：v0 的类型 t52`。
+        "issue50264",
+        // 函数字面量的**结果类型是类型参数**（`func(...) G3`）：用
+        // `type_expr_of` 解会得到 `Invalid`，`return` 就把常量收敛到 `Invalid`
+        // 上 ⇒ opt 之后 `V3` 报「常量 Float(619.2) 不可能有类型 t32」。
+        // 这一条是补上的：变异 C（结果类型退回 `type_expr_of`）起初**存活**，
+        // 因为 `issue51909` 的结果类型是接口 `Response`，两档都能解。
+        "issue48191",
     ] {
         let f = corpus().join(format!("{name}.go"));
         // ⚠️ 不能用 `-o /dev/null`：`build` 会拼 `.s` 后缀（`/dev/null.s` 写不进去）。

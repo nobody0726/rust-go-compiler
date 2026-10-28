@@ -502,3 +502,83 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 顺带清掉两处变异残留：`rgoc-types/src/implements.rs.bak`（带 `DBG impl` 打点的副本，
 被误提交进 `291f428`）与 `typeexpr.rs` 里 `DBG load inst` 那一段 `eprintln!`（同一提交）。
 
+
+## 12. Task 18 读数（2026-10-28）
+
+基线文件：`.superpowers/m12-baseline-t18c/baseline.tsv`（`tools/run-oracle/m12-baseline.sh`）。
+
+### 12.1 做了什么（五条）
+
+前三条是「链接期缺符号」，后两条是同一批语料在收口时暴露的上游漏收敛。
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | `issue48049` / `issue52026`：`undefined reference to fn4294967295` | 泛型**方法**的实例没有任何调用点（动态分派由 ssa 按方法名解析，itab 的槽位没有源码位置）⇒ 方法实例从没被请求 ⇒ `resolve_method` 给哨兵 `FuncId(u32::MAX)` | `Mono::declare_method` 记 `(基类型, 方法)` 的 origin；检查面 `request_typed_methods` 为每个具名实例补请求；`lower` 的 `find_method_path` 按实例名查表 |
+| 2 | `issue52124`：缺 `__desc_*` | itab 两侧的类型描述子不在 `type_closure` 的根里（`42` 是 `untyped int`，被根过滤掉） | 根收集后把 `it.iface` / `it.concrete` 也压栈 |
+| 3 | `issue50264` / `issue51909`：`帧布局失败：函数 Some2·tp5` | 包级那一遍检查泛型体会用**未绑定**的 `T` 请求实例（`Some2·tp5`、`Operation·struct.Body.tp2`），它没有运行期布局 | 判定放在**发码口**（`instance::is_abstract`），见 §12.4 |
+| 4 | `issue51909`：`帧布局失败：函数 func@27:11：v4 的类型 t31`（`t31 = UntypedNil`） | `lower_funclit` 也在**体下沉之后**才写 `result_types`（与 §11.1 第 1 条同一个根因的第二种形态），`return nil` 读到空表 | 体下沉之前先写一次 |
+| 5 | `issue54535`：`HIR-UNSUPPORTED-GENERIC`（`f[int]` 找不到实例） | `func_keys` 按**裸名**登记，方法 `func (n *node[T]) f` 与包级 `func f[T any]()` 撞名，`or_insert` 让包级 `f` 拿到方法的键 ⇒ 请求被译成方法实例 `node·int.f` | `func_keys` 只收包级函数（`recv.is_none()`） |
+
+第 5 条的症状值得记一笔：`inst_sites` 里好好记着 `f·int`，`instances` 里却只有
+`node·int.f` —— 报错文本（「不在 M5 面」）完全指不到真正的原因，是把它说的「实例」
+打出来才看见键错了。
+
+### 12.2 读数
+
+| 项 | t17b | t18c |
+|---|---|---|
+| build 成功合计 | 138 | **154** |
+| `run` 族 build_ok | 37/71 | **46/71** |
+| `run` 族跑绿 | 35 | **44** |
+| `compile` 族 build_ok | 28/40 | **35/40** |
+| `missing_type` | 31 | **20** |
+| `other` | 8 | **3** |
+| `layout` | 0 | 0 |
+| `verify` | 0 | 0 |
+| `panic` | 1 | 1 |
+
+逐文件对比：**16 个转 `ok`**（`run` 族 9 个：`issue47514b` / `issue47775b` /
+`issue47925` / `issue48047` / `issue48049` / `issue49659b` / `issue50264` /
+`issue52026` / `issue54535` —— 全部跑绿；`compile` 族 7 个：`issue47797` /
+`issue49432` / `issue49538` / `issue51909` / `issue52124` / `issue52241` /
+`issue53406`），另有 `issue48253` 少一条 `CHK-INVALID-SELECTOR`（`check` 仍红，
+但它与泛型无关，是 `TYP-UNSUPPORTED-IMPORT-FORM` 那一档的连带）。全量
+**246 suite / 2312 passed / 0 failed / 2 ignored**。
+
+> `missing_type` 还剩 20 个，归 Phase 3 的账（`M12-plan.md` Task 19 起）。
+
+### 12.3 变异验证：5 / 5 全红
+
+装置 `.superpowers/m18-mutate.py`（`apply A..E` / `restore`），每次变异前
+`cargo clean -p <crate>`，恢复走 `git checkout --`（代码先提交了，见 `cd33cd5`）。
+
+| # | 变异 | 变红的判据 |
+|---|---|---|
+| A | `func_keys` 把方法也收进去（去掉 `recv.is_none()`） | `t_gen_18_链接`（`issue54535`） |
+| B | `lower_funclit` 的 `result_types` 退回体下沉之后 | `t_gen_17`（`issue51909`） |
+| C | `lower_funclit` 的结果类型退回 `type_expr_of` | `t_gen_17`（`issue48191`） |
+| D | `request_typed_methods` 恒 `false`（不补方法实例） | `t_gen_18_链接`（`issue48049` / `issue52026`） |
+| E | `is_abstract` 恒 `false`（不过滤发码） | `t_gen_17`（`issue50264`） |
+
+**C 第一次是绿的**，与 §11.3 同一档教训（判据缺形态）：`t_gen_17` 当时列的
+`issue51909` 的结果类型是接口 `Response`，`type_expr_of` 与 `type_in_body` 两档
+都能解，打不到这条路径。真正能打到的是 `issue48191`（函数字面量结果类型是 `G3`
+这类类型参数），而它当时不在任何判据里。补进 `t_gen_17` 的语料表后 C 变红。
+同一次还补了 `issue50264`（`is_abstract` 的牙口）。
+
+### 12.4 一处改对了又改回来的地方：判定该放请求口还是发码口
+
+第 3 条最初是**挡在请求口**的：`Session::request_inst` 里「实参有任一无运行期
+布局的类型 ⇒ 不请求」。它让 `issue50264` / `issue51909` 立刻转好，看起来干净，
+但两条判据当场塌：
+
+* `t_gen_14b_递归实例`：自引用链 `Loop[T] → Loop·tp0` 被拒，受理表只剩 1 条
+  （判据要 2 条 —— 链必须**收敛**，不是被挡）；
+* `t_gen_14d_实例化环有码`：`issue48711.go` 的环**只**在类型参数实参上长出来
+  （每层 `[]T` 长一级是唯一能让深度长起来的东西），挡住它
+  `TYP-INVALID-INSTANCE-CYCLE` 就再也报不出来，只剩一条
+  `TYP-WRONG-TYPE-ARG-COUNT` 的假症状。
+
+判据是「造不造函数」，不是「认不认这条请求」——两者的分界线在发码口。拒绝一个
+合法请求的代价比少发一个「谁也不调」的函数大得多（泛型原型本身不发码，所以没有
+活代码会引用这些实例）。这条写进了 `Session::request_inst` 的注释里。
