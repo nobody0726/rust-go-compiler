@@ -2697,9 +2697,10 @@ impl Fb<'_> {
                 if let Some(&p) = self.slot_ptr.get(s) {
                     return (p, Some(self.heap_root()));
                 }
-                let root = *self.slot_root.get(s).unwrap_or_else(|| {
-                    panic!("槽 s{} 没有根（函数 {}）", s.0, self.f.name)
-                });
+                let root = *self
+                    .slot_root
+                    .get(s)
+                    .unwrap_or_else(|| panic!("槽 s{} 没有根（函数 {}）", s.0, self.f.name));
                 (self.addr_of(root), Some(root))
             }
             Place::Global(g) => {

@@ -74,7 +74,6 @@ pub use convertible::convertible;
 pub use dump::{DumpError, dump_types, try_dump_types};
 pub use identical::{identical, identical_ignore_tags, unalias, underlying};
 pub use implements::implements;
-pub use typeset::core_type;
 pub use infer::{
     GenericArgSite, infer_for_call, infer_from_args, infer_from_assignment, rename_tparams,
 };
@@ -93,6 +92,7 @@ pub use typ::{
     Type, TypeId, TypeParamId, UnionId,
 };
 pub use typeset::IfaceTSet;
+pub use typeset::core_type;
 pub use unify::{Unifier, UnifyMode, unify};
 pub use universe::{declare_universe, declared_names, universe};
 pub use validtype::{MAX_TYPE_NEST_DEPTH, valid_type};

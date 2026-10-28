@@ -2290,7 +2290,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         }
         let base = {
             let tt = self.tt();
-            match tt.type_of(underlying(tt, t)) {
+            match tt.type_of(under_or_core(tt, t)) {
                 Type::Pointer(e) => Some(*e),
                 _ => None,
             }
@@ -2342,7 +2342,7 @@ impl<'s, 'p> ExprChecker<'s, 'p> {
         };
         let elem = {
             let tt = self.tt();
-            match tt.type_of(underlying(tt, t)) {
+            match tt.type_of(under_or_core(tt, t)) {
                 Type::Chan { dir, elem } if *dir != ChanDir::SendOnly => Some(*elem),
                 _ => None,
             }
@@ -3735,4 +3735,34 @@ impl Session<'_> {
         let mut cx = ExprChecker { s: self, env: None };
         cx.convert_untyped(x, target, pos);
     }
+}
+
+/// `t` 的 underlying；如果它是**类型参数**，再往它的核心类型走一层。
+///
+/// # 为什么操作符判定要用它
+///
+/// `p T`、`T interface{ ~*int }` 时 `*p` 合法 —— 理由不是「`T` 是指针类型」，
+/// 而是「`T` 的**每个**类型都是指针」，也就是 `T` 有核心类型 `*int`。
+/// 只看 `underlying(T)` 会一律判不合法（`typelist.go` 实测三条：`*p`、
+/// `ch <- 0`、`<-ch`，各自的 `T` 是 `~*int` / `~chan int`）。
+///
+/// 非类型参数 ⇒ 就是 `underlying`（行为一字不变）；类型参数但**没有**核心类型
+/// （`interface{}`、只有方法集的、项表 underlying 不一致）⇒ 仍返回
+/// `underlying`（`TypeParam`），调用方照旧判「不能这么用」—— 与官方
+/// `coreType` 返回 `nil` 的后果一致。
+///
+/// ⚠️ **先看原类型**是不是类型参数：`underlying` 会把它解到**约束接口**上，
+/// 于是 `matches!(Type::TypeParam)` 永远为假、这条兜底一次都不会生效
+/// （第一次就是这么写的，`typelist.go` 三条诊断纹丝不动；与 `t_gen_05`
+/// 的 `underlying` 坑同源）。
+pub(crate) fn under_or_core(
+    tt: &rgoc_types::TypeTable,
+    t: rgoc_types::TypeId,
+) -> rgoc_types::TypeId {
+    if matches!(tt.type_of(t), Type::TypeParam(_))
+        && let Some(c) = rgoc_types::core_type(tt, t)
+    {
+        return c;
+    }
+    underlying(tt, t)
 }
