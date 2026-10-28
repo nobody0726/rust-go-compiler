@@ -717,3 +717,57 @@ DBG   tp=TypeParamId(1) ty=TypeId(36) name=Some("T")   # func Get[T any] 的 T
 逐段重写（三处都有完整 diff 上下文），**从本轮起纪律改为「写完即 add」**
 —— staging 区就是恢复操作的保护区。装置本身也该在 apply 前检查
 `git status --short <file>` 非空时拒绝运行。
+
+---
+
+## 15. Task 21：`T-GEN-01` run 族收口（68/71 + 白名单 3）
+
+### 15.1 修复清单（9 个 commit，56/71 → 68/71）
+
+| commit | 根因 | 修复 |
+|---|---|---|
+| `849c4da` | 复合字面量的核心类型判定漏 `TypeParam → core_type`；类型断言位置集不全 | `lower_composite` 形状判定下钻；断言位置集补齐 |
+| `abcde20` | 匿名接口实例的 mangled 名按下标（`f·iface11`）—— 同一份 AST 多遍求值造新条目，名字漂移 ⇒ 误报 HIR-UNSUPPORTED-GENERIC | mono 的 mangled 四档（Interface/Signature/Tuple/Union）改**结构性命名**（方法名+签名+variadic 位等递归展开） |
+| `e74e7be` | `is_abstract` 只看 targs 直达 —— `Two[Node[One.tp0]]`（named 包 tp 有布局）被下沉 ⇒ 体内找不存在的实例方法 | 新增 `rgoc_types::type_mentions_tparam`（类型图递归下钻，seen 防环），`is_abstract` 递归化 |
+| `01ce271` | native 三连：`p.(any)` 恒败；不同约束接口包同一具体值 itab 不同 ⇒ switch 误走 default；`T[struct{int}]` 与 `T[struct{int "x"}]` 撞 desc | isel `type_assert` 加 any 特例；`rt_iface_eq` 解 itab[1] 比**动态类型**；`desc::hash_into` 补 targs（Named）与 tag（Struct） |
+| `b28ec8c` | 实例壳还是 placeholder（param_types 空）⇒ 接口实参不装箱；interp 方法表 key 用整个 mangled 名 | lower 的 `arg_types` 兜底（**只信实例化后签名**，形参带 tp 的原型签名塞进去会炸帧布局——issue51840 实测）；interp 取壳名最后一段 |
+| `cda7877` | `rt_itab` 对空接口先解引用再判 `cmt==0` ⇒ `f[interface{foo()}](nil)` SIGSEGV | `if (concrete == 0) return 0;` 提前 |
+| `623a3c8` | 泛型方法接收者没在体内声明；Convert 到 chan 被拒 | `func_decl` 补接收者声明（**类型表达式先于结果名声明**——issue51765 的求值序）；放行 chan 转换（布局单字，纯 re-tag） |
+| `ec8fd74` | `A[T interface{ []int \| [5]int }]` 的 `a.val[2]`：commonUnder 命不中 ⇒ Shape::Other 误报 | 新增 `index_elem_of_terms`（官方 index.go 的 generic 判定：约束每项可索引且元素逐对 identical） |
+| `f226e76` | **接口混合比较**两处（equal.go 的 `g(3,3)` 判 false） | ① lower 给「值 vs 接口」比较的非接口侧插装箱（官方 comparison 的隐式转换；运行时没有静态类型，必须在 lower 做）；② `go_eq` 的动态类型用裸 `TypeId` 相等被重复的基本型条目骗过（`add_basic` 不去重，`default_type` 每次造新条目）—— 新增 `go_eq_tt`，动态类型按 `identical` 归一，`compare` 加 tt 参数 |
+
+### 15.2 读数
+
+| 项 | t21a（起） | t21i（终） |
+|---|---|---|
+| `run` 族跑绿 | 56/71 | **68/71** |
+| `t_gen_01` 判据 | — | **71 条逐条 interp + native 全绿（白名单 3 跳过）** |
+| 全量测试 | 2320 passed | **2321** passed / 0 failed |
+
+判据测试 `m12_checkface::t_gen_01_run_68of71`：run 清单 71 条逐条
+`build -o` 成功 + `driver run`（L1 解释器，主判据）rc=0 + native ELF
+直接执行 rc=0；断言 `total == 71` 与 `skipped == 3`。
+
+### 15.3 白名单 3 条（功能级缺口，判据冻住）
+
+| 文件 | 缺口 | 为什么不做 |
+|---|---|---|
+| `dictionaryCapture-noinline` | 无类型全局 var 的类型推导（`var x interface{...} = s[int]{...}` 装载面不推） | 装载面（rgoc-load）的独立工作，非检查/下降局部补丁 |
+| `dottype` | 内建调用的多值实参展开（`println(f2[int](i))`——HIR spread 只记个数，内建没有 spread 通道） | 动 check/HIR/interp/ssa 四层，独立任务 |
+| `issue44688` | 接口方法表达式 | **U-M5-13**：M5 起登记的面外项 |
+
+与 §14.3 的 `typelist`（部分实例化）同一条纪律：白名单**冻在判据里**
+（`WHITELIST: [&str; 3]` + 断言条数），防止悄悄变大。
+
+### 15.4 变异验证：4 / 4 全红
+
+装置 `.superpowers/m21-mutate.py`（apply E..H / restore；apply 前检查
+锚点文件无未提交改动 —— §14.5 的纪律进了装置），判据都是
+`t_gen_01_run_68of71`。每次变异前 `cargo clean -p <对应 crate>`。
+
+| # | 变异 | 变红 |
+|---|---|---|
+| E | lower 混合比较装箱整条短路（`if false &&`） | `equal`（interp 退出 2） |
+| F | `go_eq_tt` 的 identical 归一恒不命中 | `equal`（interp 退出 2） |
+| G | `is_abstract` 退回只看布局（`type_mentions_tparam` 短路） | `issue54225`（HIR-MISSING-TYPE） |
+| H | interp 方法表 key 回到整个 mangled 名 | `issue48598` / `issue48645b`（interp 退出 2） |
