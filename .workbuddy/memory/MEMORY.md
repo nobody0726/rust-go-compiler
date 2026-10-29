@@ -12,8 +12,18 @@
   **直连**就通（`gh api` 也通）。别急着改用 gh api 手工搬对象
 - commit 纪律：阶段收口即 commit + push（按交付块分）；`.superpowers/` 已 gitignore（台账不入库）
 
-## 当前状态（2026-10-27）
-- **M0–M3 完成；M4/M5 部分兑现；M6–M10 全部收口**
+## 当前状态（2026-10-29）
+- **M0–M3 完成；M4/M5 部分兑现；M6–M12 全部收口**
+- **M12（泛型 + 有限反射 + 优化 pass）已收口**（2026-10-29）：三条线互不阻塞，
+  门禁 `G12-1..13` **13/13**。读数 **251 suite / 2355 passed / 0 failed / 2 ignored**；
+  69 单线程三态各 **69/0/0**、7 并发三态各 **7/0/0**（`M'` 12/12）、
+  116 泛型门禁面（装置 `ok=183 skip=9 bad=0`）；变异 **a 3/3 + b 3/3 + c 3/3 全红**
+  （c 线 `scripts/mutation-m12.sh`，`RED=3 GREEN=0 MISS=0 HANG=0 ERROR=0`）。
+  c 线读数：`.s` **−22.0%**、`bl rt_alloc_escaped` **45→41**、十万键 **1.109 组/次**；
+  **字典替换量完切断**（收益上界 13 B/程序）。契约 `C13` 定稿。
+  账在 `M12-manifest.json`（`manifest_m12.rs` 对账 + 泛型并发三态复现），
+  复盘在 `M12-report.md`（§0 总读数 / §11 c 线）。未关缺口 `G-M12-01..05`，
+  白名单 `U-M12-01..12`
 - **M10（精确 STW GC）已收口**：九条门禁 `GC-1..GC-9` 9/9；契约 `C12` 定稿。
   读数 **235 suite / 2234 passed / 0 failed / 2 ignored**；语料
   **off / on / stress 各 69/0/0**（`on` 态真的收垃圾）；变异 **20/20 全红**；
@@ -29,6 +39,33 @@
   `U-M11-10` go 的聚合浮点实参）—— 范围外**不要顺手做**。
 - M9 终态：native 69/0/0；`--run` 69 绿；`--via=ssa` 69 绿（拒绝面为空）
 - M6 收口：语料 N=46 / M=23 冻结；66 变异全红
+
+## M12 硬约束（改泛型 / 反射 / opt pass / rt.c 映射前必读）
+- **泛型仍是全量单态化**（没有字典参数）：实例命名是 `·` 结构性命名，
+  `dump-hir` 里 `Sum·int` / `Sum·string` 并存，而 **`.s` 里 arm64 后端重编号
+  `fnN`**（Ruling 25-1：实例名只在 `dump-hir` 可见）。判定实例名要看 dump，别在 `.s` 里找
+- ⚠️ **字典替换不要再试第二次**：量过了 —— 116 门禁语料里完全相同的实例副本只有
+  **1408B / 22 个（10.0%）**，69 语料里实例 **0 个**，收益上界 ≈ **13 B/程序**；
+  代价是每个类型参数使用都变成「字典加载 + 间接」。真出现实例爆炸先做 **GC-shape 归并**
+  （`M12-report.md` §11.5）
+- ⚠️ **逃逸摘要是「模块级逐形参单调不动点」**（`rgoc-arm64/src/escape.rs::EscInfo`）：
+  `escapes(fid,param) -> Option<bool>`，**`None` 一律当逃逸**（摘要里查不到的被调方 =
+  保守）。`Indirect` / `Go` 的实参一律逃逸。改它要同时看 `frame.rs::escaping_slots`
+  的两半：本函数内的 `G = &x`（那里）与被调方存了它（这里）
+- ⚠️ **`layout_with_esc` 有三处调用点**（编译 / `frame_maps` / `stack_maps`），
+  且三处都要传**同一份** `EscInfo` —— 摘要只算一次（`module.rs` 里 `analyze(m)`）
+- ⚠️ **SwissTable 控制字节**：`0x80`=EMPTY、`0xFE`=DELETED、其余=H2 ⇒
+  **`ctrl[i] < 0x80` 等价于「有键」**（一个比较同时排掉 EMPTY 与 DELETED）。
+  `map_slots_new` 必须**显式填 `0x80`**（`gc_alloc` 清零给 `0x00`，而 `0x00` 是合法 H2 ⇒ 死循环）
+- ⚠️ **`map_probe` 的 `first_del` 记录写在 `emp` 判定之后**：所以「探测终止条件改错」
+  的症状是 **`low_bit_index(0)` 死循环**而不是断言失败（`G-M12-05`）。
+  动这段代码先给 `low_bit_index` 加 0 兜底
+- ⚠️ **`t_map_10` 那种小表判据抓不到探测错**：`cap = 8` 时一组 16 个控制字节覆盖整张表，
+  任何终止判定都命中 ⇒ 判据恒真。跨组语义必须用十万键（`t_map_11`）
+- **反射**：`ReflectMeta` 72B（含 `+64 tramp`）、`TypeDesc.pad` 语义是 `meta_idx`；
+  `Value` 有 **`indirect` 一个布尔**区分「指针值」与「装着指针的槽」（官方 `flagIndir`）
+- **`probe`/读数脚本里 `.s` 路径被 `with_extension("s")` 吃掉一层**（`x.go` → `x.s`）；
+  读数必须带「产物在不在」一栏，否则「没产物」与「没分配」同形
 
 ## M11 硬约束（改并发/切换前必读）
 - **`g_frames` 是「**当前 G** 的链头」**，不是全局唯一链：`rt_schedule` 两条赋值
@@ -130,5 +167,7 @@
 
 ## 文档索引
 - `AGENTS.md`（入口）/ `docs/README.md` / `docs/03-roadmap.md`（M0–M12）/ `docs/01-feature-set.md`
-- 契约 **C1–C9**（C8 检查诊断 / C9 值与输出）；**C10**（SSA dump，M6 建）；**C11/C12** 见 M9/M10
-- manifest `M0–M9` 已填实；`GAP-01.md` 四维归属；`M*-plan/progress.md` 为各期台账
+- 契约 **C1–C9**（C8 检查诊断 / C9 值与输出）；**C10**（SSA dump，M6 建）；
+  **C11**（并发，M8）/ **C12**（堆与 GC，M10）/ **C13**（实例化与反射元数据，M12，2026-10-29 定稿）
+- manifest `M0–M12` 已填实；`GAP-01.md` 四维归属（M12 节在文件末尾）；
+  `M*-plan/progress.md` 为各期台账（不入库）

@@ -1,9 +1,30 @@
-# M12 报告 · a 线（泛型：检查面 → 单态化 → native）+ b 线（有限反射）
+# M12 报告 · a 线（泛型）+ b 线（有限反射）+ c 线（优化 pass）
 
-> 契约：`C8`（诊断码，不新增）/ `C9`（§4.1 合并流，Ruling 24-1）/ `C12`（三态口径不变）。
+> 契约：`C8`（诊断码，不新增）/ `C9`（§4.1 合并流，Ruling 24-1）/ `C12`（三态口径不变）/
+> `C13`（实例化与反射元数据，Task 43 定稿）。
 > 台账：`M12-plan.md`（进度台账 `.superpowers/sdd/M12-plan/progress.md`，不入库）。
 > 清单：`M12-manifest.json`（数字都在那儿，由 `manifest_m12.rs` 对账）。
-> 本文件先立 a 线（Task 27），b 线在 §10（Task 36）；c 线（opt）收口后另行补节。
+> 本文件按线分章：a 线 §1–§9（Task 27）、b 线 §10（Task 36）、c 线 §11（Task 42）。
+
+---
+
+## 0. 收口总读数（2026-10-29，全部实测）
+
+| 面 | 读数 | 在哪一章 |
+|---|---|---|
+| 门禁 | **`G12-1..13` 13/13 pass** | manifest `gate` |
+| cargo | **251 suite / 2355 passed / 0 failed / 2 ignored**；fmt / check / clippy `-D warnings` 全绿 | §1 / §11 |
+| 泛型门禁面 | **116 = run 71 + compile 40 + errorcheck 5**，拒绝面 **76**；装置实测 `ok=183 skip=9 bad=0`（skip 全是白名单） | §1 |
+| 69 单线程语料 | 三态（off / on / stress）各 **69 ok / 0 skip / 0 bad** | §1 / §10.1 |
+| 7 并发语料 | 三态各 **7/0/0** + `M'` **12/12** | §10.1 |
+| 变异 | a **3/3** + b **3/3** + c **3/3** 全红（c 线一次跑完：`RED=3 GREEN=0 MISS=0 HANG=0 ERROR=0`） | §5 / §10.1 / §11.7 |
+| c 线收益 | `.s` **−22.0%**（1220189 → 951616）；`bl rt_alloc_escaped` **45 → 41**；十万键 **1.109 组/次** | §11.1–§11.3 |
+| 切断 | 字典替换**不做**（收益上界 1408 B / 22 个副本 ≈ **13 B/程序**） | §11.5 |
+| 未关缺口 | `G-M12-01..05` 五条；白名单 `U-M12-01..12` 十二条 | `GAP-01.md` M12 节 |
+
+> 一句话：**泛型从检查面打通到 native、反射给到「能读能写能调」的有限面、
+> 优化只留三条量得出来的**。所有「没做」的东西都在白名单里逐条登记，所有
+> 「做了」的东西都有一个能失败的判据。
 
 ---
 
@@ -11,7 +32,7 @@
 
 | 项 | 读数 | 复跑命令 |
 |---|---|---|
-| 四条门禁 | fmt / check / clippy 全绿；**247 suite / 2327 passed / 0 failed / 2 ignored** | `cargo test --workspace --no-fail-fast` |
+| 四条门禁 | fmt / check / clippy 全绿；**251 suite / 2355 passed / 0 failed / 2 ignored**（收口态，Task 43） | `cargo test --workspace --no-fail-fast` |
 | 门禁面 | **116 = run 71 + compile 40 + errorcheck 5**；拒绝面 **76** | `bash tools/run-oracle/m12-classify.sh` |
 | run 族（三层） | t_gen_01：**68/71**（白名单 3 冻住）；装置全族 **63/71**（skip 8 全白名单，bad=0） | `cargo test -p rgoc-driver --test m12_checkface t_gen_01`；`bash tools/run-oracle/run-native-typeparam.sh --only run` |
 | compile 族 | **39/40**（skip 1 = typelist，U-M12-01） | `bash tools/run-oracle/run-native-typeparam.sh --only compile` |
@@ -465,7 +486,8 @@ RED=3  GREEN=0  MISS=0  HANG=0  ERROR=0
 #### 11.7.1 `M-M12-09` 的第一版锚点不是红，是卡死 —— 而且卡的不在探测里
 
 第一版只改了一处（`emp != 0` → `emp != 0 || del != 0`），期望它红，结果是
-**900 秒超时打满**。缩规模量了一遍（`.probe/m9-hang.sh`，同一段 BIG_MAP 的 n）：
+**900 秒超时打满**。缩规模量了一遍（`.probe/m9-hang.sh`，同一段 BIG_MAP 的 n；
+`.probe/` 在 `.gitignore` 里、不入库，读数已抄进下面两张表）：
 
 | n | 只改这一处 |
 |---|---|

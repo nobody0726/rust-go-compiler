@@ -3,7 +3,7 @@
 > **本文件的作用**：任何 agent / 协作者在本工作区开始任务前，读这一份即可掌握 —— 工程是什么、文档在哪、各自什么状态、遵守什么纪律、下一步做什么。
 > **遇到细节一律跳转 `docs/`，本文件不复制细节。**
 >
-> **最后同步**：2026-10-25　|　**同步触发条件**：见 §5
+> **最后同步**：2026-10-29　|　**同步触发条件**：见 §5
 
 ---
 
@@ -17,10 +17,10 @@
 | 规格基准 | `go_source_code/doc/go_spec.html`（The Go Language Specification, version go1.27, May 26, 2026） |
 | AST 基准 | `go_source_code/src/cmd/compile/internal/syntax/nodes.go` |
 | 首发平台 | **Linux / arm64**（Docker 容器提供）→ `aarch64-unknown-linux-gnu` / ELF |
-| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10）→ **M10** ✅（2026-10-27，**GC-1..GC-9** 9/9；语料三态各 69/0/0；变异 20/20） |
+| 当前阶段 | **M0** ✅（T01–T55，**E1–E10**）→ **M1** ✅（T-L01–T-L21，**L1–L7**）→ **M2** ✅（T-AP01–T-AP21，**A1–A8**，2026-10-15）→ **M3** ✅（T-TY-01–T-TY-38，**TY-1–TY-8**，2026-10-17）→ **M4** 🟡（**已收口（部分兑现）**，2026-10-22：CH-1/4/5/6/7/9 `pass`、CH-2/CH-8 `fail`、CH-3 `partial`）→ **M5** 🟡（**已执行（部分兑现）**，2026-10-23：EX-3/5/6/7/9 `pass`、EX-1/2/4/8 `partial`）→ **M6** ✅（2026-10-24，**SSA-1..9** 9/9）→ **M7** ✅（2026-10-25，**NAT-1..9** 9/9）→ **M8** ✅（2026-10-25，**CON-1..9** 9/9）→ **M9** ✅（2026-10-26，**MEM-1..SCH-1** 10/10）→ **M10** ✅（2026-10-27，**GC-1..GC-9** 9/9；语料三态各 69/0/0；变异 20/20）→ **M11** ✅（2026-10-27，**GO-1..GO-7** 7/7）→ **M12** ✅（2026-10-29，**G12-1..13** 13/13；a 泛型 / b 有限反射 / c 优化 pass） |
 | 仓库 | **Git**，remote `origin` → <https://github.com/nobody0726/rust-go-compiler>（public，分支 `main`） |
 
-**一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6–M9 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial / M6 SSA-1..9 = 9/9 / M7 NAT-1..9 = 9/9 / M8 CON-1..9 = 9/9 / M9 MEM-1..SCH-1 = 10/10）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-meta` → `rgoc-ssa` → `rgoc-interp` → `rgoc-arm64` → `rgoc-driver`** **十三条**正式 crate（另 `rgoc-harness` 是测试装置、`xtask` 是构建脚本、`rgoc-hir-spike`/`rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 2184 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M9` 九份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **13 条**正式 crate（M7 加 `rgoc-arm64`、M9 加 `rgoc-meta`），workspace **2184 条测试全绿**。
+**一句话状态**：**M0–M3 全部完成、M4/M5 已执行（部分兑现）、M6–M12 已收口**（M0 E1–E10 / M1 L1–L7 / M2 A1–A8 / M3 TY-1–TY-8 / M4 CH-1..9 = 6 pass·1 partial·2 fail / M5 EX-1..9 = 5 pass·4 partial / M6 SSA-1..9 = 9/9 / M7 NAT-1..9 = 9/9 / M8 CON-1..9 = 9/9 / M9 MEM-1..SCH-1 = 10/10 / M10 GC-1..GC-9 = 9/9 / M11 GO-1..GO-7 = 7/7 / M12 G12-1..13 = 13/13）。容器镜像 `rgoc:dev`、Go oracle 1.27.1、Rust 1.98.1、`.devcontainer/` 与 `scripts/` 均已落地并实测通过；`rgoc/` 下已有 **`rgoc-lex` → `rgoc-ast` → `rgoc-parse` → `rgoc-const` → `rgoc-types` → `rgoc-load` → `rgoc-check` → `rgoc-hir` → `rgoc-meta` → `rgoc-ssa` → `rgoc-interp` → `rgoc-arm64` → `rgoc-driver`** **十三条**正式 crate（另 `rgoc-harness` 是测试装置、`xtask` 是构建脚本、`rgoc-hir-spike`/`rgoc-spikes` 仍 SPIKE-ONLY）；**workspace 2184 条测试全绿**、M0 自检 **232 条断言**全过；`M1`–`M9` 九份 manifest 均已填实。**M7**（native 代码生成）：`rgoc build hello.go` 生成 aarch64 ELF 并跑对；语料 `N'`=39 全绿且与官方 `go run` **逐字节一致**、`M'`=7（全切片面）、0 坏；九条门禁 **9/9 pass**；`FRAME-MAP v1` 与 objdump 双向对账；8 条变异全红。`rgoc/` 现有 **13 条**正式 crate（M7 加 `rgoc-arm64`、M9 加 `rgoc-meta`），workspace **2184 条测试全绿**。
 
 **M1（词法与位置）已收尾**：`M1-design.md` / `M1-tests.md` / `M1-plan.md` 三件套齐备并冻结，`M1-manifest.json` 七条门禁（L1 LEX 逐项覆盖 / L2 151 条 golden / L3 负例双向断言 / L4 native hello 回归 / L5 四条 cargo 命令 / L6 C1 升完整 / L7 GAP-01）全部 `pass`。
 
@@ -191,7 +191,25 @@ chan+select / 多 G 根扫描；M11d（定时器）/ M11e（多线程）/ M11f�
 ⚠️ 两条容易再踩的：`D-M11-12` 的「a/b 阶段强制关 GC」**从来没接线**（`T-GROOT-04` 退役），
 以及 `go f(p)` 的实参区在新 G 栈顶、**不在帧记录里**（自成一类根，见 `C12` §4.1.1）。
 （M8 没有新 crate —— 并发落在既有 `rgoc-hir` / `rgoc-interp` / `rgoc-check` 里，见 §0 的 M8 段与 `docs/milestones/M8-report.md`。）
+
+**M12（泛型 + 有限反射 + 优化 pass）已收口**（2026-10-29）。三条线互不阻塞：
+**a 泛型**（type set 四态投影 / `core_type` / 实例化闭包不动点 + 深度环检测 / HIR 消灭
+类型参数 / native 发实例体）、**b 有限反射**（`ReflectMeta` 旁挂 + `stdlib/reflect` 的 12 个
+顶层导出 / `Call` 九档 ABI 桥 / 写面十三条）、**c 优化 pass**（`rgoc-ssa` 内联 /
+`rgoc-arm64` 模块级逐形参逃逸摘要 / runtime SwissTable；**字典替换量完切断**）。
+读数：**251 suite / 2355 passed / 0 failed / 2 ignored**；69 单线程三态各 69/0/0、
+7 并发三态各 7/0/0（`M'` 12/12）、116 泛型门禁面（run 71 / compile 40 / errorcheck 5 /
+rejected 76）；变异 **a 3/3 + b 3/3 + c 3/3 全红**；c 线读数 `.s` −22.0%、
+`bl rt_alloc_escaped` 45→41、十万键 1.109 组/次。
+⚠️ 三条容易再踩的：① **`low_bit_index` 的非零前提没有断言** —— 探测终止条件改错时
+症状是死循环而不是断言失败（`G-M12-05`）；② **变异脚本不许并发跑**，两个容器会抢
+同一个 `crates/rgoc-driver/target/obj-map/` 的可执行文件（实测 99% CPU 烧 28 分钟，
+既不红也不绿），且**卡死不是判据**（`scripts/mutation-m12.sh` 里有锁 + 超时）；
+③ **`manifest.measured` 是自报不是证据**，`manifest_m12.rs` 把每条读数设成必填且
+必须带数字。
 （`rgoc-arm64` 已建：M7 的 native 代码生成，见 §0 的一句话状态与 `docs/milestones/M7-report.md`。）
+（M12 没有新 crate —— 泛型落在 `rgoc-check`/`rgoc-load`/`rgoc-ssa`/`rgoc-arm64`，
+反射落在 `rgoc-meta`/`rgoc-arm64`/`stdlib/reflect`，优化落在 `rgoc-ssa`/`rgoc-arm64`/`rt.c`。）
 （`rgoc/crates/` 现有的正式 crate 见 §1 的目录地图与 §0 的一句话状态；`rgoc-hir-spike` / `rgoc-spikes` 仍是 SPIKE-ONLY，可整块删。）
 
 ---

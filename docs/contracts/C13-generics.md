@@ -1,6 +1,7 @@
 # C13 契约：泛型实例化与反射元数据
 
-> **状态**：草案（2026-10-28，M12/Task 1）。定稿在 M12/Task 43。
+> **状态**：**已定稿**（2026-10-29，M12/Task 43）。草案建于 2026-10-28（M12/Task 1），
+> 执行期七次折回正文（见 §7 变更记录）；M12 收口时 `G12-1..13` 13/13。
 >
 > **范围**：泛型在 native 通路的**实例化口径**（命名 / 类型身份 / 检查面规则 /
 > 诊断码）与**反射元数据**的形状。它约束 `rgoc-load`、`rgoc-check`、`rgoc-meta`、
@@ -356,3 +357,4 @@ op = 3  chan       a = elem, c = 容量         ⇒ rt_makechan(&ch, c, a)
 | 2026-10-27 | Task 32 落地细则：① `ReflectMeta.methods` 填实（MethodMeta 24B：name / sig / fn）；具名接口方法来自 `InterfaceDef`（`fn=0`），具名具体类型来自 `MethodSet` —— ⚠️ `MethodSet.ty` 是**具名基类型**（`strip_ptr(recv)` 分组），按 `underlying` 找永远落空（实测 NumMethod=0）；值类型的 meta 只收**值接收者**方法（指针接收者的归 `*T`，官方方法集口径；指针性从 `named_def.methods` 的签名 `recv` 读）；② 新增 `__sigdesc_<hash>`（kind=Func 的 40 字节 desc，`size=8`，hash 就是 `sig_hash` 编码）—— `Implements` 运行期比它的 +8；③ `String()` 升级：具名 `pkgpath.name`、复合沿 elem 链（`*T` / `[]T` / `[N]T` / `map[K]V` / `chan T`） | M12/Task 32；t_ref_05 对官方 `go run` 逐行 |
 | 2026-10-29 | §5.5 `Call` 的 ABI 桥 + §5.2 加 `+64 tramp`（ReflectMeta 64→72 字节）；`rt_reflect_call` 作为内建（`BuiltinKind::ReflectCall`，进 `BUILTIN_NAMES`，check 钉住「四个 8 字节实参」）。⚠️ 同批修了**跨包具体方法调用**的 lowering（`Cross.methods`，键 = 接收者 TypeId）—— 没有它 `reflect.Value.Call`/`.Int()` 这类「导入类型的具名方法」根本进不了 HIR | M12/Task 33；t_ref_03 对官方 `go run` 九档逐行 |
 | 2026-10-29 | §5.6 写面的分配入口（`rt_reflect_alloc` 的 op 分派、结果写 `out`、切片头进托管堆、map/chan 的 box 口径、`*T` desc 现场合成）+ §5.3 补「`writable` 一个布尔 = `flagAddr` + 非只读」与 mustBeAssignable 的顺序；`BUILTIN_NAMES` 19→20、`UNIVERSE_SIZE` 45→46；新登记 `U-M12-09` / `U-M12-10` | M12/Task 34；t_ref_04 对官方 `go run` 十三条逐行 + 两条 panic 文本逐字 |
+| 2026-10-29 | **定稿**（M12/Task 43）。三条与 c 线相关的确认：① §1 的**单态化**口径不变 —— 字典替换量完**切断**（收益上界 13 B/程序，`M12-report.md` §11.5），本契约的实例命名与类型身份条款因此不需要为字典留口子；② §2 的类型身份按 `TypeId`，**实例与原型不同条目**（`t_gen_16`），这与 c 线「GC-shape 归并」的将来路线不冲突（归并发生在发码层，不改变类型身份）；③ §5.5 的 `Call` 缓冲公式与实际 `rt_reflect_call` 一致，`C5` §10 的 40 字节 `TypeDesc` 未被本契约改动（只改 `pad` 语义）。 | M12/Task 43；`G12-1..13` 13/13、manifest 对账绿 |
