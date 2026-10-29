@@ -1,12 +1,12 @@
 {
   "stage": "M12",
-  "line": "a（泛型：检查面 / 单态化 / native）",
-  "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行",
+  "line": "a（泛型）+ b（有限反射）",
+  "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行；有限反射 —— 元数据 / Call 的 ABI 桥 / 写面",
   "generated_at": "2026-10-27T00:00:00Z",
-  "filled_at": "2026-10-27T00:00:00Z",
-  "fill_task": "M12-plan.md Task 26（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
-  "status": "a 线已收口 —— 六条门禁 G12-1..G12-6 全部 pass；246 suite / 2324 passed / 0 failed / 2 ignored；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76，bad=0（skip 9 全白名单冻住）；泛型 × 并发 4 语料三态逐字节；变异 3/3 全红。b 线（反射）/ c 线（opt）pending，门禁 G12-7..G12-13 另行填",
-  "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）。",
+  "filled_at": "2026-10-29T00:00:00Z",
+  "fill_task": "M12-plan.md Task 26（a 线）+ Task 36（b 线）（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
+  "status": "a 线已收口（G12-1..6 全 pass）+ b 线已收口（G12-7..9 全 pass，248 suite / 2335 passed / 0 failed / 2 ignored）；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76；泛型 × 并发 4 语料三态；反射四条判据（t_ref_01/02/03/04/05/06）；变异 a 3/3 + b 3/3 全红；c 线（opt）pending，G12-10..13 另行填",
+  "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。b 线把 `stdlib/reflect` 从桩变成有限实现：元数据（20 个类型的 kind/size/align/field/tag 与官方逐行）、`Call` 的九档 ABI 桥（缓冲公式 + trampoline + 指针类不拷）、写面（New / MakeSlice / MakeMap / MakeChan / Set*，含 GC 保根）。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）、字段只读层 flagRO（11）、`*T` desc 同身份（12）。",
   "docs": {
     "design": "docs/milestones/M12-design.md（D-M12-1..10 / G12-1..13 / §5 未支持面）",
     "tests": "docs/milestones/M12-tests.md（T-GEN-01..19 各族 + 装置判据）",
@@ -74,7 +74,13 @@
     "no_typeparam_residue": "`--dump=hir` 与 `.s` 里 `type parameter` 出现 0 次（t_gen_05_无残留 + 阴性对照 invalid/TypeParam 必须被抓）",
     "mutations": "3/3 全红（.superpowers/m25-mutate.py：M-M12-01 不动点一轮 → T-GEN-01；M-M12-02 mangled 丢实参 → T-GEN-04；M-M12-03 core_type 不查类型集 → T-GEN-19。RED 3 / GREEN 0 / PENDING 0 / MISS 0 —— M-M12-03 对计划原靶 T-GEN-01 为 GREEN，改靶见 Ruling 25-2）",
     "compare_fix": "接口混合比较两处语义 bug（Task 21）：lower 缺装箱 + go_eq 裸 TypeId 相等被 add_basic 不去重骗过 —— equal.go `g(3,3)` 假阴性；变异 4/4 全红（m21-mutate.py E..H）",
-    "errorcheck_codes": "issue51232/51233 落 TYP-WRONG-TYPE-ARG-COUNT（Task 22 修声明面校验）；5/5 首码与官方 ERROR 行一致"
+    "errorcheck_codes": "issue51232/51233 落 TYP-WRONG-TYPE-ARG-COUNT（Task 22 修声明面校验）；5/5 首码与官方 ERROR 行一致",
+    "reflect_face": "顶层导出 12 = 类型 6（Kind/Type/Value/StructTag/StructField/Method）+ 函数 6（TypeOf/ValueOf/New/MakeSlice/MakeMap/MakeChan），白名单**相等**对账（多一个少一个都红）；Value 的导出方法 17 个（不进白名单：判据只数行首无缩进的 func/type）",
+    "ref_metadata": "t_ref_02：20 个类型逐字段（kind/size/align/name/pkgpath + struct 的 name/tag/offset/typekind + 容器 elem/key/len）与官方 go run 逐行相同",
+    "ref_call": "t_ref_03：九档 ABI 全覆盖（0 参 / 3 整数 / 2 浮点 / 混合 / 10 参走栈 / 16B 聚合按值 / 多返回 / 零大小 / nil 指针）+ Kind()=19，逐行相同；ReflectMeta 72 字节（+64 tramp）",
+    "ref_write": "t_ref_04：十三条逐行（CanSet 真假 / SetInt / Set / New 的 Kind=22 / Elem / SetFloat / SetBool / SetString / MakeSlice+Len+Cap / Index+SetInt / MakeMap+Len / MakeChan+Cap）+ 两条 panic 文本逐字（`using unaddressable value` / `call of … on zero Value`，退出 2）",
+    "ref_gc": "t_ref_06：stress 态 collections=2446 / allocs=2450 / frees=2413 / live=1872 / bad_ptr=0；四类根（New 的槽 / 写进槽里的指针 / MakeSlice 的头 ⇒ 底层数组 / map-chan 的 box）churn 后读回原值；off 与 on 两态各 0 次收 ⇒ 只有 stress 能证伪",
+    "mutations_b": "3/3 全红（M-M12-04 pointee 不解引用 → t_ref_06 的 ptr-root；M-M12-05 MakeSlice 的头按元素数组分配 → t_ref_06 的 slice-survives；M-M12-06 摘掉可寻址检查 → t_ref_04_panic 的退出码）。逐条 cp 原文备份 + 恢复后校验 sha 再跑"
   },
   "gate": [
     {
@@ -118,6 +124,27 @@
       "status": "pass",
       "evidence": "Task 24：run-native.sh 69 单线程三态不回归；run-native-chan.sh 7/7×3 + M' 12/12×3；全量 246 suite / 2324 passed / 0 failed / 2 ignored（后台实测，manifest_m12.rs::t_manifest_12_全量读数与清单一致 钉形状）",
       "gap": "—"
+    },
+    {
+      "id": "G12-7",
+      "name": "反射元数据（kind/size/align/field/tag 与官方一致）",
+      "status": "pass",
+      "evidence": "m12_reflect.rs::t_ref_01_白名单对账（导出面**相等**，且断言 MakeFunc 不在）/ t_ref_02_元数据逐字段（20 个类型 × kind/size/align/name/pkgpath + struct 逐字段 + 容器 elem/key/len，与官方 go run 逐行）/ t_ref_05_方法表与类型身份（Box[int] 的 String / NumMethod / Method(0).Name / Implements·AssignableTo·ConvertibleTo）",
+      "gap": "—"
+    },
+    {
+      "id": "G12-8",
+      "name": "反射调用（Call 的 ABI 分档全覆盖）",
+      "status": "pass",
+      "evidence": "m12_reflect.rs::t_ref_03_call的abi分档（九档：0 参 / 3 整数 / 2 浮点 / 混合 / 10 参走栈 / 16B 聚合按值 / 多返回 / 零大小 / nil 指针 + Kind()=19，逐行对官方 go run）；契约 C13 §5.5（ctx 从 x1 起 / 两侧同一缓冲公式 / 指针类不拷）",
+      "gap": "可变参数 Call 归 U-M12-03"
+    },
+    {
+      "id": "G12-9",
+      "name": "反射写面（Set*/Make*/New 生效且 GC 正确）",
+      "status": "pass",
+      "evidence": "m12_reflect.rs::t_ref_04_写面逐条（十三条，每条一个 API）/ t_ref_04_panic文本对齐官方（两条 panic 文本逐字 + 退出 2）/ t_ref_06_写面在_stress_下保根（四类根 × 2446 次收，bad_ptr=0）；契约 C13 §5.3/§5.6 + C12 §4.7（D-M12-7）",
+      "gap": "字段只读层与 *T desc 同身份归 U-M12-11 / U-M12-12"
     }
   ],
   "unsupported": [
@@ -200,6 +227,22 @@
       "exit": 0,
       "test_id": null,
       "evidence": "局部类型声明不挂 type_params ⇒ `U[int]` 判 None ⇒ 本体填 invalid 占位（Ruling 24-2，防 panic 不求真）；官方合法。登记独立跟进（baseline §17.3）"
+    },
+    {
+      "id": "U-M12-11",
+      "what": "结构体字段的只读层（官方 flagRO）与 Value.Field(i) 的可写视图",
+      "code": null,
+      "exit": 0,
+      "test_id": "t_ref_04_写面逐条",
+      "evidence": "C13 §5.3：写面只从 New / Index / Elem 造可写值；字段读面（rtype.Field）不产出可寻址的 Value ⇒ CanSet 恒假、写不进去。反射的真实用法里这条最常见，但它要连带 flagRO 一起做，独立跟进"
+    },
+    {
+      "id": "U-M12-12",
+      "what": "New 合成的 *T desc 与程序里的真 desc 同身份",
+      "code": null,
+      "exit": 0,
+      "test_id": "t_ref_04_写面逐条",
+      "evidence": "C13 §5.6 第 7 条：编译器只为源码里出现过的类型发 desc，New(TypeOf(x)) 里的 *T 可能一次都没出现 ⇒ ptrDesc 现场合成（64 格、按元素 desc 去重）。于是 TypeOf(&x) == New(TypeOf(x)).Type() 为假；修法要让发射面给每个带 meta 的类型多发一块 *T desc 并配反查表"
     }
   ],
   "open_gaps": [

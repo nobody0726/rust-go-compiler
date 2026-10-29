@@ -1,9 +1,9 @@
-# M12 报告 · a 线（泛型：检查面 → 单态化 → native）
+# M12 报告 · a 线（泛型：检查面 → 单态化 → native）+ b 线（有限反射）
 
 > 契约：`C8`（诊断码，不新增）/ `C9`（§4.1 合并流，Ruling 24-1）/ `C12`（三态口径不变）。
 > 台账：`M12-plan.md`（进度台账 `.superpowers/sdd/M12-plan/progress.md`，不入库）。
 > 清单：`M12-manifest.json`（数字都在那儿，由 `manifest_m12.rs` 对账）。
-> 本文件先立 a 线（Task 27）；b 线（反射）/ c 线（opt）收口后各自补节。
+> 本文件先立 a 线（Task 27），b 线在 §10（Task 36）；c 线（opt）收口后另行补节。
 
 ---
 
@@ -143,13 +143,14 @@ T-GEN-19（三段对照：多档不同必拒 / 单档过 / 多档同底层过）
 
 ---
 
-## 6. 不承诺（`U-M12-01..10`，细节见 manifest）
+## 6. 不承诺（`U-M12-01..12`，细节见 manifest）
 
 一句话版：**部分实例化**（01）/ **reflect.MakeFunc**（02）/ **可变参数
 Call**（03）/ PGO·DWARF·coverage（04）/ **泛型原体独立检查**（05）/
 并发 GC（06）/ `.dir` 目录测试（07）/ `errorcheck -m`（08）/
 **native 接口断言·itab 输出级老缺口**（09，8 条语料白名单冻住，ec8fd74
-实测同错非回归）/ **局部泛型类型实例化**（10，本体 invalid 占位）。
+实测同错非回归）/ **局部泛型类型实例化**（10，本体 invalid 占位）/
+b 线的两条：**字段只读层**（11）/ **合成 `*T` desc 同身份**（12，见 §10.4）。
 
 ---
 
@@ -209,5 +210,78 @@ RGOC_TTY=0 scripts/in-container.sh bash -lc 'cd /work && \
 * **具名约束拿不到核心类型**（`G-M12-01`）：`core_type` 的 unalias 不解
   Named ⇒ `type C interface{ ~*int }` 约束上的 `*p` 一律拒。修法一行
   （先 underlying 再判 Interface），但要先证明单档具名约束语料全绿。
-* **b 线（反射）/ c 线（opt）**：`G12-7..13` 与 `M-M12-04..08`（reflect/
-  opt 族的变异）在后续 Task，manifest / report 届时补节。
+* **c 线（opt）**：`G12-10..13` 与 `M-M12-07..09`（opt 族的变异）在后续 Task，
+  manifest / report 届时补节。（b 线已收口：`G12-7..9` 全 pass，见 §10。）
+
+---
+
+## 10. b 线（有限反射，`G12-7..9`）
+
+> 契约：`C13` §5（§5.1 元数据载体 / §5.2 `ReflectMeta` / §5.3 写面与屏障 /
+> §5.4 扩展区 / §5.5 `Call` 的 ABI 桥 / §5.6 写面的分配入口）+ `C12` §4.7。
+> 面是**刻意收窄**的：导出符号集合由 `t_ref_01` **相等**冻结，多一个少一个都红。
+
+### 10.1 读数（全部实测，可复跑）
+
+| 项 | 读数 | 复跑命令 |
+|---|---|---|
+| 四条门禁 | fmt / clippy 全绿；**248 suite / 2335 passed / 0 failed / 2 ignored** | `cargo test --workspace --no-fail-fast` |
+| 导出面 | **12** 个顶层符号（6 类型 + 6 函数）+ `Value` 的 17 个方法；`MakeFunc` 断言不在 | `--test m12_reflect t_ref_01` |
+| 元数据 | 20 个类型逐字段（kind/size/align/name/pkgpath + struct 字段 + 容器 elem/key/len）与官方 `go run` 逐行 | `t_ref_02` |
+| 方法表与身份 | `Box[int]` 的 `String()` / `NumMethod()` / `Method(0).Name` / `Implements·AssignableTo·ConvertibleTo` | `t_ref_05` |
+| `Call` | 九档 ABI 逐行（0 参 / 3 整数 / 2 浮点 / 混合 / **10 参走栈** / 16B 聚合按值 / 多返回 / 零大小 / nil 指针 + `Kind()=19`） | `t_ref_03` |
+| 写面 | 十三条逐行（`New`/`Elem`/`Index`/`Set*`/`Make*`/`CanSet` 真假）+ 两条 panic 文本逐字、退出 2 | `t_ref_04_写面逐条` / `t_ref_04_panic文本对齐官方` |
+| 反射 × GC | stress **collections=2446 / allocs=2450 / frees=2413 / live=1872 / `bad_ptr=0`**；off 与 on 各 **0 次收** ⇒ 只有 stress 能证伪 | `t_ref_06_写面在_stress_下保根` |
+| 变异 | b 线 **3/3 全红**（M-M12-04..06） | §10.3 |
+
+### 10.2 交付
+
+* **数据面**：`TypeDesc` 的 `+14` 对齐填充改语义为 `meta_idx`（40 字节本体一个
+  不动，M9 的 `t_desc_*` 判据零改动）；`ReflectMeta` 72 字节（`+64 tramp`）；
+  6 个反射专用运行期入口（`rt_reflect_meta` / `rt_reflect_metas` 表 /
+  `rt_reflect_call` / `rt_reflect_alloc`）。desc 扩展区按 kind 判读
+  （map: key+elem / chan: elem / array: len+elem / named: meta 收尾）。
+* **读面**：`TypeOf`（`any` 的第一字就是 `*TypeDesc`，零运行时计算）+
+  `rtype` 的 Kind/Size/Align/Name/PkgPath/String/NumField/Field/FieldByName/
+  Len/Key/Elem/NumMethod/Method/Implements/AssignableTo/ConvertibleTo +
+  `ValueOf` 与 `Value` 的读访问器。
+* **调用面**：`Value.Call` 三层 —— Go 侧摆缓冲 → `rt_reflect_call`（一行转发）
+  → `__reflecttramp_<sig_hash>`（发射侧按签名生成的直线代码：装寄存器 /
+  `blr` / 结果整体落帧再分发）。**打包不在 C 里做**：寄存器落位在编译期就定了
+  （`D-M12-5`），通用打包要把寄存器号变成数据再绕回 `blr`。
+* **写面**：`Value.writable` 一个布尔（官方 `flagAddr` + 非只读）+
+  `Value.indirect`（官方 `flagIndir`）；`New`/`MakeSlice`/`MakeMap`/`MakeChan`
+  全部走 `rt_reflect_alloc(op, …)`。
+* **GC**：写面**不发屏障**，前提写成 `C12` §4.7（`D-M12-7`）的三条 ——
+  GC 只在安全点、写操作不分配、目标槽已发布。
+
+### 10.3 两条真错（都是「判据没写过这种程序」才漏的）
+
+1. **跨包具体方法调用根本不进 HIR**（Task 33 的前置）。`find_method_path` 只查
+   **本包**的方法表（`adopt` 时 `clear()`），于是 `.Call`/`.Int`/`.Get` 这类
+   「导入类型 `reflect.Value` 的具名方法」在 lowering 期一律「找不到字段或方法」。
+   修：`Cross.methods`，键 =**接收者 `TypeId`**（按类型名会串味：`lib.T` 与 `T`
+   是两个类型）。
+2. **指针类的两种表示没分开**（Task 35 抓到）。`ValueOf(&x)` 的 `ptr` 是
+   **指针值**（`box_iface` 的 `is_ptr` 特例不装箱），而 `New(*int).Elem()` 的
+   `ptr` 是**装着指针的槽**。少了官方的 `flagIndir` 这一位，
+   `reflect.New(reflect.TypeOf((*int)(nil)))` 链上会打出一个裸地址
+   （实测 `ptr-root 281472996999248`）。修：`Value.indirect` + `pointee()`
+   归一，`Elem()`/`Set`/`Call` 的指针实参都走它。
+
+⚠️ 另有一条**判据自身**的坑：`t_ref_06` 的 churn 第一版只造 32B 的垃圾，而
+被测的 `[]int{cap:2}` 底层数组是 16B —— 块丢了根也不会被复用，读回原值
+**假绿**（M-M12-05 首跑就是绿的）。改成 8/16/32B 三种尺寸、写进去的值带
+`+1000` 之后才露馅。
+
+### 10.4 不做面
+
+| ID | 不做 | 判据 |
+|---|---|---|
+| `U-M12-02` | `reflect.MakeFunc`（需要反向 trampoline）| `t_ref_01` 断言它**不在**导出面 |
+| `U-M12-03` | 可变参数 `Call`（`CallSlice` / `...any`）| `t_ref_03` 的分档里没有它 |
+| `U-M12-11` | 结构体字段的只读层（`flagRO`）与 `Value.Field(i)` 的可写视图 | 字段读面不产出可寻址的 `Value` |
+| `U-M12-12` | `New` 合成的 `*T` desc 与程序里的真 desc 同身份 | `ptrDesc` 现场合成，`TypeOf(&x) == New(TypeOf(x)).Type()` 为假 |
+
+解释器通路：`rt_reflect_call` / `rt_reflect_alloc` 都**只有 native 后端有**
+（两处通路都报 `G-M12-05`）—— 反射的整体定位是 native 特性，不静默降级。

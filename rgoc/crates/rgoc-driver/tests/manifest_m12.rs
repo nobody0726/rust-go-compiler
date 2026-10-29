@@ -5,7 +5,7 @@
 //! M9 的教训（沿用 M10/M11 的同一口径）：`manifest.measured` 是**自报**，
 //! 不是证据 —— 清单一旦能说谎，后面所有「已完成」都不可信。这里做三件事：
 //!
-//! 1. **结构对账**：门禁 G12-1..6 / 未支持面 U-M12-01..10 / 门禁面 116 =
+//! 1. **结构对账**：门禁 G12-1..9 / 未支持面 U-M12-01..12 / 门禁面 116 =
 //!    run 71 + compile 40 + errorcheck 5 / 拒绝面 76，且语料条数与**分类装置
 //!    现算**的清单一致（`.superpowers/m12-lists` 在 gitignore 里，所以
 //!    这里自己跑 `m12-classify.sh` 重算 —— 不抄第二份）；
@@ -131,8 +131,8 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
         errs.push("stage 必须是 M12".into());
     }
 
-    // ── ① 门禁：6 条 G12-1..G12-6 ──
-    let want: BTreeSet<String> = (1..=6).map(|i| format!("G12-{i}")).collect();
+    // ── ① 门禁：9 条 G12-1..G12-9（1..6 = a 线，7..9 = b 线）──
+    let want: BTreeSet<String> = (1..=9).map(|i| format!("G12-{i}")).collect();
     let gate = m["gate"].as_array().expect("gate 应是数组");
     if gate.len() != want.len() {
         errs.push(format!("gate 应有 {} 条，实际 {}", want.len(), gate.len()));
@@ -182,8 +182,8 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
 
     // ── ② 未支持面：10 条 U-M12-01..10 ──
     let uns = m["unsupported"].as_array().expect("unsupported 应是数组");
-    if uns.len() != 10 {
-        errs.push(format!("unsupported 应有 10 条，实际 {}", uns.len()));
+    if uns.len() != 12 {
+        errs.push(format!("unsupported 应有 12 条，实际 {}", uns.len()));
     }
     let mut uids = BTreeSet::new();
     for u in uns {
@@ -198,7 +198,7 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
             errs.push(format!("{id} 没有 evidence —— 「不做」也要写清为什么"));
         }
     }
-    let want_u: BTreeSet<String> = (1..=10).map(|i| format!("U-M12-{i:02}")).collect();
+    let want_u: BTreeSet<String> = (1..=12).map(|i| format!("U-M12-{i:02}")).collect();
     if uids != want_u {
         errs.push(format!("unsupported id 集合不对：{uids:?}"));
     }
@@ -322,6 +322,51 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
         errs.push("measured.mutations 必须含 3/3".into());
     }
 
+    // ── ⑥b b 线读数：键必须齐，形态要能核 ──
+    //
+    // 数字**复现**留在 `t_ref_06` 自己（它断言 `collections > 0` 且
+    // `bad_ptr == 0`），这里只钉「清单里写了这个数、而且形状对」——
+    // 抄第二份 fixture 进对账测试就是 `R-51-1` 说的「文档与副本各一份」，
+    // 迟早会漂。
+    for key in [
+        "reflect_face",
+        "ref_metadata",
+        "ref_call",
+        "ref_write",
+        "ref_gc",
+        "mutations_b",
+    ] {
+        if measured[key].is_null() {
+            errs.push(format!("measured 缺 {key}（b 线）"));
+        }
+    }
+    let gc = measured["ref_gc"].as_str().unwrap_or("");
+    let collections = gc
+        .split_once("collections=")
+        .and_then(|(_, rest)| rest.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|d| d.parse::<u64>().ok());
+    if collections.is_none_or(|v| v == 0) {
+        errs.push(
+            "measured.ref_gc 必须写出 `collections=<正整数>`（stress 态一次都没收 ⇒ 判据恒真）"
+                .into(),
+        );
+    }
+    if !gc.contains("bad_ptr=0") {
+        errs.push("measured.ref_gc 必须含 `bad_ptr=0`".into());
+    }
+    if measured["mutations_b"]
+        .as_str()
+        .is_none_or(|s| !s.contains("3/3"))
+    {
+        errs.push("measured.mutations_b 必须含 3/3".into());
+    }
+    if measured["reflect_face"]
+        .as_str()
+        .is_none_or(|s| !s.contains("12"))
+    {
+        errs.push("measured.reflect_face 必须写出顶层导出符号数（12 = 6 类型 + 6 函数）".into());
+    }
+
     errs
 }
 
@@ -440,7 +485,7 @@ fn t_manifest_12_合成反例都必须红() {
         |m| {
             m["gate"].as_array_mut().unwrap().pop();
         },
-        "gate 应有 6 条",
+        "gate 应有 9 条",
     );
 
     expect_red(
@@ -505,7 +550,7 @@ fn t_manifest_12_合成反例都必须红() {
         |m| {
             m["unsupported"].as_array_mut().unwrap().pop();
         },
-        "unsupported 应有 10 条",
+        "unsupported 应有 12 条",
     );
 
     expect_red(

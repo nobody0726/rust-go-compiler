@@ -716,7 +716,7 @@ type Value struct {
 	// `MakeXxx` / `Call` 的结果一律不可写 —— 与官方一致（那些值没有地址）。
 	//
 	// 官方还有 `flagRO`（未导出字段的只读层）：本仓的结构体字段读面
-	// 今天不产出可寻址的 Value，那一层进不了面（`U-M12-09`）。
+	// 今天不产出可寻址的 Value，那一层进不了面（`U-M12-11`）。
 	writable bool
 	// indirect 是官方 `flagIndir` 的收窄版：`ptr` 是**值的存储地址**（true）
 	// 还是**值本身**（false）。
@@ -1255,7 +1255,7 @@ func (v Value) Set(x Value) {
 //
 // ⚠️ 合成的 desc 与「程序里真用到的那块 `*T` desc」**不是同一个对象**：
 // `reflect.TypeOf(&x) == reflect.New(reflect.TypeOf(x)).Type()` 会是 false
-// （`U-M12-10`）。要修得让发射面给每个带 meta 的类型多发一块 `*T` 的 desc
+// （`U-M12-12`）。要修得让发射面给每个带 meta 的类型多发一块 `*T` 的 desc
 // 并配一张反查表 —— 独立的一块工作，收窄面里不做。
 var ptrDescPool [64]descFull
 
