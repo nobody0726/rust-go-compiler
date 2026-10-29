@@ -4,7 +4,7 @@
   "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行；有限反射 —— 元数据 / Call 的 ABI 桥 / 写面",
   "generated_at": "2026-10-27T00:00:00Z",
   "filled_at": "2026-10-29T00:00:00Z",
-  "fill_task": "M12-plan.md Task 26（a 线）+ Task 36（b 线）（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
+  "fill_task": "M12-plan.md Task 26（a 线）+ Task 36（b 线）+ Task 37/38（c 线：内联 / 精细逃逸的读数已填，门禁 G12-10..13 待 Task 42 汇总）（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
   "status": "a 线已收口（G12-1..6 全 pass）+ b 线已收口（G12-7..9 全 pass，248 suite / 2335 passed / 0 failed / 2 ignored）；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76；泛型 × 并发 4 语料三态；反射四条判据（t_ref_01/02/03/04/05/06）；变异 a 3/3 + b 3/3 全红；c 线（opt）pending，G12-10..13 另行填",
   "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。b 线把 `stdlib/reflect` 从桩变成有限实现：元数据（20 个类型的 kind/size/align/field/tag 与官方逐行）、`Call` 的九档 ABI 桥（缓冲公式 + trampoline + 指针类不拷）、写面（New / MakeSlice / MakeMap / MakeChan / Set*，含 GC 保根）。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）、字段只读层 flagRO（11）、`*T` desc 同身份（12）。",
   "docs": {
@@ -81,7 +81,8 @@
     "ref_write": "t_ref_04：十三条逐行（CanSet 真假 / SetInt / Set / New 的 Kind=22 / Elem / SetFloat / SetBool / SetString / MakeSlice+Len+Cap / Index+SetInt / MakeMap+Len / MakeChan+Cap）+ 两条 panic 文本逐字（`using unaddressable value` / `call of … on zero Value`，退出 2）",
     "ref_gc": "t_ref_06：stress 态 collections=2446 / allocs=2450 / frees=2413 / live=1872 / bad_ptr=0；四类根（New 的槽 / 写进槽里的指针 / MakeSlice 的头 ⇒ 底层数组 / map-chan 的 box）churn 后读回原值；off 与 on 两态各 0 次收 ⇒ 只有 stress 能证伪",
     "mutations_b": "3/3 全红（M-M12-04 pointee 不解引用 → t_ref_06 的 ptr-root；M-M12-05 MakeSlice 的头按元素数组分配 → t_ref_06 的 slice-survives；M-M12-06 摘掉可寻址检查 → t_ref_04_panic 的退出码）。逐条 cp 原文备份 + 恢复后校验 sha 再跑",
-    "opt_inline": "内联（Task 37）：69 个语料的 `.s` 行数 none=1220189 / 四 pass（无内联）=1202917 / 全开=951616（比 none 降 22.0%，比四 pass 降 20.9%）；fixture（两调用点）191→164 行、函数 2→1、`bl fn` 3→1；同一 fixture 八调用点则是 317→338（涨）—— 一处内联的体比一条 `bl` 贵，收益全在「被调方被收尸」那一份，且它只算一次。判据：m12_opt.rs::t_opt_01_*（体积 + 三态）+ opt_equiv.rs（69 语料 all vs none 逐字节）+ opt_inline.rs（8 条单元判据）"
+    "opt_inline": "内联（Task 37）：69 个语料的 `.s` 行数 none=1220189 / 四 pass（无内联）=1202917 / 全开=951616（比 none 降 22.0%，比四 pass 降 20.9%）；fixture（两调用点）191→164 行、函数 2→1、`bl fn` 3→1；同一 fixture 八调用点则是 317→338（涨）—— 一处内联的体比一条 `bl` 贵，收益全在「被调方被收尸」那一份，且它只算一次。判据：m12_opt.rs::t_opt_01_*（体积 + 三态）+ opt_equiv.rs（69 语料 all vs none 逐字节）+ opt_inline.rs（8 条单元判据）",
+    "opt_escape": "精细逃逸（Task 38）：模块级逐形参摘要（rgoc-arm64/src/escape.rs）让 69 个语料的 `bl rt_alloc_escaped` 从 45 条降到 41 条（有分配的文件 10→9）。**两面同程序对照**（同一台编译器换程序）：`g(p *int, n int)` 只读 `*p` ⇒ `.s` 里 0 条、三态 allocs=0 heap=0、输出恒 300000；同一个 `g` 里加 `G = p`（G 是全局）⇒ 1 条、三态 allocs=1 heap=17039872。**反事实**（把 `escape::analyze` 换成 `EscInfo::empty()` = Task 38 之前的保守档）⇒ 前一个程序退回 1 条 / allocs=1 / heap=17039872 —— 摘要真的在改代码。三态语料仍 69/0/0；顺手补两条漏判（CalleeRef::Indirect 与 Instr::Go 以前一个字都没算，方向保守）。判据：escape_summary.rs（6 条）+ gc_corpus/gc_precise 三态 + m12_opt.rs 三态比对"
   },
   "gate": [
     {

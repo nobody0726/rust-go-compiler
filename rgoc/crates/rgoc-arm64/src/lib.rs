@@ -20,6 +20,7 @@
 //! | `frame` | 帧布局 + `FRAME-MAP v1` | Task 9–11 |
 //! | `parallel_copy` | 块参数交接 | Task 12 |
 //! | `isel` | 指令选择 | Task 13 起 |
+//! | `escape` | 模块级逐形参逃逸摘要（`C12` §4.5 的输入） | M12/Task 38 |
 //!
 //! 先建空文件再逐个填的做法在本仓是**禁止**的（「不用 `None` 冒充未实现」的同一条纪律）：
 //! 一个只有 `//!` 的模块看起来像「已实现」，实际什么都没有。
@@ -27,6 +28,7 @@
 pub mod abi;
 pub mod diag;
 pub mod emit;
+pub mod escape;
 pub mod frame;
 pub mod hchan;
 pub mod isel;

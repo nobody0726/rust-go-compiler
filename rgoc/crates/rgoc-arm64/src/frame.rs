@@ -248,7 +248,7 @@ const SAVED: u32 = 32;
 ///
 /// 任一值或取址槽的类型没有运行期布局（泛型 / `Invalid` / 元组）。
 pub fn layout(f: &SsaFunc, tt: &TypeTable) -> Result<Frame, FrameError> {
-    layout_with(f, tt, &BTreeMap::new())
+    layout_full(f, tt, &BTreeMap::new(), None)
 }
 
 /// 同 [`layout`]，但能按 `FuncId` 查到被调方的形参类型。
@@ -264,6 +264,29 @@ pub fn layout_with(
     f: &SsaFunc,
     tt: &TypeTable,
     siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+) -> Result<Frame, FrameError> {
+    layout_full(f, tt, siblings, None)
+}
+
+/// 同 [`layout_with`]，但带上**模块级逃逸摘要**（`M12/Task 38`）。
+///
+/// # Errors
+///
+/// 同 [`layout`]。
+pub fn layout_with_esc(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    esc: &crate::escape::EscInfo,
+) -> Result<Frame, FrameError> {
+    layout_full(f, tt, siblings, Some(esc))
+}
+
+fn layout_full(
+    f: &SsaFunc,
+    tt: &TypeTable,
+    siblings: &BTreeMap<rgoc_hir::FuncId, &SsaFunc>,
+    esc: Option<&crate::escape::EscInfo>,
 ) -> Result<Frame, FrameError> {
     let outgoing = max_outgoing(f, tt, siblings);
     // `cur` 是**槽区**的游标（从 0 起，不含保存区）。
@@ -297,7 +320,7 @@ pub fn layout_with(
     // ② 取址槽：`slot_types` 是 `BTreeMap`，天然按 `SlotId` 升序。
     //
     // 逃逸的那些（`R-13-5`）不占帧存储，只占一个 8 字节指针格，存储在 arena。
-    let esc = escaping_slots(f);
+    let esc_slots = escaping_slots(f, esc);
     let mut addr_slots = BTreeMap::new();
     let mut heap = BTreeMap::new();
     for (slot, typ) in &f.slot_types {
@@ -305,7 +328,7 @@ pub fn layout_with(
             slot: *slot,
             typ: *typ,
         })?;
-        let is_esc = esc.contains(slot);
+        let is_esc = esc_slots.contains(slot);
         let width = if is_esc { 8 } else { s.size };
         cur = round_up(cur, 8);
         cur = cur.checked_add(width).expect("帧大小溢出 u32");
@@ -525,7 +548,16 @@ fn join(v: &[i32]) -> String {
 ///
 /// 所以只在「明确不逃逸」时才留在帧里。`print`/`println` 这类内建不收指针，
 /// 不算逃逸位置。
-fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
+///
+/// # `esc`（`M12/Task 38`）
+///
+/// 传了模块级摘要时，`f(&x)` 这类**静态目标**的调用点按被调方的**逐形参**
+/// 结论判（`escape.rs`）—— 被调方不会留下那个指针，`x` 就留在帧里。
+/// `None` 时退化成「传给函数就算逃逸」（`layout` / 单函数测试的路径）。
+fn escaping_slots(
+    f: &SsaFunc,
+    esc: Option<&crate::escape::EscInfo>,
+) -> std::collections::BTreeSet<SlotId> {
     use std::collections::{BTreeMap, BTreeSet};
     let mut origin: BTreeMap<ValueId, SlotId> = BTreeMap::new();
     let mut out: BTreeSet<SlotId> = BTreeSet::new();
@@ -540,22 +572,36 @@ fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
             }
         }
     }
-    // 指针的别名（`copy` / `convert` / 取字段 / 取下标）都继承同一个槽。
-    // 两遍足够：SSA 里值号是定义序，跨块前向引用不存在。
-    for _ in 0..2 {
+    // 指针的别名（`copy` / `convert` / 取字段 / 取下标 / 打进复合字面量）都继承
+    // 同一个槽。收敛到不变为止（复合字面量可以套娃，两遍不够）。
+    loop {
+        let mut grew = false;
         for b in &f.blocks {
             for i in &b.instrs {
-                let (dst, src) = match i {
-                    Instr::Copy { dst, src } => (*dst, *src),
-                    Instr::Convert { dst, x, .. } => (*dst, *x),
-                    Instr::Field { dst, base, .. } => (*dst, *base),
-                    Instr::Index { dst, base, .. } => (*dst, *base),
+                let (dst, srcs): (ValueId, Vec<ValueId>) = match i {
+                    Instr::Copy { dst, src } => (*dst, vec![*src]),
+                    Instr::Convert { dst, x, .. } => (*dst, vec![*x]),
+                    Instr::Field { dst, base, .. } => (*dst, vec![*base]),
+                    Instr::Index { dst, base, .. } => (*dst, vec![*base]),
+                    Instr::Composite { dst, items, .. } => (*dst, items.clone()),
                     _ => continue,
                 };
-                if let Some(s) = origin.get(&src).copied() {
-                    origin.insert(dst, s);
+                let mut hit = None;
+                for s in srcs {
+                    if let Some(x) = origin.get(&s).copied() {
+                        hit = Some(x);
+                        break;
+                    }
+                }
+                if let Some(s) = hit
+                    && origin.insert(dst, s).is_none()
+                {
+                    grew = true;
                 }
             }
+        }
+        if !grew {
+            break;
         }
     }
     let mark = |v: &ValueId, out: &mut BTreeSet<SlotId>| {
@@ -566,12 +612,54 @@ fn escaping_slots(f: &SsaFunc) -> std::collections::BTreeSet<SlotId> {
     for b in &f.blocks {
         for i in &b.instrs {
             match i {
-                // 传给别的函数（被调方可能留下来）。内建不算。
+                // 静态目标的调用：按被调方的逐形参结论判（`None` ⇒ 不知道 ⇒ 逃逸）
                 Instr::Call {
-                    callee: CalleeRef::Func(_) | CalleeRef::Method { .. },
+                    callee: CalleeRef::Func(fid),
                     args,
                     ..
                 } => {
+                    for (k, a) in args.iter().enumerate() {
+                        match esc.and_then(|e| e.escapes(*fid, k)) {
+                            Some(false) => {}
+                            _ => mark(a, &mut out),
+                        }
+                    }
+                }
+                Instr::Call {
+                    callee: CalleeRef::Method { func, recv },
+                    args,
+                    ..
+                } => {
+                    match esc.and_then(|e| e.escapes(*func, 0)) {
+                        Some(false) => {}
+                        _ => mark(recv, &mut out),
+                    }
+                    for (k, a) in args.iter().enumerate() {
+                        match esc.and_then(|e| e.escapes(*func, k + 1)) {
+                            Some(false) => {}
+                            _ => mark(a, &mut out),
+                        }
+                    }
+                }
+                // 函数值调用：被调方运行期才定 ⇒ 一律逃逸（`M12/Task 38` 补的漏判）
+                Instr::Call {
+                    callee: CalleeRef::Indirect(_),
+                    args,
+                    ..
+                } => {
+                    for a in args {
+                        mark(a, &mut out);
+                    }
+                }
+                // `go f(&x)`：拷到新 G 栈上的是**指针值**，指向的仍是本帧
+                Instr::Go { callee, args, .. } => {
+                    match callee {
+                        CalleeRef::Method { recv, .. } | CalleeRef::Iface { recv, .. } => {
+                            mark(recv, &mut out);
+                        }
+                        CalleeRef::Indirect(v) => mark(v, &mut out),
+                        CalleeRef::Func(_) | CalleeRef::Builtin(_) | CalleeRef::Runtime(_) => {}
+                    }
                     for a in args {
                         mark(a, &mut out);
                     }

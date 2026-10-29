@@ -83,6 +83,8 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // 决定（`R-13-3`），`isel` 需要能按 `FuncId` 查到那些类型。
     let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
+    // **模块级逃逸摘要**（`M12/Task 38`）：算一次，三个要用帧的地方共用一份。
+    let esc = crate::escape::analyze(m);
 
     // ②b 方法表（`M9/Task 27`）与静态 ITab（`M9/Task 28`）。
     //
@@ -102,7 +104,7 @@ pub fn compile(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // 「位图按 A 帧算、指令按 B 帧发」这种只在改过帧布局之后才露头的错。
     let mut stackmaps: Vec<FuncStackMap> = Vec::with_capacity(m.funcs.len());
     for (i, f) in m.funcs.iter().enumerate() {
-        let fr = frame::layout_with(f, tt, &siblings)
+        let fr = frame::layout_with_esc(f, tt, &siblings, &esc)
             .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         // ⚠️ **M10：`Liveness` 只算一次**，`isel` 的 `sp_idx` 与这里的栈图
         // 共用同一份（`M10-design.md` §8 风险 1）。两处各算一遍会错位，而
@@ -1545,8 +1547,9 @@ pub fn frame_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     // （`R-13-3`），帧图与产物必须算在同一份帧上，否则「表里的偏移」对不上「代码里的偏移」。
     let siblings: std::collections::BTreeMap<rgoc_hir::FuncId, &rgoc_ssa::ir::SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
+    let esc = crate::escape::analyze(m);
     for f in &m.funcs {
-        let fr = frame::layout_with(f, tt, &siblings)
+        let fr = frame::layout_with_esc(f, tt, &siblings, &esc)
             .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         let cfg = rgoc_ssa::cfg::Cfg::build(f);
         let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
@@ -1808,8 +1811,9 @@ pub fn stack_maps(m: &Module, tt: &TypeTable) -> Result<String, CompileError> {
     out.push('\n');
     let siblings: BTreeMap<rgoc_hir::FuncId, &SsaFunc> =
         m.funcs.iter().map(|f| (f.src, f)).collect();
+    let esc = crate::escape::analyze(m);
     for (i, f) in m.funcs.iter().enumerate() {
-        let fr = frame::layout_with(f, tt, &siblings)
+        let fr = frame::layout_with_esc(f, tt, &siblings, &esc)
             .map_err(|e| CompileError::Frame(e, f.name.clone()))?;
         let cfg = rgoc_ssa::cfg::Cfg::build(f);
         let lv = rgoc_ssa::live::analyze(f, &cfg, tt);
