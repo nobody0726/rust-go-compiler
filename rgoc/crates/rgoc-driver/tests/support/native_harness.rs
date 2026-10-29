@@ -87,6 +87,33 @@ pub fn build_and_run_roots_env(
     roots: &[PathBuf],
     env: &[(&str, &str)],
 ) -> Result<Outcome, String> {
+    build_and_run_full(name, src, roots, env, rgoc_ssa::opt::Config::all())
+}
+
+/// 同 [`build_and_run_roots_env`]，但**指定 pass 开关**（`M12/Task 37` 的 A/B 对照）。
+///
+/// `--opt=none` 与 `--opt=all` 要编**两次**同一段源码，比 `.s` 行数与运行结果 ——
+/// 这是 `T-OPT-01` 的「体积读数」那一半。
+///
+/// # Errors
+///
+/// 同 [`build_and_run`]。
+pub fn build_and_run_opt(
+    name: &str,
+    src: &str,
+    opt: rgoc_ssa::opt::Config,
+    env: &[(&str, &str)],
+) -> Result<Outcome, String> {
+    build_and_run_full(name, src, &[], env, opt)
+}
+
+fn build_and_run_full(
+    name: &str,
+    src: &str,
+    roots: &[PathBuf],
+    env: &[(&str, &str)],
+    opt: rgoc_ssa::opt::Config,
+) -> Result<Outcome, String> {
     let dir = fixture_root().join(name);
     std::fs::create_dir_all(&dir).map_err(|e| format!("建 {} 失败：{e}", dir.display()))?;
     let go = dir.join("main.go");
@@ -99,7 +126,7 @@ pub fn build_and_run_roots_env(
         output: Some(prog.clone()),
         emit: Emit::Elf,
         keep_asm: true,
-        opt: rgoc_ssa::opt::Config::all(),
+        opt,
         lang: None,
     };
     let out = build_cmd::run_build(&cmd)?;

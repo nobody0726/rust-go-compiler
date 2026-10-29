@@ -1,9 +1,10 @@
 //! SSA 优化 passes（`M6-design.md` §3.6；`D-M6-8`；`M6-plan.md` Phase 4）。
 //!
-//! # 四个 pass 与它们的边界
+//! # 五个 pass 与它们的边界
 //!
 //! | pass | 做什么 | 边界 |
 //! |---|---|---|
+//! | `inline` | 直接调用换成函数体（切开+续块），并收掉腾空的被调方 | 只认小的、规矩的、非递归的 `CalleeRef::Func` |
 //! | `copy` | `Copy` 链合并、块参数实参里的 `Copy` 消解 | 并行语义不许破（`a,b=b,a`） |
 //! | `fold` | 常量折叠（`Bin`/`Un`/`Convert`）+ `If` 常量条件简化成 `Goto` | 只折**语义完全确定**的情形；除零/负移位一律不折 |
 //! | `cse` | **块内**纯值公共子表达式消除 | 跨块不合（那要可用表达式分析，属 M7） |
@@ -20,8 +21,10 @@
 //!
 //! # 顺序
 //!
-//! `copy` → `fold` → `cse` → `dce`：
+//! `inline` → `copy` → `fold` → `cse` → `dce`：
 //!
+//! * `inline` **只能**排第一：它是唯一的跨函数 pass（要 `Module`），而且它搬进来的
+//!   函数体正需要后面四个 pass 收拾；
 //! * `copy` 先做，`fold` 才看得见「常量经 `Copy` 传过来」的形态；
 //! * `cse` 在 `dce` 前，免得「同一表达式出现两次」因为中间有死值而看不出来；
 //! * `dce` 最后收垃圾（包括被 `fold` 改短的控制流留下的死块）。
@@ -30,6 +33,7 @@ pub mod copy;
 pub mod cse;
 pub mod dce;
 pub mod fold;
+pub mod inline;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,6 +54,8 @@ pub struct Config {
     pub copy: bool,
     /// 块内公共子表达式消除。
     pub cse: bool,
+    /// 内联（唯一的跨函数 pass）。
+    pub inline: bool,
 }
 
 impl Default for Config {
@@ -59,7 +65,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// 四个全开（默认）。
+    /// 五个全开（默认）。
     #[must_use]
     pub const fn all() -> Self {
         Self {
@@ -67,10 +73,11 @@ impl Config {
             dce: true,
             copy: true,
             cse: true,
+            inline: true,
         }
     }
 
-    /// 四个全关（`--opt=none`：A/B 对照的另一半）。
+    /// 五个全关（`--opt=none`：A/B 对照的另一半）。
     #[must_use]
     pub const fn none() -> Self {
         Self {
@@ -78,6 +85,7 @@ impl Config {
             dce: false,
             copy: false,
             cse: false,
+            inline: false,
         }
     }
 
@@ -103,6 +111,7 @@ impl Config {
                 "dce" => c.dce = true,
                 "copy" => c.copy = true,
                 "cse" => c.cse = true,
+                "inline" => c.inline = true,
                 _ => return None,
             }
         }
@@ -112,7 +121,7 @@ impl Config {
     /// 有任何一个 pass 开着吗（`none` ⇒ 整个 `run` 是空操作）。
     #[must_use]
     pub const fn any(self) -> bool {
-        self.fold || self.dce || self.copy || self.cse
+        self.fold || self.dce || self.copy || self.cse || self.inline
     }
 
     /// 稳定文本（诊断与测试断言用）。
@@ -125,6 +134,9 @@ impl Config {
             return "all".to_string();
         }
         let mut v = Vec::new();
+        if self.inline {
+            v.push("inline");
+        }
         if self.fold {
             v.push("fold");
         }
@@ -148,6 +160,10 @@ impl Config {
 /// 任一 pass 之后图不合法 ⇒ 把 verifier 的错误原样抛出去（那是 pass 的 bug，
 /// 不是用户的错，所以要带 `V*` 编号与块/指令下标）。
 pub fn run(m: &mut Module, tt: &TypeTable, cfg: Config) -> Result<(), VerifyError> {
+    // 内联是唯一的**跨函数** pass：它先跑，后面四个逐函数的 pass 再收拾它搬进来的体。
+    if cfg.inline {
+        inline::run(m, tt)?;
+    }
     for f in &mut m.funcs {
         if cfg.copy {
             copy::run(f);

@@ -176,7 +176,7 @@ pub struct RunCommand {
     pub lang: Option<String>,
     /// `--via hir|ssa`：走哪条执行通路（默认 `hir`）。
     pub via: Via,
-    /// `--opt all|none|fold,dce,…`：SSA passes 的开关（只在 `via=ssa` 时有意义）。
+    /// `--opt all|none|inline,fold,dce,…`：SSA passes 的开关（只在 `via=ssa` 时有意义）。
     pub opt: rgoc_ssa::opt::Config,
     /// `--sched=seed:N`：`select` 多就绪时的选择种子（默认 `seed:0` = 源码顺序）。
     ///
@@ -206,7 +206,7 @@ pub struct SsaCommand {
     pub dump: bool,
     /// `--verify`：跑 verifier 九条不变式。
     pub verify: bool,
-    /// `--opt all|none|fold,dce,…`：跑哪些 pass（默认全开）。
+    /// `--opt all|none|inline,fold,dce,…`：跑哪些 pass（默认全开）。
     pub opt: rgoc_ssa::opt::Config,
 }
 
@@ -260,7 +260,7 @@ pub struct BuildCommand {
     /// 保留路径固定为 `<output>.s`（`output` 见上一条）—— 不另开一个「asm 输出路径」旗标：
     /// 多一个旗标就多一种组合，而 `T-NAT-48` 只需要「能拿回那份 `.s`」这一件事。
     pub keep_asm: bool,
-    /// `--opt all|none|fold,dce,…`：SSA passes 的开关（默认全开）。
+    /// `--opt all|none|inline,fold,dce,…`：SSA passes 的开关（默认全开）。
     pub opt: rgoc_ssa::opt::Config,
     /// `--lang go1.N`：版本门控覆盖（与 `check`/`run` 同义）。
     pub lang: Option<String>,
@@ -425,7 +425,7 @@ pub enum CliError {
     BadSteps(String),
     /// `--via` 的值不认识（只接受 `hir` / `ssa`）
     BadVia(String),
-    /// `--opt` 的值不认识（只接受 `all` / `none` / `fold,dce,copy,cse`）
+    /// `--opt` 的值不认识（只接受 `all` / `none` / `inline,fold,dce,copy,cse`）
     BadOpt(String),
     /// `--sched` 的值不认识（只接受 `seed:<非负整数>`，M8/Task 5）
     BadSched(String),
@@ -494,7 +494,7 @@ impl fmt::Display for CliError {
             Self::BadVia(v) => write!(f, "--via 只接受 hir / ssa（收到 {v:?}）。{USAGE}"),
             Self::BadOpt(v) => write!(
                 f,
-                "--opt 只接受 all / none / fold,dce,copy,cse（收到 {v:?}）。{USAGE}"
+                "--opt 只接受 all / none / inline,fold,dce,copy,cse（收到 {v:?}）。{USAGE}"
             ),
             Self::BadSched(v) => write!(
                 f,

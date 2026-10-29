@@ -26,6 +26,7 @@ use crate::ir::{Block, BlockId, Instr, Module, Root, RootId, Sig, SsaFunc, Term,
 #[derive(Debug)]
 pub struct FnBuilder {
     name: String,
+    src: rgoc_hir::FuncId,
     blocks: Vec<Block>,
     roots: Vec<Root>,
     value_types: Vec<TypeId>,
@@ -55,6 +56,7 @@ impl FnBuilder {
     pub fn new(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            src: rgoc_hir::FuncId(0),
             blocks: vec![Block::default()],
             roots: Vec::new(),
             value_types: Vec::new(),
@@ -79,6 +81,7 @@ impl FnBuilder {
     pub fn bare(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            src: rgoc_hir::FuncId(0),
             blocks: vec![Block::default()],
             roots: Vec::new(),
             value_types: Vec::new(),
@@ -226,6 +229,11 @@ impl FnBuilder {
         self.slot_types.insert(slot, typ);
     }
 
+    /// 设本函数的 `FuncId`（跨函数 pass 认人用；`M12/Task 37` 的内联按它找被调方）。
+    pub fn src_func(&mut self, id: rgoc_hir::FuncId) {
+        self.src = id;
+    }
+
     /// 登记一个被调方的签名（`V5` 要查；不登记就等于「查不了」）。
     pub fn call_sig(&mut self, f: rgoc_hir::FuncId, params: usize, results: usize, variadic: bool) {
         self.call_sigs.insert(
@@ -283,9 +291,11 @@ impl FnBuilder {
         let f = SsaFunc {
             captured: Vec::new(),
             ctx_abi: false,
-            src: rgoc_hir::FuncId(0),
+            src: self.src,
             name: self.name,
-            params: Vec::new(),
+            // `C10` 规则 2：`params` 是入口块 params 的**副本**（跨函数 pass 要按它
+            // 数形参个数，`M12/Task 37` 的内联就靠这一条对边上实参的个数）。
+            params: self.blocks[0].params.clone(),
             blocks: self.blocks,
             entry: BlockId(0),
             roots: self.roots,

@@ -80,7 +80,8 @@
     "ref_call": "t_ref_03：九档 ABI 全覆盖（0 参 / 3 整数 / 2 浮点 / 混合 / 10 参走栈 / 16B 聚合按值 / 多返回 / 零大小 / nil 指针）+ Kind()=19，逐行相同；ReflectMeta 72 字节（+64 tramp）",
     "ref_write": "t_ref_04：十三条逐行（CanSet 真假 / SetInt / Set / New 的 Kind=22 / Elem / SetFloat / SetBool / SetString / MakeSlice+Len+Cap / Index+SetInt / MakeMap+Len / MakeChan+Cap）+ 两条 panic 文本逐字（`using unaddressable value` / `call of … on zero Value`，退出 2）",
     "ref_gc": "t_ref_06：stress 态 collections=2446 / allocs=2450 / frees=2413 / live=1872 / bad_ptr=0；四类根（New 的槽 / 写进槽里的指针 / MakeSlice 的头 ⇒ 底层数组 / map-chan 的 box）churn 后读回原值；off 与 on 两态各 0 次收 ⇒ 只有 stress 能证伪",
-    "mutations_b": "3/3 全红（M-M12-04 pointee 不解引用 → t_ref_06 的 ptr-root；M-M12-05 MakeSlice 的头按元素数组分配 → t_ref_06 的 slice-survives；M-M12-06 摘掉可寻址检查 → t_ref_04_panic 的退出码）。逐条 cp 原文备份 + 恢复后校验 sha 再跑"
+    "mutations_b": "3/3 全红（M-M12-04 pointee 不解引用 → t_ref_06 的 ptr-root；M-M12-05 MakeSlice 的头按元素数组分配 → t_ref_06 的 slice-survives；M-M12-06 摘掉可寻址检查 → t_ref_04_panic 的退出码）。逐条 cp 原文备份 + 恢复后校验 sha 再跑",
+    "opt_inline": "内联（Task 37）：69 个语料的 `.s` 行数 none=1220189 / 四 pass（无内联）=1202917 / 全开=951616（比 none 降 22.0%，比四 pass 降 20.9%）；fixture（两调用点）191→164 行、函数 2→1、`bl fn` 3→1；同一 fixture 八调用点则是 317→338（涨）—— 一处内联的体比一条 `bl` 贵，收益全在「被调方被收尸」那一份，且它只算一次。判据：m12_opt.rs::t_opt_01_*（体积 + 三态）+ opt_equiv.rs（69 语料 all vs none 逐字节）+ opt_inline.rs（8 条单元判据）"
   },
   "gate": [
     {

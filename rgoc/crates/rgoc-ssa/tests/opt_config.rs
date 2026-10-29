@@ -2,7 +2,7 @@
 //!
 //! # 判据
 //!
-//! 1. `Config::parse` 只认四个名字与 `all`/`none`；空串、未知名、尾随逗号一律 `None`
+//! 1. `Config::parse` 只认五个名字与 `all`/`none`；空串、未知名、尾随逗号一律 `None`
 //!    （静默当 `all` 是**猜**，用户可能想写 `none` 却漏了字）。
 //! 2. 每个 pass 之后 `verify` 都过（`SSA-5`）—— 用一个「fold 折出常量、dce 再收掉」
 //!    的小函数走全流程，跑完自己再 verify 一遍。
@@ -47,10 +47,28 @@ fn t_ssa_64_开关解析() {
             fold: true,
             dce: true,
             copy: false,
-            cse: false
+            cse: false,
+            inline: false
         }
         .as_str(),
         "fold,dce"
+    );
+    // 内联是第五个开关（`M12` c 线）；只开它时文本里只有它
+    assert_eq!(
+        Config::parse("inline"),
+        Some(Config {
+            inline: true,
+            ..Config::none()
+        }),
+        "内联单独可开"
+    );
+    assert_eq!(
+        Config {
+            inline: true,
+            ..Config::none()
+        }
+        .as_str(),
+        "inline"
     );
     assert_eq!(Config::default(), Config::all(), "默认全开");
 }
