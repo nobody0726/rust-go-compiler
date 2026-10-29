@@ -69,6 +69,24 @@ pub fn build_and_run(name: &str, src: &str) -> Result<Outcome, String> {
 ///
 /// 同 [`build_and_run`]。
 pub fn build_and_run_env(name: &str, src: &str, env: &[(&str, &str)]) -> Result<Outcome, String> {
+    build_and_run_roots_env(name, src, &[], env)
+}
+
+/// 同 [`build_and_run_env`]，但带 **import 根**（`-I`）。
+///
+/// M12 的 b 线要从 `stdlib/reflect` 取反射包（`import "reflect"`），而
+/// `-I` 是它唯一入口 —— 其余 native 装置不带根，所以这里另开一个变体，
+/// 既有调用点一个不动。
+///
+/// # Errors
+///
+/// 同 [`build_and_run`]。
+pub fn build_and_run_roots_env(
+    name: &str,
+    src: &str,
+    roots: &[PathBuf],
+    env: &[(&str, &str)],
+) -> Result<Outcome, String> {
     let dir = fixture_root().join(name);
     std::fs::create_dir_all(&dir).map_err(|e| format!("建 {} 失败：{e}", dir.display()))?;
     let go = dir.join("main.go");
@@ -76,7 +94,7 @@ pub fn build_and_run_env(name: &str, src: &str, env: &[(&str, &str)]) -> Result<
 
     let prog = dir.join("prog");
     let cmd = BuildCommand {
-        roots: Vec::new(),
+        roots: roots.to_vec(),
         files: vec![go.clone()],
         output: Some(prog.clone()),
         emit: Emit::Elf,

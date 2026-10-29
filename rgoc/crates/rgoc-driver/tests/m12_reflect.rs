@@ -25,6 +25,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod support;
+
+use support::gc_probe::{GcMode, parse_stats};
+use support::native_harness::build_and_run_roots_env;
+
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
@@ -872,4 +877,104 @@ fn t_ref_04_panic文本对齐官方() {
         assert_eq!(code, Some(2), "{tag}：panic 必须退出 2：\n{got}");
         assert_eq!(got, want, "{tag}：panic 文本必须与官方逐字相同");
     }
+}
+
+// ════════════════════════════════════════════════════════════════════
+// T-REF-06 反射 × GC（Task 35）
+// ════════════════════════════════════════════════════════════════════
+
+/// `t_ref_06` 的 fixture：反射造出来的东西必须在 `stress` 态下活下来。
+///
+/// `stress` = **每次分配前**先收一遍（`C12` §5.1）—— 它把「已分配但还没
+/// 发布」的窗口压到最小，也是唯一能把「根丢了」变成稳定症状的态（`on`
+/// 态下要等阈值，几百次分配根本触发不了）。
+///
+/// 四条断言各自钉一类根：
+///   ① `New` 出来的槽 —— `Value.ptr` 是它**唯一**的根（没有别的变量指着它）；
+///   ② 写进槽里的**指针** —— 逃逸槽（`rt_alloc_escaped`）只有这一条根，
+///      丢了就是「读到一个被复用的块」；
+///   ③ `MakeSlice` 的头 —— 头在托管堆上，底层数组才跟着有根；
+///   ④ `MakeMap` / `MakeChan` 的 box 与运行期对象。
+///
+/// `churn` 在写与读之间造垃圾：没有它，块还没被复用，即使根丢了也读回原值
+/// （假绿）。
+/// `churn` 在写与读之间造垃圾，而且**尺寸要对得上**：一个丢了根的块只有
+/// 在被**同尺寸**的分配复用时才会露馅（否则它一直躺在那儿，读回原值 ⇒ 假绿）。
+///
+/// 所以这里三种尺寸都造，而且写进去的值带个 +1000 —— 复用了就会读到 1000
+/// 以上的数，绝不会碰巧等于原来的 5。
+const T_REF_06_SRC: &str = r#"package main
+
+import "reflect"
+
+func churn(n int) int {
+	total := 0
+	for i := 0; i < n; i++ {
+		a := make([]int, 2)
+		b := make([]int, 4)
+		c := make([]int, 1)
+		a[0] = i + 1000
+		b[0] = i + 1000
+		c[0] = i + 1000
+		total = total + a[0] + b[0] + c[0]
+	}
+	return total
+}
+
+func main() {
+	n := reflect.New(reflect.TypeOf(0))
+	n.Elem().SetInt(1234)
+	churn(200)
+	println("new-int", n.Elem().Int())
+
+	pp := reflect.New(reflect.TypeOf((*int)(nil))).Elem()
+	x := 42
+	pp.Set(reflect.ValueOf(&x))
+	churn(200)
+	println("ptr-root", pp.Elem().Int())
+
+	sl := reflect.MakeSlice(reflect.TypeOf([]int{}), 2, 2)
+	sl.Index(0).SetInt(5)
+	churn(200)
+	println("slice-survives", sl.Index(0).Int())
+
+	m := reflect.MakeMap(reflect.TypeOf(map[string]int{}))
+	c := reflect.MakeChan(reflect.TypeOf(make(chan int)), 4)
+	churn(200)
+	println("map-chan", m.Len(), c.Cap())
+}
+"#;
+
+#[test]
+fn t_ref_06_写面在_stress_下保根() {
+    let out = build_and_run_roots_env(
+        "ref06",
+        T_REF_06_SRC,
+        &[repo_root().join("stdlib")],
+        &[("RGOC_GC_STRESS", "1"), ("RGOC_GC_STATS", "1")],
+    )
+    .expect("反射 fixture 应当能编译并跑起来");
+
+    let want = [
+        "new-int 1234",
+        "ptr-root 42",
+        "slice-survives 5",
+        "map-chan 0 4",
+    ]
+    .join("\n")
+        + "\n";
+    assert_eq!(out.exit, 0, "fixture 必须正常退出：\n{}", out.stderr);
+    assert_eq!(out.stdout, want, "四类根在 stress 下都必须保住");
+
+    let stats = parse_stats(&out.stderr)
+        .expect("统计行格式必须合法（C12 §5.2）")
+        .expect("RGOC_GC_STATS=1 必须打出统计行");
+    assert_eq!(stats.mode, GcMode::Stress, "必须是 stress 态");
+    assert!(
+        stats.collections > 0,
+        "stress 态一次 GC 都没跑 ⇒ 判据恒真（C12 §5.1 的坑）"
+    );
+    stats
+        .assert_clean()
+        .expect("反射的写面不能制造坏指针（bad_ptr 必须 0）");
 }

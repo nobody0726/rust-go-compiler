@@ -685,9 +685,17 @@ func TypeOf(i any) Type {
 //
 // 读面（Task 31）只需要 typ；ptr（数据指针）被写面（Task 34）与 `Call`
 // （Task 33）用。
+//
+// `indirect` 的判定：指针类的 data 字**就是指针本身**（`box_iface` 的
+// `is_ptr` 特例）⇒ 直接表示；其余类型都进了 `rt_box` 的箱子 ⇒ 间接。
 func ValueOf(i any) Value {
 	w := (*[2]unsafe.Pointer)(unsafe.Pointer(&i))
-	return Value{typ: rtype{desc: w[0]}, ptr: w[1]}
+	if w[0] == nil {
+		var z Value
+		return z
+	}
+	direct := Kind((*descFull)(w[0]).kind) == Pointer
+	return Value{typ: rtype{desc: w[0]}, ptr: w[1], indirect: !direct}
 }
 
 // Value 是值的视图（读面 + `Call` + 写面）。
@@ -710,6 +718,19 @@ type Value struct {
 	// 官方还有 `flagRO`（未导出字段的只读层）：本仓的结构体字段读面
 	// 今天不产出可寻址的 Value，那一层进不了面（`U-M12-09`）。
 	writable bool
+	// indirect 是官方 `flagIndir` 的收窄版：`ptr` 是**值的存储地址**（true）
+	// 还是**值本身**（false）。
+	//
+	// ⚠️ 只有**指针类**会走 false：`box_iface` 对 `Type::Pointer` 有 `is_ptr`
+	// 特例（不装箱，`any` 的 data 字就是指针本身），`New` 返回的也是
+	// 「指针值 = 新对象地址」。其余一切都是装箱/分配出来的存储。
+	//
+	// 少了这一位就会撞上同一个类型的**两种表示**：`ValueOf(&x)` 的
+	// `ptr` 是 `&x`（值本身），而 `New(*int).Elem()` 的 `ptr` 是
+	// 「装着 `&x` 的槽」（存储地址）。`Elem()` 要解几层、`Set` 往哪写，
+	// 全靠它分（实测：不分就在 `reflect.New(TypeOf((*int)(nil)))` 上读到
+	// 一个裸地址 —— `t_ref_06` 抓的就是这个）。
+	indirect bool
 }
 
 // ────────────────────────────── Call ──────────────────────────────
@@ -814,15 +835,15 @@ func (v Value) Call(args []Value) []Value {
 	// 实参落缓冲（`d.size` 个字节；零大小的只占位不拷）。
 	//
 	// ⚠️ **指针类不拷，直接写那个字**：`box_iface` 对指针有 `is_ptr` 特例
-	// （不装箱，`any` 的 data 字就是指针本身）⇒ `Value.ptr` 指的是**目标
-	// 对象**而不是装着指针的槽。照 `size` 字节去拷会拷成「被指向的内容」，
-	// 于是被调方拿 `5` 当地址解引用 —— 实测 SIGSEGV。
+	// （不装箱，`any` 的 data 字就是指针本身）⇒ 指针类的 Value 有两种表示
+	// （`pointee` 把两种归一成「指针值」）。照 `size` 字节去拷会拷成
+	// 「被指向的内容」，于是被调方拿 `5` 当地址解引用 —— 实测 SIGSEGV。
 	ab := (*[1 << 24]byte)(argp)
 	off := 0
 	for i := 0; i < n; i++ {
 		pd := (*descFull)(pm[i].typ)
 		if Kind(pd.kind) == Pointer {
-			(*[1]*byte)(unsafe.Pointer(&ab[off]))[0] = (*byte)(args[i].ptr)
+			(*[1]*byte)(unsafe.Pointer(&ab[off]))[0] = (*byte)(args[i].pointee())
 		} else if pd.size > 0 {
 			copyBytes(unsafe.Pointer(&ab[off]), args[i].ptr, int(pd.size))
 		}
@@ -844,10 +865,9 @@ func (v Value) Call(args []Value) []Value {
 	callDepth--
 
 	// 结果：逐个包成 Value（指向结果缓冲 —— 缓冲是包级数组，不会回收）。
-	// 结果：逐个包成 Value。
 	//
-	// 指针类**同一个口径**（`box_iface` 的 `is_ptr` 臂）：`Value.ptr` 是
-	// 指针本身，不是「装着指针的槽」—— 这样结果可以直接当下一轮的实参。
+	// 指针类**同一个口径**：结果寄存器里的那个字就是指针值 ⇒ 直接表示
+	// （与 `ValueOf(&x)` 一致）；其余结果指向缓冲里的存储 ⇒ 间接表示。
 	out := make([]Value, nr)
 	rb := (*[1 << 24]byte)(resp)
 	roff := 0
@@ -857,7 +877,7 @@ func (v Value) Call(args []Value) []Value {
 			w := (*[1]*byte)(unsafe.Pointer(&rb[roff]))
 			out[i] = Value{typ: rtype{desc: rm[i].typ}, ptr: unsafe.Pointer(w[0])}
 		} else {
-			out[i] = Value{typ: rtype{desc: rm[i].typ}, ptr: unsafe.Pointer(&rb[roff])}
+			out[i] = Value{typ: rtype{desc: rm[i].typ}, ptr: unsafe.Pointer(&rb[roff]), indirect: true}
 		}
 		roff += slotBytes(rd)
 	}
@@ -993,8 +1013,22 @@ func addBytes(p unsafe.Pointer, off uint64) unsafe.Pointer {
 }
 
 // addrValue 造一个**有地址**的 Value（写面的构造子）。
+//
+// `p` 是值的**存储地址** ⇒ 间接表示（`indirect`）。
 func addrValue(t Type, p unsafe.Pointer) Value {
-	return Value{typ: t, ptr: p, writable: true}
+	return Value{typ: t, ptr: p, writable: true, indirect: true}
+}
+
+// pointee 返回指针类的**指针值**（把两种表示归一）。
+//
+// 直接表示（`ValueOf(&x)` / `Call` 的指针结果 / `New`）时 `ptr` 就是指针值；
+// 间接表示（`New(*int).Elem()` / `[]*T` 的 `Index(i)`）时 `ptr` 指向
+// 「装着那个指针的槽」—— 要先取出那个字。
+func (v Value) pointee() unsafe.Pointer {
+	if v.indirect {
+		return unsafe.Pointer((*[1]*byte)(v.ptr)[0])
+	}
+	return v.ptr
 }
 
 // CanSet 报告 v 能不能被改写（官方：可寻址且不是未导出字段）。
@@ -1019,6 +1053,10 @@ func (v Value) mustBeAssignable(method string) {
 //
 // 收窄：官方还支持 interface 的 `Elem`（解出动态值）—— 本仓的 `Value`
 // 不承载「接口的静态值」，那条臂进不了面。
+//
+// 「指向的那个值」= 指针值指向的存储 ⇒ 返回的 Value 永远是**间接表示**
+// （哪怕元素类型本身是指针：`New(*int).Elem()` 得到的是那个 `*int` 槽，
+// 不是它指向的 int）。
 func (v Value) Elem() Value {
 	d := v.descOf()
 	if d == nil {
@@ -1027,14 +1065,13 @@ func (v Value) Elem() Value {
 	if Kind(d.kind) != Pointer {
 		panic("reflect: call of reflect.Value.Elem on " + kindName(Kind(d.kind)) + " Value")
 	}
-	if v.ptr == nil {
+	p := v.pointee()
+	if p == nil {
 		// 官方：nil 指针的 `Elem()` 是**零 Value**（不是 panic）。
 		var z Value
 		return z
 	}
-	// `Value.ptr` 对 Pointer 类就是指针本身（`box_iface` 的 `is_ptr` 特例）
-	// ⇒ 指向的对象地址已经在手，元素类型从 desc 的扩展区取。
-	return addrValue(rtype{desc: v.typ.(rtype).elemDesc()}, v.ptr)
+	return addrValue(rtype{desc: v.typ.(rtype).elemDesc()}, p)
 }
 
 // Index 返回 v[i]（收窄到 slice / array）。
@@ -1194,7 +1231,7 @@ func (v Value) SetString(x string) {
 
 // Set 把 x 赋给 v（类型已由调用方保证）。
 //
-// 指针类要特殊处理：`Value.ptr` 对指针就是**指针本身**（`is_ptr` 特例），
+// 指针类要特殊处理：指针类的值是**指针本身**（两种表示由 `pointee` 归一），
 // 照 `size` 字节拷会拷成「被指向的内容」——`Call` 踩过同一个坑。其余
 // （含 string 的 16 字节、聚合）都是整块拷。
 func (v Value) Set(x Value) {
@@ -1205,7 +1242,7 @@ func (v Value) Set(x Value) {
 		panic("reflect: call of reflect.Value.Set on zero Value")
 	}
 	if Kind(xd.kind) == Pointer {
-		(*[1]*byte)(v.ptr)[0] = (*byte)(x.ptr)
+		(*[1]*byte)(v.ptr)[0] = (*byte)(x.pointee())
 		return
 	}
 	copyBytes(v.ptr, x.ptr, int(d.size))
@@ -1285,6 +1322,9 @@ func (v Value) String() string {
 }
 
 // New 返回一个指向 T 的新零值对象的指针 Value（`Kind() == Pointer`）。
+//
+// 返回值是**直接表示**（官方 `New` 同样不带 `flagIndir`）：`ptr` 里放的就是
+// 那个指针值 —— 也就是新对象的地址。
 func New(typ Type) Value {
 	if typ == nil {
 		panic("reflect: New(nil)")
@@ -1325,7 +1365,7 @@ func MakeSlice(typ Type, len int, cap int) Value {
 	w[0] = uintptr(data)
 	w[1] = uintptr(len)
 	w[2] = uintptr(cap)
-	return Value{typ: typ, ptr: hdr}
+	return Value{typ: typ, ptr: hdr, indirect: true}
 }
 
 // MakeMap 造一个空 map 值。
@@ -1344,7 +1384,7 @@ func MakeMap(typ Type) Value {
 	m := reflectAlloc(allocMap, d.ext0, d.ext1, 0)
 	box := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
 	(*[1]uintptr)(box)[0] = uintptr(m)
-	return Value{typ: typ, ptr: box}
+	return Value{typ: typ, ptr: box, indirect: true}
 }
 
 // MakeChan 造一个容量 `buffer` 的 channel 值（Value.ptr 的口径同 `MakeMap`）。
@@ -1362,5 +1402,5 @@ func MakeChan(typ Type, buffer int) Value {
 	ch := reflectAlloc(allocChan, d.ext0, nil, buffer)
 	box := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
 	(*[1]uintptr)(box)[0] = uintptr(ch)
-	return Value{typ: typ, ptr: box}
+	return Value{typ: typ, ptr: box, indirect: true}
 }
