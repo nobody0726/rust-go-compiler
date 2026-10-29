@@ -9,7 +9,7 @@
 //!
 //! | 断言 | 出处 |
 //! |---|---|
-//! | 名字全集（44） | Go 规范 Universe block 一节 |
+//! | 名字全集（45 = 44 + `rt_reflect_call`） | Go 规范 Universe block + `C13` §5.5 的钩子 |
 //! | `byte` ⇒ `basic uint8`、`rune` ⇒ `basic int32` | oracle 实测（`var a byte`…） |
 //! | `error` ⇒ `named` + `interface` + `method "Error"` + recv 是自己 | oracle 实测 |
 //! | `any` ⇒ `alias` + 右侧 `interface 0 0` | oracle 实测 |
@@ -20,7 +20,7 @@ use rgoc_types::object::ObjKind;
 use rgoc_types::{IfaceTSet, Type, TypeTable, declared_names, universe};
 
 #[test]
-fn 名字全集恰好是那_44_个() {
+fn 名字全集恰好是那_45_个() {
     let (st, u, _tt) = universe();
     let s = st.scope(u);
     let mut got: Vec<&str> = s.names().collect();
@@ -74,10 +74,14 @@ fn 名字全集恰好是那_44_个() {
         "println",
         "real",
         "recover",
+        // 运行期钩子 1（M12/Task 33）：**不在 Go 规范的 Universe block 里**，
+        // 是 `reflect.Value.Call` 的 ABI 桥入口（`C13` §5.5）。名字带 `rt_`
+        // 前缀，与语言内建区分。
+        "rt_reflect_call",
     ];
     want.sort_unstable();
     assert_eq!(got, want);
-    assert_eq!(got.len(), 44);
+    assert_eq!(got.len(), 45);
     assert_eq!(got, declared_names());
 }
 
@@ -274,7 +278,7 @@ fn 检查器的表可以自己声明_universe() {
     let mut st = rgoc_types::ScopeTable::new();
     let u = rgoc_types::declare_universe(&mut tt, &mut st);
     let s = st.scope(u);
-    assert_eq!(s.len(), 44);
+    assert_eq!(s.len(), 45);
     let error_ty = s.lookup("error").and_then(|o| o.typ).expect("有 error");
     assert_eq!(
         tt.type_of(error_ty).variant_label(),

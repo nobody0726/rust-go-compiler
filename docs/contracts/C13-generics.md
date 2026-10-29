@@ -155,7 +155,7 @@ TypeDesc（40 字节，C5 §10 冻结 —— 本契约一个偏移都不改）
 ### 5.2 `ReflectMeta`（只读，`.rodata`）
 
 ```text
-ReflectMeta
+ReflectMeta（72 字节）
   +0   name       *u8     （不含包名，`Box[int]`）
   +8   pkgpath    *u8
   +16  fields     *FieldMeta    （+0 起，连续）
@@ -166,6 +166,7 @@ ReflectMeta
   +48  nparams    u32
   +52  nresults   u32
   +56  results    *ParamMeta
+  +64  tramp      *u8     （§5.5 的 ABI 桥入口；非签名类型恒 0）
 
 FieldMeta（32 字节）
   +0  name *u8 / +8 tag *u8 / +16 typ *TypeDesc / +24 offset u32 / +28 flags u8（anonymous/exported）
@@ -179,6 +180,11 @@ ParamMeta（16 字节）
 
 `abi_class` 由 **M7 的 `abi_classify` 在编译期算好**写进元数据；**运行时不算**
 （`D-M12-5` 的推论：反射不该重新实现一遍 ABI 分类）。
+
+⚠️ **`+64 tramp` 是 Task 33 追加的**：块从 64 → 72 字节。所有消费方都按
+**字段偏移**读（Go 侧 `reflectMeta` 镜像、C 侧 `struct ReflectMeta`），
+没有一处按步长遍历 —— 表是**指针表**（`rt_reflect_metas`），所以加尾巴
+不影响既有读法。`C` 侧的 `_Static_assert(sizeof == 72)` 是这条的判据。
 
 ### 5.3 写面与屏障
 
@@ -230,6 +236,45 @@ desc 块 = 40 字节本体（§5.1）之后，按 kind 追加扩展 quad（按 k
 * `Array.len` 与 `size / elem.size` 恒相等（数组无内部填充）—— 两条来源
   互相校验，发射侧用 `layout::array_len_of`（**长度怎么读的唯一口径**）。
 
+### 5.5 `Call` 的 ABI 桥（M12/Task 33）
+
+`Value.Call` 要调一个**运行期才知道**的函数指针，而「指针 → 函数值」的转换
+Go 源码表达不了 ⇒ 需要一段编译器生成的桩 + 一个 C 入口：
+
+```text
+void __reflecttramp_<sig_hash>(void *funcval, const void *args, void *results)   ← 发射侧生成
+void rt_reflect_call(void *funcval, void *tramp, void *args, void *results)      ← rt.c
+void rt_reflect_call(fn, tramp, args, results)                                   ← Go 侧内建
+```
+
+**契约**（发射侧 `emit_reflect_trampoline` 与 `reflect.go::Value.Call` 逐条对齐）：
+
+1. `funcval` 是**闭包块**的地址（`{code, ctx…}`）—— 与 `CalleeRef::Indirect`
+   的 `ldr x16, [x0]` 同口径；它同时就是 `x0` 里的隐式 ctx（`ctx_abi` 的
+   约定：**凡是当过值的函数**都带 ctx 形参）⇒ 真形参从 **`x1`** 起分配，
+   落位是 `place_args([ctx, 形参…])` 的**下标 1 起**。
+2. `args` / `results` 是**缓冲**：第 i 个形参在 `off_i = Σ max(8, 槽宽)`。
+   两侧同一个公式（发射侧 `buf_slot` / Go 侧 `slotBytes`）—— 一旦分叉，
+   参数整体错位。
+3. 结果寄存器 `x0..x7` / `d0..d7` **先整体落帧**再分发：聚合结果 > 16 字节
+   时被调方返回的是**堆地址**，分发要 `rt_memcpy`（clobber `x0/x1/x2`）。
+4. 结果的寄存器计数**逐类独立**（与 `isel::take_results` 同一张表）。
+5. **指针类实参不拷内容**：`box_iface` 对 `Type::Pointer` 有 `is_ptr` 特例
+   （不装箱，`any` 的 data 字就是指针本身）⇒ `Value.ptr` 指**目标对象**而不是
+   「装着指针的槽」。照 `size` 拷会拷成被指向的内容（实测把 `5` 当地址
+   解引用 ⇒ SIGSEGV）。结果侧同口径：指针类结果直接取那一个字。
+
+**为什么不在 C 里做通用打包**：寄存器落位在编译期就定了（`D-M12-5`），
+通用打包要把「寄存器号」变成数据、再绕回 `blr` —— 同一件事做两遍。
+
+**溢出到栈**：trampoline 的栈参数写在 `[sp, #off]`（自己的帧底），保存区
+在 `stackbytes` 之上 —— 被调方从 `fp+16` 读到的正是这块。
+
+**`rt_reflect_call` 是内建**（`BuiltinKind::ReflectCall`），名字进 universe
+（`BUILTIN_NAMES`），`check` 钉住「四个实参都是 8 字节」—— 它们直接进
+`x0..x3`。⚠️ 它是**运行期钩子、不是语言特性**：`reflect` 之外的代码用它
+没有意义，解释器通路直接报 `G-M12-05`。
+
 ---
 
 ## 6. 不做面
@@ -255,3 +300,4 @@ desc 块 = 40 字节本体（§5.1）之后，按 kind 追加扩展 quad（按 k
 | 2026-10-28 | §5.4 扩展区（Map/Chan/Array/Named 的反射读面载体）| M12/Task 31；40 字节冻结 + `elem_of` 语义不变的折中 |
 | 2026-10-27 | Task 31 落地细则：① `FieldMeta.tag` 存**字面量的值**（不含反引号/引号定界符 —— `check::typeexpr` 原抄 `BasicLit.value` 带定界符，实测 `Tag` 打出 `` `json:"x"` ``，官方是 `json:"x"`；与 `rgoc_load::typeexpr::tag_text` 同口径）；② 匿名 struct 的 `PkgPath()` 返回空串（匿名也有 meta，但 `name` 空 ⇒ 包路径不外漏）；③ `kind` 升官方 27 档（见 `C5` §11.1 变更记录）；④ `type_hash` 按 `TypeId` 记忆化（自引用接口类型曾指数爆炸）+ 别名透明（别名臂直接返回 rhs hash） | M12/Task 31；t_ref_02 对官方 oracle 逐字段 |
 | 2026-10-27 | Task 32 落地细则：① `ReflectMeta.methods` 填实（MethodMeta 24B：name / sig / fn）；具名接口方法来自 `InterfaceDef`（`fn=0`），具名具体类型来自 `MethodSet` —— ⚠️ `MethodSet.ty` 是**具名基类型**（`strip_ptr(recv)` 分组），按 `underlying` 找永远落空（实测 NumMethod=0）；值类型的 meta 只收**值接收者**方法（指针接收者的归 `*T`，官方方法集口径；指针性从 `named_def.methods` 的签名 `recv` 读）；② 新增 `__sigdesc_<hash>`（kind=Func 的 40 字节 desc，`size=8`，hash 就是 `sig_hash` 编码）—— `Implements` 运行期比它的 +8；③ `String()` 升级：具名 `pkgpath.name`、复合沿 elem 链（`*T` / `[]T` / `[N]T` / `map[K]V` / `chan T`） | M12/Task 32；t_ref_05 对官方 `go run` 逐行 |
+| 2026-10-29 | §5.5 `Call` 的 ABI 桥 + §5.2 加 `+64 tramp`（ReflectMeta 64→72 字节）；`rt_reflect_call` 作为内建（`BuiltinKind::ReflectCall`，进 `BUILTIN_NAMES`，check 钉住「四个 8 字节实参」）。⚠️ 同批修了**跨包具体方法调用**的 lowering（`Cross.methods`，键 = 接收者 TypeId）—— 没有它 `reflect.Value.Call`/`.Int()` 这类「导入类型的具名方法」根本进不了 HIR | M12/Task 33；t_ref_03 对官方 `go run` 九档逐行 |

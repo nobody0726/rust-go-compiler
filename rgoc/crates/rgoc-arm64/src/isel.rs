@@ -3194,6 +3194,20 @@ fn builtin(
             }
             Ok(())
         }
+        // `rt_reflect_call(funcval, tramp, args, results)`（M12/Task 33）：
+        // 四个实参都是 8 字节标量（`check` 侧已钉住）⇒ 直接进 `x0..x3`。
+        //
+        // ⚠️ 入口在 `rt.c`，但它调的是**任意函数**（tramp 里的 `blr`）——
+        // panic 状态照常要查（`R-9-24`：被调方 panic 之后是正常返回的）。
+        BuiltinKind::ReflectCall => {
+            for (i, a) in args.iter().take(4).enumerate() {
+                let s = cx.slot(*a);
+                ld_x(asm, &format!("x{i}"), s.off);
+            }
+            asm.ins("bl rt_reflect_call");
+            check_panic(cx, asm);
+            Ok(())
+        }
         // 其余内建（`copy`/`delete`/`clear`/`close`/`recover`）在 M6 的
         // 拒绝面里，走不到这里；真走到了说明上游漏判 —— 宁可少发也不发错。
         _ => Ok(()),

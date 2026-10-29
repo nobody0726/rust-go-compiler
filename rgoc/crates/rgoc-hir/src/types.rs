@@ -797,4 +797,10 @@ pub enum BuiltinKind {
     Recover,
     /// `close`（M8/Task 8 起真的产出；`C11` §3.2 的三个 panic 在解释器里发）
     Close,
+    /// `rt_reflect_call(funcval, tramp, args, results)`（M12/Task 33）。
+    ///
+    /// 不是语言特性：`reflect.Value.Call` 要调运行期才知道的函数指针，
+    /// 而「指针 → 函数值」的转换 Go 源码表达不了。四个实参直接进
+    /// `x0..x3`（`C13` §5.5）。
+    ReflectCall,
 }

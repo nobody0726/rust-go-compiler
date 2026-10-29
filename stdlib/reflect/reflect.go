@@ -89,7 +89,7 @@ type descFull struct {
 	ext2    unsafe.Pointer // +56
 }
 
-// reflectMeta 是 ReflectMeta 的 Go 侧镜像（C13 §5.2，64 字节）。
+// reflectMeta 是 ReflectMeta 的 Go 侧镜像（C13 §5.2，72 字节）。
 type reflectMeta struct {
 	name     unsafe.Pointer // +0  cstring
 	pkgpath  unsafe.Pointer // +8  cstring
@@ -97,10 +97,22 @@ type reflectMeta struct {
 	nfields  uint32         // +24
 	nmethods uint32         // +28
 	methods  unsafe.Pointer // +32
-	params   unsafe.Pointer // +40
+	params   unsafe.Pointer // +40 *paramMeta
 	nparams  uint32         // +48
 	nresults uint32         // +52
-	results  unsafe.Pointer // +56
+	results  unsafe.Pointer // +56 *paramMeta
+	tramp    unsafe.Pointer // +64 Call 的 ABI 桥入口（非签名类型为 nil）
+}
+
+// paramMeta 是 ParamMeta 的 Go 侧镜像（C13 §5.2，16 字节）。
+//
+// `cls` 是编译期算好的 ABI 类（0 = `x` / 1 = `v` / 2 = 栈）：`Call` 的
+// 重放在 `__reflecttramp_*` 里（发射侧生成的直线代码），Go 侧**不读**它 ——
+// 留在这里是为了让「两侧同形」这条契约有第二个读者（对账用）。
+type paramMeta struct {
+	typ unsafe.Pointer // +0 *TypeDesc
+	cls uint8          // +8 ABI 类
+	// +9..16 填充
 }
 
 // fieldMeta 是 FieldMeta 的 Go 侧镜像（C13 §5.2，32 字节）。
@@ -671,16 +683,256 @@ func TypeOf(i any) Type {
 
 // ValueOf 返回 i 的 Value 视图。
 //
-// 读面（Task 31）只需要 typ；ptr（数据指针）留给写面（Task 34）。
+// 读面（Task 31）只需要 typ；ptr（数据指针）被写面（Task 34）与 `Call`
+// （Task 33）用。
 func ValueOf(i any) Value {
 	w := (*[2]unsafe.Pointer)(unsafe.Pointer(&i))
-	return Value{typ: rtype{desc: w[0]}, ptr: uintptr(w[1])}
+	return Value{typ: rtype{desc: w[0]}, ptr: w[1]}
 }
 
-// Value 是值的视图（读面 + 后续的写面）。
+// Value 是值的视图（读面 + `Call` + 后续的写面）。
 type Value struct {
 	// typ 是值的动态类型。
 	typ Type
-	// ptr 是值的数据指针（装箱值的存储地址；写面 Task 34 接管）。
-	ptr uintptr
+	// ptr 是值的数据指针（装箱值的存储地址）。
+	//
+	// ⚠️ 用 `unsafe.Pointer` 而不是 `uintptr`：`Call` 要把它交给
+	// `copyBytes` / 记进结果的 `Value`，而 `uintptr → unsafe.Pointer`
+	// 这个方向在本仓今天的代码生成上有缺口（解引用丢失，实测
+	// 2026-10-28）。存指针就没有这个转换。
+	ptr unsafe.Pointer
+}
+
+// ────────────────────────────── Call ──────────────────────────────
+
+// callArena 是 `Call` 的参数 / 结果缓冲（`C13` §5.5）。
+//
+// 为什么是**包级数组**：`Value` 只存裸指针，而返回给调用方的结果值指向
+// 缓冲里的位置 —— 局部切片一回收，那些指针就是悬空的。包级数组天然是
+// GC 根，也不依赖分配器（解释器缺口 `G-M12-05` 因此不在这条路上）。
+var callArena [65536]byte
+
+// callUsed 是本次顶层 `Call` 已用掉的字节数。
+var callUsed int
+
+// callDepth 是嵌套深度：顶层调用从 0 开始复用，嵌套调用往后长 ——
+// 否则「被调函数里再 `reflect.Value.Call` 一次」会把外层正在用的缓冲踩掉。
+var callDepth int
+
+// callSpace 从 `callArena` 里切 n 字节（16 对齐）。`n` 至少 8。
+func callSpace(n int) unsafe.Pointer {
+	if n < 8 {
+		n = 8
+	}
+	if callUsed+n > len(callArena) {
+		panic("reflect: Call 的缓冲用尽（callArena）")
+	}
+	p := unsafe.Pointer(&callArena[callUsed])
+	callUsed += (n + 15) &^ 15
+	return p
+}
+
+// slotBytes 返回缓冲里一个形参 / 结果占的字节数。
+//
+// 与发射侧 `emit_reflect_trampoline` 的 `buf_slot` **同一个公式**：
+// `max(8, round8(size))`。两侧一旦分叉，实参就整体错位。
+func slotBytes(d *descFull) int {
+	n := int(d.size)
+	n = (n + 7) &^ 7
+	if n < 8 {
+		n = 8
+	}
+	return n
+}
+
+// copyBytes 拷 n 个字节（Go 侧没有 memcpy 内建）。
+func copyBytes(dst unsafe.Pointer, src unsafe.Pointer, n int) {
+	if n <= 0 || dst == nil || src == nil {
+		return
+	}
+	d := (*[1 << 24]byte)(dst)
+	s := (*[1 << 24]byte)(src)
+	for i := 0; i < n; i++ {
+		d[i] = s[i]
+	}
+}
+
+// Call 用 args 调用函数值 v，返回结果值。
+//
+// 收窄面（`C13` §5.5 / T-REF-03）：实参**个数**必须与签名一致（官方同）；
+// 类型不逐一对账 —— 静态类型已由调用方保证。
+//
+// 通路：实参按 `slotBytes` 摆进缓冲 → `rt_reflect_call(funcval, tramp,
+// args, results)` → 发射侧生成的 `__reflecttramp_<hash>` 按 AAPCS64 装
+// 寄存器、`blr`、再把结果搬回缓冲。
+func (v Value) Call(args []Value) []Value {
+	if v.typ == nil {
+		panic("reflect: call of nil Value")
+	}
+	t := v.typ.(rtype)
+	d := t.d()
+	if d == nil || Kind(d.kind) != Func {
+		panic("reflect: call of non-function Value")
+	}
+	m := t.meta()
+	if m == nil || m.tramp == nil {
+		panic("reflect: call of unimplemented function type")
+	}
+	n := int(m.nparams)
+	if len(args) != n {
+		panic("reflect: wrong number of arguments in call")
+	}
+	nr := int(m.nresults)
+	pm := (*[64]paramMeta)(m.params)
+	rm := (*[64]paramMeta)(m.results)
+
+	// 缓冲：先算总长，再一次性切（顶层调用会把水位归零）。
+	argBytes := 0
+	for i := 0; i < n; i++ {
+		argBytes += slotBytes((*descFull)(pm[i].typ))
+	}
+	resBytes := 0
+	for i := 0; i < nr; i++ {
+		resBytes += slotBytes((*descFull)(rm[i].typ))
+	}
+	if callDepth == 0 {
+		callUsed = 0
+	}
+	callDepth++
+	argp := callSpace(argBytes)
+	resp := callSpace(resBytes)
+
+	// 实参落缓冲（`d.size` 个字节；零大小的只占位不拷）。
+	//
+	// ⚠️ **指针类不拷，直接写那个字**：`box_iface` 对指针有 `is_ptr` 特例
+	// （不装箱，`any` 的 data 字就是指针本身）⇒ `Value.ptr` 指的是**目标
+	// 对象**而不是装着指针的槽。照 `size` 字节去拷会拷成「被指向的内容」，
+	// 于是被调方拿 `5` 当地址解引用 —— 实测 SIGSEGV。
+	ab := (*[1 << 24]byte)(argp)
+	off := 0
+	for i := 0; i < n; i++ {
+		pd := (*descFull)(pm[i].typ)
+		if Kind(pd.kind) == Pointer {
+			(*[1]*byte)(unsafe.Pointer(&ab[off]))[0] = (*byte)(args[i].ptr)
+		} else if pd.size > 0 {
+			copyBytes(unsafe.Pointer(&ab[off]), args[i].ptr, int(pd.size))
+		}
+		off += slotBytes(pd)
+	}
+
+	// 函数值槽里存的是**闭包块**的地址（与 `CalleeRef::Indirect` 的
+	// `ldr x16, [x0]` 同口径）。
+	//
+	// ⚠️ 不写 `*(*unsafe.Pointer)(v.ptr)`：`*unsafe.Pointer` 这种「跨包
+	// 类型的指针」还在单包窄面里（lowering 只认本包复合类型）。`*[1]*byte`
+	// 的底座是内建类型，走得通。
+	fn := unsafe.Pointer((*[1]*byte)(v.ptr)[0])
+	if fn == nil {
+		callDepth--
+		panic("reflect: call of nil function")
+	}
+	rt_reflect_call(fn, m.tramp, argp, resp)
+	callDepth--
+
+	// 结果：逐个包成 Value（指向结果缓冲 —— 缓冲是包级数组，不会回收）。
+	// 结果：逐个包成 Value。
+	//
+	// 指针类**同一个口径**（`box_iface` 的 `is_ptr` 臂）：`Value.ptr` 是
+	// 指针本身，不是「装着指针的槽」—— 这样结果可以直接当下一轮的实参。
+	out := make([]Value, nr)
+	rb := (*[1 << 24]byte)(resp)
+	roff := 0
+	for i := 0; i < nr; i++ {
+		rd := (*descFull)(rm[i].typ)
+		if Kind(rd.kind) == Pointer {
+			w := (*[1]*byte)(unsafe.Pointer(&rb[roff]))
+			out[i] = Value{typ: rtype{desc: rm[i].typ}, ptr: unsafe.Pointer(w[0])}
+		} else {
+			out[i] = Value{typ: rtype{desc: rm[i].typ}, ptr: unsafe.Pointer(&rb[roff])}
+		}
+		roff += slotBytes(rd)
+	}
+	return out
+}
+
+// ────────────────────── Value 的读访问器 ──────────────────────
+//
+// `Call` 的结果是 `Value`，没有这些访问器就**没法观察**（判据 T-REF-03
+// 的九档全都要把结果打出来）。面按官方同名方法收窄：只读、只认对应
+// kind（官方对不匹配的 kind 也 panic）。
+
+// descOf 取 v 的类型 desc（零 Value 返回 nil）。
+func (v Value) descOf() *descFull {
+	if v.typ == nil {
+		return nil
+	}
+	return v.typ.(rtype).d()
+}
+
+// Kind 返回 v 的动态类型种类（零 Value 是 `Invalid`）。
+func (v Value) Kind() Kind {
+	d := v.descOf()
+	if d == nil {
+		return Invalid
+	}
+	return Kind(d.kind)
+}
+
+// Type 返回 v 的动态类型（零 Value 返回 nil）。
+func (v Value) Type() Type {
+	return v.typ
+}
+
+// Int 返回有符号整数（官方口径：kind 必须是整数类，否则 panic）。
+func (v Value) Int() int64 {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Int on zero Value")
+	}
+	switch Kind(d.kind) {
+	case Int, Int8, Int16, Int32, Int64:
+		return readInt(v.ptr, int(d.size))
+	}
+	panic("reflect: call of reflect.Value.Int on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// readInt 按 `size` 字节小端读一个整数并做符号扩展。
+func readInt(p unsafe.Pointer, size int) int64 {
+	b := (*[8]byte)(p)
+	var u uint64
+	for i := 0; i < size && i < 8; i++ {
+		u |= uint64(b[i]) << uint(8*i)
+	}
+	if size > 0 && size < 8 {
+		sh := uint(64 - 8*size)
+		return int64(u<<sh) >> sh
+	}
+	return int64(u)
+}
+
+// Float 返回浮点值（官方口径：kind 必须是浮点类，否则 panic）。
+func (v Value) Float() float64 {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Float on zero Value")
+	}
+	if Kind(d.kind) == Float32 {
+		return float64(*(*float32)(v.ptr))
+	}
+	if Kind(d.kind) == Float64 {
+		return *(*float64)(v.ptr)
+	}
+	panic("reflect: call of reflect.Value.Float on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// Bool 返回布尔值（官方口径：kind 必须是 bool，否则 panic）。
+func (v Value) Bool() bool {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Bool on zero Value")
+	}
+	if Kind(d.kind) != Bool {
+		panic("reflect: call of reflect.Value.Bool on " + kindName(Kind(d.kind)) + " Value")
+	}
+	return (*[1]byte)(v.ptr)[0] != 0
 }

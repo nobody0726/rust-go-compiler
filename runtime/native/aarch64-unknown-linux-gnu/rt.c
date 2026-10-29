@@ -1789,6 +1789,7 @@ struct ReflectMeta {
     u32 nparams;               /* +48 */
     u32 nresults;              /* +52 */
     const void *results;       /* +56 ParamMeta[]（Task 33） */
+    const void *tramp;         /* +64 Call 的 ABI 桥入口（Task 33；非签名为 0） */
 };
 
 struct FieldMeta {
@@ -1800,7 +1801,7 @@ struct FieldMeta {
     /* +29..32 对齐填充 */
 };
 
-_Static_assert(sizeof(ReflectMeta) == 64, "ReflectMeta 必须是 64 字节（C13 §5.2）");
+_Static_assert(sizeof(ReflectMeta) == 72, "ReflectMeta 必须是 72 字节（C13 §5.2）");
 _Static_assert(sizeof(FieldMeta) == 32, "FieldMeta 必须是 32 字节（C13 §5.2）");
 _Static_assert(RT_OFFSETOF(ReflectMeta, nfields) == 24, "nfields 必须在 +24（C13 §5.2）");
 _Static_assert(RT_OFFSETOF(ReflectMeta, params) == 40, "params 必须在 +40（C13 §5.2）");
@@ -1817,6 +1818,31 @@ const ReflectMeta *rt_reflect_meta(const TypeDesc *desc)
         return 0;
     }
     return rt_reflect_metas[desc->meta_idx - 1];
+}
+
+/* ── 反射 `Call` 的入口（M12/Task 33，`C13` §5.5）─────────────────────
+ *
+ * `Value.Call` 要调一个**运行期才知道**的函数指针，Go 源码表达不了
+ * （指针 → 函数值的转换需要运行期支持）。所以这里留一个 C 入口：
+ *
+ *     rt_reflect_call(funcval, tramp, args, results)
+ *
+ * `tramp` 是发射侧按签名生成的 `__reflecttramp_<hash>`（`module.rs::
+ * emit_reflect_trampoline`）：它把 `args` 缓冲里的实参按 AAPCS64 摆进
+ * `x0..x7` / `d0..d7` / 栈，`blr` 之后再把结果搬回 `results` 缓冲。
+ *
+ * **打包本身不在 C 里做**：寄存器落位在编译期就定了（`D-M12-5`），
+ * 通用打包要把寄存器号变成数据、再绕回 `blr` —— 同一件事做两遍。
+ *
+ * ⚠️ 不能直接 `((void(*)(void,...))funcval)()`：`funcval` 是**闭包块**
+ * 的地址（`{code, ctx…}`），代码在块的第 0 个字（与 `CalleeRef::Indirect`
+ * 的 `ldr x16, [x0]` 同口径）。这段间接跳转在 tramp 里，本函数只转发。
+ */
+typedef void (*rt_reflect_tramp_fn)(void *funcval, void *args, void *results);
+
+void rt_reflect_call(void *funcval, void *tramp, void *args, void *results)
+{
+    ((rt_reflect_tramp_fn)tramp)(funcval, args, results);
 }
 
 /* ════════════════════════════════════════════════════════════════════

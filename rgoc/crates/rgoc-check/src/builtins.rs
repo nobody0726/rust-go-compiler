@@ -135,6 +135,31 @@ pub(crate) fn call_builtin(
             let _ = cx.expr(file, &c.args[0]);
             Operand::no_value()
         }
+        // `rt_reflect_call(funcval, tramp, args, results)`：`reflect.Value.Call`
+        // 的 ABI 桥入口（`C13` §5.5）。四个实参都必须是**一个字**的量
+        // （指针 / uintptr）—— 它们直接进 `x0..x3`，宽度不对就是错位。
+        "rt_reflect_call" => {
+            for a in &c.args {
+                let x = cx.expr(file, a);
+                if x.mode == Mode::Invalid {
+                    return Operand::invalid();
+                }
+                let ok = x
+                    .typ
+                    .and_then(|t| rgoc_types::layout::layout(cx.type_table(), t))
+                    .is_some_and(|l| l.size == 8);
+                if !ok {
+                    cx.report(
+                        a.start_pos(),
+                        DiagCode::ChkInvalidBuiltinArg,
+                        "invalid argument: rt_reflect_call 的实参必须是 8 字节（指针 / uintptr）"
+                            .to_string(),
+                    );
+                    return Operand::invalid();
+                }
+            }
+            Operand::no_value()
+        }
         _ => Operand::invalid(),
     }
 }
@@ -147,6 +172,8 @@ fn arity(name: &str) -> Option<(usize, bool)> {
         "complex" | "copy" | "delete" => (2, false),
         "make" | "max" | "min" => (1, true),
         "new" | "assert" => (1, false),
+        // `rt_reflect_call(funcval, tramp, args, results)`：定元数 4 个。
+        "rt_reflect_call" => (4, false),
         // ⚠️ `recover` **不是**变参（`predeclaredFuncs` 的 `{0, false}`）——
         // `recover(1)` 是 `too many arguments`（`task29-arity.go` 实测 `15:18`）。
         "recover" => (0, false),

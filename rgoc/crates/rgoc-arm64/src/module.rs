@@ -626,6 +626,18 @@ pub fn type_closure(m: &Module, tt: &TypeTable) -> BTreeMap<u32, TypeId> {
                     }
                 }
             }
+            // M12/Task 33：签名类型的 `ReflectMeta.params/results` 每个
+            // `.quad __desc_…` 都指着形参/结果的 desc —— 不进闭包就是
+            // 链接期 `undefined reference`（与 struct 字段同族）。
+            rgoc_types::typ::Type::Signature(sid) => {
+                let sd = tt.signature_def(*sid);
+                let elems = tuple_types(tt, sd.params)
+                    .into_iter()
+                    .chain(tuple_types(tt, sd.results));
+                for e in elems {
+                    stack.push(e);
+                }
+            }
             _ => {}
         }
     }
@@ -891,11 +903,16 @@ fn emit_descs(asm: &mut Asm, m: &Module, tt: &TypeTable, mt: &BTreeMap<u32, Stri
 ///
 /// * **具名类型**（含泛型实例 `Box[int]`）：`Name` / `PkgPath` / `String` 需要；
 /// * **struct**（含匿名）：`NumField` / `Field(i)` 需要字段表；
-/// * 其余（基本 / 指针 / 切片 / 数组 / map / chan / func / 接口）：从 desc
+/// * **签名**（含匿名 `func(int) string`）：`Value.Call` 需要
+///   `params/results` 的 ABI 类（`C13` §5.2，M12/Task 33）；
+/// * 其余（基本 / 指针 / 切片 / 数组 / map / chan）：从 desc
 ///   本体（size / kind / elem）就够 —— 不发，省 `.rodata`。
 fn needs_reflect_meta(tt: &TypeTable, t: TypeId) -> bool {
     use rgoc_types::typ::Type;
-    matches!(tt.type_of(t), Type::Named(_) | Type::Struct(_))
+    matches!(
+        tt.type_of(t),
+        Type::Named(_) | Type::Struct(_) | Type::Signature(_)
+    )
 }
 
 /// 反射元数据块符号（`C13` §5.4：desc 扩展区与块本体共用这一个名字）。
@@ -1069,6 +1086,28 @@ fn emit_reflect_meta(
         asm.rodata_named_raw(&ml, &method_labels);
         ml
     };
+
+    // ── params / results 的 ABI 类（`C13` §5.2 的 ParamMeta；Task 33）──
+    //
+    // **编译期算好**（`D-M12-5`：运行时不重算 ABI 分类）：对签名类型的
+    // meta，逐形参发 `{typ desc, abi_class}`。类的编码与 `place_args`
+    // 的落位一一对应（`X`⇒0 / `V`⇒1 / `Stack`⇒2；`3`=零大小保留 ——
+    // rgoc 的约定里零大小形参**照占**一个槽（`place_args` 的 Agg 臂），
+    // 按它的结果编码才能让运行期的重放与真调用逐槽对齐）。
+    let mut params_label = "0".to_string();
+    let mut nparams: u32 = 0;
+    let mut results_label = "0".to_string();
+    let mut nresults: u32 = 0;
+    // `Call` 的 ABI 桥（`C13` §5.5）：只有签名类型有。
+    let mut tramp_label = "0".to_string();
+    if let Type::Signature(sid) = tt.type_of(t) {
+        let sd = tt.signature_def(*sid);
+        let params = tuple_types(tt, sd.params);
+        let results = tuple_types(tt, sd.results);
+        (params_label, nparams) = emit_param_metas(asm, tt, sigs, &params, h, "p");
+        (results_label, nresults) = emit_param_metas(asm, tt, sigs, &results, h, "r");
+        tramp_label = emit_reflect_trampoline(asm, tt, h, &params, &results);
+    }
     asm.rodata_named_raw(
         &meta_label,
         &[
@@ -1087,14 +1126,251 @@ fn emit_reflect_meta(
             }),
             // +32 methods *MethodMeta（Task 32）/ +40 params *ParamMeta（Task 33）。
             format!(".quad {methods_label}"),
-            ".quad 0".to_string(),
+            format!(".quad {params_label}"),
             // +48 nparams u32 / +52 nresults u32（Task 33）。
-            ".byte 0,0,0,0,0,0,0,0".to_string(),
+            format!(".byte {}", {
+                let mut b: Vec<u8> = Vec::with_capacity(8);
+                b.extend_from_slice(&nparams.to_le_bytes());
+                b.extend_from_slice(&nresults.to_le_bytes());
+                b.iter()
+                    .map(|x| x.to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            }),
             // +56 results *ParamMeta（Task 33）。
-            ".quad 0".to_string(),
+            format!(".quad {results_label}"),
+            // +64 tramp：`Call` 的 ABI 桥入口（非签名类型为 0；`C13` §5.5）。
+            format!(".quad {tramp_label}"),
         ],
     );
     meta_label
+}
+
+/// 一组形参/结果的 `ParamMeta` 块（`C13` §5.2；M12/Task 33）。
+///
+/// 每条 16 字节：`{typ *TypeDesc, abi_class u8, pad[7]}`。类编码与
+/// `place_args` 的落位一一对应（`X`⇒0 / `V`⇒1 / `Stack`⇒2；`3`=零大小
+/// 保留 —— rgoc 的约定里零大小形参**照占**一个槽（`place_args` 的 Agg
+/// 臂），按它的结果编码才能让运行期的重放与真调用逐槽对齐）。
+/// 返回（块符号，条数）；空表返回（"0"，条数）—— `nparams` 照实发，
+/// `Call` 靠它判参数个数。
+fn emit_param_metas(
+    asm: &mut Asm,
+    tt: &TypeTable,
+    _sigs: &mut BTreeMap<u32, String>,
+    tys: &[TypeId],
+    h: u32,
+    tag: &str,
+) -> (String, u32) {
+    let (locs, _) = crate::abi::place_args(tt, tys);
+    let mut labels: Vec<String> = Vec::new();
+    for (loc, ty) in locs.iter().zip(tys) {
+        let cls: u8 = match loc {
+            crate::abi::ArgLoc::X { .. } => 0,
+            crate::abi::ArgLoc::V { .. } => 1,
+            crate::abi::ArgLoc::Stack { .. } => 2,
+        };
+        let desc_l = desc_symbol(type_hash(tt, *ty));
+        labels.push(format!(".quad {desc_l}"));
+        labels.push(format!(".byte {},0,0,0,0,0,0,0", cls));
+    }
+    let n = tys.len() as u32;
+    if labels.is_empty() {
+        return ("0".to_string(), n);
+    }
+    let l = format!("__reflectparams_{h:08x}_{tag}");
+    asm.rodata_named_raw(&l, &labels);
+    (l, n)
+}
+
+/// 反射 `Value.Call` 的 ABI 桥：`__reflecttramp_<hash>`（`C13` §5.5；T-REF-03）。
+///
+/// # 契约
+///
+/// ```text
+/// void tramp(void *funcval, const void *args, void *results);
+/// ```
+///
+/// * `funcval` 是**闭包块**的地址（`{code, ctx…}`）—— 与 `CalleeRef::Indirect`
+///   的 `ldr x16, [x0]` 同一口径；它同时就是 `x0` 里的隐式 ctx（`ctx_abi`
+///   的约定：凡是当过值的函数都带 ctx 形参）。所以**真形参从 `x1` 起**。
+/// * `args` / `results` 是**缓冲**：第 i 个形参在 `off_i = Σ max(8, 槽宽)`，
+///   结果同口径（Go 侧 `slotOf` 用的是同一个公式 —— 两侧一旦分叉，
+///   参数就会错位到「读起来像垃圾」的程度）。
+///
+/// # 为什么按签名发直线代码，而不是在 rt.c 里做通用打包
+///
+/// 寄存器落位（`place_args`）与类型分类在**编译期**就定了（`D-M12-5`：
+/// 运行时不重算 ABI 分类）。通用打包要把「寄存器号」变成数据，再在 C 里
+/// 绕一圈回到 `blr` —— 同一件事做两遍，还多一份运行期分支。
+///
+/// # 结果寄存器先存到帧里再分发
+///
+/// 聚合结果 >16 字节时被调方返回的是**堆地址**，分发要 `rt_memcpy`
+/// （clobber `x0/x1/x2`）。先把 `x0..x7` / `d0..d7` 整体落帧，后面的
+/// 分发就只读这份快照 —— 否则第二个结果读到的就是 memcpy 的残留。
+fn emit_reflect_trampoline(
+    asm: &mut Asm,
+    tt: &TypeTable,
+    h: u32,
+    params: &[TypeId],
+    results: &[TypeId],
+) -> String {
+    use rgoc_types::typ::Type;
+    // 缓冲槽宽：`max(8, slot 宽)`。零大小类型也**照占 8 字节** ——
+    // `place_args` 的 Agg 臂照样给它一个寄存器，缓冲侧必须能接下它。
+    let buf_slot = |t: TypeId| -> u32 { slot_of(tt, t).map_or(8, |s| s.size).max(8) };
+    let mut poff: Vec<u32> = Vec::with_capacity(params.len());
+    let mut cur = 0u32;
+    for p in params {
+        poff.push(cur);
+        cur += buf_slot(*p);
+    }
+    let mut roff: Vec<u32> = Vec::with_capacity(results.len());
+    let mut cur = 0u32;
+    for r in results {
+        roff.push(cur);
+        cur += buf_slot(*r);
+    }
+    // 落位：第 0 个是 ctx 占位（`x0`），真形参从下标 1 起。
+    let mut want: Vec<TypeId> = vec![TypeId::from_index(0)];
+    want.extend_from_slice(params);
+    let (locs, stackbytes) = crate::abi::place_args(tt, &want);
+    let save_x = stackbytes + 32;
+    let save_d = save_x + 64;
+    let frame = (save_d + 64 + 15) & !15;
+    // 浮点细分：`place_args` 只给到 `V` 族，`s`/`d` 与实虚部个数在这里定。
+    let fkind = |t: TypeId| -> u8 {
+        match tt.type_of(rgoc_types::identical::underlying(tt, t)) {
+            Type::Basic(rgoc_types::BasicId::Float32) => 1,
+            Type::Basic(rgoc_types::BasicId::Complex64) => 2,
+            Type::Basic(rgoc_types::BasicId::Complex128) => 3,
+            _ => 0,
+        }
+    };
+    let sym = format!("__reflecttramp_{h:08x}");
+    asm.label(&sym);
+    asm.comment(&format!("reflect Call 的 ABI 桥（sig {h:08x}）"));
+    asm.ins(&format!("sub sp, sp, #{frame}"));
+    asm.ins(&format!("stp x29, x30, [sp, #{stackbytes}]"));
+    asm.ins(&format!("stp x19, x20, [sp, #{}]", stackbytes + 16));
+    asm.ins("mov x29, sp");
+    asm.ins("mov x20, x1"); // 参数缓冲（x1 后面会被形参寄存器覆盖）
+    asm.ins("mov x19, x2"); // 结果缓冲
+    asm.ins("mov x16, x0"); // funcval（同时留在 x0 当 ctx）
+    asm.ins("ldr x16, [x16]");
+    for (i, loc) in locs.iter().enumerate().skip(1) {
+        let ty = params[i - 1];
+        let off = poff[i - 1];
+        match loc {
+            crate::abi::ArgLoc::X { reg, n } => {
+                if slot_of(tt, ty).is_some_and(|s| s.class == SlotClass::Agg) {
+                    asm.ins(&format!("add x{reg}, x20, #{off}"));
+                } else {
+                    asm.ins(&format!("ldr x{reg}, [x20, #{off}]"));
+                    if *n > 1 {
+                        asm.ins(&format!("ldr x{}, [x20, #{}]", reg + 1, off + 8));
+                    }
+                }
+            }
+            crate::abi::ArgLoc::V { reg, .. } => match fkind(ty) {
+                1 => asm.ins(&format!("ldr s{reg}, [x20, #{off}]")),
+                2 => {
+                    asm.ins(&format!("ldr s{reg}, [x20, #{off}]"));
+                    asm.ins(&format!("ldr s{}, [x20, #{}]", reg + 1, off + 4));
+                }
+                3 => {
+                    asm.ins(&format!("ldr d{reg}, [x20, #{off}]"));
+                    asm.ins(&format!("ldr d{}, [x20, #{}]", reg + 1, off + 8));
+                }
+                _ => asm.ins(&format!("ldr d{reg}, [x20, #{off}]")),
+            },
+            crate::abi::ArgLoc::Stack { off: soff } => {
+                if slot_of(tt, ty).is_some_and(|s| s.class == SlotClass::Agg) {
+                    asm.ins(&format!("add x9, x20, #{off}"));
+                    asm.ins(&format!("str x9, [sp, #{soff}]"));
+                } else {
+                    let n = crate::abi::reg_count(tt, ty).unwrap_or(1).max(1);
+                    for k in 0..n {
+                        asm.ins(&format!("ldr x9, [x20, #{}]", off + k * 8));
+                        asm.ins(&format!("str x9, [sp, #{}]", soff + k * 8));
+                    }
+                }
+            }
+        }
+    }
+    asm.ins("blr x16");
+    for k in 0..4 {
+        asm.ins(&format!(
+            "stp x{}, x{}, [sp, #{}]",
+            2 * k,
+            2 * k + 1,
+            save_x + 16 * k
+        ));
+        asm.ins(&format!(
+            "stp d{}, d{}, [sp, #{}]",
+            2 * k,
+            2 * k + 1,
+            save_d + 16 * k
+        ));
+    }
+    // 结果分发：**逐类独立计数**（与 `isel::take_results` 同一张表）。
+    let (mut xi, mut vi) = (0u32, 0u32);
+    for (j, r) in results.iter().enumerate() {
+        let off = roff[j];
+        let s = slot_of(tt, *r);
+        match s.map(|s| s.class) {
+            Some(SlotClass::Complex64) => {
+                asm.ins(&format!("ldr s9, [sp, #{}]", save_d + 8 * vi));
+                asm.ins(&format!("str s9, [x19, #{off}]"));
+                asm.ins(&format!("ldr s10, [sp, #{}]", save_d + 8 * (vi + 1)));
+                asm.ins(&format!("str s10, [x19, #{}]", off + 4));
+                vi += 2;
+            }
+            Some(SlotClass::Float) => {
+                let reg = if fkind(*r) == 1 { "s9" } else { "d9" };
+                asm.ins(&format!("ldr {reg}, [sp, #{}]", save_d + 8 * vi));
+                asm.ins(&format!("str {reg}, [x19, #{off}]"));
+                vi += 1;
+            }
+            Some(SlotClass::Complex128) => {
+                asm.ins(&format!("ldr d9, [sp, #{}]", save_d + 8 * vi));
+                asm.ins(&format!("str d9, [x19, #{off}]"));
+                asm.ins(&format!("ldr d10, [sp, #{}]", save_d + 8 * (vi + 1)));
+                asm.ins(&format!("str d10, [x19, #{}]", off + 8));
+                vi += 2;
+            }
+            _ => {
+                let size = s.map_or(8, |s| s.size);
+                if size > 16 {
+                    // 被调方返回**堆地址**（`isel::return_values` 同口径）。
+                    asm.ins(&format!("ldr x1, [sp, #{}]", save_x + 8 * xi));
+                    asm.ins("mov x0, x19");
+                    if off > 0 {
+                        asm.ins(&format!("add x0, x0, #{off}"));
+                    }
+                    isel::load_imm(asm, "x2", i64::from(size));
+                    asm.ins("bl rt_memcpy");
+                    xi += 1;
+                } else if size > 8 {
+                    asm.ins(&format!("ldr x9, [sp, #{}]", save_x + 8 * xi));
+                    asm.ins(&format!("str x9, [x19, #{off}]"));
+                    asm.ins(&format!("ldr x9, [sp, #{}]", save_x + 8 * (xi + 1)));
+                    asm.ins(&format!("str x9, [x19, #{}]", off + 8));
+                    xi += 2;
+                } else {
+                    asm.ins(&format!("ldr x9, [sp, #{}]", save_x + 8 * xi));
+                    asm.ins(&format!("str x9, [x19, #{off}]"));
+                    xi += 1;
+                }
+            }
+        }
+    }
+    asm.ins(&format!("ldp x19, x20, [sp, #{}]", stackbytes + 16));
+    asm.ins(&format!("ldp x29, x30, [sp, #{stackbytes}]"));
+    asm.ins(&format!("add sp, sp, #{frame}"));
+    asm.ins("ret");
+    sym
 }
 
 /// 方法签名的**描述块**（kind=Func 的 40 字节 desc；`C13` §5.2 的

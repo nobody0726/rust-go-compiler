@@ -3062,6 +3062,18 @@ impl<'a> G<'a> {
                     },
                 });
             }
+            // `rt_reflect_call` 是运行期钩子（`C13` §5.5）：它要调按签名生成的
+            // native 桩，解释器没有那条通路（`Ruling 31-1` / `G-M12-05`）。
+            // 不静默当无事发生 —— 报错比错答案好。
+            BuiltinKind::ReflectCall => {
+                self.fail(
+                    sh,
+                    RtError::Message(
+                        "runtime error: `rt_reflect_call` 只有 native 后端有（G-M12-05）"
+                            .to_string(),
+                    ),
+                );
+            }
             BuiltinKind::Panic => {
                 let v = args
                     .into_iter()
@@ -3200,6 +3212,18 @@ impl<'a> G<'a> {
                         data: Box::new(Value::Nil(NilKind::Iface)),
                     },
                 });
+            }
+            // `rt_reflect_call` 是运行期钩子（`C13` §5.5）：它要调按签名生成的
+            // native 桩，解释器没有那条通路（`Ruling 31-1` / `G-M12-05`）。
+            // 不静默当无事发生 —— 报错比错答案好。
+            BuiltinKind::ReflectCall => {
+                self.fail(
+                    sh,
+                    RtError::Message(
+                        "runtime error: `rt_reflect_call` 只有 native 后端有（G-M12-05）"
+                            .to_string(),
+                    ),
+                );
             }
             BuiltinKind::New => {
                 let v = vals.into_iter().next().unwrap_or(Value::Int(0));

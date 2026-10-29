@@ -184,6 +184,10 @@ pub fn builtin_summary(k: BuiltinKind) -> Summary {
         BuiltinKind::Print | BuiltinKind::Println => s.prints = true,
         // ⚠️ `new` **不在这张表里**（`R-10-11`）：分配可能 OOM，标 `may_panic`。
         BuiltinKind::New => s.may_panic = true,
+        // `rt_reflect_call` 调的是**任意函数**（运行期才知道是谁）：它写什么、
+        // 会不会 panic 都不可知 ⇒ 按最坏情况记（`writes_all` 已含"可能 panic"
+        // 那一层保守，见 `Summary` 的文档）。
+        BuiltinKind::ReflectCall => s.writes_all = true,
         // 纯读
         BuiltinKind::Len
         | BuiltinKind::Cap

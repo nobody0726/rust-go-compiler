@@ -71,13 +71,35 @@ pub const TYPE_NAMES: [&str; 22] = [
 pub const CONST_NAMES: [&str; 3] = ["true", "false", "iota"];
 
 /// 预声明**内建函数**（18 个，照规范 Universe block 一节）。
-pub const BUILTIN_NAMES: [&str; 18] = [
-    "append", "cap", "clear", "close", "complex", "copy", "delete", "imag", "len", "make", "max",
-    "min", "new", "panic", "print", "println", "real", "recover",
+pub const BUILTIN_NAMES: [&str; 19] = [
+    "append",
+    "cap",
+    "clear",
+    "close",
+    "complex",
+    "copy",
+    "delete",
+    "imag",
+    "len",
+    "make",
+    "max",
+    "min",
+    "new",
+    "panic",
+    "print",
+    "println",
+    "real",
+    "recover",
+    // ⚠️ **运行期钩子，不是语言特性**（`M12/Task 33`）：`reflect` 的
+    // `Value.Call` 要调一个运行期才知道的函数指针，而「指针 → 函数值」
+    // 的转换 Go 源码表达不了。名字带 `rt_` 前缀就是为了让它在 dump /
+    // 报错里一眼可辨。语料面只允许 `stdlib/reflect` 用它（白名单由
+    // `t_ref_01` 冻结 `reflect` 的**导出**符号；本名字不导出）。
+    "rt_reflect_call",
 ];
 
-/// universe 里的对象总数：22 类型名 + 3 常量 + 1 个 `nil` + 18 内建。
-pub const UNIVERSE_SIZE: usize = 22 + 3 + 1 + 18;
+/// universe 里的对象总数：22 类型名 + 3 常量 + 1 个 `nil` + 19 内建。
+pub const UNIVERSE_SIZE: usize = 22 + 3 + 1 + 19;
 
 /// universe 的全部名字，**按字典序**（`UNIVERSE_SIZE` 个）。
 ///
@@ -236,11 +258,11 @@ mod tests {
     fn 清单长度与总数自洽() {
         assert_eq!(TYPE_NAMES.len(), 22);
         assert_eq!(CONST_NAMES.len(), 3);
-        assert_eq!(BUILTIN_NAMES.len(), 18);
-        assert_eq!(UNIVERSE_SIZE, 44);
+        assert_eq!(BUILTIN_NAMES.len(), 19);
+        assert_eq!(UNIVERSE_SIZE, 45);
         assert_eq!(
             TYPE_NAMES.len() + CONST_NAMES.len() + 1 + BUILTIN_NAMES.len(),
-            44
+            45
         );
         // 无重复（重复会让 `insert` 静默顶替，总数对不上而看不出来）
         let mut all: Vec<&str> = TYPE_NAMES

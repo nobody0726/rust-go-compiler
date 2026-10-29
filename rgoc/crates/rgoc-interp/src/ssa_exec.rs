@@ -1254,6 +1254,15 @@ impl Exec<'_> {
                     "`recover` 需要 defer（`SSA-UNSUPPORTED-DEFER`）".to_string(),
                 ));
             }
+            // `rt_reflect_call` 是**运行期钩子**（`C13` §5.5）：它调
+            // `__reflecttramp_*` 这类按签名生成的桩，而解释器没有那段代码。
+            // 反射整体是 native 特性（`Ruling 31-1`，`G-M12-05`）——
+            // 与 `--via=ssa` 下的其余运行期钩子同口径：响亮地拒。
+            BuiltinKind::ReflectCall => {
+                return Err(Halt::Runtime(
+                    "`rt_reflect_call` 只有 native 后端有（`G-M12-05`）".to_string(),
+                ));
+            }
             BuiltinKind::Panic => {
                 return Err(Halt::Runtime("`panic` 应落成 Term::Panic".to_string()));
             }

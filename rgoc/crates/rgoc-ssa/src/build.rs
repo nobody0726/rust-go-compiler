@@ -7244,7 +7244,8 @@ fn builtin_results(k: BuiltinKind) -> usize {
         | BuiltinKind::Print
         | BuiltinKind::Println
         | BuiltinKind::Panic
-        | BuiltinKind::Close => 0,
+        | BuiltinKind::Close
+        | BuiltinKind::ReflectCall => 0,
         // 一个结果
         BuiltinKind::Len
         | BuiltinKind::Cap

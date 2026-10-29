@@ -374,6 +374,7 @@ fn builtin_text(b: BuiltinKind) -> &'static str {
         BuiltinKind::Panic => "panic",
         BuiltinKind::Recover => "recover",
         BuiltinKind::Close => "close",
+        BuiltinKind::ReflectCall => "rt_reflect_call",
     }
 }
 

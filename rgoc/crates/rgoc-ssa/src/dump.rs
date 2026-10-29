@@ -378,6 +378,7 @@ fn builtin_name(b: BuiltinKind) -> &'static str {
         BuiltinKind::Min => "min",
         BuiltinKind::Max => "max",
         BuiltinKind::Clear => "clear",
+        BuiltinKind::ReflectCall => "rt_reflect_call",
     }
 }
 

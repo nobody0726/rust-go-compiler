@@ -223,8 +223,6 @@ struct Lowerer<'a, 'p> {
     self_path: String,
     /// 包级函数名 → 函数。
     funcs_by_name: BTreeMap<String, FuncId>,
-    /// `(接收者基类型名, 方法名)` → 函数。
-    methods: BTreeMap<(String, String), FuncId>,
     /// 包级变量名 → 全局。
     globals_by_name: BTreeMap<String, GlobalId>,
     /// 初始化组（声明序）与「名字 → 组」。
@@ -263,15 +261,19 @@ struct Lowerer<'a, 'p> {
     generic_names: BTreeSet<String>,
 }
 
-/// 跨包函数名表（M12/Task 31）：`(import 路径, 函数名) → FuncId`。
+/// 跨包名表（M12/Task 31 建函数表；Task 33 加方法表）。
 ///
-/// collect 轮由**每个包**登记自己的包级函数；体下沉轮由跨包 selector
-/// （`reflect.TypeOf`）查询。键用 **import 路径**（`import "reflect"` 的
-/// `reflect`），不用包名 —— 路径才是 import 语句里写的、selector 前缀
-/// 对应的东西。
+/// * `funcs`：`(import 路径, 函数名) → FuncId`。collect 轮由**每个包**
+///   登记自己的包级函数；体下沉轮由跨包 selector（`reflect.TypeOf`）查询。
+///   键用 **import 路径**（`import "reflect"` 的 `reflect`），不用包名 ——
+///   路径才是 import 语句里写的、selector 前缀对应的东西。
+/// * `methods`：`(接收者基类型的 TypeId, 方法名) → FuncId`（Task 33）。
+///   键用 **TypeId** 而不是类型名：`lib.T` 与 `T` 是两个类型，按名字查
+///   会串味（`go/types` 的方法集也是按类型对象挂的）。
 #[derive(Default)]
 struct Cross {
     funcs: BTreeMap<(String, String), FuncId>,
+    methods: BTreeMap<(TypeId, String), FuncId>,
 }
 
 impl<'a, 'p> Lowerer<'a, 'p> {
@@ -288,7 +290,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             cross,
             self_path: String::new(),
             funcs_by_name: BTreeMap::new(),
-            methods: BTreeMap::new(),
             globals_by_name: BTreeMap::new(),
             groups: Vec::new(),
             group_of_name: BTreeMap::new(),
@@ -327,7 +328,6 @@ impl<'a, 'p> Lowerer<'a, 'p> {
             .copied()
             .unwrap_or_else(|| FileId::from_index(0));
         self.funcs_by_name.clear();
-        self.methods.clear();
         self.globals_by_name.clear();
         self.groups.clear();
         self.group_of_name.clear();
@@ -519,8 +519,9 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         if let Type::Named(nid) = tt.type_of(cur) {
             let def = tt.named_def(*nid);
             if def.methods.iter().any(|(m, _)| m == name) {
-                // 非泛型方法：原型本身发码。
-                if let Some(&fid) = self.methods.get(&(def.name.clone(), name.to_owned())) {
+                // 跨包 / 本包同名：按**接收者 TypeId** 查（`M12/Task 33`）。
+                // 实例类型（`Box[int]`）没有自己的条目，落到下面的名字表。
+                if let Some(&fid) = self.cross.methods.get(&(def.self_ty, name.to_owned())) {
                     return Some((fid, Vec::new()));
                 }
                 // 泛型方法（`M12/Task 18`）：原型**不发码**（形参还是 `T`），
@@ -575,7 +576,7 @@ impl<'a, 'p> Lowerer<'a, 'p> {
         //
         // 必须先走完这一遍再 lower 任何初始化式：`var tests = []struct{…}{
         // {"m1.F()", func(){ m1.F() }}, … }` 里的方法 `func (m *M) F()` 可能
-        // 声明在**后面**，而 lowering 找方法靠 `self.methods`。边收边 lower
+        // 声明在**后面**，而 lowering 找方法靠 `cross.methods`。边收边 lower
         // 会让前向声明的方法在 lowering 期「不存在」（`nilptr2.go` 实测：
         // 四个 `.F` 全部报「选择器找不到字段或方法」）。
         let mut key = 0usize;
@@ -612,7 +613,13 @@ impl<'a, 'p> Lowerer<'a, 'p> {
                         // 不能掉进下面两个包级分支里去。
                         if f.recv.is_some() {
                             if let Some((base, _)) = f.recv_base() {
-                                self.methods.insert((base, f.name.value.clone()), fid);
+                                // 跨包方法表（M12/Task 33）：键 = 接收者基类型的
+                                // **TypeId**。方法只能声明在本包的具名类型上
+                                // （Go 规则）⇒ 这里的 `self.pkg` 就是那个包。
+                                let base_ty = pkg.lookup(&base).and_then(|o| o.typ);
+                                if let Some(bt) = base_ty {
+                                    self.cross.methods.insert((bt, f.name.value.clone()), fid);
+                                }
                             }
                         } else if f.name.value == "init" {
                             self.prog.inits.push(fid);
@@ -3911,6 +3918,7 @@ fn builtin_kind(name: &str) -> Option<BuiltinKind> {
         "panic" => BuiltinKind::Panic,
         "recover" => BuiltinKind::Recover,
         "close" => BuiltinKind::Close,
+        "rt_reflect_call" => BuiltinKind::ReflectCall,
         "make" => return None, // make 走 Make 节点
         _ => return None,
     })

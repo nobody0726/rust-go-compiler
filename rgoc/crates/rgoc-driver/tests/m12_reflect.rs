@@ -569,3 +569,132 @@ fn t_ref_05_方法表与类型身份() {
     assert_eq!(out.status.code(), Some(0), "fixture 必须正常退出：\n{got}");
     assert_eq!(got, want, "方法表与类型身份必须与官方逐行相同");
 }
+
+// ════════════════════════════════════════════════════════════════════
+// T-REF-03：`Call` 的 ABI 分档（Task 33）
+// ════════════════════════════════════════════════════════════════════
+
+/// `t_ref_03` 的 fixture：九档各一条，每条都打印**可观察的数值**
+/// （`Value` 的读访问器是这条判据的观察面，见 `reflect.go` 的注释）。
+///
+/// | 档 | 形态 | 期望 |
+/// |---|---|---|
+/// | 0 参数 | `func() int` | 42 |
+/// | 1..8 整型 | `func(int,int,int) int` | 123 |
+/// | 1..8 浮点 | `func(float64,float64) float64` | 5.25 |
+/// | 整浮混合 | `func(int,float64,int) float64` | 5.5 |
+/// | 超 8 个（走栈）| `func(10×int) int` | 55 |
+/// | 聚合体按值 | `func(S) int`（16 字节 struct）| 34 |
+/// | 多返回值 | `func(int) (int,int)` | 21 42 |
+/// | 零大小参数 | `func(struct{}) int` | 7 |
+/// | `nil` 参数 | `func(*int) int` | −1 |
+///
+/// 浮点结果乘 100 取整再打：`println` 的浮点格式是**另一条契约**
+/// （`C9`），不该让 ABI 判据去背它。`0.5×2 + 2.25 = 5.25`、`2+0.5+3 = 5.5`
+/// 在二进制里都是精确值，乘 100 不会有舍入噪声。
+const T_REF_03_SRC: &str = r#"package main
+
+import "reflect"
+
+type S struct {
+	A int
+	B int
+}
+
+func f0() int { return 42 }
+
+func f3(a, b, c int) int { return a*100 + b*10 + c }
+
+func f2f(a, b float64) float64 { return a*2 + b }
+
+func fmix(a int, b float64, c int) float64 { return float64(a) + b + float64(c) }
+
+func f10(a1, a2, a3, a4, a5, a6, a7, a8, a9, a10 int) int {
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10
+}
+
+func fs(s S) int { return s.A*10 + s.B }
+
+func f2r(a int) (int, int) { return a, a * 2 }
+
+func fz(z struct{}) int { return 7 }
+
+func fp(p *int) int {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
+func main() {
+	println("0-param", reflect.ValueOf(f0).Call(nil)[0].Int())
+	println("3-int", reflect.ValueOf(f3).Call([]reflect.Value{reflect.ValueOf(1), reflect.ValueOf(2), reflect.ValueOf(3)})[0].Int())
+	println("2-float", int(reflect.ValueOf(f2f).Call([]reflect.Value{reflect.ValueOf(1.5), reflect.ValueOf(2.25)})[0].Float()*100))
+	println("mixed", int(reflect.ValueOf(fmix).Call([]reflect.Value{reflect.ValueOf(2), reflect.ValueOf(0.5), reflect.ValueOf(3)})[0].Float()*100))
+	println("10-arg", reflect.ValueOf(f10).Call([]reflect.Value{
+		reflect.ValueOf(1), reflect.ValueOf(2), reflect.ValueOf(3), reflect.ValueOf(4), reflect.ValueOf(5),
+		reflect.ValueOf(6), reflect.ValueOf(7), reflect.ValueOf(8), reflect.ValueOf(9), reflect.ValueOf(10),
+	})[0].Int())
+	println("agg", reflect.ValueOf(fs).Call([]reflect.Value{reflect.ValueOf(S{3, 4})})[0].Int())
+	r := reflect.ValueOf(f2r).Call([]reflect.Value{reflect.ValueOf(21)})
+	println("multi", r[0].Int(), r[1].Int())
+	println("zero", reflect.ValueOf(fz).Call([]reflect.Value{reflect.ValueOf(struct{}{})})[0].Int())
+	println("nil", reflect.ValueOf(fp).Call([]reflect.Value{reflect.ValueOf((*int)(nil))})[0].Int())
+	println("func-kind", reflect.ValueOf(f0).Kind())
+}
+"#;
+
+/// 期望输出 —— 官方 `go run` 的逐行实测（oracle，2026-10-29）。
+///
+/// 最后一行是 `Kind()` 的**数值**：官方 `reflect.Kind` 的枚举序里
+/// `Func = 19`（`go run` 打的是 `Kind().String()` 的 `func`）——
+/// 这里要的是「档位没串」，所以钉数值。
+#[test]
+fn t_ref_03_call的abi分档() {
+    let tmp = std::env::temp_dir().join(format!("rgoc-ref03-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("建 scratch 失败");
+    let main = tmp.join("main.go");
+    fs::write(&main, T_REF_03_SRC).expect("写 fixture 失败");
+
+    let bin = tmp.join("ref03bin");
+    let build = Command::new(driver())
+        .args(["build", "-I"])
+        .arg(repo_root().join("stdlib"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&main)
+        .output()
+        .expect("起不了 build");
+    assert_eq!(
+        build.status.code(),
+        Some(0),
+        "Call 的九档 fixture 应当能编译：\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let out = Command::new(&bin).output().expect("起不了产物");
+    let _ = fs::remove_dir_all(&tmp);
+    let got = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let want = [
+        "0-param 42",
+        "3-int 123",
+        "2-float 525",
+        "mixed 550",
+        "10-arg 55",
+        "agg 34",
+        "multi 21 42",
+        "zero 7",
+        "nil -1",
+        "func-kind 19",
+    ]
+    .join("\n");
+    let want = want + "\n";
+    assert_eq!(out.status.code(), Some(0), "fixture 必须正常退出：\n{got}");
+    assert_eq!(got, want, "九档 ABI 必须与官方逐行相同");
+}
