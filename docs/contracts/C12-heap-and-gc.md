@@ -150,7 +150,7 @@ header（空闲块）：
 | 1 | `array` | **元素** desc | 元素个数 | 元素数组 | `n` 个元素，每个按 `elem->gcdata` |
 | 2 | `closure` | null | 捕获个数 | `[fn, cap0, cap1…]` | **跳过字 0**（代码地址），扫 `n` 个捕获字 |
 | 3 | `raw` | null | 字节数 | 字节 | **不扫** |
-| 4 | `mapslots` | null | 槽数（cap） | `[+0 kdesc][+8 vdesc][+16 槽…]` | 每个 LIVE 槽的 key 与 value |
+| 4 | `mapslots` | null | 槽数（cap） | `[+0 kdesc][+8 vdesc][+16 ctrl(cap+组宽)][槽…]` | 每个「控制字节 < 0x80」的槽的 key 与 value |
 | 5 | `arena` | null | 字节数 | 字节 | **不扫、永不回收**（`R-10-6`）|
 
 - `object` 的 `n` 恒 0 —— 元素个数只在 `array` 有意义。
@@ -158,9 +158,20 @@ header（空闲块）：
 - `closure` 的 `n` = 捕获个数；data 字 0 是 `fn`（代码地址，`mark_ptr` 会忽略，
   但**不扫更省**）。
 - `mapslots` 的 data 前 16 字节是**两个 desc 指针**（`kdesc`/`vdesc`），
-  槽数组从 `+16` 起。槽的 stride = `8 + align8(kdesc->size) + align8(vdesc->size)`，
-  槽字 0 是 `state`（0=空 / 1=LIVE / 2=墓碑）。**GC 只扫 `state == 1` 的槽。**
+  接着是一块**控制字节**，槽数组在它后面。
+  槽的 stride = `align8(kdesc->size) + align8(vdesc->size)`；
+  控制字节占 `round_up(cap + 16, 8)` 字节，前 `cap` 个是槽状态，尾 16 字节是
+  `ctrl[0..16)` 的镜像（组读不必判回绕）。
+  **GC 只扫 `ctrl[i] < 0x80` 的槽**，`0x80`（不存在）与 `0xFE`（已删除）都不扫。
   这样 mapslots 块**自身完备**（不需要回到 `MapObj` 才能扫）。
+
+  > **变更（2026-10-29，`M12/Task 39` SwissTable）**：M9 的形状是
+  > `[+16 槽…]`，每个槽自带 8 字节的状态字（`0=EMPTY / 1=LIVE / 2=TOMB`），
+  > stride = `8 + align8(k) + align8(v)`。改成「独立控制字节 + H2」之后
+  > 槽变小了（`map[int]int` 从 24 字节降到 16 字节），而扫描侧的判据从
+  > `state == 1` 变成 `ctrl[i] < 0x80` —— **一个比较同时排掉 EMPTY 与 DELETED**，
+  > 这是控制字节编码（`0x80`/`0xFE` 都 >= `0x80`、H2 只有 7 位）的直接结果。
+  > 谁要改这两个常量，必须同时改扫描器、迭代器与 `slot_del` 的判据。
 
 ### 2.3 `gcdata` 与 `ptrdata` 的一致性（**新增不变量**）
 
@@ -456,6 +467,7 @@ live-in 也能跑绿 —— 四个语料 × 四种组合的读数在 `scripts/g-
 | | 缺省 / 其它 | 开：自动触发（§5.3）|
 | `RGOC_GC_STRESS` | `<n>` | **每 n 次** `gc_alloc` 之前先 `rt_gc()`；`1` = 每次（最强，小 fixture 用）|
 | `RGOC_GC_STATS` | `1` | 退出时向 **stderr** 打一行（§5.2）|
+| `RGOC_MAP_STATS` | `1` | 退出时**再**打一行映射探测读数（§5.2a，`M12/Task 39`）|
 | `RGOC_GC_THRESHOLD` | 字节数 | 自动触发阈值（缺省 4 MiB）；`0` 表示「每次分配失败都收」|
 
 `RGOC_HEAP_MAX` 沿用 M9（缺省 256 MiB）。
@@ -487,6 +499,20 @@ gc: collections=<n> allocs=<n> frees=<n> live=<n> heap=<n> chunks=<n> rss=<n> ki
 > 分支漏了变量），三态照样一致。`mode` 让「环境变量真的生效」变成可观测的，
 > 于是 `T-CORP-00` 能断言「三个态确实是三个态」。它是**装置判据**，不是
 > 实现判据 —— 而装置说谎比实现有 bug 难查得多。
+
+### 5.2a 映射读数（**另一行、另一个开关**，`M12/Task 39`）
+
+`RGOC_MAP_STATS=1` 时，在 gc 行**之后**再打一行（`\n` 结尾）：
+
+```text
+map: lookups=<n> groups=<n> key_cmps=<n>
+```
+
+- **不是** `gc:` 行的字段：§5.2 的 12 个键冻结，往里加键会让所有解析统计行的
+  判据一起漂。
+- **缺省一个字节都不打**：否则 69 个语料的期望输出会全变（`C9` §4.1 的合并流）。
+- `groups` 是**组数**（一组 16 个槽），与 `lookups` 的比值就是探测趟数：线性探测
+  在同样负载下 2.17 组/次，SwissTable 1.11（实测，见 `M12-report.md` §11.3）。
 
 **写入点**：由**生成的 `main` 出口**调用 `rt_gc_stats_line()`（`module.rs` 在
 `main` 的 `ret` 之前插一条 `bl`），**不**依赖 libc 的 `atexit`（freestanding 没有）。
@@ -603,6 +629,7 @@ gc_pause--;
 
 | 日期 | 变更 | 依据 |
 |---|---|---|
+| 2026-10-29 | **§2.2 的 `mapslots` 换布局**（SwissTable）：槽不再自带状态字，改 `[+16 ctrl(cap+16)][槽…]`；stride 去掉那 8 字节；扫描判据从 `state == 1` 变成 `ctrl[i] < 0x80`（`0x80`=EMPTY / `0xFE`=DELETED / 其余=H2）。新增 **§5.2a** 映射读数行（`RGOC_MAP_STATS`，独立开关、缺省不打）| M12/Task 39；判据 `t_map_11`（十万键 len/sum/miss）/ `t_map_12`（1.11 组/次；反事实线性 2.17）/ `t_map_13`（缺省不打）；三态语料 69/0/0 |
 | 2026-10-29 | 新增 **§4.7 写面为什么不需要写屏障（`D-M12-7`）**：三条前提（GC 只在安全点 / 写操作不分配 / 目标槽已发布）+ 「上并发或移动式 GC 前必须先改本节」 | M12/Task 35；判据 `t_ref_06`（stress 态 2446 次收 / 2450 次分配、`bad_ptr=0`、四类根 churn 后读回原值；`off`/`on` 两态 0 次收 ⇒ 只有 `stress` 能证伪）|
 | 2026-10-27 | **M11c 增补**：§4.1 从**八类根**扩到**十类**（第 9 类「其它 G 的栈」、第 10 类「`go` 的实参区」）+ 新增 §4.1.1（三种 G 状态都扫 / 当前 G 的链头从 `g_frames` 拿 / `gdesc.wait` 的 `WaitSet` 与 `Hchan*` 逐字段标 / 第 10 类的来历与保守性）；§4.2 补「`g_frames` 的语义是**当前 G** 的链头」（`D-M11-10`）；§5.1 的 `RGOC_GC_STRESS` 按契约改成**真间隔**（代码原来存的是布尔）| 实测：① 只扫当前 G ⇒ 挂起 G 的 `p` 被收，输出空（`t_groot_01`）；② `go f(p)` 的实参在新 G 栈顶、不在帧记录里 ⇒ 闭包块被回收并清零 ⇒ trampoline 撞 nil 检查 panic（`t_groot_02`）；③ `STRESS=1000` + 30 万分配跑出 `collections=300000` ⇒ 间隔被当成开关注入 |
 | 2026-10-27 | **`G-M10-06` 查清**：§4.4 加 §4.4.1（真 live-in 会坏的根因是 `rt_defer_push` 的「分配未发布」窗口，不是位图）；新增 **§6.1 `R-10-24`**（`rt_defer_push` 必须 `gc_pause`）；§6 表第 3 行补约束 | `scripts/g-m10-06-probe.md`：四个语料 × 四种组合的读数 + trace（`push-fv` 地址复用 / `gc-begin:3` 无 `mark-fv`）；修法后真 live-in 也全绿 |

@@ -289,3 +289,165 @@ func main() {
         "删掉 0 之后 8 必须还查得到（探测链不能断在 TOMB 上）"
     );
 }
+
+// ───────────────── `T-OPT-03`：SwissTable 探测（M12/Task 39）────────────────
+
+/// 跑一个 fixture，并把 `env` 传进产物；返回 `(stdout, stderr)`。
+///
+/// 与 [`build_and_run`] 只差环境变量 —— 映射的探测读数走 `RGOC_MAP_STATS=1`
+/// 这一条**独立**的开关（`C12` §5.2 的 gc 行不进新键），所以必须有传 env 的口。
+fn run_env(name: &str, src: &str, env: &[(&str, &str)]) -> (String, String, i32) {
+    let dir = scratch();
+    let go = dir.join(format!("{name}.go"));
+    std::fs::write(&go, src).expect("写 fixture 失败");
+    let exe = dir.join(name);
+    let cmd = BuildCommand {
+        roots: Vec::new(),
+        files: vec![go],
+        output: Some(exe.clone()),
+        emit: Emit::Elf,
+        keep_asm: false,
+        opt: rgoc_ssa::opt::Config::all(),
+        lang: None,
+    };
+    let out = build_cmd::run_build(&cmd).expect("build 不该失败");
+    assert_eq!(out.exit, 0, "应构建成功，stderr={}", out.stderr);
+    let mut c = std::process::Command::new(&exe);
+    for (k, v) in env {
+        c.env(k, v);
+    }
+    let run = c.output().expect("跑不动产物");
+    (
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+        String::from_utf8_lossy(&run.stderr).into_owned(),
+        run.status.code().unwrap_or(-1),
+    )
+}
+
+/// 十万键的 fixture：填、全查、删一半、再查。
+///
+/// # 为什么非要十万键
+///
+/// 小 fixture 看不出探测结构的好坏，也看不出「DELETED 当终止符」这类错：
+/// `cap = 8` 时一组（16 个控制字节）覆盖整张表，任何终止判定都能命中。
+/// 十万键 ⇒ `cap` 长到 131072（8192 组），一串探测才真的会跨组、跨墓碑。
+///
+/// 期望值：`len = 50000`、`sum = 4999950000`（`Σ i`，i < 100000）、`miss = 0`。
+const BIG_MAP: &str = r#"
+package main
+
+func main() {
+	const n = 100000
+	m := make(map[int]int)
+	for i := 0; i < n; i++ {
+		m[i*7] = i
+	}
+	sum := 0
+	for i := 0; i < n; i++ {
+		sum += m[i*7]
+	}
+	for i := 0; i < n; i += 2 {
+		delete(m, i*7)
+	}
+	miss := 0
+	for i := 0; i < n; i++ {
+		v, ok := m[i*7]
+		if i%2 == 0 {
+			if ok {
+				miss++
+			}
+		} else if !ok || v != i {
+			miss++
+		}
+	}
+	println(len(m), sum, miss)
+}
+"#;
+
+#[test]
+fn t_map_11_十万键的语义不随探测结构变() {
+    let (stdout, stderr, code) = run_env("t_map_11", BIG_MAP, &[]);
+    assert_eq!(code, 0, "应跑通，stderr={stderr}");
+    assert_eq!(
+        stdout, "50000 4999950000 0\n",
+        "十万键的 len/sum/miss 变了 —— 探测结构改了语义"
+    );
+}
+
+#[test]
+fn t_map_12_十万键的探测读数() {
+    let (stdout, stderr, code) = run_env("t_map_12", BIG_MAP, &[("RGOC_MAP_STATS", "1")]);
+    assert_eq!(code, 0, "应跑通，stderr={stderr}");
+    assert_eq!(stdout, "50000 4999950000 0\n", "统计开关不能改变输出");
+
+    let line = stderr
+        .lines()
+        .find(|l| l.starts_with("map: "))
+        .unwrap_or_else(|| panic!("RGOC_MAP_STATS=1 必须打一行 `map: …`，实际 stderr：\n{stderr}"));
+    let get = |key: &str| -> u64 {
+        let pat = format!("{key}=");
+        let i = line
+            .find(&pat)
+            .unwrap_or_else(|| panic!("行里没有 {key}：{line}"))
+            + pat.len();
+        line[i..]
+            .split_whitespace()
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("{key} 不是数字：{line}"))
+    };
+    let lookups = get("lookups");
+    let groups = get("groups");
+    let cmps = get("key_cmps");
+
+    // ① 计数器必须是活的：不能「恒 0 然后断言 0 <= 阈值」。
+    assert!(
+        lookups >= 300_000,
+        "lookups 太少（{lookups}），fixture 没跑满"
+    );
+    assert!(groups > 0, "groups 恒 0 ⇒ 计数器没接上");
+    // ② 一组 16 个控制字节，7/8 负载下「命中」几乎总落在第一组里 ⇒ 平均约 **1.11**
+    //    组。阈值 1.5 的来历是**实测的两头**：SwissTable 1.109 组/次；把组步进临时
+    //    改成 1 个槽（等效线性探测，语义不变）是 2.17 组/次 —— 红。所以这条判据
+    //    有这个牙，而且两边都有余量。
+    assert!(
+        groups * 2 < lookups * 3,
+        "平均超过 1.5 组/次就不算 SwissTable：lookups={lookups} groups={groups}（{:.2} 组/次）",
+        groups as f64 / lookups as f64
+    );
+    // ③ H2 起筛子作用：比键次数应远少于「每组 16 个槽都去比」的上界。
+    assert!(
+        cmps <= groups * 16,
+        "键比较次数超过了控制字节的总数：cmps={cmps} groups={groups}"
+    );
+    eprintln!(
+        "map 探测读数：lookups={lookups} groups={groups} key_cmps={cmps}（{:.3} 组/次、{:.3} 次比键/次）",
+        groups as f64 / lookups as f64,
+        cmps as f64 / lookups as f64
+    );
+}
+
+#[test]
+fn t_map_13_不设开关就不打映射统计() {
+    // 这条挡的是「新统计行默认就打印」——那会让 69 个语料的期望输出全变。
+    // 用小 fixture：这条判据只说「有没有那一行」，与规模无关。
+    let (stdout, stderr, code) = run_env(
+        "t_map_13",
+        r#"
+package main
+
+func main() {
+	m := map[int]int{}
+	m[1] = 2
+	println(len(m), m[1])
+}
+"#,
+        &[],
+    );
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "1 2\n");
+    assert!(
+        !stderr.contains("map: "),
+        "不设 RGOC_MAP_STATS 时不该有映射统计行：\n{stderr}"
+    );
+}

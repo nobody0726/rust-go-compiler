@@ -206,13 +206,47 @@ i64 rt_memcmp(const void *a, const void *b, u64 n) {
 /* `+8` 的 kind（占高 32 位）。`K_ARENA` 是「永不回收、不扫描」的运行时结构。 */
 enum { K_OBJECT = 0, K_ARRAY = 1, K_CLOSURE = 2, K_RAW = 3, K_MAPSLOTS = 4, K_ARENA = 5 };
 
-/* map 槽状态（`C12` §2.2 的 `mapslots`）。**扫描器要用**，所以提到这里。
+/* map 槽的**控制字节**（`C12` §2.2 的 `mapslots`）。**扫描器要用**，所以提到这里。
  *
- * `TOMB` 与 `EMPTY` 必须分开：`TOMB` **不终止探测** —— 否则「删过的键」会把
- * 后面的键挡在探测链外（查不到）。 */
-#define MAP_EMPTY 0
-#define MAP_LIVE 1
-#define MAP_TOMB 2
+ * # 从「槽里一个字的状态」改成「独立一字节/槽」（M12/Task 39，SwissTable）
+ *
+ * 旧形状是每个槽自带 8 字节的 `state`（0=EMPTY / 1=LIVE / 2=TOMB）。改成一整块
+ * 控制字节之后有两件事变了：
+ *
+ * * **槽变小了**：stride 从 `8 + align8(k) + align8(v)` 变成 `align8(k) + align8(v)`，
+ *   `map[int]int` 的槽从 24 字节降到 16 字节（少三分之一）。
+ * * **一趟能看一组**：控制字节是连续的，一次 `u64` 读拿 8 个槽的状态，于是
+ *   「这个键在不在这附近」从「一个槽一次访存 + 一次比较」变成「两组 u64 读 +
+ *   位运算，命中的才去比键」。
+ *
+ * # 三个取值（borrow 自 absl，与 h2 不撞）
+ *
+ * ```text
+ * 0x80  EMPTY    从来没放过键
+ * 0xFE  DELETED  放过、被删了（**不终止探测**）
+ * 其余  H2       这个槽的键的 hash 高 7 位（0x00..0x7F）
+ * ```
+ *
+ * `H2 == 0x80 || H2 == 0xFE` 不可能：H2 只有 7 位。
+ *
+ * ⇒ **`ctrl[i] < 0x80` 等价于「这个槽有键」**。扫描器与迭代器都用这一条判
+ * （一个比较同时排掉 EMPTY 与 DELETED）。
+ *
+ * `DELETED` 与 `EMPTY` 必须分开：`DELETED` **不终止探测** —— 否则「删过的键」会把
+ * 后面的键挡在探测链外（查不到）。
+ */
+#define MAP_CTRL_EMPTY 0x80u
+#define MAP_CTRL_DELETED 0xFEu
+/* 组宽：一次看 16 个控制字节（两个 `u64`）。
+ *
+ * # 为什么是 16 而不是 absl 的 16 条 SSE / NEON 指令
+ *
+ * absl 的组匹配是 `_mm_cmpeq_epi8` + `_mm_movemask_epi8`：一条指令出 16 位掩码。
+ * 本仓的运行期是 `-ffreestanding` 的纯 C，`arm_neon.h` 的可用性不是这里能假定的
+ * （`rt.c` 现在连 `<string.h>` 都不引）。所以组匹配写成**按字节的 SWAR**
+ * （`eq_bytes`）：收益的大头本来就来自「一次读 16 个控制字节」，比较指令数是
+ * 次要的。要换成 NEON 只改 `group_masks` 一处，`MAP_GROUP` 保持 16。 */
+#define MAP_GROUP 16UL
 
 /* 8 字节向上取整。定义在 map 那一节，但扫描器也要用（算槽的 stride）。 */
 static u64 align8(u64 n);
@@ -385,6 +419,12 @@ static u64 gc_stress;                            /* 1 = 每次分配前先收 */
  * `gc_pause` 解决「一次分配 + 立即发布」。 */
 static u64 gc_pause;
 static u64 gc_stats;                             /* 1 = 退出时打一行 */
+/* 映射探测读数的开关（`RGOC_MAP_STATS`，`M12/Task 39`）。
+ *
+ * ⚠️ 它**不是** gc 统计行的一部分：`C12` §5.2 的 12 个键冻结，往里加一个键会让
+ * 所有解析统计行的判据一起漂。所以它自己一行、自己一个开关，缺省**一个字节都
+ * 不打** —— 否则 69 个语料的期望输出会全变。 */
+static u64 map_stats;
 /* M11a 的 `rt_switch` 自测开关（`T-STK-01`）。缺省关：它切一次栈，
  * 对正常程序没有意义，只在判据里开。 */
 static u64 g11_selftest;
@@ -1262,6 +1302,8 @@ void rt_init(u64 sp) {
             gc_stress = parse_u64(e + 15);
         } else if (starts_with(e, "RGOC_GC_STATS=")) {
             gc_stats = parse_u64(e + 14) != 0;
+        } else if (starts_with(e, "RGOC_MAP_STATS=")) {
+            map_stats = env_u64(e, "RGOC_MAP_STATS=") != 0;
         } else if (starts_with(e, "RGOC_GC_THRESHOLD=")) {
             /* `0` 有意义（= 每次分配失败都收），所以不设下限。 */
             gc_threshold = parse_u64(e + 18);
@@ -2805,12 +2847,16 @@ static void scan_block(u8 *blk) {
         }
         break;
     case K_MAPSLOTS: {
-        /* data = `[+0 kdesc][+8 vdesc][+16 槽…]`（`C12` §2.2）。
+        /* data = `[+0 kdesc][+8 vdesc][+16 ctrl…][槽…]`（`C12` §2.2）。
          *
          * ⚠️ **自带 desc 头**（`R-10-17`）：`MapObj` 里也有 kdesc/vdesc，但
          * 槽块一旦被单独分配，扫它的人手里只有块本身 —— 回头找 `MapObj`
          * 需要在块里存一个 `MapObj*`，那是多余的一跳（而且 `MapObj` 自己
-         * 也在托管堆里，扫的时候还没轮到它）。 */
+         * 也在托管堆里，扫的时候还没轮到它）。
+         *
+         * M12/Task 39（SwissTable）之后状态在**独立的控制字节块**里：
+         * `ctrl[i] < 0x80` ⇔ 这个槽有键（`H2`），`0x80`/`0xFE` 分别是不存在与
+         * 已删除。两者都不扫。 */
         const TypeDesc *kd = *(const TypeDesc *const *)data;
         const TypeDesc *vd = *(const TypeDesc *const *)(data + 8);
         if (kd == 0 || vd == 0) {
@@ -2818,15 +2864,17 @@ static void scan_block(u8 *blk) {
             break;
         }
         u64 ksz = align8((u64)kd->size);
-        u64 stride = 8UL + ksz + align8((u64)vd->size);
-        u8 *sl = data + 16;
+        u64 vstride = ksz + align8((u64)vd->size);
+        u64 cbytes = (n + MAP_GROUP + 7UL) & ~7UL;
+        const u8 *ctrl = data + 16;
+        u8 *sl = data + 16 + cbytes;
         for (u64 i = 0; i < n; i++) {
-            u8 *slot = sl + i * stride;
-            if (slot[0] != MAP_LIVE) {
+            if (ctrl[i] >= MAP_CTRL_EMPTY) {
                 continue;
             }
-            mark_words(slot + 8, kd);
-            mark_words(slot + 8 + ksz, vd);
+            u8 *slot = sl + i * vstride;
+            mark_words(slot, kd);
+            mark_words(slot + ksz, vd);
         }
         break;
     }
@@ -3281,34 +3329,52 @@ void rt_panic_nilmap(void);
  */
 typedef struct {
     u64 count;          /* +0  活条目数（`len(m)` 读这里，别动） */
-    u64 cap;            /* +8  槽数，恒为 2 的幂 */
+    u64 cap;            /* +8  槽数，恒为 2 的幂、且 >= `MAP_GROUP` */
     u32 key_size;       /* +16 */
     u32 val_size;       /* +20 */
     const TypeDesc *kdesc; /* +24 */
     const TypeDesc *vdesc; /* +32 */
     u8 *slots;          /* +40 槽块（托管，kind = mapslots）的**槽区**起点 */
+    u8 *ctrl;           /* +48 同一个槽块的**控制字节**起点（M12/Task 39） */
+    u64 tomb;           /* +56 墓碑数（决定什么时候该长，见 `map_grow` 的负载因子） */
 } MapObj;
 
-/* `MapObj` 的 desc：**只有一个指针字**，在字 5（`slots`）。 */
-static const u8 mapobj_gcdata[1] = {0x20};
+/* `MapObj` 的 desc：**两个指针字**，在字 5（`slots`）与字 6（`ctrl`）。
+ *
+ * ⚠️ `tomb` 在字 7，不是指针 ⇒ 不置位。 */
+static const u8 mapobj_gcdata[1] = {0x60};
 static const TypeDesc mapobj_desc = {
-    sizeof(MapObj), 48, 0, 9 /* Kind::Struct */, 2 /* HAS_POINTERS */, 0,
+    sizeof(MapObj), 56, 0, 9 /* Kind::Struct */, 2 /* HAS_POINTERS */, 0,
     mapobj_gcdata, 0, 0};
 _Static_assert(__builtin_offsetof(MapObj, count) == 0, "len(m) 读 +0");
 _Static_assert(__builtin_offsetof(MapObj, slots) == 40, "gcdata 的 bit5 指这里");
+_Static_assert(__builtin_offsetof(MapObj, ctrl) == 48, "gcdata 的 bit6 指这里");
 
 static u64 align8(u64 n) { return (n + 7UL) & ~7UL; }
 
-/* 一个槽的字节数：状态 1 字节（占 8）+ key + val，各自按 8 对齐。 */
+/* 一个槽的字节数：key + val，各自按 8 对齐。
+ *
+ * M12/Task 39 起**没有**状态字节（状态在控制块里）。 */
 static u64 slot_stride(const MapObj *m) {
-    return 8UL + align8((u64)m->key_size) + align8((u64)m->val_size);
+    return align8((u64)m->key_size) + align8((u64)m->val_size);
 }
 
 static u8 *slot_at(const MapObj *m, u64 i) { return m->slots + i * slot_stride(m); }
 
-static u8 *slot_key(const MapObj *m, u8 *slot) { return slot + 8; }
+static u8 *slot_key(const MapObj *m, u8 *slot) { return slot; }
 
-static u8 *slot_val(const MapObj *m, u8 *slot) { return slot + 8 + align8((u64)m->key_size); }
+static u8 *slot_val(const MapObj *m, u8 *slot) { return slot + align8((u64)m->key_size); }
+
+/* 控制字节块占多少字节（含尾部镜像），按 8 对齐 ⇒ 槽区也跟着 8 对齐。 */
+static u64 ctrl_bytes(u64 cap) { return (cap + MAP_GROUP + 7UL) & ~7UL; }
+
+/* 键的 32 位 hash 的高 7 位当 H2。
+ *
+ * # 为什么还要乘一下
+ *
+ * `rt_hash` 只有 32 位，而 H1 用的是它的**低位**（`h & (cap-1)`）。直接取高位
+ * 在 `cap` 大到 2^25 时会与 H1 重叠。乘一个奇数把高位混一混，两者就独立了。 */
+static u8 map_h2(u32 h) { return (u8)((h * 2654435761u) >> 25) & 0x7Fu; }
 
 /* 类型 hash（FNV-1a 32 位）。
  *
@@ -3377,26 +3443,56 @@ int rt_equal(const TypeDesc *d, const void *a, const void *b) {
     return 1;
 }
 
-/* 分配一个 `cap` 槽的**槽块**（`C12` §2.2 的 `mapslots`），返回**槽区**起点。
+/* 一块槽块的两个起点（`C12` §2.2 的 `mapslots`）。 */
+typedef struct {
+    u8 *ctrl;  /* cap + MAP_GROUP 字节：前 cap 个是槽状态，尾部是镜像 */
+    u8 *slots; /* cap × slot_stride 字节 */
+} MapSlots;
+
+/* 分配一个 `cap` 槽的**槽块**（`C12` §2.2 的 `mapslots`）。
  *
- * data 形状：`[+0 kdesc][+8 vdesc][+16 槽…]`。`gc_alloc` 恒清零 ⇒ 槽状态
- * 全是 `MAP_EMPTY`，不必再 memset。
+ * data 形状：`[+0 kdesc][+8 vdesc][+16 ctrl(cap+MAP_GROUP)][槽…]`。
  *
- * ⚠️ 槽块的 `n` 是 **cap** 不是 count：扫的时候要按 `cap` 走（`EMPTY`/`TOMB`
- * 的槽里可能还躺着上一条命的指针 —— `gc_alloc` 清零过，但 `delete` 只把状态
- * 改成 `TOMB`、**不清 key/val**）。按 `count` 扫会漏掉后面的 LIVE 槽。 */
-static u8 *map_slots_new(const TypeDesc *kdesc, const TypeDesc *vdesc, u64 cap) {
-    u64 stride = 8UL + align8((u64)kdesc->size) + align8((u64)vdesc->size);
-    u8 *p = (u8 *)gc_alloc(16 + cap * stride, K_MAPSLOTS, 0, cap);
+ * # ⚠️ 控制字节**不能**靠 `gc_alloc` 的清零
+ *
+ * 清零出来的字节是 `0x00`，而 `0x00` 是一个**合法的 H2**（hash 高 7 位恰好是 0）。
+ * 于是「整块新表」会被当成「每个槽都有一个 H2=0 的键」—— 探测时每个槽都去比键，
+ * 却一个 EMPTY 都遇不到（`0x00` 不是 `0x80`）⇒ 死循环。所以必须显式填 `EMPTY`。
+ *
+ * # 尾部镜像
+ *
+ * `ctrl[cap + k] = ctrl[k % cap]`（k < MAP_GROUP）。于是「从 `i` 起读 16 个控制
+ * 字节」永远不用判回绕，`i` 落在最后一个槽上也一样。`cap` 可能**小于**一组
+ * （起始 8 槽），所以按 `k % cap` 取，不假设 `k < cap`。
+ *
+ * ⚠️ 槽块的 `n` 是 **cap** 不是 count：扫的时候要按 `cap` 走（`DELETED` 的槽里
+ * 可能还躺着上一条命的指针 —— `delete` 只改控制字节、**不清 key/val**）。
+ * 按 `count` 扫会漏掉后面的活槽。 */
+static MapSlots map_slots_new(const TypeDesc *kdesc, const TypeDesc *vdesc, u64 cap) {
+    u64 stride = align8((u64)kdesc->size) + align8((u64)vdesc->size);
+    u64 cbytes = ctrl_bytes(cap);
+    u8 *p = (u8 *)gc_alloc(16 + cbytes + cap * stride, K_MAPSLOTS, 0, cap);
     *(const TypeDesc **)p = kdesc;
     *(const TypeDesc **)(p + 8) = vdesc;
-    return p + 16;
+    MapSlots s;
+    s.ctrl = p + 16;
+    s.slots = p + 16 + cbytes;
+    for (u64 i = 0; i < cap; i++) {
+        s.ctrl[i] = (u8)MAP_CTRL_EMPTY;
+    }
+    for (u64 k = 0; k < MAP_GROUP; k++) {
+        s.ctrl[cap + k] = s.ctrl[k % cap];
+    }
+    return s;
 }
 
-/* 分配 `cap` 个槽。 */
+/* 分配 `cap` 个槽，挂到 `m` 上。 */
 static void map_alloc_slots(MapObj *m, u64 cap) {
+    MapSlots s = map_slots_new(m->kdesc, m->vdesc, cap);
     m->cap = cap;
-    m->slots = map_slots_new(m->kdesc, m->vdesc, cap);
+    m->tomb = 0;
+    m->ctrl = s.ctrl;
+    m->slots = s.slots;
 }
 
 /* `make(map[K]V[, n])` —— `n` 只是容量提示，M9 从 8 个槽起步（靠 rehash 长）。
@@ -3419,13 +3515,15 @@ static void map_alloc_slots(MapObj *m, u64 cap) {
  *
  * 这条对 `map_grow` 同样适用：新槽块分配之后只做 memcpy，不分配。 */
 static MapObj *map_new(const TypeDesc *kdesc, const TypeDesc *vdesc) {
-    u8 *slots = map_slots_new(kdesc, vdesc, 8);
+    MapSlots sl = map_slots_new(kdesc, vdesc, 8);
     /* 槽块还没发布 ⇒ pin 住，否则 `MapObj` 那次分配前的 GC 会收掉它。 */
-    gc_pin_push(slots);
+    gc_pin_push(sl.slots);
     MapObj *m = (MapObj *)gc_alloc(sizeof(MapObj), K_OBJECT, &mapobj_desc, 0);
     gc_pin_pop();
-    m->slots = slots;
+    m->slots = sl.slots;
+    m->ctrl = sl.ctrl;
     m->count = 0;
+    m->tomb = 0;
     m->cap = 8;
     m->key_size = kdesc->size;
     m->val_size = vdesc->size;
@@ -3444,69 +3542,158 @@ u64 rt_map_len(const void *mp) {
     return m == 0 ? 0 : m->count;
 }
 
-/* 在 `m` 里找 `k` 的槽。返回槽指针；`*found` 说明是命中还是遇到空槽。
+/* ── 组匹配（SwissTable，`M12/Task 39`）──────────────────────────────── */
+
+/* 探测读数的三个计数器（`RGOC_MAP_STATS=1` 才打印，见 `rt_gc_stats_line`）。 */
+static u64 map_stat_lookups;
+static u64 map_stat_groups;
+static u64 map_stat_cmps;
+
+/* 一个 `u64` 里**哪些字节等于** `b`：结果的 bit `j*8+7` 置位 ⇔ 第 j 个字节匹配。
  *
- * # 三条不变式
+ * # 为什么不用「减 1 再与」那套
  *
- * 1. **`TOMB` 不终止探测**（见文件头的说明）。
- * 2. 记下**第一个** `TOMB`（`first_tomb`）：插入时优先复用它，否则删得越多
- *    表越脏、探测链越长。
- * 3. `cap` 是 2 的幂 ⇒ `& (cap-1)` 代替取模。
- */
-static u8 *map_probe(MapObj *m, const void *k, int *found, u8 **first_tomb) {
-    u64 mask = m->cap - 1;
-    u64 i = (u64)rt_hash(m->kdesc, k) & mask;
-    u8 *tomb = 0;
-    for (u64 n = 0; n < m->cap; n++) {
-        u8 *slot = slot_at(m, i);
-        u8 st = slot[0];
-        if (st == MAP_LIVE) {
-            if (rt_equal(m->kdesc, slot_key(m, slot), k)) {
-                *found = 1;
-                if (first_tomb != 0) {
-                    *first_tomb = tomb;
-                }
-                return slot;
-            }
-        } else if (st == MAP_EMPTY) {
-            *found = 0;
-            if (first_tomb != 0) {
-                *first_tomb = tomb;
-            }
-            return slot;
-        } else if (tomb == 0) {
-            tomb = slot;
-        }
-        i = (i + 1) & mask;
-    }
-    /* 全表都是 LIVE/TOMB 且没有空槽：插入必然失败 —— 靠 rehash 兜住
-     * （负载因子 0.75 ⇒ 活条目最多 3/4，所以总会有空槽或 TOMB 可复用）。 */
-    *found = 0;
-    if (first_tomb != 0) {
-        *first_tomb = tomb;
-    }
-    return tomb;
+ * 常见的 `haszero(x) = (x - 0x0101…) & ~x & 0x8080…` 只能回答「**有没有**零字节」：
+ * 减法会从低位往高位**借位**，于是 `…00 01` 这种形状会在第 1 个字节上报出一个
+ * 假阳性（第 0 字节借了 1，第 1 字节变成 0）。判「有没有」无妨，判「**哪些**」
+ * 就错了。
+ *
+ * 这里改成不借位：先把每个字节拆成低 7 位与最高位，
+ *   * `lo + 0x7F7F…`：低 7 位最大 0x7F，加 0x7F 最大 0xFE ⇒ **不进位到相邻字节**，
+ *     且和的最高位为 1 ⇔ 那个低 7 位非 0；
+ *   * 再并上原来的最高位 ⇒ 最高位为 0 ⇔ 整个字节是 0。
+ *
+ * 于是结果是精确的逐字节判定。 */
+static u64 eq_bytes(u64 w, u8 b) {
+    u64 x = w ^ (0x0101010101010101UL * (u64)b);
+    u64 lo = x & 0x7F7F7F7F7F7F7F7FUL;
+    u64 hi = x & 0x8080808080808080UL;
+    u64 nz = lo + 0x7F7F7F7F7F7F7F7FUL;
+    return ~(nz | hi) & 0x8080808080808080UL;
 }
 
-/* 扩容：cap 翻倍 + 全量重插（**不做渐进搬迁**，`U-M9-08`）。 */
+/* 把两个 `u64` 的「每字节最高位」压成 16 位（bit j = 组内第 j 个槽）。 */
+static u32 compact16(u64 m0, u64 m1) {
+    u32 r = 0;
+    for (u64 j = 0; j < 8; j++) {
+        r |= (u32)((m0 >> (j * 8 + 7)) & 1UL) << j;
+        r |= (u32)((m1 >> (j * 8 + 7)) & 1UL) << (j + 8);
+    }
+    return r;
+}
+
+/* 一组的三个集合：H2 命中 / EMPTY / DELETED。
+ *
+ * ⚠️ 16 个控制字节必须**一次**读出来（两个 `u64`），不能写成「16 次 `ctrl[i]`」——
+ * 那样编译器生成的还是 16 趟字节读，组探测的收益就没了。尾部镜像（`map_slots_new`）
+ * 保证 `c + 15` 永不越界。 */
+static void group_masks(const u8 *c, u8 h2, u32 *hit, u32 *emp, u32 *del) {
+    u64 w0, w1;
+    rt_memcpy(&w0, c, 8);
+    rt_memcpy(&w1, c + 8, 8);
+    *hit = compact16(eq_bytes(w0, h2), eq_bytes(w1, h2));
+    *emp = compact16(eq_bytes(w0, (u8)MAP_CTRL_EMPTY), eq_bytes(w1, (u8)MAP_CTRL_EMPTY));
+    *del = compact16(eq_bytes(w0, (u8)MAP_CTRL_DELETED), eq_bytes(w1, (u8)MAP_CTRL_DELETED));
+}
+
+/* 掩码里最低的那个置位在哪一位（掩码非 0 时调用）。 */
+static u64 low_bit_index(u32 x) {
+    u64 i = 0;
+    while ((x & 1u) == 0) {
+        x >>= 1;
+        i++;
+    }
+    return i;
+}
+
+/* 在 `m` 里找 `k` 的槽，返回**槽下标**；`*found` 说明命中还是没命中。
+ *
+ * # 命中 ⇒ 返回那个槽；没命中 ⇒ 返回**插入位**（探测序列里第一个 `DELETED`，
+ * 一个都没有就是第一个 `EMPTY`）
+ *
+ * # 四条不变式
+ *
+ * 1. **`DELETED` 不终止探测**（见文件头的说明）：只有 `EMPTY` 才说明「后面再也
+ *    不会有这个键」。
+ * 2. 组步进 `i = (i + MAP_GROUP) & mask` —— 一组 16 个槽；`cap` 是 2 的幂 ⇒
+ *    `& (cap-1)` 代替取模。
+ * 3. 组内**先看 H2 命中**再判 `EMPTY`：同一个组里可能既有命中的槽又有空槽
+ *    （探测链在前、空槽在后），顺序反了会把存在的键判成不存在。
+ * 4. 一定终止：`map_grow` 保证 `count + tomb + 1 <= 7/8·cap` ⇒ 任何时刻至少有
+ *    `cap/8 >= 1` 个 `EMPTY`，`EMPTY` 只增不减（`delete` 写的是 `DELETED`），
+ *    所以整圈探测必然遇到它。
+ */
+static u64 map_probe(MapObj *m, const void *k, int *found) {
+    u64 mask = m->cap - 1;
+    u32 h = rt_hash(m->kdesc, k);
+    u8 h2 = map_h2(h);
+    u64 first_del = ~0UL;
+    u64 i = (u64)h & mask;
+    map_stat_lookups++;
+    for (;;) {
+        map_stat_groups++;
+        u32 hit, emp, del;
+        group_masks(m->ctrl + i, h2, &hit, &emp, &del);
+        for (u32 b = hit; b != 0; b &= b - 1) {
+            u64 idx = (i + low_bit_index(b)) & mask;
+            map_stat_cmps++;
+            if (rt_equal(m->kdesc, slot_key(m, slot_at(m, idx)), k)) {
+                *found = 1;
+                return idx;
+            }
+        }
+        if (emp != 0) {
+            *found = 0;
+            if (first_del != ~0UL) {
+                return first_del;
+            }
+            return (i + low_bit_index(emp)) & mask;
+        }
+        if (del != 0 && first_del == ~0UL) {
+            first_del = (i + low_bit_index(del)) & mask;
+        }
+        i = (i + MAP_GROUP) & mask;
+    }
+}
+
+/* 扩容：cap 翻倍 + 全量重插（**不做渐进搬迁**，`U-M9-08`）。
+ *
+ * ⚠️ 重插期间**不能**调 `map_probe`：它会去比键（`rt_equal`），而此刻新旧两块
+ * 都在手上、键的字节还没搬完 —— 更要紧的是它会改动 `m->count` 之外的东西
+ * （计数器的 `lookups` 会把「扩容」算成一次查询）。所以这里直接按 H1 落位：
+ * 新表里没有墓碑、没有重复键，`first EMPTY` 就是位置。 */
 static void map_grow(MapObj *m) {
     u8 *old_slots = m->slots;
+    u8 *old_ctrl = m->ctrl;
     u64 old_cap = m->cap;
     u64 old_stride = slot_stride(m);
-    /* 先分配新槽块，再改 `m->slots` —— 中间**不分配**（只有 memcpy）。 */
-    u8 *new_slots = map_slots_new(m->kdesc, m->vdesc, old_cap * 2);
+    u64 ksz = align8((u64)m->key_size);
+    /* 先分配新槽块，再改 `m->ctrl`/`m->slots` —— 中间**不分配**（只有 memcpy）。 */
+    MapSlots ns = map_slots_new(m->kdesc, m->vdesc, old_cap * 2);
     m->cap = old_cap * 2;
-    m->slots = new_slots;
+    m->ctrl = ns.ctrl;
+    m->slots = ns.slots;
+    m->tomb = 0;
+    u64 mask = m->cap - 1;
     for (u64 i = 0; i < old_cap; i++) {
-        u8 *slot = old_slots + i * old_stride;
-        if (slot[0] != MAP_LIVE) {
+        if (old_ctrl[i] >= MAP_CTRL_EMPTY) {
             continue;
         }
-        int found = 0;
-        u8 *dst = map_probe(m, slot_key(m, slot), &found, 0);
-        dst[0] = MAP_LIVE;
-        rt_memcpy(slot_key(m, dst), slot_key(m, slot), m->key_size);
-        rt_memcpy(slot_val(m, dst), slot + 8 + align8((u64)m->key_size), m->val_size);
+        u8 *src = old_slots + i * old_stride;
+        u32 h = rt_hash(m->kdesc, src);
+        u8 h2 = map_h2(h);
+        u64 j = (u64)h & mask;
+        /* 新表里全是 EMPTY ⇒ 一路按组找，第一次遇到空槽就是位置。 */
+        while (m->ctrl[j] != MAP_CTRL_EMPTY) {
+            j = (j + 1) & mask;
+        }
+        m->ctrl[j] = h2;
+        rt_memcpy(slot_key(m, slot_at(m, j)), src, m->key_size);
+        rt_memcpy(slot_val(m, slot_at(m, j)), src + ksz, m->val_size);
+    }
+    /* 镜像要跟着新的前 `MAP_GROUP` 个字节走 —— 上面刚写过的就是它们。 */
+    for (u64 k = 0; k < MAP_GROUP; k++) {
+        m->ctrl[m->cap + k] = m->ctrl[k % m->cap];
     }
 }
 
@@ -3520,12 +3707,12 @@ int rt_map_get(const void *mp, const void *k, void *out, u64 vsize) {
         return 0;
     }
     int found = 0;
-    u8 *slot = map_probe(m, k, &found, 0);
+    u64 idx = map_probe(m, k, &found);
     if (!found) {
         rt_memset(out, 0, m->val_size);
         return 0;
     }
-    rt_memcpy(out, slot_val(m, slot), m->val_size);
+    rt_memcpy(out, slot_val(m, slot_at(m, idx)), m->val_size);
     return 1;
 }
 
@@ -3536,25 +3723,33 @@ void rt_map_set(void *mp, const void *k, const void *v) {
         rt_panic_nilmap();
         return;
     }
-    /* 负载因子 0.75：`count*4 >= cap*3` 就长。先长再插 ——
-     * 反过来会在「刚满的表」上探测一整圈。 */
-    if ((m->count + 1) * 4 >= m->cap * 3) {
+    /* 负载因子 7/8（含墓碑）：`(count + tomb + 1) * 8 > cap * 7` 就长。先长再插 ——
+     * 反过来会在「刚满的表」上探测一整圈。
+     *
+     * ⚠️ **墓碑要算进负载**：只数 `count` 的话，反复插删的循环永远不扩容，
+     * 但 `DELETED` 只增不减 ⇒ 表里 `EMPTY` 被耗尽 ⇒ `map_probe` 的终止性
+     * （不变式 4）不成立。 */
+    if ((m->count + m->tomb + 1) * 8 > m->cap * 7) {
         map_grow(m);
     }
     int found = 0;
-    u8 *tomb = 0;
-    u8 *slot = map_probe(m, k, &found, &tomb);
+    u64 idx = map_probe(m, k, &found);
     if (found) {
-        rt_memcpy(slot_val(m, slot), v, m->val_size);
+        rt_memcpy(slot_val(m, slot_at(m, idx)), v, m->val_size);
         return;
     }
-    if (slot[0] != MAP_LIVE && tomb != 0) {
-        slot = tomb;
+    /* 插入位可能是一个 `DELETED` 槽（`map_probe` 优先复用它）⇒ 墓碑减一。 */
+    if (m->ctrl[idx] == MAP_CTRL_DELETED) {
+        m->tomb--;
     }
-    slot[0] = MAP_LIVE;
-    rt_memcpy(slot_key(m, slot), k, m->key_size);
-    rt_memcpy(slot_val(m, slot), v, m->val_size);
+    m->ctrl[idx] = map_h2(rt_hash(m->kdesc, k));
+    rt_memcpy(slot_key(m, slot_at(m, idx)), k, m->key_size);
+    rt_memcpy(slot_val(m, slot_at(m, idx)), v, m->val_size);
     m->count++;
+    /* 镜像跟着走：插入位落在前 `MAP_GROUP` 个槽里时要保持 `ctrl[cap+k] == ctrl[k]`。 */
+    if (idx < MAP_GROUP) {
+        m->ctrl[m->cap + idx] = m->ctrl[idx];
+    }
 }
 
 /* `delete(m, k)`：不存在的键是**静默无操作**（规范如此）。 */
@@ -3564,11 +3759,15 @@ void rt_map_del(void *mp, const void *k) {
         return;
     }
     int found = 0;
-    u8 *slot = map_probe(m, k, &found, 0);
+    u64 idx = map_probe(m, k, &found);
     if (!found) {
         return;
     }
-    slot[0] = MAP_TOMB;
+    m->ctrl[idx] = MAP_CTRL_DELETED;
+    if (idx < MAP_GROUP) {
+        m->ctrl[m->cap + idx] = MAP_CTRL_DELETED;
+    }
+    m->tomb++;
     m->count--;
 }
 
@@ -3582,8 +3781,11 @@ void rt_map_del(void *mp, const void *k) {
  *
  * # 迭代中删除
  *
- * 按 `state` 判 ⇒ 已删的（`TOMB`）不再产出 —— 规范要求「迭代开始后被删的条目
+ * 按控制字节判 ⇒ 已删的（`DELETED`）不再产出 —— 规范要求「迭代开始后被删的条目
  * 不产出」，这条天然满足。**迭代中新增**可能产出也可能不（规范允许两者）。
+ *
+ * 注意与探测判据的**同一句**：`ctrl[i] < 0x80` ⇔ 这个槽有键（EMPTY 与 DELETED
+ * 都 >= 0x80）。
  */
 u64 rt_map_iter(const void *mp, u64 idx, void *kout, void *vout) {
     const MapObj *m = (const MapObj *)mp;
@@ -3591,12 +3793,11 @@ u64 rt_map_iter(const void *mp, u64 idx, void *kout, void *vout) {
         return 0;
     }
     for (u64 i = idx; i < m->cap; i++) {
-        u8 *slot = slot_at(m, i);
-        if (slot[0] != MAP_LIVE) {
+        if (m->ctrl[i] >= MAP_CTRL_EMPTY) {
             continue;
         }
-        rt_memcpy(kout, slot_key(m, slot), m->key_size);
-        rt_memcpy(vout, slot_val(m, slot), m->val_size);
+        rt_memcpy(kout, slot_key(m, slot_at(m, i)), m->key_size);
+        rt_memcpy(vout, slot_val(m, slot_at(m, i)), m->val_size);
         return i + 1;
     }
     return 0;
@@ -5019,10 +5220,8 @@ static u64 rss_kb(void) {
     return buf[4];
 }
 
-void rt_gc_stats_line(void) {
-    if (gc_stats == 0) {
-        return;
-    }
+/* gc 统计行本体（`C12` §5.2 冻结的 12 个键，键序不许动）。 */
+static void gc_stats_body(void) {
     char b[512];
     u64 n = 0;
     n = sb_str(b, n, "gc: collections=");
@@ -5071,6 +5270,48 @@ void rt_gc_stats_line(void) {
     }
     b[n++] = '\n';
     write_all(FD_STDERR, b, n);
+}
+
+/* 映射探测读数（`M12/Task 39`，`RGOC_MAP_STATS=1` 才打）。
+ *
+ * # 三个键
+ *
+ * ```text
+ * lookups   `map_probe` 被调了几次（读、写、删各算一次；扩容不算）
+ * groups    探测走了多少**组**（一组 16 个槽）—— 这是「探了几趟」的真读数
+ * key_cmps  真正比了几次键（H2 筛过之后）
+ * ```
+ *
+ * # 为什么 `groups` 是这三者里最有用的
+ *
+ * `lookups` 只说明 fixture 跑了多少；`key_cmps` 说 H2 筛得准不准。而「一趟探测
+ * 摸了几次内存」才是探测结构的直接代价：线性探测在 7/8 负载下平均 4 个以上
+ * **槽**，SwissTable 是 0.3 个**组**。把 `MAP_GROUP` 临时改成 1 就退化成线性
+ * 探测（同一个计数器口径），所以这两个数可以直接比 —— `M12-report.md` §11.3 的
+ * 反事实读数就是这么来的。
+ *
+ * ⚠️ 单独一行、单独开关：`C12` §5.2 的 gc 行 12 个键冻结，往里加键会让所有解析
+ * 统计行的判据一起漂；而默认打印会让 69 个语料的期望输出全变。 */
+static void map_stats_body(void) {
+    char b[256];
+    u64 n = 0;
+    n = sb_str(b, n, "map: lookups=");
+    n = sb_u64(b, n, map_stat_lookups);
+    n = sb_str(b, n, " groups=");
+    n = sb_u64(b, n, map_stat_groups);
+    n = sb_str(b, n, " key_cmps=");
+    n = sb_u64(b, n, map_stat_cmps);
+    b[n++] = '\n';
+    write_all(FD_STDERR, b, n);
+}
+
+void rt_gc_stats_line(void) {
+    if (gc_stats != 0) {
+        gc_stats_body();
+    }
+    if (map_stats != 0) {
+        map_stats_body();
+    }
 }
 
 /* 探针（`C12` §5.4）：测试只读统计行，但这几个在调试时能直接看。 */
