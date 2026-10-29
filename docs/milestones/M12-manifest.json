@@ -1,12 +1,12 @@
 {
   "stage": "M12",
-  "line": "a（泛型）+ b（有限反射）",
-  "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行；有限反射 —— 元数据 / Call 的 ABI 桥 / 写面",
+  "line": "a（泛型）+ b（有限反射）+ c（优化 pass）",
+  "name": "泛型落地 —— 类型参数检查面（约束 / 类型集 / 实例化闭包）、单态化（实例命名 / 不动点）、native 实例可执行；有限反射 —— 元数据 / Call 的 ABI 桥 / 写面；优化 pass —— 内联 / 精细逃逸 / SwissTable（字典替换量完切断）",
   "generated_at": "2026-10-27T00:00:00Z",
   "filled_at": "2026-10-29T00:00:00Z",
-  "fill_task": "M12-plan.md Task 26（a 线）+ Task 36（b 线）+ Task 37/38（c 线：内联 / 精细逃逸的读数已填，门禁 G12-10..13 待 Task 42 汇总）（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
-  "status": "a 线已收口（G12-1..6 全 pass）+ b 线已收口（G12-7..9 全 pass，248 suite / 2335 passed / 0 failed / 2 ignored）；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76；泛型 × 并发 4 语料三态；反射四条判据（t_ref_01/02/03/04/05/06）；变异 a 3/3 + b 3/3 全红；c 线（opt）pending，G12-10..13 另行填",
-  "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。b 线把 `stdlib/reflect` 从桩变成有限实现：元数据（20 个类型的 kind/size/align/field/tag 与官方逐行）、`Call` 的九档 ABI 桥（缓冲公式 + trampoline + 指针类不拷）、写面（New / MakeSlice / MakeMap / MakeChan / Set*，含 GC 保根）。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）、字段只读层 flagRO（11）、`*T` desc 同身份（12）。",
+  "fill_task": "M12-plan.md Task 26（a 线）+ Task 36（b 线）+ Task 42（c 线：G12-10..13 与 mutations_c 一并填实）（按实测数字填；由 rgoc-driver/tests/manifest_m12.rs 对账）",
+  "status": "a 线已收口（G12-1..6 全 pass）+ b 线已收口（G12-7..9 全 pass）+ c 线已收口（G12-10..13 全 pass；字典替换按 M12-design.md §4.5 量完**切断**，保留单态化）；门禁面 116 = run 71 + compile 40 + errorcheck 5，拒绝面 76；泛型 × 并发 4 语料三态；变异 a 3/3 + b 3/3 + c 3/3 全红（c 线一次跑完：RED=3 GREEN=0 MISS=0 HANG=0 ERROR=0）",
+  "scope": "把泛型从检查面打通到 native：类型参数与约束（type set 四态投影 / core_type 单档 / 内建逐 term 谓词）、实例化闭包（不动点 + 深度环检测 + 诊断回滚）、单态化（`·` 结构性命名 / memo / 只实例化可达实例）、HIR 消灭类型参数（under_or_core / is_abstract / type_mentions_tparam）、实例体发码与链接、`go` × 泛型与 `chan` × 泛型的并发三态。b 线把 `stdlib/reflect` 从桩变成有限实现：元数据（20 个类型的 kind/size/align/field/tag 与官方逐行）、`Call` 的九档 ABI 桥（缓冲公式 + trampoline + 指针类不拷）、写面（New / MakeSlice / MakeMap / MakeChan / Set*，含 GC 保根）。**不含**：部分实例化（U-M12-01）、reflect.MakeFunc（02）、可变参数 Call（03）、PGO/DWARF/coverage（04）、泛型原体独立检查（05）、并发 GC（06）、.dir 目录测试（07）、errorcheck -m（08）、native 接口断言/itab 输出级老缺口（09）、局部泛型类型实例化（10）、字段只读层 flagRO（11）、`*T` desc 同身份（12）。c 线（优化 pass，全部可切断）：`rgoc-ssa` 的 inline pass（单层 + 深度上限，`opt_equiv` 当唯一强判据）、`rgoc-arm64` 的模块级逐形参逃逸摘要（`EscInfo` 单调不动点 ⇒ 不逃逸的 `&x` 留栈）、runtime 的 SwissTable 槽块（`ctrl` 控制字节 + H2 组探测 + 墓碑复用）；**字典替换量完切断**（收益上界 13 B/程序，退回单态化）。",
   "docs": {
     "design": "docs/milestones/M12-design.md（D-M12-1..10 / G12-1..13 / §5 未支持面）",
     "tests": "docs/milestones/M12-tests.md（T-GEN-01..19 各族 + 装置判据）",
@@ -63,7 +63,7 @@
     "errorcheck_m": { "count": 2, "note": "不做（U-M12-08）" }
   },
   "measured": {
-    "workspace": "246 suite / 2324 passed / 0 failed / 2 ignored",
+    "workspace": "251 suite / 2355 passed / 0 failed / 2 ignored",
     "gate_face_counts": "116 = run 71 + compile 40 + errorcheck 5；拒绝面 76（rejected）",
     "typeparam_family": "run 63/71（skip 8 全白名单：5 × U-M12-09 + 3 × §15.3）· compile 39/40（skip 1 = typelist，U-M12-01）· errorcheck 5/5 · rejected 76/76 —— 合计 bad=0（Task 24 收口态，装置 run-native-typeparam.sh 实测）",
     "run_native_interp": "t_gen_01_run_68of71：71 条门禁语料 build + interp + native，白名单 3 条功能级缺口冻住（§15.3），其余 68 条全绿",
@@ -84,7 +84,8 @@
     "opt_inline": "内联（Task 37）：69 个语料的 `.s` 行数 none=1220189 / 四 pass（无内联）=1202917 / 全开=951616（比 none 降 22.0%，比四 pass 降 20.9%）；fixture（两调用点）191→164 行、函数 2→1、`bl fn` 3→1；同一 fixture 八调用点则是 317→338（涨）—— 一处内联的体比一条 `bl` 贵，收益全在「被调方被收尸」那一份，且它只算一次。判据：m12_opt.rs::t_opt_01_*（体积 + 三态）+ opt_equiv.rs（69 语料 all vs none 逐字节）+ opt_inline.rs（8 条单元判据）",
     "opt_escape": "精细逃逸（Task 38）：模块级逐形参摘要（rgoc-arm64/src/escape.rs）让 69 个语料的 `bl rt_alloc_escaped` 从 45 条降到 41 条（有分配的文件 10→9）。**两面同程序对照**（同一台编译器换程序）：`g(p *int, n int)` 只读 `*p` ⇒ `.s` 里 0 条、三态 allocs=0 heap=0、输出恒 300000；同一个 `g` 里加 `G = p`（G 是全局）⇒ 1 条、三态 allocs=1 heap=17039872。**反事实**（把 `escape::analyze` 换成 `EscInfo::empty()` = Task 38 之前的保守档）⇒ 前一个程序退回 1 条 / allocs=1 / heap=17039872 —— 摘要真的在改代码。三态语料仍 69/0/0；顺手补两条漏判（CalleeRef::Indirect 与 Instr::Go 以前一个字都没算，方向保守）。判据：escape_summary.rs（6 条）+ gc_corpus/gc_precise 三态 + m12_opt.rs 三态比对",
     "opt_swiss": "SwissTable（Task 39）：槽块从「每槽自带 8 字节状态字」换成 `[+16 ctrl(cap+16)][槽…]` + H2 组探测（组宽 16，逐字节 SWAR；`ctrl[i] < 0x80` 一个比较同时排掉 EMPTY 与 DELETED）。十万键读数 **1.109 组/次**（lookups=350000 groups=388281 key_cmps=212233 ⇒ 0.606 次比键/次）；**反事实**把组步进改成 1 个槽（等效线性探测、语义不变）⇒ **2.17 组/次**，判据随之变红。十万键语义 len=50000 sum=4999950000 miss=0；不设 `RGOC_MAP_STATS` 时 stderr 一个字节都没有；三态语料 69/0/0。契约 C12 §2.2 换布局 + §5.2a 新统计行。判据：obj_map.rs::t_map_11/12/13（前 10 条 t_map_01..10 原样全绿）",
-    "opt_dict": "字典替换（Task 40）**切断**，保留单态化 —— 不是没时间做，是量完不该做。先量上界（字典传递只能省「同一泛型来源、不同实例化、指令完全相同」的副本）：116 门禁语料（107 个有产物）`.text` 14084B/3521 条指令，实例函数 4052B/92 个（28.8%），其中完全相同副本 **1408B/22 个（10.0%）**；69 语料（native 主门禁）17428B/4357 条指令，实例函数 **0 个**。⇒ 一半面收益恒 0，另一半上界约 13 字节/程序，而字典参数 + 每次类型参数使用的间接加载会把这点收益吃掉。替代路线：将来真出现实例爆炸，先做 Go 的 GC-shape 归并（同形状类型共用一个 stencil），不引字典。读数脚本 `.probe/mono-size.py`（`ssa --dump` 取名字、`.stackmap` 取「位置 ↔ fn id」、`.s` 数指令 × 4）。顺带撞见 `dottype.go` 在 native 上 panic ⇒ `G-M12-04`"
+    "opt_dict": "字典替换（Task 40）**切断**，保留单态化 —— 不是没时间做，是量完不该做。先量上界（字典传递只能省「同一泛型来源、不同实例化、指令完全相同」的副本）：116 门禁语料（107 个有产物）`.text` 14084B/3521 条指令，实例函数 4052B/92 个（28.8%），其中完全相同副本 **1408B/22 个（10.0%）**；69 语料（native 主门禁）17428B/4357 条指令，实例函数 **0 个**。⇒ 一半面收益恒 0，另一半上界约 13 字节/程序，而字典参数 + 每次类型参数使用的间接加载会把这点收益吃掉。替代路线：将来真出现实例爆炸，先做 Go 的 GC-shape 归并（同形状类型共用一个 stencil），不引字典。读数脚本 `.probe/mono-size.py`（`ssa --dump` 取名字、`.stackmap` 取「位置 ↔ fn id」、`.s` 数指令 × 4）。顺带撞见 `dottype.go` 在 native 上 panic ⇒ `G-M12-04`",
+    "mutations_c": "3/3 全红（scripts/mutation-m12.sh 一次跑完，可复跑）：M-M12-07 内联去掉「有 Defer 就不内联」→ t_opt_01_带_defer_的被调方不内联（0 passed / 1 failed，8 filtered）；M-M12-08 escape.rs::summary 的 Store 非 slot 根分支不再标逃逸 → t_opt_02_存进全局的形参_槽进_arena（0/1，5 filtered）；M-M12-09 map_probe 把 DELETED 也当终止符 → t_map_11_十万键的语义不随探测结构变（0/1，10 filtered），语义读数 50822 4999950000 818（正确 50000 4999950000 0）。判据 RED=3 GREEN=0 MISS=0 HANG=0 ERROR=0 五项同时成立。⚠️ M-M12-09 是**两处编辑**：第二处给 low_bit_index 加 `if (x == 0) return 0;` 只是兜底（只改第一处时症状是 900s 卡死，不是断言失败），成因与判别实验见 report §11.7.1 / G-M12-05"
   },
   "gate": [
     {
@@ -126,7 +127,7 @@
       "id": "G12-6",
       "name": "不回归（69 单线程 + 7 并发三态 + 全量 cargo）",
       "status": "pass",
-      "evidence": "Task 24：run-native.sh 69 单线程三态不回归；run-native-chan.sh 7/7×3 + M' 12/12×3；全量 246 suite / 2324 passed / 0 failed / 2 ignored（后台实测，manifest_m12.rs::t_manifest_12_全量读数与清单一致 钉形状）",
+      "evidence": "Task 24：run-native.sh 69 单线程三态不回归；run-native-chan.sh 7/7×3 + M' 12/12×3；全量 251 suite / 2355 passed / 0 failed / 2 ignored（Task 42 收口时实测，manifest_m12.rs::t_manifest_12_真清单必须自洽 钉 measured.workspace 的形状）",
       "gap": "—"
     },
     {
@@ -149,6 +150,34 @@
       "status": "pass",
       "evidence": "m12_reflect.rs::t_ref_04_写面逐条（十三条，每条一个 API）/ t_ref_04_panic文本对齐官方（两条 panic 文本逐字 + 退出 2）/ t_ref_06_写面在_stress_下保根（四类根 × 2446 次收，bad_ptr=0）；契约 C13 §5.3/§5.6 + C12 §4.7（D-M12-7）",
       "gap": "字段只读层与 *T desc 同身份归 U-M12-11 / U-M12-12"
+    },
+    {
+      "id": "G12-10",
+      "name": "内联（opt_equiv + 三态不变 + 体积读数）",
+      "status": "pass",
+      "evidence": "m12_opt.rs::t_opt_01_内联之后调用点消失且体积下降（fixture 两调用点 191→164 行、函数 2→1、bl fn 3→1）；opt_equiv.rs（69 语料 opt all vs none 逐字节 —— pass 的唯一强判据）；opt_inline.rs 8 条单元判据；三态语料 run-native.sh --gc=off|on|stress 各 69/0/0。体积读数 69 语料 .s：none=1220189 / 四 pass=1202917 / 全开=951616（−22.0% vs none）。⚠️ 同一 fixture 八调用点时 317→338（涨）—— 收益只在「被调方被收尸」那一份",
+      "gap": "—"
+    },
+    {
+      "id": "G12-11",
+      "name": "精细逃逸（allocs 下降 + 三态不变）",
+      "status": "pass",
+      "evidence": "escape_summary.rs::t_opt_02_不逃逸的形参_槽留在帧里 / t_opt_02_存进全局的形参_槽进_arena（两面同程序对照）/ 互递归也能收敛 / 间接调用的实参一律逃逸 / 摘要里查不到的被调方一律逃逸 / 没有摘要时退化成保守档（6 条）；gc_corpus.rs 与 gc_precise.rs 三态；m12_opt.rs 三态比对。读数：69 语料 bl rt_alloc_escaped 45→41 条（有分配的文件 10→9），哨兵程序 0 条 / allocs=0 heap=0。反事实 EscInfo::empty() ⇒ 退回 1 条 / allocs=1",
+      "gap": "—"
+    },
+    {
+      "id": "G12-12",
+      "name": "SwissTable（语义不变 + probe 读数）",
+      "status": "pass",
+      "evidence": "obj_map.rs::t_map_11_十万键的语义不随探测结构变（len=50000 sum=4999950000 miss=0）/ t_map_12_十万键的探测读数（lookups=350000 groups=388281 key_cmps=212233 ⇒ 1.109 组/次，判据 groups*2 < lookups*3）/ t_map_13_不设开关就不打映射统计（stderr 零字节）；t_map_01..10 原样全绿；契约 C12 §2.2（layout）+ §5.2a（读数行）",
+      "gap": "—"
+    },
+    {
+      "id": "G12-13",
+      "name": "字典替换（116 语料重跑 + 体积读数，可切断）",
+      "status": "pass",
+      "evidence": "按 M12-design.md §4.5 的切断顺序量完**切断**（保留单态化）：116 门禁语料（107 个有产物）跑通并取体积读数 —— .text 14084B/3521 条、实例函数 4052B/92 个（28.8%）、其中完全相同副本仅 1408B/22 个（10.0%，≈13 B/程序）；69 语料（native 主门禁）实例函数 0 个 ⇒ 一半面收益恒 0。读数的复跑方式写在 M12-report.md §11.5（.probe/mono-size.py）",
+      "gap": "字典替换**不做**（量完切断，非预算超限）：收益上界 13 B/程序，代价是每个类型参数的使用都变成「从字典加载 + 一次间接」。将来真出现实例爆炸时，先做 GC-shape 归并而不是字典（report §11.5）"
     }
   ],
   "unsupported": [
@@ -270,6 +299,12 @@
       "what": "多值调用当唯一实参（`println(f2[int](i))`）在 native 上 panic，而不是干净拒绝",
       "detail": "`go_source_code/test/typeparam/dottype.go` 是合法 `// run` 程序：`check` 零诊断、`--via=hir` 打出 `3 / 0 / 0 true`，但 `build` panic 在 `crates/rgoc-ssa/src/build.rs:4130` 的 `todo!`（\"n 个结果的调用出现在单值位置（检查器应已拒绝）\"）。程序合法 ⇒ 不是检查器的洞，是 SSA 构建期没做「多值调用展开成多个实参」。现状是 panic（无诊断）而不是 `SSA-UNSUPPORTED-*`，违反「不支持面必须干净拒绝」。修法两条路之一：① 实参列表里只有一个多值调用时按结果展开；② 新增一个 `SsaCode` + 给 HIR 扫描加「位置」上下文改判干净拒绝。两条都动 a 线的拒绝面（码集合稳定性判据），超出 Task 40 的面，未修。Task 40 的体积读数因此是 107/116（9 个 native 不可构建，这条占 1）。",
       "found_at": "M12/Task 40（体积读数探针撞见）"
+    },
+    {
+      "id": "G-M12-05",
+      "what": "`low_bit_index` 的非零前提没有断言 —— 探测的终止条件一旦改错，症状是死循环而不是断言失败",
+      "detail": "`map_probe` 里 `first_del` 的记录写在 `emp` 判定**之后**，而 `if (emp != 0)` 这一支里会调 `low_bit_index(emp)`；`low_bit_index` 靠调用点保证入参非零（`while ((x & 1u) == 0)` 在 0 上死转）。后果在 Task 41 的变异 M-M12-09 上暴露：把终止条件改成 `if (emp != 0 || del != 0)` 之后，能走到 `return (i + low_bit_index(emp)) & mask;` 而 `emp == 0` ⇒ 900 秒超时打满，**不是断言失败**。判别实验（`.probe/m9-hang2.sh`：变异之上再给 `low_bit_index` 加 `if (x == 0) return 0;`）一次定死：不再卡死，语义错误露出（n=20000 → `10016 199990000 7`、n=100000 → `50822 4999950000 818`，正确是 `n/2 / sum / 0`）。当前正确代码走不到这个分支（`emp != 0` 保证入参非零），所以**不是活 bug**，是脆弱性：它让「用变异检验探测判别式」这条路的症状变成卡死而不是红。修法两条（都未做，超出 Task 41）：① 给 `low_bit_index` 加 `assert(x != 0)` 或 0 兜底；② 把 `first_del` 的记录挪到 `emp` 判定之前，前提局部化。",
+      "found_at": "M12/Task 41（变异 M-M12-09 首版锚点 900s 超时）"
     }
   ],
   "closed_gaps": [

@@ -5,7 +5,7 @@
 //! M9 的教训（沿用 M10/M11 的同一口径）：`manifest.measured` 是**自报**，
 //! 不是证据 —— 清单一旦能说谎，后面所有「已完成」都不可信。这里做三件事：
 //!
-//! 1. **结构对账**：门禁 G12-1..9 / 未支持面 U-M12-01..12 / 门禁面 116 =
+//! 1. **结构对账**：门禁 G12-1..13 / 未支持面 U-M12-01..12 / 门禁面 116 =
 //!    run 71 + compile 40 + errorcheck 5 / 拒绝面 76，且语料条数与**分类装置
 //!    现算**的清单一致（`.superpowers/m12-lists` 在 gitignore 里，所以
 //!    这里自己跑 `m12-classify.sh` 重算 —— 不抄第二份）；
@@ -131,8 +131,8 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
         errs.push("stage 必须是 M12".into());
     }
 
-    // ── ① 门禁：9 条 G12-1..G12-9（1..6 = a 线，7..9 = b 线）──
-    let want: BTreeSet<String> = (1..=9).map(|i| format!("G12-{i}")).collect();
+    // ── ① 门禁：13 条 G12-1..G12-13（1..6 = a 线，7..9 = b 线，10..13 = c 线）──
+    let want: BTreeSet<String> = (1..=13).map(|i| format!("G12-{i}")).collect();
     let gate = m["gate"].as_array().expect("gate 应是数组");
     if gate.len() != want.len() {
         errs.push(format!("gate 应有 {} 条，实际 {}", want.len(), gate.len()));
@@ -367,6 +367,46 @@ fn reconcile(m: &Value, lists: &Path) -> Vec<String> {
         errs.push("measured.reflect_face 必须写出顶层导出符号数（12 = 6 类型 + 6 函数）".into());
     }
 
+    // ── ⑥c c 线读数：三条优化各自要有**可复跑的读数**，不是「做了」──
+    //
+    // 形态钉法同 ⑥b：数字的复现留在各自的测试里（`t_opt_01` / `escape_summary`
+    // 的六条 / `t_map_11`+`t_map_12`），这里只钉「清单里写了这个数」。
+    for key in [
+        "opt_inline",
+        "opt_escape",
+        "opt_swiss",
+        "opt_dict",
+        "mutations_c",
+    ] {
+        if measured[key].is_null() {
+            errs.push(format!("measured 缺 {key}（c 线）"));
+        }
+    }
+    if measured["mutations_c"]
+        .as_str()
+        .is_none_or(|s| !s.contains("3/3"))
+    {
+        errs.push("measured.mutations_c 必须含 3/3".into());
+    }
+    // 四条判据的读数都必须在，且必须带**数字**（只写「下降了」等于没写）。
+    for (key, must) in [
+        ("opt_inline", "951616"),
+        ("opt_escape", "45"),
+        ("opt_swiss", "1.109"),
+        ("opt_dict", "1408"),
+    ] {
+        if measured[key].as_str().is_none_or(|s| !s.contains(must)) {
+            errs.push(format!("measured.{key} 必须含读数 {must}"));
+        }
+    }
+    // `opt_dict` 是**切断**决策，清单里必须写明白，否则下一个人会当它「还没做」。
+    if measured["opt_dict"]
+        .as_str()
+        .is_none_or(|s| !s.contains("切断"))
+    {
+        errs.push("measured.opt_dict 必须写明这是**切断**决策（不是没做）".into());
+    }
+
     errs
 }
 
@@ -485,7 +525,7 @@ fn t_manifest_12_合成反例都必须红() {
         |m| {
             m["gate"].as_array_mut().unwrap().pop();
         },
-        "gate 应有 9 条",
+        "gate 应有 13 条",
     );
 
     expect_red(
@@ -583,5 +623,21 @@ fn t_manifest_12_合成反例都必须红() {
             m["measured"]["min_checked"] = Value::String("109（随手一填）".into());
         },
         "必须含 108",
+    );
+
+    expect_red(
+        "c 线读数只写了「下降了」（没有数字）",
+        |m| {
+            m["measured"]["opt_inline"] = Value::String("内联之后体积下降了".into());
+        },
+        "必须含读数 951616",
+    );
+
+    expect_red(
+        "把 c 线的「切断」决策写成别的",
+        |m| {
+            m["measured"]["opt_dict"] = Value::String("1408B/22 个，3/3 全红".into());
+        },
+        "必须写明这是**切断**决策",
     );
 }
