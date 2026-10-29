@@ -188,8 +188,16 @@ ParamMeta（16 字节）
 
 ### 5.3 写面与屏障
 
-`Value.Set*` 只做 `rt_memcpy`。**不需要写屏障**的前提是「STW + 单线程」——
-这条写进 `C12`（`D-M12-7`）。上并发 GC 时这条会**静默失效**，必须先改 `C12`。
+`Value.Set*` 只做整块拷贝（`CopyBytes` / 直接 `str`）。**不需要写屏障**的前提是
+「STW + 单线程」—— 这条写进 `C12`（`D-M12-7`）。上并发 GC 时这条会**静默失效**，
+必须先改 `C12`。
+
+「能不能写」由 `Value.writable` 一个布尔决定（官方是 `flagAddr` + `flagRO` 两位）。
+只有三条路能造出可写的 `Value`：`New(t).Elem()`、`Index(i)`、以及 `Elem()` 链的
+延续；`ValueOf` / `MakeXxx` / `Call` 的结果一律不可写（它们没有地址 —— 与官方一致）。
+判定的**顺序与文本**逐字对齐官方 `flag.mustBeAssignableSlow`：先零值
+（`call of <method> on zero Value`）、再不可寻址（`<method> using unaddressable value`）。
+
 
 ### 5.4 `TypeDesc` 扩展区（M12/Task 31）
 
@@ -275,6 +283,48 @@ void rt_reflect_call(fn, tramp, args, results)                                  
 `x0..x3`。⚠️ 它是**运行期钩子、不是语言特性**：`reflect` 之外的代码用它
 没有意义，解释器通路直接报 `G-M12-05`。
 
+### 5.6 写面的分配入口（M12/Task 34）
+
+`reflect.New` / `MakeSlice` / `MakeMap` / `MakeChan` 都要「**按运行期拿到的
+desc** 分配」，而 `new` / `make` 的 lowering 只服务**静态类型** —— Go 源码写不出
+这件事。四个运行期入口合成一个符号，用 `op` 分派：
+
+```text
+void rt_reflect_alloc(i64 op, void **out, const TypeDesc *a, const TypeDesc *b, i64 c)
+
+op = 0  new        a = desc                 ⇒ rt_alloc(a, 1)        （零值对象）
+op = 1  元素数组    a = elem, c = 元素个数    ⇒ rt_alloc_array(a, c)  （底层数组）
+op = 2  map        a = key, b = elem         ⇒ rt_map_make(a, b)
+op = 3  chan       a = elem, c = 容量         ⇒ rt_makechan(&ch, c, a)
+```
+
+**契约**：
+
+1. **结果写进 `out`，不返回**。`uintptr → unsafe.Pointer` 这个方向在本仓今天的
+   代码生成上有缺口（§5.5 第 5 条的邻居问题）⇒ 让 C 写进一个指针槽，Go 侧
+   只做 `*T → unsafe.Pointer`。
+2. `op` 全是 Go 侧的常量（`allocNew` / `allocArray` / `allocMap` / `allocChan`），
+   两侧必须同序；未知 `op` 给 `null`（上层炸在解引用上，好过静默造错对象）。
+3. **分配后立刻发布**：调用方拿到指针就写进 `Value.ptr`，中途不再分配 ⇒
+   没有「已分配但还没发布」的窗口（`R-10-17` 那一类）。
+4. `op = 1` 的三个短路与 `rt_makeslice` **同序**：`c <= 0` ⇒ 不分配；元素零大小
+   ⇒ `rt_zerobase`（`&s[0]` 才能取地址）；其余走 `rt_alloc_array`。
+5. `MakeSlice` 的**切片头自己也要在托管堆上**：`Value` 只存裸指针，头落栈上
+   返回即悬空。按切片类型自己的 desc `rt_alloc` 24 字节 —— 那块对象的 gcdata
+   恰好覆盖第 0 字（data 指针），所以底层数组有根。
+6. `Map` / `Chan` 的 `Value.ptr` 指向**装着那个指针的槽**（与 `ValueOf(map)`
+   同口径：`box_iface` 只对 `Type::Pointer` 走 `is_ptr` 特例）⇒ 造容器时多分配
+   一块 8 字节的槽。`Len()` / `Cap()` 因此要先解一层再读 `MapObj.count`（+0）/
+   `Hchan.qcount`（+0）/ `Hchan.dataqsiz`（+8）。
+7. **`New` 的 `*T` desc 是现场合成的**（`ptrDesc`）：编译器只为源码里出现过的
+   类型发 desc，`reflect.New(TypeOf(x))` 里的 `*T` 完全可能一次都没出现过。
+   合成块的 `size = 8` / `kind = Pointer` / `elem = T` / `hash = T.hash ^ 0x9e3779b9`。
+   ⚠️ 它与程序里真用到的那块 `*T` desc **不是同一个对象** ⇒ 见 `U-M12-10`。
+
+`rt_reflect_alloc` 同样是内建（`BuiltinKind::ReflectAlloc`），名字进 universe，
+`check` 钉住「五个实参都是 8 字节」，`isel` 直接进 `x0..x4`。
+
+
 ---
 
 ## 6. 不做面
@@ -289,6 +339,8 @@ void rt_reflect_call(fn, tramp, args, results)                                  
 | `U-M12-06` | 并发 GC / 写屏障 | 沿用 `U-M11-08` |
 | `U-M12-07` | `.dir` 目录测试（相对包 import）| 67 个桩 + 69 个目录 |
 | `U-M12-08` | `errorcheck -m`（内联诊断）| 2 个文件 |
+| `U-M12-09` | 结构体字段的**只读层**（官方 `flagRO`）与 `Value.Field(i)` 的可写视图 | 写面只从 `New` / `Index` / `Elem` 造可写值；字段读面今天只读 |
+| `U-M12-10` | `New` 合成的 `*T` desc 与程序里的真 desc **同身份** | §5.6 第 7 条：要发射面给每个带 meta 的类型多发一块 `*T` desc + 一张反查表 |
 
 ---
 
@@ -301,3 +353,4 @@ void rt_reflect_call(fn, tramp, args, results)                                  
 | 2026-10-27 | Task 31 落地细则：① `FieldMeta.tag` 存**字面量的值**（不含反引号/引号定界符 —— `check::typeexpr` 原抄 `BasicLit.value` 带定界符，实测 `Tag` 打出 `` `json:"x"` ``，官方是 `json:"x"`；与 `rgoc_load::typeexpr::tag_text` 同口径）；② 匿名 struct 的 `PkgPath()` 返回空串（匿名也有 meta，但 `name` 空 ⇒ 包路径不外漏）；③ `kind` 升官方 27 档（见 `C5` §11.1 变更记录）；④ `type_hash` 按 `TypeId` 记忆化（自引用接口类型曾指数爆炸）+ 别名透明（别名臂直接返回 rhs hash） | M12/Task 31；t_ref_02 对官方 oracle 逐字段 |
 | 2026-10-27 | Task 32 落地细则：① `ReflectMeta.methods` 填实（MethodMeta 24B：name / sig / fn）；具名接口方法来自 `InterfaceDef`（`fn=0`），具名具体类型来自 `MethodSet` —— ⚠️ `MethodSet.ty` 是**具名基类型**（`strip_ptr(recv)` 分组），按 `underlying` 找永远落空（实测 NumMethod=0）；值类型的 meta 只收**值接收者**方法（指针接收者的归 `*T`，官方方法集口径；指针性从 `named_def.methods` 的签名 `recv` 读）；② 新增 `__sigdesc_<hash>`（kind=Func 的 40 字节 desc，`size=8`，hash 就是 `sig_hash` 编码）—— `Implements` 运行期比它的 +8；③ `String()` 升级：具名 `pkgpath.name`、复合沿 elem 链（`*T` / `[]T` / `[N]T` / `map[K]V` / `chan T`） | M12/Task 32；t_ref_05 对官方 `go run` 逐行 |
 | 2026-10-29 | §5.5 `Call` 的 ABI 桥 + §5.2 加 `+64 tramp`（ReflectMeta 64→72 字节）；`rt_reflect_call` 作为内建（`BuiltinKind::ReflectCall`，进 `BUILTIN_NAMES`，check 钉住「四个 8 字节实参」）。⚠️ 同批修了**跨包具体方法调用**的 lowering（`Cross.methods`，键 = 接收者 TypeId）—— 没有它 `reflect.Value.Call`/`.Int()` 这类「导入类型的具名方法」根本进不了 HIR | M12/Task 33；t_ref_03 对官方 `go run` 九档逐行 |
+| 2026-10-29 | §5.6 写面的分配入口（`rt_reflect_alloc` 的 op 分派、结果写 `out`、切片头进托管堆、map/chan 的 box 口径、`*T` desc 现场合成）+ §5.3 补「`writable` 一个布尔 = `flagAddr` + 非只读」与 mustBeAssignable 的顺序；`BUILTIN_NAMES` 19→20、`UNIVERSE_SIZE` 45→46；新登记 `U-M12-09` / `U-M12-10` | M12/Task 34；t_ref_04 对官方 `go run` 十三条逐行 + 两条 panic 文本逐字 |

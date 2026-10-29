@@ -191,7 +191,9 @@ fn t_ref_01_白名单对账() {
 
     // 判据侧：登记集合（Task 31 读面：StructTag / StructField 随
     // Field(i) 的读面一起进来；Task 32 方法表：Method 随 NumMethod/Method
-    // 一起进来 —— 官方 `reflect.Method` 的收窄版）。
+    // 一起进来 —— 官方 `reflect.Method` 的收窄版；Task 34 写面：四个
+    // 包级构造函数进来 —— 方法（`Value.SetInt` 之类）不计入这张表，
+    // 它只看**行首无缩进**的 `func` / `type`）。
     let want: BTreeSet<String> = [
         "type Kind",
         "type Type",
@@ -201,6 +203,10 @@ fn t_ref_01_白名单对账() {
         "type Value",
         "func TypeOf",
         "func ValueOf",
+        "func New",
+        "func MakeSlice",
+        "func MakeMap",
+        "func MakeChan",
     ]
     .into_iter()
     .map(String::from)
@@ -697,4 +703,173 @@ fn t_ref_03_call的abi分档() {
     let want = want + "\n";
     assert_eq!(out.status.code(), Some(0), "fixture 必须正常退出：\n{got}");
     assert_eq!(got, want, "九档 ABI 必须与官方逐行相同");
+}
+
+// ════════════════════════════════════════════════════════════════════
+// T-REF-04 写面（Task 34）
+// ════════════════════════════════════════════════════════════════════
+
+/// 编译 + 运行一个 fixture，返回（合并流, 退出码）。
+fn build_run(tag: &str, src: &str) -> (String, Option<i32>) {
+    let tmp = std::env::temp_dir().join(format!("rgoc-ref04-{tag}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    fs::create_dir_all(&tmp).expect("建 scratch 失败");
+    let main = tmp.join("main.go");
+    fs::write(&main, src).expect("写 fixture 失败");
+    let bin = tmp.join("bin");
+    let build = Command::new(driver())
+        .args(["build", "-I"])
+        .arg(repo_root().join("stdlib"))
+        .arg("-o")
+        .arg(&bin)
+        .arg(&main)
+        .output()
+        .expect("起不了 build");
+    assert_eq!(
+        build.status.code(),
+        Some(0),
+        "fixture 应当能编译：\n{}{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let out = Command::new(&bin).output().expect("起不了产物");
+    let _ = fs::remove_dir_all(&tmp);
+    let got = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (got, out.status.code())
+}
+
+/// `t_ref_04` 的 fixture：**每条 API 一个断言**，十三条。
+///
+/// 三条造可写值的路：`New(t).Elem()` / `Index(i)` / 上一层的延续；
+/// 四个改写器：`SetInt` / `SetFloat` / `SetBool` / `SetString`（`Set`
+/// 单独一条）；三个容器构造器：`MakeSlice` / `MakeMap` / `MakeChan`；
+/// `CanSet` 真假各一条。
+///
+/// 浮点用 `int(...)` 取整再打：`println` 的浮点格式是另一条契约（`C9`），
+/// 不该让写面的判据去背它。
+const T_REF_04_SRC: &str = r#"package main
+
+import "reflect"
+
+func main() {
+	p := reflect.New(reflect.TypeOf(0))
+	v := p.Elem()
+	println("canset-true", v.CanSet())
+	v.SetInt(41)
+	println("after-setint", v.Int())
+
+	v.Set(reflect.ValueOf(7))
+	println("after-set", v.Int())
+
+	println("new-kind", int(p.Kind()))
+
+	q := reflect.New(reflect.TypeOf(0))
+	q.Elem().SetInt(99)
+	println("new-elem", q.Elem().Int())
+
+	f := reflect.New(reflect.TypeOf(0.0)).Elem()
+	f.SetFloat(25)
+	println("setfloat", int(f.Float()))
+
+	b := reflect.New(reflect.TypeOf(false)).Elem()
+	b.SetBool(true)
+	println("setbool", b.Bool())
+
+	s := reflect.New(reflect.TypeOf("")).Elem()
+	s.SetString("hello")
+	println("setstring", s.String())
+
+	sl := reflect.MakeSlice(reflect.TypeOf([]int{}), 3, 5)
+	println("makeslice", sl.Len(), sl.Cap())
+
+	sl.Index(0).SetInt(11)
+	println("slice0", sl.Index(0).Int())
+
+	m := reflect.MakeMap(reflect.TypeOf(map[string]int{}))
+	println("map-len", m.Len())
+
+	c := reflect.MakeChan(reflect.TypeOf(make(chan int)), 2)
+	println("chan-cap", c.Cap())
+
+	println("canset-false", reflect.ValueOf(3).CanSet())
+}
+"#;
+
+/// `CanSet` 为假时 `SetInt` 必须 panic（`T-REF-04` Step 2）。
+const T_REF_04_PANIC_UNADDR: &str = r#"package main
+
+import "reflect"
+
+func main() {
+	reflect.ValueOf(3).SetInt(4)
+	println("unreachable")
+}
+"#;
+
+/// 零 `Value` 的写面 panic（官方是 `ValueError`，不是「不可寻址」）。
+const T_REF_04_PANIC_ZERO: &str = r#"package main
+
+import "reflect"
+
+func main() {
+	var v reflect.Value
+	v.SetInt(1)
+	println("unreachable")
+}
+"#;
+
+#[test]
+fn t_ref_04_写面逐条() {
+    let (got, code) = build_run("main", T_REF_04_SRC);
+    let want = [
+        "canset-true true",
+        "after-setint 41",
+        "after-set 7",
+        "new-kind 22",
+        "new-elem 99",
+        "setfloat 25",
+        "setbool true",
+        "setstring hello",
+        "makeslice 3 5",
+        "slice0 11",
+        "map-len 0",
+        "chan-cap 2",
+        "canset-false false",
+    ]
+    .join("\n");
+    let want = want + "\n";
+    assert_eq!(code, Some(0), "fixture 必须正常退出：\n{got}");
+    assert_eq!(got, want, "写面十三条必须与官方 `go run` 逐行相同");
+}
+
+/// `CanSet` 为假 / 零 `Value` 的 panic：**文本逐字对齐官方**，退出 2。
+///
+/// 官方两条消息来自 `flag.mustBeAssignableSlow`：
+///   - 有类型但没地址 ⇒ `<method> using unaddressable value`
+///   - `flag == 0`      ⇒ `ValueError{method, Invalid}` ⇒ `call of <method> on zero Value`
+///
+/// 顺序也是判据的一部分：**先零值、再不可寻址**。反过来写的话，
+/// 零 `Value` 会打出「unaddressable」——那是错的。
+#[test]
+fn t_ref_04_panic文本对齐官方() {
+    for (tag, src, want) in [
+        (
+            "unaddr",
+            T_REF_04_PANIC_UNADDR,
+            "panic: reflect: reflect.Value.SetInt using unaddressable value\n",
+        ),
+        (
+            "zero",
+            T_REF_04_PANIC_ZERO,
+            "panic: reflect: call of reflect.Value.SetInt on zero Value\n",
+        ),
+    ] {
+        let (got, code) = build_run(tag, src);
+        assert_eq!(code, Some(2), "{tag}：panic 必须退出 2：\n{got}");
+        assert_eq!(got, want, "{tag}：panic 文本必须与官方逐字相同");
+    }
 }

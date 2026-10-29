@@ -379,6 +379,7 @@ fn builtin_name(b: BuiltinKind) -> &'static str {
         BuiltinKind::Max => "max",
         BuiltinKind::Clear => "clear",
         BuiltinKind::ReflectCall => "rt_reflect_call",
+        BuiltinKind::ReflectAlloc => "rt_reflect_alloc",
     }
 }
 

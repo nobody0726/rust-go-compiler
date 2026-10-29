@@ -3647,6 +3647,69 @@ void rt_makeslice(Slice *out, const TypeDesc *elem, u64 len, u64 cap) {
     out->ptr = rt_alloc_array(elem, cap);
 }
 
+/* ── 反射写面的分配入口（M12/Task 34，`C13` §5.6）─────────────────────
+ *
+ * `reflect.New` / `MakeSlice` / `MakeMap` / `MakeChan` 都要「**按 desc**
+ * 分配」，而 `new` / `make` 的 lowering 只服务**静态类型** —— Go 源码里
+ * 写不出「按运行期拿到的 desc 分配」。四个入口合成一个符号，用 `op` 分派：
+ *
+ * ```text
+ * op = 0  new        a = desc                ⇒ 一个零值对象（data 指针）
+ * op = 1  元素数组    a = elem, c = 元素个数   ⇒ 底层数组（data 指针）
+ * op = 2  map        a = key, b = elem        ⇒ MapObj*
+ * op = 3  chan       a = elem, c = 容量        ⇒ Hchan*
+ * ```
+ *
+ * # 为什么结果写进 `out` 而不是返回
+ *
+ * Go 侧的 `Value.ptr` 是 `unsafe.Pointer`；`uintptr → unsafe.Pointer` 那个
+ * 方向在本仓今天的代码生成上有缺口（`stdlib/reflect/reflect.go` 里
+ * `Value.ptr` 的注释记着实测）。让它**写进一个指针槽**，Go 侧就只做
+ * `*T → unsafe.Pointer` 这一种转换。
+ *
+ * # GC
+ *
+ * 四条都走托管分配（`C12` §2.2）：`rt_alloc` ⇒ `K_OBJECT`、`rt_alloc_array`
+ * ⇒ `K_ARRAY`、`rt_makechan` / `rt_map_make` 自己带 `gc_pause`（`R-10-24`）。
+ * 调用方（`reflect.go`）拿到指针后**立刻**存进 `Value.ptr`，中途不再分配
+ * ⇒ 不存在「已分配但还没发布」的窗口（`R-10-17` 那一类）。
+ */
+void rt_reflect_alloc(i64 op, void **out, const TypeDesc *a, const TypeDesc *b, i64 c)
+{
+    switch (op) {
+    case 0:
+        *out = rt_alloc(a, 1);
+        return;
+    case 1:
+        /* 与 `rt_makeslice` 的三个短路**同序**：cap 0 ⇒ 不分配；零大小
+         * 元素 ⇒ 共享 `rt_zerobase`（`zerosize.go` 要求 `&s[0]` 可用）。 */
+        if (c <= 0) {
+            *out = 0;
+            return;
+        }
+        if (a->size == 0) {
+            *out = rt_zerobase;
+            return;
+        }
+        *out = rt_alloc_array(a, (u64)c);
+        return;
+    case 2:
+        *out = rt_map_make(a, b);
+        return;
+    case 3: {
+        Hchan *ch;
+        rt_makechan(&ch, (u64)c, a);
+        *out = ch;
+        return;
+    }
+    default:
+        /* 未知 op：宁可给 null 让上层炸在解引用上，也不静默造一个错对象。
+         * （`op` 全是 Go 侧的常量，走到这里就是两侧分叉了。） */
+        *out = 0;
+        return;
+    }
+}
+
 /* 扩容：cap 够就原地，不够就新分配 + 拷。
  *
  * # 增长策略

@@ -17,9 +17,10 @@
 //!
 //! # 内建函数**没有签名**
 //!
-//! 18 个内建（`len`/`cap`/`make`/…）在这里只登记**名字与种类**（`typ: None`）：
-//! M3 不做调用检查，编造 18 个签名只会造出「看起来能查、其实没查」的假象
-//! （官方对这些内建的签名也是 `Typ[Invalid]` 的样子货）。
+//! 18 个语言内建（`len`/`cap`/`make`/…）加上 2 个 `rt_` 运行期钩子（M12
+//! 的反射：`rt_reflect_call` / `rt_reflect_alloc`）在这里只登记**名字与
+//! 种类**（`typ: None`）：M3 不做调用检查，编造签名只会造出「看起来能查、
+//! 其实没查」的假象（官方对这些内建的签名也是 `Typ[Invalid]` 的样子货）。
 //! 调用检查与内建签名归后续里程碑 ⇒ `open_gaps`。
 //!
 //! # 为什么 `declare_universe` 与 `universe()` 是两个函数
@@ -71,7 +72,7 @@ pub const TYPE_NAMES: [&str; 22] = [
 pub const CONST_NAMES: [&str; 3] = ["true", "false", "iota"];
 
 /// 预声明**内建函数**（18 个，照规范 Universe block 一节）。
-pub const BUILTIN_NAMES: [&str; 19] = [
+pub const BUILTIN_NAMES: [&str; 20] = [
     "append",
     "cap",
     "clear",
@@ -96,10 +97,14 @@ pub const BUILTIN_NAMES: [&str; 19] = [
     // 报错里一眼可辨。语料面只允许 `stdlib/reflect` 用它（白名单由
     // `t_ref_01` 冻结 `reflect` 的**导出**符号；本名字不导出）。
     "rt_reflect_call",
+    // 写面的分配入口（`M12/Task 34`）：`New` / `MakeSlice` / `MakeMap` /
+    // `MakeChan` 都要「按 desc 分配」，而 `new` / `make` 的 lowering 只
+    // 服务**静态类型**。同样不导出（`t_ref_01` 白名单里没有它）。
+    "rt_reflect_alloc",
 ];
 
-/// universe 里的对象总数：22 类型名 + 3 常量 + 1 个 `nil` + 19 内建。
-pub const UNIVERSE_SIZE: usize = 22 + 3 + 1 + 19;
+/// universe 里的对象总数：22 类型名 + 3 常量 + 1 个 `nil` + 20 内建。
+pub const UNIVERSE_SIZE: usize = 22 + 3 + 1 + 20;
 
 /// universe 的全部名字，**按字典序**（`UNIVERSE_SIZE` 个）。
 ///
@@ -258,11 +263,11 @@ mod tests {
     fn 清单长度与总数自洽() {
         assert_eq!(TYPE_NAMES.len(), 22);
         assert_eq!(CONST_NAMES.len(), 3);
-        assert_eq!(BUILTIN_NAMES.len(), 19);
-        assert_eq!(UNIVERSE_SIZE, 45);
+        assert_eq!(BUILTIN_NAMES.len(), 20);
+        assert_eq!(UNIVERSE_SIZE, 46);
         assert_eq!(
             TYPE_NAMES.len() + CONST_NAMES.len() + 1 + BUILTIN_NAMES.len(),
-            45
+            46
         );
         // 无重复（重复会让 `insert` 静默顶替，总数对不上而看不出来）
         let mut all: Vec<&str> = TYPE_NAMES

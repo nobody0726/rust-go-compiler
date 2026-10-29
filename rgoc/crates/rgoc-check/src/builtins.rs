@@ -160,6 +160,30 @@ pub(crate) fn call_builtin(
             }
             Operand::no_value()
         }
+        // `rt_reflect_alloc(op, out, a, b, c)`：写面的分配入口（`C13` §5.6）。
+        // 五个实参同样必须各占**一个字**（`op` 与 `c` 是整数，其余是指针）。
+        "rt_reflect_alloc" => {
+            for a in &c.args {
+                let x = cx.expr(file, a);
+                if x.mode == Mode::Invalid {
+                    return Operand::invalid();
+                }
+                let ok = x
+                    .typ
+                    .and_then(|t| rgoc_types::layout::layout(cx.type_table(), t))
+                    .is_some_and(|l| l.size == 8);
+                if !ok {
+                    cx.report(
+                        a.start_pos(),
+                        DiagCode::ChkInvalidBuiltinArg,
+                        "invalid argument: rt_reflect_alloc 的实参必须是 8 字节（指针 / 整数）"
+                            .to_string(),
+                    );
+                    return Operand::invalid();
+                }
+            }
+            Operand::no_value()
+        }
         _ => Operand::invalid(),
     }
 }
@@ -174,6 +198,8 @@ fn arity(name: &str) -> Option<(usize, bool)> {
         "new" | "assert" => (1, false),
         // `rt_reflect_call(funcval, tramp, args, results)`：定元数 4 个。
         "rt_reflect_call" => (4, false),
+        // `rt_reflect_alloc(op, out, a, b, c)`：定元数 5 个。
+        "rt_reflect_alloc" => (5, false),
         // ⚠️ `recover` **不是**变参（`predeclaredFuncs` 的 `{0, false}`）——
         // `recover(1)` 是 `too many arguments`（`task29-arity.go` 实测 `15:18`）。
         "recover" => (0, false),

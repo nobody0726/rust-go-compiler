@@ -188,6 +188,10 @@ pub fn builtin_summary(k: BuiltinKind) -> Summary {
         // 会不会 panic 都不可知 ⇒ 按最坏情况记（`writes_all` 已含"可能 panic"
         // 那一层保守，见 `Summary` 的文档）。
         BuiltinKind::ReflectCall => s.writes_all = true,
+        // 写面的分配入口同理：它按 `op` 走 `rt_alloc` / `rt_alloc_array` /
+        // `rt_map_make` / `rt_makechan`，往 `out` 指向的槽里写一个字，
+        // 而且分配本身可能 OOM ⇒ 最坏情况记（`writes_all` 含"可能 panic"）。
+        BuiltinKind::ReflectAlloc => s.writes_all = true,
         // 纯读
         BuiltinKind::Len
         | BuiltinKind::Cap

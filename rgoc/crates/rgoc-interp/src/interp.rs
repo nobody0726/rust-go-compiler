@@ -3074,6 +3074,17 @@ impl<'a> G<'a> {
                     ),
                 );
             }
+            // `rt_reflect_alloc` 同一个道理（`C13` §5.6）：写面要按 desc
+            // 分配，解释器的堆模型里没有「按 desc 分配」这条通路。
+            BuiltinKind::ReflectAlloc => {
+                self.fail(
+                    sh,
+                    RtError::Message(
+                        "runtime error: `rt_reflect_alloc` 只有 native 后端有（G-M12-05）"
+                            .to_string(),
+                    ),
+                );
+            }
             BuiltinKind::Panic => {
                 let v = args
                     .into_iter()
@@ -3221,6 +3232,17 @@ impl<'a> G<'a> {
                     sh,
                     RtError::Message(
                         "runtime error: `rt_reflect_call` 只有 native 后端有（G-M12-05）"
+                            .to_string(),
+                    ),
+                );
+            }
+            // `rt_reflect_alloc` 同一个道理（`C13` §5.6）：写面要按 desc
+            // 分配，解释器的堆模型里没有「按 desc 分配」这条通路。
+            BuiltinKind::ReflectAlloc => {
+                self.fail(
+                    sh,
+                    RtError::Message(
+                        "runtime error: `rt_reflect_alloc` 只有 native 后端有（G-M12-05）"
                             .to_string(),
                     ),
                 );

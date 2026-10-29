@@ -690,7 +690,7 @@ func ValueOf(i any) Value {
 	return Value{typ: rtype{desc: w[0]}, ptr: w[1]}
 }
 
-// Value 是值的视图（读面 + `Call` + 后续的写面）。
+// Value 是值的视图（读面 + `Call` + 写面）。
 type Value struct {
 	// typ 是值的动态类型。
 	typ Type
@@ -701,6 +701,15 @@ type Value struct {
 	// 这个方向在本仓今天的代码生成上有缺口（解引用丢失，实测
 	// 2026-10-28）。存指针就没有这个转换。
 	ptr unsafe.Pointer
+	// writable 是写面的闸（官方 `flagAddr` 且非只读，`C13` §5.6）。
+	//
+	// 只有**三条路**能造出可写的 Value：`New(t).Elem()`、`Index(i)`
+	// （slice / array 的元素）、以及 `Elem()` 链的延续。`ValueOf` /
+	// `MakeXxx` / `Call` 的结果一律不可写 —— 与官方一致（那些值没有地址）。
+	//
+	// 官方还有 `flagRO`（未导出字段的只读层）：本仓的结构体字段读面
+	// 今天不产出可寻址的 Value，那一层进不了面（`U-M12-09`）。
+	writable bool
 }
 
 // ────────────────────────────── Call ──────────────────────────────
@@ -935,4 +944,423 @@ func (v Value) Bool() bool {
 		panic("reflect: call of reflect.Value.Bool on " + kindName(Kind(d.kind)) + " Value")
 	}
 	return (*[1]byte)(v.ptr)[0] != 0
+}
+
+// ────────────────────────────── 写面 ──────────────────────────────
+//
+// 官方写面靠 `flag` 的 `flagAddr` / `flagRO` 两位判「能不能写」；这里的
+// 收窄面只留 `Value.writable` 一个布尔（理由见 `Value` 的字段注释）。
+//
+// 四类入口：
+//   - 取地址：`New` / `Elem` / `Index`（造出可写的 Value）
+//   - 改写：`Set` / `SetInt` / `SetFloat` / `SetBool` / `SetString`
+//   - 容量类：`Len` / `Cap`
+//   - 造容器：`MakeSlice` / `MakeMap` / `MakeChan`
+//
+// ⚠️ 写面**没有写屏障**：GC 是 STW + 单线程（`D-M12-7`），改写一个槽
+// 发生在两个安全点之间，扫描器看不到中间态。这是「不需要屏障」的**前提**，
+// 不是「忘了加」—— Task 35 把这条写进 `C12`。
+
+// allocOp 是 `rt_reflect_alloc` 的 op 码（`C13` §5.6，与 rt.c 的 switch 同序）。
+const (
+	allocNew   = 0 // new(desc a) ⇒ 零值对象
+	allocArray = 1 // 元素数组(a = elem, c = 个数) ⇒ 底层数组
+	allocMap   = 2 // map(a = key, b = elem) ⇒ MapObj*
+	allocChan  = 3 // chan(a = elem, c = 容量) ⇒ Hchan*
+)
+
+// reflectAlloc 调运行期的按 desc 分配入口。
+//
+// ⚠️ 结果槽用 `[1]*byte` 而不是 `[1]unsafe.Pointer`：`*unsafe.Pointer`
+// 这个**类型**在 lowering 期还在窄面外（`Call` 里那条注释记着实测），
+// 而 `**byte` 走得通。`unsafe.Pointer(out[0])` 是 `*byte → unsafe.Pointer`
+// 方向，一直在面里。
+func reflectAlloc(op int, a unsafe.Pointer, b unsafe.Pointer, c int) unsafe.Pointer {
+	var out [1]*byte
+	rt_reflect_alloc(op, unsafe.Pointer(&out[0]), a, b, c)
+	return unsafe.Pointer(out[0])
+}
+
+// addBytes 返回 p + off。
+//
+// Go 源码没有指针算术，借 `[1<<24]byte` 视图走下标（与 `copyBytes` 同一
+// 手法）。视图大小就是单次跳跃的上限 —— 24 位够覆盖本仓所有语料。
+func addBytes(p unsafe.Pointer, off uint64) unsafe.Pointer {
+	if off == 0 {
+		return p
+	}
+	return unsafe.Pointer(&(*[1 << 24]byte)(p)[off])
+}
+
+// addrValue 造一个**有地址**的 Value（写面的构造子）。
+func addrValue(t Type, p unsafe.Pointer) Value {
+	return Value{typ: t, ptr: p, writable: true}
+}
+
+// CanSet 报告 v 能不能被改写（官方：可寻址且不是未导出字段）。
+func (v Value) CanSet() bool {
+	return v.writable
+}
+
+// mustBeAssignable 是写面的第一道闸。
+//
+// 顺序与文本逐字对齐官方 `flag.mustBeAssignableSlow`：**先 0 值、再不可
+// 寻址**。`method` 是官方 `valueMethodName()` 的形态（`reflect.Value.SetInt`）。
+func (v Value) mustBeAssignable(method string) {
+	if v.typ == nil {
+		panic("reflect: call of " + method + " on zero Value")
+	}
+	if !v.writable {
+		panic("reflect: " + method + " using unaddressable value")
+	}
+}
+
+// Elem 返回指针指向的那个值（可写）。
+//
+// 收窄：官方还支持 interface 的 `Elem`（解出动态值）—— 本仓的 `Value`
+// 不承载「接口的静态值」，那条臂进不了面。
+func (v Value) Elem() Value {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Elem on zero Value")
+	}
+	if Kind(d.kind) != Pointer {
+		panic("reflect: call of reflect.Value.Elem on " + kindName(Kind(d.kind)) + " Value")
+	}
+	if v.ptr == nil {
+		// 官方：nil 指针的 `Elem()` 是**零 Value**（不是 panic）。
+		var z Value
+		return z
+	}
+	// `Value.ptr` 对 Pointer 类就是指针本身（`box_iface` 的 `is_ptr` 特例）
+	// ⇒ 指向的对象地址已经在手，元素类型从 desc 的扩展区取。
+	return addrValue(rtype{desc: v.typ.(rtype).elemDesc()}, v.ptr)
+}
+
+// Index 返回 v[i]（收窄到 slice / array）。
+//
+// slice 元素永远可寻址（官方的 `flagAddr | flagIndir`）—— 所以
+// `MakeSlice(...).Index(0).SetInt(x)` 成立，哪怕 `MakeSlice` 的结果本身
+// 不可写。
+func (v Value) Index(i int) Value {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Index on zero Value")
+	}
+	et := v.typ.(rtype).elemDesc()
+	if et == nil {
+		panic("reflect: call of reflect.Value.Index on " + kindName(Kind(d.kind)) + " Value")
+	}
+	es := uint64((*descFull)(et).size)
+	switch Kind(d.kind) {
+	case Slice:
+		// 切片头就在 `v.ptr` 上（三个字：data / len / cap）。
+		w := (*[3]uintptr)(v.ptr)
+		if i < 0 || uint64(i) >= uint64(w[1]) {
+			panic("reflect: slice index out of range")
+		}
+		return addrValue(rtype{desc: et}, addBytes(unsafe.Pointer(w[0]), uint64(i)*es))
+	case Array:
+		if i < 0 || i >= v.typ.(rtype).Len() {
+			panic("reflect: array index out of range")
+		}
+		return addrValue(rtype{desc: et}, addBytes(v.ptr, uint64(i)*es))
+	}
+	panic("reflect: call of reflect.Value.Index on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// Len 返回长度（slice / array / map / chan / string）。
+//
+// `Map` / `Chan` 的 `v.ptr` 指向**装着那个指针的槽**（`box_iface` 只对
+// `Type::Pointer` 走 is_ptr 特例）⇒ 先解一层再读运行期结构。
+func (v Value) Len() int {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Len on zero Value")
+	}
+	switch Kind(d.kind) {
+	case Slice, String:
+		// 只碰头两个字；string 的头只有 16 字节，读 [1] 不越界。
+		return int((*[3]uintptr)(v.ptr)[1])
+	case Array:
+		return v.typ.(rtype).Len()
+	case Map:
+		m := (*[1]unsafe.Pointer)(v.ptr)[0]
+		if m == nil {
+			return 0
+		}
+		// `len(m)` 就是 `MapObj.count`（rt.c 的 `_Static_assert(count == 0)`）。
+		return int((*[1]uint64)(m)[0])
+	case Chan:
+		ch := (*[1]unsafe.Pointer)(v.ptr)[0]
+		if ch == nil {
+			return 0
+		}
+		// Hchan: +0 qcount / +8 dataqsiz（`C11` §7 冻结）。
+		return int((*[1]uint64)(ch)[0])
+	}
+	panic("reflect: call of reflect.Value.Len on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// Cap 返回容量（slice / array / chan）。
+func (v Value) Cap() int {
+	d := v.descOf()
+	if d == nil {
+		panic("reflect: call of reflect.Value.Cap on zero Value")
+	}
+	switch Kind(d.kind) {
+	case Slice:
+		return int((*[3]uintptr)(v.ptr)[2])
+	case Array:
+		return v.typ.(rtype).Len()
+	case Chan:
+		ch := (*[1]unsafe.Pointer)(v.ptr)[0]
+		if ch == nil {
+			return 0
+		}
+		return int((*[2]uint64)(ch)[1])
+	}
+	panic("reflect: call of reflect.Value.Cap on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// writeInt 按 size 字节小端写一个整数（`readInt` 的逆）。
+func writeInt(p unsafe.Pointer, size int, x int64) {
+	b := (*[8]byte)(p)
+	u := uint64(x)
+	for i := 0; i < size && i < 8; i++ {
+		b[i] = byte(u >> uint(8*i))
+	}
+}
+
+// SetInt 改写 v 的底层值（整数类）。
+func (v Value) SetInt(x int64) {
+	v.mustBeAssignable("reflect.Value.SetInt")
+	d := v.descOf()
+	switch Kind(d.kind) {
+	case Int, Int8, Int16, Int32, Int64:
+		writeInt(v.ptr, int(d.size), x)
+		return
+	}
+	panic("reflect: call of reflect.Value.SetInt on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// SetFloat 改写 v 的底层值（浮点类）。
+func (v Value) SetFloat(x float64) {
+	v.mustBeAssignable("reflect.Value.SetFloat")
+	d := v.descOf()
+	switch Kind(d.kind) {
+	case Float32:
+		*(*float32)(v.ptr) = float32(x)
+		return
+	case Float64:
+		*(*float64)(v.ptr) = x
+		return
+	}
+	panic("reflect: call of reflect.Value.SetFloat on " + kindName(Kind(d.kind)) + " Value")
+}
+
+// SetBool 改写 v 的底层值（bool）。
+func (v Value) SetBool(x bool) {
+	v.mustBeAssignable("reflect.Value.SetBool")
+	d := v.descOf()
+	if Kind(d.kind) != Bool {
+		panic("reflect: call of reflect.Value.SetBool on " + kindName(Kind(d.kind)) + " Value")
+	}
+	b := (*[1]byte)(v.ptr)
+	if x {
+		b[0] = 1
+	} else {
+		b[0] = 0
+	}
+}
+
+// SetString 改写 v 的底层值（string，两个字一起换）。
+//
+// 两个字分开搬：第 0 字是**指针**，走 `unsafe.Pointer`（不做
+// `uintptr → unsafe.Pointer` 这个今天有缺口的方向），第 1 字是长度。
+// 目标槽的 gcdata 已经把第 0 字标成指针（string 的 `ptrdata == 8`）——
+// 扫描器照常把新串的数据指针当根。
+func (v Value) SetString(x string) {
+	v.mustBeAssignable("reflect.Value.SetString")
+	d := v.descOf()
+	if Kind(d.kind) != String {
+		panic("reflect: call of reflect.Value.SetString on " + kindName(Kind(d.kind)) + " Value")
+	}
+	srcp := (*[1]unsafe.Pointer)(unsafe.Pointer(&x))[0]
+	srcn := (*[2]uintptr)(unsafe.Pointer(&x))[1]
+	(*[1]unsafe.Pointer)(v.ptr)[0] = srcp
+	(*[3]uintptr)(v.ptr)[1] = srcn
+}
+
+// Set 把 x 赋给 v（类型已由调用方保证）。
+//
+// 指针类要特殊处理：`Value.ptr` 对指针就是**指针本身**（`is_ptr` 特例），
+// 照 `size` 字节拷会拷成「被指向的内容」——`Call` 踩过同一个坑。其余
+// （含 string 的 16 字节、聚合）都是整块拷。
+func (v Value) Set(x Value) {
+	v.mustBeAssignable("reflect.Value.Set")
+	d := v.descOf()
+	xd := x.descOf()
+	if xd == nil {
+		panic("reflect: call of reflect.Value.Set on zero Value")
+	}
+	if Kind(xd.kind) == Pointer {
+		(*[1]*byte)(v.ptr)[0] = (*byte)(x.ptr)
+		return
+	}
+	copyBytes(v.ptr, x.ptr, int(d.size))
+}
+
+// ptrDescPool 给 `New` 合成 `*T` 的 desc。
+//
+// 编译器只为**源码里出现过的**类型发 desc，`reflect.New(TypeOf(x))` 里的
+// `*T` 完全可能一次都没出现过 —— 所以这里按元素 desc 现场合成一块。
+//
+// ⚠️ 合成的 desc 与「程序里真用到的那块 `*T` desc」**不是同一个对象**：
+// `reflect.TypeOf(&x) == reflect.New(reflect.TypeOf(x)).Type()` 会是 false
+// （`U-M12-10`）。要修得让发射面给每个带 meta 的类型多发一块 `*T` 的 desc
+// 并配一张反查表 —— 独立的一块工作，收窄面里不做。
+var ptrDescPool [64]descFull
+
+// ptrDescSrc 是每个合成 desc 对应的元素 desc（去重用）。
+var ptrDescSrc [64]unsafe.Pointer
+
+// ptrDescUsed 是已合成的个数。
+var ptrDescUsed int
+
+// ptrDesc 返回 `*d` 的 desc（同一元素类型复用同一块）。
+func ptrDesc(d *descFull) *descFull {
+	src := unsafe.Pointer(d)
+	for i := 0; i < ptrDescUsed; i++ {
+		if ptrDescSrc[i] == src {
+			return &ptrDescPool[i]
+		}
+	}
+	if ptrDescUsed >= len(ptrDescPool) {
+		panic("reflect: New 的指针类型超过 64 个（ptrDescPool）")
+	}
+	s := &ptrDescPool[ptrDescUsed]
+	s.size = 8
+	s.ptrdata = 8
+	// hash 必须与元素分开（`Implements` / `AssignableTo` 比 hash）；
+	// 0x9e3779b9 是黄金比例常数，纯粹为了「不撞上一个真的 hash」。
+	s.hash = d.hash ^ 2654435761
+	s.kind = uint8(Pointer)
+	s.flags = 2 // HAS_POINTERS（`desc::flags`）
+	s.elem = src
+	ptrDescSrc[ptrDescUsed] = src
+	ptrDescUsed++
+	return s
+}
+
+// cstrN 把 (p, n) 读成 Go 字符串（`cstr` 的定长版：Go 字符串没有 NUL 结尾）。
+func cstrN(p unsafe.Pointer, n int) string {
+	if p == nil || n <= 0 {
+		return ""
+	}
+	b := (*[1 << 24]byte)(p)
+	s := ""
+	for i := 0; i < n; i++ {
+		s = s + string(b[i])
+	}
+	return s
+}
+
+// String 返回 v 的底层字符串。
+//
+// 官方口径：**只有 Kind 是 String 时才返回底层串**；其余 kind 返回
+// `<T Value>` 这种描述（不 panic）。零 Value 是 `<invalid Value>`。
+// 写面（`SetString`）没有它就观察不了结果。
+func (v Value) String() string {
+	d := v.descOf()
+	if d == nil {
+		return "<invalid Value>"
+	}
+	if Kind(d.kind) == String {
+		p := (*[1]unsafe.Pointer)(v.ptr)[0]
+		n := int((*[3]uintptr)(v.ptr)[1])
+		return cstrN(p, n)
+	}
+	return "<" + v.typ.(rtype).String() + " Value>"
+}
+
+// New 返回一个指向 T 的新零值对象的指针 Value（`Kind() == Pointer`）。
+func New(typ Type) Value {
+	if typ == nil {
+		panic("reflect: New(nil)")
+	}
+	d := typ.(rtype).d()
+	p := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
+	return Value{typ: rtype{desc: unsafe.Pointer(ptrDesc(d))}, ptr: p}
+}
+
+// MakeSlice 造一个 `len` 长、`cap` 容的切片值。
+//
+// 切片头**自己也要在托管堆上**：`Value` 只存裸指针，头若落在栈上，
+// 返回即悬空。按切片类型自己的 desc 分配 24 字节（`rt_alloc`）—— 那块
+// 对象的 gcdata 恰好覆盖第 0 字（data 指针），所以底层数组有根。
+func MakeSlice(typ Type, len int, cap int) Value {
+	if typ == nil {
+		panic("reflect: MakeSlice(nil)")
+	}
+	d := typ.(rtype).d()
+	if Kind(d.kind) != Slice {
+		panic("reflect: MakeSlice of non-slice type")
+	}
+	if len < 0 {
+		panic("reflect: MakeSlice: negative len")
+	}
+	if cap < 0 {
+		panic("reflect: MakeSlice: negative cap")
+	}
+	if len > cap {
+		panic("reflect: MakeSlice: len > cap")
+	}
+	hdr := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
+	var data unsafe.Pointer
+	if cap > 0 {
+		data = reflectAlloc(allocArray, typ.(rtype).elemDesc(), nil, cap)
+	}
+	w := (*[3]uintptr)(hdr)
+	w[0] = uintptr(data)
+	w[1] = uintptr(len)
+	w[2] = uintptr(cap)
+	return Value{typ: typ, ptr: hdr}
+}
+
+// MakeMap 造一个空 map 值。
+//
+// map 的 `Value.ptr` 指向**装着 MapObj 指针的槽**（与 `ValueOf(map)` 同
+// 口径：`box_iface` 只对 `Type::Pointer` 用 is_ptr），所以这里多分配一块
+// 8 字节的槽并把 MapObj 指针写进去。
+func MakeMap(typ Type) Value {
+	if typ == nil {
+		panic("reflect: MakeMap(nil)")
+	}
+	d := typ.(rtype).d()
+	if Kind(d.kind) != Map {
+		panic("reflect: MakeMapWithSize of non-map type")
+	}
+	m := reflectAlloc(allocMap, d.ext0, d.ext1, 0)
+	box := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
+	(*[1]uintptr)(box)[0] = uintptr(m)
+	return Value{typ: typ, ptr: box}
+}
+
+// MakeChan 造一个容量 `buffer` 的 channel 值（Value.ptr 的口径同 `MakeMap`）。
+func MakeChan(typ Type, buffer int) Value {
+	if typ == nil {
+		panic("reflect: MakeChan(nil)")
+	}
+	d := typ.(rtype).d()
+	if Kind(d.kind) != Chan {
+		panic("reflect: MakeChan of non-chan type")
+	}
+	if buffer < 0 {
+		panic("reflect: MakeChan: negative buffer size")
+	}
+	ch := reflectAlloc(allocChan, d.ext0, nil, buffer)
+	box := reflectAlloc(allocNew, unsafe.Pointer(d), nil, 0)
+	(*[1]uintptr)(box)[0] = uintptr(ch)
+	return Value{typ: typ, ptr: box}
 }

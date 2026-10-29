@@ -3919,6 +3919,7 @@ fn builtin_kind(name: &str) -> Option<BuiltinKind> {
         "recover" => BuiltinKind::Recover,
         "close" => BuiltinKind::Close,
         "rt_reflect_call" => BuiltinKind::ReflectCall,
+        "rt_reflect_alloc" => BuiltinKind::ReflectAlloc,
         "make" => return None, // make 走 Make 节点
         _ => return None,
     })

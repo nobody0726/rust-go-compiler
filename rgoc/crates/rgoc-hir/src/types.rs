@@ -803,4 +803,11 @@ pub enum BuiltinKind {
     /// 而「指针 → 函数值」的转换 Go 源码表达不了。四个实参直接进
     /// `x0..x3`（`C13` §5.5）。
     ReflectCall,
+    /// `rt_reflect_alloc(op, out, a, b, c)`（M12/Task 34）。
+    ///
+    /// 写面的分配入口：`New` / `MakeSlice` / `MakeMap` / `MakeChan` 四条
+    /// 路都要一个按 desc 分配的运行期入口，而 `new` / `make` 的 lowering
+    /// 只服务静态类型。一个符号带 `op` 分派（`C13` §5.6）—— 五个实参
+    /// 直接进 `x0..x4`，结果写进 `out`（Go 侧不做 `uintptr→unsafe.Pointer`）。
+    ReflectAlloc,
 }

@@ -1263,6 +1263,11 @@ impl Exec<'_> {
                     "`rt_reflect_call` 只有 native 后端有（`G-M12-05`）".to_string(),
                 ));
             }
+            BuiltinKind::ReflectAlloc => {
+                return Err(Halt::Runtime(
+                    "`rt_reflect_alloc` 只有 native 后端有（`G-M12-05`）".to_string(),
+                ));
+            }
             BuiltinKind::Panic => {
                 return Err(Halt::Runtime("`panic` 应落成 Term::Panic".to_string()));
             }

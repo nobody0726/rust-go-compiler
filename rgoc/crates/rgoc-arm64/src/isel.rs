@@ -3208,6 +3208,17 @@ fn builtin(
             check_panic(cx, asm);
             Ok(())
         }
+        // `rt_reflect_alloc(op, out, a, b, c)`（M12/Task 34）：五个字面量
+        // 实参直接进 `x0..x4`（`check` 侧钉住每参 8 字节）。
+        BuiltinKind::ReflectAlloc => {
+            for (i, a) in args.iter().take(5).enumerate() {
+                let s = cx.slot(*a);
+                ld_x(asm, &format!("x{i}"), s.off);
+            }
+            asm.ins("bl rt_reflect_alloc");
+            check_panic(cx, asm);
+            Ok(())
+        }
         // 其余内建（`copy`/`delete`/`clear`/`close`/`recover`）在 M6 的
         // 拒绝面里，走不到这里；真走到了说明上游漏判 —— 宁可少发也不发错。
         _ => Ok(()),
